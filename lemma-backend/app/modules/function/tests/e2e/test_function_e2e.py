@@ -21,10 +21,17 @@ from app.modules.test_support.e2e_authz import (
     item_names,
 )
 
+# `usefixtures` is deliberately NOT here. At module scope it made all 29 tests
+# boot a uvicorn backend server and a local sandbox server, including the four
+# that never supply `code` and only assert status codes -- the duplicate-name
+# check measured 18.8s in CI to prove a 409. It is applied per test below, to
+# the ones that actually reach the runtime.
+#
+# `workspace` stays at module scope: it is what the sandbox shard's marker
+# filter selects on, and moving it would change which shard these run in.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.workspace,
-    pytest.mark.usefixtures("configure_workspace_api_url"),
 ]
 
 
@@ -367,6 +374,7 @@ def _patch_connector_operation_execution(connector_id: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_lifecycle(authenticated_client, test_pod):
     pod_id = test_pod["id"]
     func_name = f"func_{uuid4().hex[:8]}"
@@ -586,6 +594,7 @@ async def test_function_list_and_access_respects_pod_roles(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_execution_datastore_and_file_round_trip(
     authenticated_client,
     test_pod,
@@ -817,6 +826,7 @@ async def {function_name}(ctx: FunctionContext, data: WriteInput) -> WriteResult
         pytest.param("JOB", False, id="job-no-rls"),
     ],
 )
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_record_write_honors_record_grants_for_all_table_types(
     authenticated_client,
     test_pod,
@@ -972,6 +982,7 @@ async def {function_name}(ctx: FunctionContext, data: BulkInput) -> BulkResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_a_function_writes_many_rows_through_the_table_facade(
     authenticated_client,
     test_pod,
@@ -1048,6 +1059,7 @@ async def test_a_function_writes_many_rows_through_the_table_facade(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_record_write_requires_record_write_not_table_update(
     authenticated_client,
     test_pod,
@@ -1147,6 +1159,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_concurrent_hot_runs_reports_average_execution_time(
     authenticated_client,
     test_pod,
@@ -1234,6 +1247,7 @@ async def {function_name}(ctx: FunctionContext, data: HotInput) -> HotResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_datastore_read_write_latency_sequence(
     authenticated_client,
     test_pod,
@@ -1427,6 +1441,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_connector_operation_resolves_user_owned_account_in_backend(
     authenticated_client,
     test_pod,
@@ -1508,6 +1523,7 @@ async def test_function_connector_operation_resolves_user_owned_account_in_backe
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_connector_operation_resolves_agent_owned_account_in_backend(
     authenticated_client,
     test_pod,
@@ -1601,6 +1617,7 @@ async def test_function_connector_operation_resolves_agent_owned_account_in_back
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_connector_operation_fails_when_user_owned_account_missing(
     authenticated_client,
     test_pod,
@@ -1679,6 +1696,7 @@ async def test_function_connector_operation_fails_when_user_owned_account_missin
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     authenticated_client,
     test_pod,
@@ -1767,6 +1785,7 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_job_function_run_completes_via_worker(
     authenticated_client,
     test_pod,
@@ -1827,6 +1846,7 @@ async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_job_function_execution_writes_datastore_record(
     authenticated_client,
     test_pod,
@@ -1949,6 +1969,7 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
 
 @pytest.mark.slow
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_job_function_long_run_is_not_destroyed_while_active(
     authenticated_client,
     test_pod,
@@ -2020,6 +2041,7 @@ async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_concurrent_api_function_runs_all_complete(
     authenticated_client,
     test_pod,
@@ -2074,6 +2096,7 @@ async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_concurrent_job_function_runs_all_complete(
     authenticated_client,
     test_pod,
@@ -2135,6 +2158,7 @@ async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_execute_requires_only_execute_not_read(
     authenticated_client,
     async_client,
@@ -2242,6 +2266,7 @@ async def {function_name}(ctx: FunctionContext, data: AddInput) -> AddResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_runs_a_tenant_connector_operation_for_real(
     authenticated_client,
     test_pod,
@@ -2431,6 +2456,7 @@ async def {function_name}(ctx: FunctionContext, data: Input) -> Output:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_update_function_replaces_code_and_activates_new_revision(
     authenticated_client, test_pod
 ):
@@ -2550,6 +2576,7 @@ async def test_delete_function_cleans_up_icon_and_the_function_becomes_unreachab
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_upsert_function_for_import_creates_then_idempotently_updates(
     authenticated_client, test_pod, fixed_test_user, db_manager
 ):
@@ -2623,6 +2650,7 @@ async def test_upsert_function_for_import_creates_then_idempotently_updates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_execute_function_as_workload_runs_under_the_agent_delegated_context(
     authenticated_client, test_pod, fixed_test_user, db_manager
 ):
@@ -2699,6 +2727,7 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_it(
     authenticated_client, test_pod, fixed_test_user, db_manager, worker
 ):
@@ -2757,6 +2786,7 @@ async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_cancel_function_run_stops_a_dispatched_run_before_it_completes(
     authenticated_client, test_pod, worker, db_manager
 ):
