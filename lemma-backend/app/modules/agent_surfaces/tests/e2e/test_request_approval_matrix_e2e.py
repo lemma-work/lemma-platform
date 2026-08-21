@@ -126,7 +126,7 @@ async def _run_deferred_approval_reconciliation(
 
 _INNER_TOOL_ARGS = {
     "type": "WIDGET",
-    "content": "<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>",
+    "content": "<div class='status'><span>Ready</span></div>",
 }
 
 
