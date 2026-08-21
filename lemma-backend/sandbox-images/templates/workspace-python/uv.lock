@@ -664,6 +664,9 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.14.8,<0.16" }]
+
 [[package]]
 name = "lemma-terminal"
 source = { directory = "../../../../lemma-cli" }
@@ -693,7 +696,7 @@ dev = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
-    { name = "ruff" },
+    { name = "ruff", specifier = ">=0.14.8,<0.16" },
     { name = "textual-dev" },
 ]
 
