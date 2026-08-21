@@ -33,7 +33,6 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-_CONVERSATION_TITLE_MAX_LENGTH = 120
 # Recent thread/channel messages fetched per run for group-mention continuity.
 _CHANNEL_CONTEXT_LIMIT = 15
 

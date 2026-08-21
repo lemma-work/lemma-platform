@@ -49,9 +49,7 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
 
 logger = get_logger(__name__)
 
-_CONVERSATION_TITLE_MAX_LENGTH = 120
 # Recent thread/channel messages fetched per run for group-mention continuity.
-_CHANNEL_CONTEXT_LIMIT = 15
 
 
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
