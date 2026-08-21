@@ -229,40 +229,6 @@ def test_llm_fanout_processor_is_built_only_when_the_llm_backend_is_on(monkeypat
     processor.shutdown()
 
 
-def test_llm_fanout_forwards_only_openinference_spans(monkeypatch):
-    """The root AGENT span crosses to the LLM backend; the SQL beside it does not."""
-    delegate = _Exporter()
-    monkeypatch.setattr(
-        telemetry,
-        "_get_settings",
-        lambda: SimpleNamespace(
-            llm_otel_enabled=True,
-            llm_otel_exporter_otlp_endpoint="http://phoenix:4317",
-            llm_otel_exporter_otlp_protocol="grpc",
-            llm_otel_exporter_otlp_headers=None,
-        ),
-    )
-    monkeypatch.setattr(
-        telemetry,
-        "_build_span_exporter",
-        lambda endpoint, *, protocol, headers=None: delegate,
-    )
-    processor = telemetry._build_llm_fanout_processor()
-    assert processor is not None
-
-    agent_span = SimpleNamespace(
-        name="agent.run",
-        attributes={telemetry.SpanAttributes.OPENINFERENCE_SPAN_KIND: "AGENT"},
-    )
-    sql_span = SimpleNamespace(name="SELECT", attributes={})
-    # Straight at the exporter the processor was built around: batching is the
-    # SDK's business, the filter is ours.
-    processor.span_exporter.export([agent_span, sql_span])
-
-    assert [span.name for batch in delegate.exported for span in batch] == ["agent.run"]
-    processor.shutdown()
-
-
 def test_record_span_input_and_output_encode_and_truncate():
     span = SimpleNamespace(
         attributes={},
@@ -311,3 +277,109 @@ def test_record_span_output_encodes_values_json_cannot_hold_natively():
         "application/json"
     )
     assert "1" in span.attributes[telemetry.SpanAttributes.OUTPUT_VALUE]
+
+
+def _readable_span(name: str, *, parent, attributes=None):
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.trace import SpanContext, TraceFlags
+
+    context = SpanContext(
+        trace_id=0x1111,
+        span_id=0x2222,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return ReadableSpan(
+        name=name,
+        context=context,
+        parent=parent,
+        attributes=attributes or {},
+    )
+
+
+def test_trace_rooting_exporter_drops_the_parent_the_backend_never_gets():
+    """An orphan is not a root: Phoenix resolves roots with `parent_id IS NULL`."""
+    from opentelemetry.trace import SpanContext, TraceFlags
+
+    parent = SpanContext(
+        trace_id=0x1111,
+        span_id=0x3333,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    delegate = _Exporter()
+    exporter = telemetry.TraceRootingSpanExporter(delegate)
+
+    child = _readable_span("agent.run", parent=parent, attributes={"a": "b"})
+    assert exporter.export([child]) is SpanExportResult.SUCCESS
+
+    (exported,) = delegate.exported[0]
+    assert exported.parent is None
+    # Everything that identifies the span is untouched -- in particular its own
+    # span id, which the model spans below it name as their parent.
+    assert exported.context.span_id == child.context.span_id
+    assert exported.context.trace_id == child.context.trace_id
+    assert exported.name == "agent.run"
+    assert exported.attributes == {"a": "b"}
+
+
+def test_trace_rooting_exporter_leaves_a_real_root_alone():
+    delegate = _Exporter()
+    exporter = telemetry.TraceRootingSpanExporter(delegate)
+    root = _readable_span("agent.run", parent=None)
+
+    exporter.export([root])
+
+    (exported,) = delegate.exported[0]
+    assert exported is root
+
+
+def test_trace_rooting_exporter_forwards_lifecycle():
+    delegate = _Exporter(flush=False)
+    exporter = telemetry.TraceRootingSpanExporter(delegate)
+    assert exporter.force_flush() is False
+    exporter.shutdown()
+    assert delegate.shutdown_calls == 1
+
+
+def test_llm_fanout_reroots_what_it_forwards(monkeypatch):
+    """The two wrappers compose: filter to OpenInference spans, then re-root."""
+    from opentelemetry.trace import SpanContext, TraceFlags
+
+    delegate = _Exporter()
+    monkeypatch.setattr(
+        telemetry,
+        "_get_settings",
+        lambda: SimpleNamespace(
+            llm_otel_enabled=True,
+            llm_otel_exporter_otlp_endpoint="http://phoenix:4317",
+            llm_otel_exporter_otlp_protocol="grpc",
+            llm_otel_exporter_otlp_headers=None,
+        ),
+    )
+    monkeypatch.setattr(
+        telemetry,
+        "_build_span_exporter",
+        lambda endpoint, *, protocol, headers=None: delegate,
+    )
+    processor = telemetry._build_llm_fanout_processor()
+    assert processor is not None
+
+    parent = SpanContext(
+        trace_id=0x1111,
+        span_id=0x3333,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    agent_span = _readable_span(
+        "agent.run",
+        parent=parent,
+        attributes={telemetry.SpanAttributes.OPENINFERENCE_SPAN_KIND: "AGENT"},
+    )
+    sql_span = _readable_span("SELECT", parent=parent)
+    processor.span_exporter.export([agent_span, sql_span])
+
+    exported = [span for batch in delegate.exported for span in batch]
+    assert [span.name for span in exported] == ["agent.run"]
+    assert exported[0].parent is None
+    processor.shutdown()
