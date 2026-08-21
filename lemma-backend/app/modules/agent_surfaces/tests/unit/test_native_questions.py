@@ -14,9 +14,9 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.platforms.slack.service import _question_blocks
+from app.modules.agent_surfaces.platforms.slack.message_blocks import _question_blocks
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
-from app.modules.agent_surfaces.platforms.teams.adapter import _teams_question_card
+from app.modules.agent_surfaces.platforms.teams.cards import _teams_question_card
 from app.modules.agent_surfaces.platforms.teams.parser import (
     TEAMS_FORM_CALLBACK_KEY,
     TeamsMessageParser,

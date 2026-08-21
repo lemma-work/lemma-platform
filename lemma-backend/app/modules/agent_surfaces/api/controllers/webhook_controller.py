@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import hashlib
 import hmac
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,7 +13,6 @@ from app.core.api.callback_page import (
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
-from app.core.redaction import redact_value
 from app.core.api.dependencies import get_uow_factory
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -24,154 +21,25 @@ from app.modules.agent_surfaces.api.dependencies import (
     TelegramManagerServiceDep,
     get_surface_service,
 )
-from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfacePlatformWebhookIngress,
+from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
+    _decode_webhook_payload,
+    _handle_resend_webhook,
+    _handled_slack_modal,
+    _published_whatsapp_verification,
+    _redacted_headers,
+    _surface_source_event_id,
+    _verify_inbound_request,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
-from app.modules.identity.services.whatsapp_mobile_verification import (
-    is_whatsapp_verification_configured,
-    parse_reserved_verification_message,
-)
-from app.modules.agent_surfaces.platforms.resend.inbound import (
-    normalize_resend_inbound as _normalize_resend_inbound,
-)
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
-)
-from app.modules.agent_surfaces.api.controllers.slack_webhook_verification import (
-    slack_api_app_id,
-    slack_candidates_for_workspace,
-    slack_team_id,
 )
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagedBotProvisioningInProgressError,
 )
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
-
-
-_MODAL_OPENING_ACTION_IDS = {
-    "lemma_channel_setup",
-    "lemma_dm_agent_setup",
-}
-# App Home taps that must feel instant. Starter prompts carry no trigger_id but
-# a visible lag on a "try this" button reads as a dead button.
-_FAST_LANE_ACTION_PREFIXES = ("lemma_agent_dm",)
-
-
-def _opens_a_slack_modal(payload: dict) -> bool:
-    """True for a click whose only job is to open a modal within 3 seconds."""
-    inner = payload
-    for key in ("payload", "data"):
-        nested = inner.get(key)
-        if isinstance(nested, dict):
-            inner = nested
-            break
-    if inner.get("type") != "block_actions":
-        return False
-    return any(
-        isinstance(action, dict)
-        and (
-            action.get("action_id") in _MODAL_OPENING_ACTION_IDS
-            or str(action.get("action_id") or "").startswith(_FAST_LANE_ACTION_PREFIXES)
-        )
-        for action in inner.get("actions") or []
-    )
-
-
-def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> str:
-    candidates: list[object] = [
-        payload.get("event_id"),
-        payload.get("update_id"),
-        payload.get("id"),
-        payload.get("message_id"),
-        payload.get("data", {}).get("message_id")
-        if isinstance(payload.get("data"), dict)
-        else None,
-    ]
-    for candidate in candidates:
-        if candidate is not None and str(candidate):
-            return f"{platform}:{candidate}"
-    return f"{platform}:content-sha256:{hashlib.sha256(raw_body).hexdigest()}"
-
-
-def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
-    value = redact_value(headers)
-    return {str(key): str(item) for key, item in value.items()}
-
-
-def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
-    """Decode a webhook body to JSON.
-
-    Most platforms send JSON. Slack interactivity (block_actions /
-    view_submission) is ``application/x-www-form-urlencoded`` with a single
-    ``payload=<json>`` field. Signature verification still runs over the raw
-    bytes, so decoding here does not weaken auth.
-    """
-    if not raw_body:
-        return {}
-    content_type = headers.get("content-type") or headers.get("Content-Type") or ""
-    try:
-        if content_type.startswith("application/x-www-form-urlencoded"):
-            from urllib.parse import parse_qs
-
-            fields = parse_qs(raw_body.decode("utf-8"))
-            payload_values = fields.get("payload")
-            return json.loads(payload_values[0]) if payload_values else {}
-        return json.loads(raw_body.decode("utf-8"))
-    except Exception:
-        return {}
-
-
-async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
-    """Read the signing-secret candidates for a workspace and let the session go.
-
-    The scope closes before `verify_slack_request` runs, so the HMAC comparison
-    (and the request it authenticates) holds no pooled connection.
-    """
-    async with uow_scope(uow_factory) as uow:
-        return await slack_candidates_for_workspace(
-            service=get_surface_service(uow), team_id=slack_team_id(payload)
-        )
-
-
-async def _verify_inbound_request(
-    *,
-    platform: str,
-    headers: dict[str, str],
-    raw_body: bytes,
-    payload: dict,
-    security_service,
-    uow_factory: UnitOfWorkFactory,
-) -> list[UUID] | None:
-    """Check a shared-endpoint request is really from the platform.
-
-    Slack is the one platform where the answer depends on *who* sent it: an org
-    running its own Slack app signs with its own secret. So the workspace has
-    to be read out of the body before the signature is checked. That is safe —
-    the only thing read is the team id, and the only thing it selects is which
-    secret to try. Nothing acts on the payload, and a request matching no
-    candidate is rejected exactly as an unsigned one would be.
-
-    This is what lets an org's own app deliver to the shared endpoint like
-    everyone else, rather than needing a URL of its own.
-    """
-    if platform == "slack":
-        verified = security_service.verify_slack_request(
-            headers=headers,
-            raw_body=raw_body,
-            api_app_id=slack_api_app_id(payload),
-            candidates=await _slack_candidates(uow_factory, payload),
-        )
-        return list(verified.receiver_surface_ids) or None
-    await security_service.verify_platform_request(
-        platform=platform,
-        headers=headers,
-        raw_body=raw_body,
-    )
-    return None
 
 
 @router.post(
@@ -229,39 +97,13 @@ async def handle_platform_webhook(
     # Resend inbound: a catch-all address webhook. Resolve the destination
     # address to a concrete surface and feed the normal surface-level pipeline.
     if platform == "resend":
-        # Authenticate the Svix signature over the raw body BEFORE trusting any
-        # of it (Resend does not go through assert_platform_request_allowed).
-        await security_service.verify_resend_request(headers=headers, raw_body=raw_body)
-        normalized = _normalize_resend_inbound(payload)
-        recipients = normalized.get("recipients") or []
-        if not recipients:
-            return {"message": "Ignored: no destination address"}
-        # Try every address the message was delivered for, not just the one the
-        # sender typed: under aliasing or forwarding the pod's address is in
-        # ``received_for`` and matching on ``to`` alone loses the mail.
-        surface = None
-        async with uow_scope(uow_factory) as uow:
-            repository = get_surface_service(uow).surface_repository
-            for address in recipients:
-                surface = await repository.get_active_by_address(
-                    platform="RESEND", address=address
-                )
-                if surface is not None:
-                    normalized["to"] = address
-                    break
-        if surface is None:
-            return {"message": "Ignored: no surface for address"}
-        source_event_id = _surface_source_event_id("resend", normalized, raw_body)
-        event = SurfaceWebhookReceivedEvent(
-            event_id=stable_event_id({"event_id": source_event_id}),
-            source="resend",
-            payload=normalized,
-            headers=_redacted_headers(headers),
-            surface_id=surface.id,
-            source_event_id=source_event_id,
+        return await _handle_resend_webhook(
+            payload=payload,
+            headers=headers,
+            raw_body=raw_body,
+            security_service=security_service,
+            uow_factory=uow_factory,
         )
-        await EventPublisher.publish(event.stream_name(), event)
-        return {"message": "Webhook received"}
 
     # Slack sends url_verification before any signing secret is configured — respond immediately.
     if platform == "slack" and payload.get("type") == "url_verification":
@@ -279,48 +121,13 @@ async def handle_platform_webhook(
         uow_factory=uow_factory,
     )
 
-    # Verification commands are identity traffic, not agent messages. The
-    # request is intercepted only after Meta's raw-body signature succeeds and
-    # only when it targets Lemma's configured global phone-number id.
-    if platform == "whatsapp":
-        verification = parse_reserved_verification_message(payload)
-        if verification is not None and is_whatsapp_verification_configured():
-            code, sender_wa_id, destination_id, message_id = verification
-            if destination_id == surface_settings.whatsapp_phone_number_id:
-                identity_event = WhatsAppMobileVerificationReceivedEvent(
-                    event_id=stable_event_id(
-                        {"whatsapp_mobile_verification_message_id": message_id}
-                    ),
-                    code=code,
-                    sender_wa_id=sender_wa_id,
-                    destination_phone_number_id=destination_id,
-                    whatsapp_message_id=message_id,
-                )
-                await EventPublisher.publish(
-                    identity_event.stream_name(), identity_event
-                )
-                return {"message": "Verification message received"}
+    if platform == "whatsapp" and await _published_whatsapp_verification(payload):
+        return {"message": "Verification message received"}
 
-    # Opening a Slack modal is the one thing that cannot go through the queue:
-    # ``trigger_id`` dies ~3 seconds after the click, and by the time a worker
-    # dequeues the event it is usually already expired. So this runs inline, in
-    # the HTTP request, before anything is published.
-    if platform == "slack" and _opens_a_slack_modal(payload):
-        from app.modules.agent_surfaces.events.handlers import (
-            build_surface_event_handler,
-        )
-
-        async with uow_factory() as uow:
-            handled = await build_surface_event_handler(uow).try_handle_channel_setup(
-                SurfacePlatformWebhookIngress(
-                    source=platform,
-                    payload=payload,
-                    headers=_redacted_headers(headers),
-                    receiver_surface_ids=receiver_surface_ids,
-                )
-            )
-        if handled:
-            return Response(status_code=200)
+    if platform == "slack" and await _handled_slack_modal(
+        payload, headers, receiver_surface_ids, uow_factory
+    ):
+        return Response(status_code=200)
 
     source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(

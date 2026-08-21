@@ -193,7 +193,9 @@ class TelegramClient:
     def _parse(self, method: str, response: httpx.Response) -> dict[str, Any]:
         try:
             data = response.json()
-        except Exception:
+        except ValueError:
+            # httpx raises json.JSONDecodeError -- a ValueError -- for a body
+            # that is not JSON. Anything else here is our bug, not theirs.
             data = {}
         if not isinstance(data, dict):
             data = {}

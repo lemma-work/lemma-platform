@@ -12,18 +12,20 @@ around it.
 
 from __future__ import annotations
 
+
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.modules.agent_surfaces.services.surface_lifecycle import (
+    SurfaceLifecycleMixin,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
-    ParsedSurfaceLifecycleEvent,
     SurfaceChannelRoute,
-    SurfaceLifecycleKind,
 )
 from app.composition.surface_identity import Pod
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -37,7 +39,9 @@ from app.modules.agent_surfaces.services.surface_configuration_authorization imp
 logger = get_logger(__name__)
 
 
-class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
+class SurfaceConfigurationMixin(
+    SurfaceLifecycleMixin, SurfaceConfigurationAuthorizationMixin
+):
     """Set-up flows a person drives from inside the chat app."""
 
     async def try_handle_channel_setup(
@@ -411,174 +415,3 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             return None, None
         platform = self._resolve_platform(request.source)
         return (self.adapter_registry.get(platform) if platform else None), platform
-
-    async def try_handle_lifecycle(
-        self,
-        request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
-    ) -> bool:
-        """Parse + route an event about the app itself rather than a message.
-
-        Returns True when the payload was a lifecycle event, so the caller stops
-        — these never become conversations. False means fall through to the
-        interaction and message paths.
-        """
-        surface = None
-        if isinstance(request, SurfaceDirectWebhookIngress):
-            surface = await self.surface_repository.get(request.surface_id)
-            if surface is None:
-                return False
-            adapter = self.adapter_registry.get(surface.surface_type)
-            platform = surface.surface_type
-        else:
-            platform = self._resolve_platform(request.source)
-            adapter = self.adapter_registry.get(platform) if platform else None
-        if adapter is None:
-            return False
-        # Parsing can reach the platform (Slack parses locally, but Teams and
-        # Telegram fetch a profile or a token here), so treat it as egress.
-        async with connection_released(self.uow.session):
-            parsed = await adapter.parse_inbound_lifecycle(
-                request.payload, request.headers
-            )
-        if parsed is None:
-            return False
-
-        action = (
-            Permissions.AGENT_UPDATE
-            if parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
-            else Permissions.AGENT_READ
-        )
-        candidates, user_id, authorized = await self._authorized_configuration_surfaces(
-            request,
-            tenant_id=parsed.tenant_id,
-            platform=platform,
-            actor_external_user_id=parsed.actor_external_user_id,
-            adapter=adapter,
-            action=action,
-        )
-        explicit_surface_id = str(surface.id) if surface is not None else None
-        selected = await self._pick_configuration_surface(
-            authorized,
-            explicit_surface_id=explicit_surface_id,
-            user_id=user_id,
-            platform=platform,
-        )
-        if selected is None:
-            if not candidates or not parsed.actor_external_user_id:
-                return True
-            prompt_surface = authorized[0][0] if authorized else candidates[0]
-            credentials = await self._resolve_credentials(prompt_surface)
-            if not authorized:
-                if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-                    async with connection_released(self.uow.session):
-                        await adapter.publish_home_view(
-                            credentials=credentials,
-                            user_id=parsed.actor_external_user_id,
-                            pod_name=None,
-                            dm_agent_name=None,
-                            channel_routes=[],
-                            agents=[],
-                            apps=[],
-                            access_message=(
-                                "You need access to a connected Lemma pod before this app can show agents or settings."
-                            ),
-                        )
-                elif (
-                    parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
-                    and parsed.external_channel_id
-                ):
-                    async with connection_released(self.uow.session):
-                        await adapter.send_channel_setup_prompt(
-                            credentials=credentials,
-                            channel_id=parsed.external_channel_id,
-                            user_id=parsed.actor_external_user_id,
-                            configuration_error=(
-                                "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
-                            ),
-                        )
-                return True
-            choices = await self._surface_choice_labels(authorized)
-            if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-                async with connection_released(self.uow.session):
-                    await adapter.publish_home_view(
-                        credentials=credentials,
-                        user_id=parsed.actor_external_user_id,
-                        pod_name=None,
-                        dm_agent_name=None,
-                        channel_routes=[],
-                        agents=[],
-                        apps=[],
-                        surface_choices=choices,
-                    )
-            elif (
-                parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
-                and parsed.external_channel_id
-            ):
-                async with connection_released(self.uow.session):
-                    await adapter.send_channel_setup_prompt(
-                        credentials=credentials,
-                        channel_id=parsed.external_channel_id,
-                        user_id=parsed.actor_external_user_id,
-                        surface_choices=choices,
-                    )
-            return True
-        surface, ctx = selected
-        try:
-            await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
-        except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic",
-                surface_id=str(surface.id),
-                exc_info=True,
-            )
-        return True
-
-    async def _handle_lifecycle_event(
-        self,
-        *,
-        surface,
-        parsed: ParsedSurfaceLifecycleEvent,
-        ctx,
-    ) -> None:
-        """React to the app's own situation changing.
-
-        Today the one reaction is offering to configure a freshly joined
-        channel. A channel that already has a route needs no prompt — the
-        invite was someone re-adding the bot, not setting it up.
-        """
-        adapter = self.adapter_registry.get(surface.surface_type)
-        if adapter is None:
-            return
-        credentials = await self._resolve_credentials(surface)
-
-        if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-            # Slack spins forever until a view is published, so this must answer
-            # every open — including the very first, before anything is set up.
-            if not parsed.actor_external_user_id:
-                return
-            await self._publish_home(
-                surface=surface,
-                adapter=adapter,
-                credentials=credentials,
-                external_user_id=parsed.actor_external_user_id,
-                ctx=ctx,
-            )
-            return
-
-        if parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL:
-            return
-        if not parsed.actor_external_user_id or not parsed.external_channel_id:
-            return
-        if surface.channel_route_for(
-            channel_id=parsed.external_channel_id, channel_name=""
-        ):
-            return
-        async with connection_released(self.uow.session):
-            await adapter.send_channel_setup_prompt(
-                credentials=credentials,
-                channel_id=parsed.external_channel_id,
-                user_id=parsed.actor_external_user_id,
-                channel_name=await adapter.channel_name(
-                    credentials=credentials, channel_id=parsed.external_channel_id
-                ),
-            )

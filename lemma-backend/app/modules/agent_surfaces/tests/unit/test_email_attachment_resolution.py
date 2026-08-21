@@ -9,9 +9,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.platforms.email_common import (
-    resolve_outbound_email_attachments,
+from app.modules.agent_surfaces.platforms.email_attachments import (
     resolve_outbound_email_attachment_urls,
+    resolve_outbound_email_attachments,
 )
 
 pytestmark = pytest.mark.asyncio

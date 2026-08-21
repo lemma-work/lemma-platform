@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-    _normalize_resend_inbound,
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    normalize_resend_inbound as _normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -462,7 +462,7 @@ def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
     array. The reply then opens a new conversation and the notification it was
     answering stays OPEN forever.
     """
-    from app.modules.agent_surfaces.platforms.email_common import email_thread_root
+    from app.modules.agent_surfaces.platforms.email_identity import email_thread_root
     from app.modules.agent_surfaces.platforms.resend.inbound import (
         header_map,
         references_of,
