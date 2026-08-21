@@ -113,7 +113,7 @@ class ConversationTitleService:
                     )
                 except Exception:
                     logger.debug(
-                        'agent.conversation_title_service.llm_title_generation_s_using.diagnostic',
+                        "agent.conversation_title_service.llm_title_generation_s_using.diagnostic",
                         conversation_id=conversation_id,
                     )
             if not title:
@@ -139,7 +139,7 @@ class ConversationTitleService:
             return title
         except Exception:  # never break the calling worker
             logger.debug(
-                'agent.conversation_title_service.conversation_title_generation_s_s.diagnostic',
+                "agent.conversation_title_service.conversation_title_generation_s_s.diagnostic",
                 conversation_id=conversation_id,
             )
             return None

@@ -17,19 +17,27 @@ def _make_client_and_captured():
     class FakeApps:
         def list(self, *, limit=100):
             captured["limit"] = limit
-            return {"items": [{"id": "app-1", "name": "my-app", "url": "https://app.example.com"}]}
+            return {
+                "items": [
+                    {"id": "app-1", "name": "my-app", "url": "https://app.example.com"}
+                ]
+            }
 
         def get(self, name):
             captured["get"] = name
             return {"id": "app-1", "name": name}
 
         def create(self, request):
-            captured["create"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["create"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "app-1", "name": "my-app"}
 
         def update(self, name, request):
             captured["update"] = name
-            captured["update_payload"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["update_payload"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "app-1", "name": name}
 
         def delete(self, name):
@@ -158,8 +166,14 @@ def test_apps_init_writes_server_binding(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "--config-file", str(cfg), "--pod", "pod-abc",
-            "apps", "init", str(target), "--no-install",
+            "--config-file",
+            str(cfg),
+            "--pod",
+            "pod-abc",
+            "apps",
+            "init",
+            str(target),
+            "--no-install",
         ],
     )
 
@@ -167,7 +181,9 @@ def test_apps_init_writes_server_binding(tmp_path, monkeypatch):
     binding = target / ".lemma.lemma-cloud.env"
     assert binding.exists()
     assert "LEMMA_POD_ID=pod-abc" in binding.read_text(encoding="utf-8")
-    assert "LEMMA_SERVER=lemma-cloud" in (target / ".lemma.env").read_text(encoding="utf-8")
+    assert "LEMMA_SERVER=lemma-cloud" in (target / ".lemma.env").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_apps_open_never_puts_the_token_in_argv(monkeypatch):
@@ -183,11 +199,17 @@ def test_apps_open_never_puts_the_token_in_argv(monkeypatch):
         calls.append({"command": command, "input": kwargs.get("input", "")})
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
 
-    monkeypatch.setattr(apps.shutil, "which", lambda _name: "/usr/local/bin/agent-browser")
+    monkeypatch.setattr(
+        apps.shutil, "which", lambda _name: "/usr/local/bin/agent-browser"
+    )
     monkeypatch.setattr(apps.subprocess, "run", fake_run)
     monkeypatch.setattr(apps, "resolve_token", lambda *a, **k: secret)
-    monkeypatch.setattr(apps, "resolve_base_url", lambda *a, **k: "https://api.example.com")
-    monkeypatch.setattr(apps, "resolve_auth_url", lambda *a, **k: "https://auth.example.com")
+    monkeypatch.setattr(
+        apps, "resolve_base_url", lambda *a, **k: "https://api.example.com"
+    )
+    monkeypatch.setattr(
+        apps, "resolve_auth_url", lambda *a, **k: "https://auth.example.com"
+    )
 
     client, _ = _make_client_and_captured()
     _patch(monkeypatch, client)

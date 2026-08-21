@@ -40,7 +40,8 @@ class RespondToNotificationRequest(BaseModel):
         ),
     )
     data: dict | None = Field(
-        default=None, description="Structured values, when specific fields were asked for."
+        default=None,
+        description="Structured values, when specific fields were asked for.",
     )
 
 

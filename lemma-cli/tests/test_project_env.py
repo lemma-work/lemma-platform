@@ -48,7 +48,9 @@ def _load(start, *, server_flag=None, config_file=NONEXISTENT):
 
 def test_anchors_on_base_or_server_file(tmp_path):
     root = _repo(tmp_path)
-    (root / ".lemma.lemma-cloud.env").write_text("LEMMA_POD_ID=p\n")  # no base .lemma.env
+    (root / ".lemma.lemma-cloud.env").write_text(
+        "LEMMA_POD_ID=p\n"
+    )  # no base .lemma.env
     assert find_project_dir(root / "apps" / "web") == root
 
 
@@ -181,7 +183,9 @@ def test_token_in_committed_base_flagged(tmp_path):
 def test_write_server_env_writes_binding_and_seeds_default(tmp_path):
     root = (tmp_path / "bundle").resolve()
     root.mkdir()
-    path = write_server_env(root, "lemma-cloud", {"LEMMA_POD_ID": "p1", "LEMMA_ORG_ID": "o1"})
+    path = write_server_env(
+        root, "lemma-cloud", {"LEMMA_POD_ID": "p1", "LEMMA_ORG_ID": "o1"}
+    )
     assert path.name == ".lemma.lemma-cloud.env"
     text = path.read_text()
     assert "LEMMA_POD_ID=p1" in text and "LEMMA_ORG_ID=o1" in text

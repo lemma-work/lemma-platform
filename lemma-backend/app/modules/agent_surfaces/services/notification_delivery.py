@@ -205,9 +205,7 @@ def rank_candidates(
         capabilities = get_platform_capabilities(channel.platform.value)
         is_email = bool(capabilities and capabilities.is_email)
         here = origin_surface_id is not None and channel.surface.id == origin_surface_id
-        freshness = (
-            sort_key_for_link(channel.link).timestamp() if channel.link else 0.0
-        )
+        freshness = sort_key_for_link(channel.link).timestamp() if channel.link else 0.0
         # Tuple is compared ascending, so negate what should come first.
         return (int(is_email), 0 if here else 1, -freshness)
 

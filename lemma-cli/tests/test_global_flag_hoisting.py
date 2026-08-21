@@ -4,6 +4,7 @@
 list`. LazyRootGroup hoists the root-level global flags to the front so Click's
 group parser sees them regardless of where the user put them.
 """
+
 from __future__ import annotations
 
 import typer.main
@@ -40,7 +41,15 @@ def test_hoist_handles_equals_form_and_bare_flags():
 
 def test_hoist_preserves_subcommand_and_payload_order():
     # A --data JSON payload must not be reordered or split.
-    args = ["records", "create", "tickets", "--data", '{"title":"x"}', "--output", "json"]
+    args = [
+        "records",
+        "create",
+        "tickets",
+        "--data",
+        '{"title":"x"}',
+        "--output",
+        "json",
+    ]
     assert hoist_global_options(args) == [
         "--output",
         "json",
@@ -86,7 +95,12 @@ def test_no_hoisted_flag_collides_with_a_subcommand_option():
     import pathlib
     import re
 
-    cmd_dir = pathlib.Path(__file__).resolve().parents[1] / "lemma_cli" / "cli_core" / "commands"
+    cmd_dir = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "lemma_cli"
+        / "cli_core"
+        / "commands"
+    )
     subcommand_opts: set[str] = set()
     for f in cmd_dir.glob("*.py"):
         subcommand_opts.update(re.findall(r'"(--[a-z][a-z-]+)"', f.read_text()))

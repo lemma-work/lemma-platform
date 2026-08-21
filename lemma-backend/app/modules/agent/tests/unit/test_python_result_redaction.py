@@ -34,9 +34,7 @@ def test_a_printed_line_that_merely_contains_the_result_is_kept():
 
 
 def test_unrelated_stdout_is_left_untouched():
-    trimmed = replace_result_if_present(
-        _result(stdout="hello world\n", result="42")
-    )
+    trimmed = replace_result_if_present(_result(stdout="hello world\n", result="42"))
     assert trimmed.stdout == "hello world\n"
 
 

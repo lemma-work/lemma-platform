@@ -45,7 +45,9 @@ def _service(*, pod_ids, surfaces_by_pod, preferences=None, get_surface=None):
 
     surfaces = SimpleNamespace(
         list_by_pod=AsyncMock(side_effect=_list_by_pod),
-        get=AsyncMock(side_effect=lambda sid: get_surface(sid) if get_surface else None),
+        get=AsyncMock(
+            side_effect=lambda sid: get_surface(sid) if get_surface else None
+        ),
     )
     membership = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=list(pod_ids)),

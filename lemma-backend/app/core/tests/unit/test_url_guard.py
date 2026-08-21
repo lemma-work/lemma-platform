@@ -93,9 +93,7 @@ class TestUrlShape:
     async def test_a_url_without_a_host_is_refused(self):
         assert await _reason("https:///nowhere") == "missing_host"
 
-    @pytest.mark.parametrize(
-        "port", [22, 25, 3306, 5432, 6379, 9200, 11211, 27017]
-    )
+    @pytest.mark.parametrize("port", [22, 25, 3306, 5432, 6379, 9200, 11211, 27017])
     async def test_non_http_service_ports_are_refused(self, port):
         # Aiming an HTTP fetcher at SSH, Postgres or Redis is protocol confusion,
         # not a connector target. Several of these sit above 1024, so a check on
@@ -106,9 +104,7 @@ class TestUrlShape:
     async def test_http_ports_are_allowed(self, port):
         # Resolution is permitted to fail here; the point is the port check.
         policy = GuardPolicy(allow_unresolvable=True)
-        assert await assert_safe_url(
-            f"https://api.example.com:{port}/", policy=policy
-        )
+        assert await assert_safe_url(f"https://api.example.com:{port}/", policy=policy)
 
 
 class TestFailureModes:
@@ -168,12 +164,16 @@ class TestTheSelfHostingEscapeHatchIsNarrow:
 
     @pytest.mark.asyncio
     async def test_a_private_address_is_allowed(self):
-        policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
+        policy = GuardPolicy(
+            allow_private=True, allow_http=True, allow_unresolvable=True
+        )
         assert await assert_safe_url("http://10.0.0.5:8080/mcp", policy=policy)
 
     @pytest.mark.asyncio
     async def test_loopback_is_allowed(self):
-        policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
+        policy = GuardPolicy(
+            allow_private=True, allow_http=True, allow_unresolvable=True
+        )
         assert await assert_safe_url("http://127.0.0.1:9000/mcp", policy=policy)
 
     @pytest.mark.asyncio
@@ -185,19 +185,25 @@ class TestTheSelfHostingEscapeHatchIsNarrow:
         ],
     )
     async def test_link_local_stays_refused(self, url):
-        policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
+        policy = GuardPolicy(
+            allow_private=True, allow_http=True, allow_unresolvable=True
+        )
         with pytest.raises(UnsafeUrlError) as caught:
             await assert_safe_url(url, policy=policy)
         assert caught.value.reason == "link_local_address"
 
     @pytest.mark.asyncio
     async def test_a_private_database_host_is_allowed(self):
-        policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
+        policy = GuardPolicy(
+            allow_private=True, allow_http=True, allow_unresolvable=True
+        )
         assert await assert_safe_host("10.0.0.9", 5432, policy=policy)
 
     @pytest.mark.asyncio
     async def test_the_metadata_host_stays_refused_for_sql_too(self):
-        policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
+        policy = GuardPolicy(
+            allow_private=True, allow_http=True, allow_unresolvable=True
+        )
         with pytest.raises(UnsafeUrlError):
             await assert_safe_host("169.254.169.254", 5432, policy=policy)
 

@@ -44,6 +44,7 @@ from app.core.observability.stall_sampler import (
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class _LagGauge:
     """Most-recent measured event-loop lag, in seconds.
@@ -113,9 +114,7 @@ def is_loop_healthy() -> bool:
         return False
     if _last_unhealthy_at is None:
         return True
-    return (
-        time.monotonic() - _last_unhealthy_at
-    ) >= _LIVENESS_STICKY_SECONDS
+    return (time.monotonic() - _last_unhealthy_at) >= _LIVENESS_STICKY_SECONDS
 
 
 def reset_loop_watchdog_state() -> None:
@@ -274,7 +273,9 @@ async def loop_lag_watchdog(
                     # temp file, an atomic rename — on whatever volume the pod
                     # was given. Small, but the one thing in this process that
                     # must never be the reason the loop it measures stalls.
-                    await run_blocking(_write_heartbeat, heartbeat_path, limiter="cpu_bound")
+                    await run_blocking(
+                        _write_heartbeat, heartbeat_path, limiter="cpu_bound"
+                    )
                 except OSError as exc:  # pragma: no cover - defensive
                     logger.debug(
                         "runtime.heartbeat.write_failed",

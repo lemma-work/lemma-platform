@@ -75,12 +75,18 @@ async def test_pod_member_lifecycle(
     assert accept_response.status_code == 200, accept_response.text
 
     # 4. Resolve organization_member_id for invitee.
-    org_members_response = await authenticated_client.get(f"/organizations/{org_id}/members")
+    org_members_response = await authenticated_client.get(
+        f"/organizations/{org_id}/members"
+    )
     assert org_members_response.status_code == 200, org_members_response.text
     members = org_members_response.json().get("items", [])
 
     invitee_org_member = next(
-        (member for member in members if member.get("user", {}).get("email") == invitee_email),
+        (
+            member
+            for member in members
+            if member.get("user", {}).get("email") == invitee_email
+        ),
         None,
     )
     assert invitee_org_member is not None
@@ -105,9 +111,13 @@ async def test_pod_member_lifecycle(
     pod_members_response = await authenticated_client.get(f"/pods/{pod_id}/members")
     assert pod_members_response.status_code == 200, pod_members_response.text
     pod_members = pod_members_response.json().get("items", [])
-    assert any(member["user_id"] == invitee_org_member["user"]["id"] for member in pod_members)
+    assert any(
+        member["user_id"] == invitee_org_member["user"]["id"] for member in pod_members
+    )
     listed_member = next(
-        member for member in pod_members if member["user_id"] == invitee_org_member["user"]["id"]
+        member
+        for member in pod_members
+        if member["user_id"] == invitee_org_member["user"]["id"]
     )
     assert listed_member["pod_member_id"] == pod_member["pod_member_id"]
     assert listed_member["email"] == invitee_email
@@ -133,7 +143,9 @@ async def test_pod_member_lifecycle(
         f"/pods/{pod_id}/members/lookup/by-user-id/{invitee_org_member['user']['id']}"
     )
     assert lookup_by_user_response.status_code == 200, lookup_by_user_response.text
-    assert lookup_by_user_response.json()["pod_member_id"] == pod_member["pod_member_id"]
+    assert (
+        lookup_by_user_response.json()["pod_member_id"] == pod_member["pod_member_id"]
+    )
 
     lookup_by_email_response = await authenticated_client.get(
         f"/pods/{pod_id}/members/lookup/by-email",
@@ -141,7 +153,9 @@ async def test_pod_member_lifecycle(
     )
     assert lookup_by_email_response.status_code == 200, lookup_by_email_response.text
     assert lookup_by_email_response.json()["user_id"] == invitee_profile["id"]
-    assert lookup_by_email_response.json()["pod_member_id"] == pod_member["pod_member_id"]
+    assert (
+        lookup_by_email_response.json()["pod_member_id"] == pod_member["pod_member_id"]
+    )
 
     missing_lookup_response = await authenticated_client.get(
         f"/pods/{pod_id}/members/lookup/by-email",
@@ -165,8 +179,12 @@ async def test_pod_member_lifecycle(
     assert remove_response.status_code == 204, remove_response.text
 
     # 10. Verify member removed.
-    pod_members_after_response = await authenticated_client.get(f"/pods/{pod_id}/members")
-    assert pod_members_after_response.status_code == 200, pod_members_after_response.text
+    pod_members_after_response = await authenticated_client.get(
+        f"/pods/{pod_id}/members"
+    )
+    assert pod_members_after_response.status_code == 200, (
+        pod_members_after_response.text
+    )
     pod_members_after = pod_members_after_response.json().get("items", [])
     assert all(
         member["user_id"] != invitee_org_member["user"]["id"]
@@ -252,7 +270,9 @@ async def test_update_remove_member_rejects_mismatched_pod_path(
     )
     assert accept_response.status_code == 200, accept_response.text
 
-    org_members_response = await authenticated_client.get(f"/organizations/{org_id}/members")
+    org_members_response = await authenticated_client.get(
+        f"/organizations/{org_id}/members"
+    )
     assert org_members_response.status_code == 200, org_members_response.text
     invitee_org_member = next(
         (

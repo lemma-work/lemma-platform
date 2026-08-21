@@ -41,7 +41,10 @@ from app.modules.pod.tests.e2e.workload_permissions.harness import (
     seed_auth_config,
     seed_connector,
 )
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID, DEFAULT_POD_AGENT_NAME
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_ID,
+    DEFAULT_POD_AGENT_NAME,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -100,9 +103,13 @@ async def _user_ctx(db_session, *, user_id: str, pod_id: str):
 async def test_plain_user_resolves_own_account(
     authenticated_client, fixed_test_org, fixed_test_user, db_session
 ):
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     svc = build_account_resolution_service(db_session)
-    ctx = await _user_ctx(db_session, user_id=fixed_test_user["id"], pod_id=env["pod_id"])
+    ctx = await _user_ctx(
+        db_session, user_id=fixed_test_user["id"], pod_id=env["pod_id"]
+    )
 
     account = await svc.resolve_account(
         user_id=UUID(fixed_test_user["id"]),
@@ -116,7 +123,9 @@ async def test_plain_user_resolves_own_account(
 async def test_plain_user_cannot_resolve_other_users_account(
     authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session
 ):
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     other = await signup_user(async_client, "conn-other")
     other_account_id = await seed_account(
         db_session,
@@ -126,7 +135,9 @@ async def test_plain_user_cannot_resolve_other_users_account(
         connector_id=env["connector_id"],
     )
     svc = build_account_resolution_service(db_session)
-    ctx = await _user_ctx(db_session, user_id=fixed_test_user["id"], pod_id=env["pod_id"])
+    ctx = await _user_ctx(
+        db_session, user_id=fixed_test_user["id"], pod_id=env["pod_id"]
+    )
 
     with pytest.raises(AccountResolutionError):
         await svc.resolve_account(
@@ -144,7 +155,9 @@ async def test_plain_user_cannot_resolve_other_users_account(
 async def test_named_workload_without_connector_use_is_denied(
     authenticated_client, fixed_test_org, fixed_test_user, db_session
 ):
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     name = f"conn_agent_{uuid4().hex[:8]}"
     agent = await create_agent(authenticated_client, env["pod_id"], name)
     # No connector.use grant.
@@ -171,11 +184,17 @@ async def test_named_workload_without_connector_use_is_denied(
 async def test_named_workload_with_connector_use_resolves_own_account(
     authenticated_client, fixed_test_org, fixed_test_user, db_session
 ):
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     name = f"conn_agent_{uuid4().hex[:8]}"
     agent = await create_agent(authenticated_client, env["pod_id"], name)
     await replace_workload_grants(
-        authenticated_client, env["pod_id"], AGENT, name, [_connector_grant(env["connector_id"])]
+        authenticated_client,
+        env["pod_id"],
+        AGENT,
+        name,
+        [_connector_grant(env["connector_id"])],
     )
 
     svc = build_account_resolution_service(db_session)
@@ -204,7 +223,9 @@ async def test_named_workload_other_account_requires_workload_grant(
     invoker-independent. The invoking user needs no matching grant. This is the
     shared-sender pattern (one team account pinned on a workload).
     """
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     other = await signup_user(async_client, "conn-other2")
     other_account_id = await seed_account(
         db_session,
@@ -238,7 +259,11 @@ async def test_named_workload_other_account_requires_workload_grant(
 
     # (1) connector.use only — the workload holds no account grant -> denied.
     await replace_workload_grants(
-        authenticated_client, env["pod_id"], AGENT, name, [_connector_grant(env["connector_id"])]
+        authenticated_client,
+        env["pod_id"],
+        AGENT,
+        name,
+        [_connector_grant(env["connector_id"])],
     )
     with pytest.raises(ConnectorAccessDeniedError):
         await _resolve_other()
@@ -264,7 +289,9 @@ async def test_named_workload_other_account_requires_workload_grant(
 async def test_default_pod_agent_resolves_own_account_without_grant(
     authenticated_client, fixed_test_org, fixed_test_user, db_session
 ):
-    env = await _setup(authenticated_client, fixed_test_org, fixed_test_user, db_session)
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
     svc = build_account_resolution_service(db_session)
     ctx = await build_workload_ctx(
         db_session,

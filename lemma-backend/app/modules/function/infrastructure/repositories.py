@@ -294,7 +294,9 @@ def _expired_run_error(run, *, now: datetime) -> str:
     started = getattr(run, "started_at", None)
     deadline = getattr(run, "deadline_at", None)
     if started is None or deadline is None:
-        return "Function execution deadline exceeded; the runtime never reported a result"
+        return (
+            "Function execution deadline exceeded; the runtime never reported a result"
+        )
     budget = round((deadline - started).total_seconds())
     ran_for = round((now - started).total_seconds())
     return (

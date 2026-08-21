@@ -360,7 +360,9 @@ def sweep(monkeypatch):
             pass
 
     monkeypatch.setattr(svc, "AgentConversationWaitRepository", _FakeRepo)
-    monkeypatch.setattr(svc, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow())
+    monkeypatch.setattr(
+        svc, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
+    )
     monkeypatch.setattr(svc, "async_session_maker", object())
     state.service = svc.SnoozeReconcileService()
     state.module = svc

@@ -5,6 +5,7 @@ such as a single generated model — no longer eagerly pulls in the HTTP client,
 all resource classes, and `requests`. Each name loads its module only on first
 access, which keeps `import lemma_sdk` (and the CLI that depends on it) cheap.
 """
+
 from __future__ import annotations
 
 import importlib

@@ -70,7 +70,9 @@ async def test_surface_webhook_auth_exclusion_matches_only_uuid_webhook_paths():
 _RESEND_SECRET = "whsec_" + base64.b64encode(b"resend-inbound-secret-key").decode()
 
 
-def _svix_headers(raw_body: bytes, secret: str, *, timestamp: int | None = None) -> dict[str, str]:
+def _svix_headers(
+    raw_body: bytes, secret: str, *, timestamp: int | None = None
+) -> dict[str, str]:
     """Build a valid Svix signature header set for ``raw_body``."""
     svix_id = "msg_2b3c4d"
     ts = str(timestamp if timestamp is not None else int(time.time()))
@@ -238,9 +240,7 @@ def test_the_verifier_accepts_svix_s_own_published_vector(monkeypatch):
             headers={
                 "svix-id": msg_id,
                 "svix-timestamp": timestamp,
-                "svix-signature": (
-                    "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
-                ),
+                "svix-signature": ("v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="),
             },
             raw_body=body,
         )

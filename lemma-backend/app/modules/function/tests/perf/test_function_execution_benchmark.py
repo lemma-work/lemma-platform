@@ -149,12 +149,8 @@ def _lifecycle_comparison(report) -> dict[str, object]:
     instead of pausing.
     """
     by_phase = {sample.phase: sample for sample in report.lifecycle}
-    cold = next(
-        (sample for sample in report.cold if sample.case == "api_noop"), None
-    )
-    warm = next(
-        (case for case in report.cases if case.case == "api_noop"), None
-    )
+    cold = next((sample for sample in report.cold if sample.case == "api_noop"), None)
+    warm = next((case for case in report.cases if case.case == "api_noop"), None)
     resumed = by_phase.get("resumed")
     rebuilt = by_phase.get("rebuilt")
     comparison: dict[str, object] = {
@@ -190,6 +186,7 @@ async def test_function_execution_quality_benchmark(
             (WorkloadKind.FUNCTION, pod_id),
         )
     )
+
     # The two lifecycle hooks. They exist here rather than in the harness
     # because only the test process can reach the sandbox control plane -- the
     # harness speaks public HTTP APIs, and no public route releases or destroys
@@ -289,9 +286,7 @@ async def test_function_execution_quality_benchmark(
                         "terminal_mean_seconds": case.terminal.mean_seconds,
                         "terminal_p95_seconds": case.terminal.p95_seconds,
                         "submit_p95_seconds": case.submit.p95_seconds,
-                        "function_call_mean_seconds": (
-                            case.function_call.mean_seconds
-                        ),
+                        "function_call_mean_seconds": (case.function_call.mean_seconds),
                         "platform_overhead_p95_seconds": (
                             case.platform_overhead.p95_seconds
                         ),

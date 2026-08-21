@@ -143,7 +143,10 @@ async def stage_upload_limited(
             digest.update(chunk)
             if len(prefix) < SNIFF_PREFIX_BYTES:
                 prefix.extend(chunk[: SNIFF_PREFIX_BYTES - len(prefix)])
-            if path is None and sum(map(len, chunks)) + len(chunk) <= UPLOAD_MEMORY_SPOOL_BYTES:
+            if (
+                path is None
+                and sum(map(len, chunks)) + len(chunk) <= UPLOAD_MEMORY_SPOOL_BYTES
+            ):
                 chunks.append(chunk)
                 continue
             if path is None:

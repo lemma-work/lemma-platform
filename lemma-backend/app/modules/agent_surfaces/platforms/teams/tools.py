@@ -30,9 +30,7 @@ def build_teams_surface_toolset(
         try:
             return await service.get_recent_channel_messages(ctx=ctx, request=request)
         except Exception:
-            logger.debug(
-                "surface.teams.history_failed", exc_info=True
-            )
+            logger.debug("surface.teams.history_failed", exc_info=True)
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Teams channel history lookup failed unexpectedly.",

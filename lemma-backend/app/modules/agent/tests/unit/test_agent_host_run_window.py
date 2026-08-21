@@ -56,7 +56,9 @@ class TestTheCeilingsAgree:
         assert AGENT_RUN_JOB_TIMEOUT_SECONDS > DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
 
     def test_the_worker_has_room_to_cancel_and_finalize(self) -> None:
-        headroom = AGENT_RUN_JOB_TIMEOUT_SECONDS - DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+        headroom = (
+            AGENT_RUN_JOB_TIMEOUT_SECONDS - DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+        )
         assert headroom >= 120
 
     def test_the_orphan_sweep_never_reaps_a_healthy_run(self) -> None:
@@ -89,7 +91,8 @@ class TestCredentialRefresh:
     def test_renewal_starts_well_before_expiry(self) -> None:
         """With room for several attempts before the safety margin bites."""
         assert credential_refresh_due(
-            expires_at=_now() + timedelta(seconds=CREDENTIAL_REFRESH_MARGIN_SECONDS - 1),
+            expires_at=_now()
+            + timedelta(seconds=CREDENTIAL_REFRESH_MARGIN_SECONDS - 1),
             now=_now(),
         )
         assert CREDENTIAL_REFRESH_MARGIN_SECONDS > CREDENTIAL_SAFETY_MARGIN_SECONDS

@@ -57,7 +57,7 @@ def _fixture_dependencies(name: str) -> set[str]:
     func = getattr(fixture, "__wrapped__", fixture)
     try:
         parameters = inspect.signature(func).parameters
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return set()
     return {
         parameter

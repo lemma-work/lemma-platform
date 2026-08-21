@@ -57,9 +57,7 @@ class RuntimeSchemaInspection(RuntimeContract):
 
     @model_validator(mode="after")
     def validate_inspection_shape(self) -> RuntimeSchemaInspection:
-        if self.ok != (self.schemas is not None) or self.ok == (
-            self.error is not None
-        ):
+        if self.ok != (self.schemas is not None) or self.ok == (self.error is not None):
             raise ValueError("schema inspection result is inconsistent")
         return self
 

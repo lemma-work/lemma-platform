@@ -21,7 +21,7 @@ def sample(**overrides) -> dict:
             "workspace": {"ref": "ghcr.io/lemma-work/lemma-workspace:v1.4.0"},
             "function": {"ref": "ghcr.io/lemma-work/lemma-function:v1.4.0"},
         },
-        "infra": {"postgres": "docker.io/pgvector/pgvector:0.8.0-pg16"},
+        "infra": {"postgres": "docker.io/pgvector/pgvector:0.8.0-pg18"},
     }
     data.update(overrides)
     return data
@@ -33,7 +33,7 @@ def test_parse_and_pull_refs():
     assert manifest.image("backend").pull_ref == "ghcr.io/lemma-work/lemma-backend:v1.4.0@sha256:aa"
     assert manifest.image("frontend").pull_ref == "ghcr.io/lemma-work/lemma-frontend:v1.4.0"
     # infra falls back to built-in defaults when missing from the manifest
-    assert manifest.infra_image("postgres") == "docker.io/pgvector/pgvector:0.8.0-pg16"
+    assert manifest.infra_image("postgres") == "docker.io/pgvector/pgvector:0.8.0-pg18"
     assert manifest.infra_image("redis") == m.DEFAULT_INFRA_IMAGES["redis"]
 
 
@@ -41,7 +41,7 @@ def test_infrastructure_images_accept_release_digests():
     data = sample(
         infra={
             "postgres": {
-                "ref": "docker.io/pgvector/pgvector:0.8.3-pg16",
+                "ref": "docker.io/pgvector/pgvector:0.8.3-pg18",
                 "digest": "sha256:infra",
             }
         }

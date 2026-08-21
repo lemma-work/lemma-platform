@@ -45,9 +45,7 @@ class DomainEvent(BaseModel):
     traceparent: str | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    tracestate: str | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    tracestate: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def populate_event_lineage(self) -> "DomainEvent":

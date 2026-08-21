@@ -238,9 +238,7 @@ async def test_llm_error_falls_back_to_first_message(
     assert capture["usage"] == ["FAILED"]  # failure still metered
     assert uow.updated_with is not None
     assert uow.updated_with.title == title
-    assert capture["published"] == [
-        (conv.id, title_updated_payload(conv.id, title))
-    ]
+    assert capture["published"] == [(conv.id, title_updated_payload(conv.id, title))]
 
 
 @pytest.mark.asyncio
@@ -262,9 +260,7 @@ async def test_no_model_configured_uses_first_message_without_llm(
     assert capture["run_calls"] == 0  # LLM never invoked
     assert uow.updated_with is not None
     assert uow.updated_with.title == title
-    assert capture["published"] == [
-        (conv.id, title_updated_payload(conv.id, title))
-    ]
+    assert capture["published"] == [(conv.id, title_updated_payload(conv.id, title))]
 
 
 @pytest.mark.asyncio

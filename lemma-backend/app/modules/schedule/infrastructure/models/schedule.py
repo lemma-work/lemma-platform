@@ -16,6 +16,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleType,
 )
 
+
 class Schedule(UUIDAuditBase):
     """Unified schedule model for time, webhook, and datastore event sources."""
 
@@ -92,12 +93,8 @@ class Schedule(UUIDAuditBase):
     # Relationships
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
     pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
-    workflow: Mapped[Any] = relationship(
-        "WorkflowModel", foreign_keys=[workflow_id]
-    )
-    agent: Mapped[Any] = relationship(
-        "AgentModel", foreign_keys=[agent_id]
-    )
+    workflow: Mapped[Any] = relationship("WorkflowModel", foreign_keys=[workflow_id])
+    agent: Mapped[Any] = relationship("AgentModel", foreign_keys=[agent_id])
 
     __table_args__ = (
         Index("ix_schedules_user_pod", "user_id", "pod_id"),

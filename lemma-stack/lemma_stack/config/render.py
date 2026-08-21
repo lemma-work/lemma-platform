@@ -124,9 +124,7 @@ def backend_env(
         "FUNCTION_IMAGE": function_image,
         "WORKSPACE_DOCKER_SOCKET_PATH": container_socket,
         "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
-        "WORKSPACE_DOCKER_PRIVATE_NETWORK": (
-            "" if provider == "lemma_local" else NETWORK_NAME
-        ),
+        "WORKSPACE_DOCKER_PRIVATE_NETWORK": ("" if provider == "lemma_local" else NETWORK_NAME),
         "WORKSPACE_ADD_HOST_GATEWAY": "false",
         "WORKSPACE_HOST_ALIAS": "host.lemma.internal",
         # sandboxes share the network; no host.docker.internal rewrite
@@ -233,9 +231,7 @@ def host_backend_env(
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
             "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
             "WORKSPACE_CALLBACK_FRONTEND_URL": (f"http://host.lemma.internal:{frontend_port}"),
-            "FUNCTION_RUNTIME_GATEWAY_URL": (
-                f"http://host.lemma.internal:{backend_port}"
-            ),
+            "FUNCTION_RUNTIME_GATEWAY_URL": (f"http://host.lemma.internal:{backend_port}"),
             "SCHEDULER_API_URL": f"http://127.0.0.1:{backend_port}",
             "LOCAL_OBJECT_STORAGE_ROOT": str(paths.object_storage_dir),
             "LOCAL_FILE_STORAGE_ROOT": str(paths.files_dir),
@@ -249,9 +245,7 @@ def host_backend_env(
                 "WORKSPACE_LOCAL_RUNTIME_CLI": managed_runtime_cli,
                 "WORKSPACE_ADD_HOST_GATEWAY": "false",
                 "WORKSPACE_LOCAL_CALLBACK_REQUIRED": "true",
-                "WORKSPACE_LOCAL_CALLBACK_URL": (
-                    f"http://host.lemma.internal:{backend_port}"
-                ),
+                "WORKSPACE_LOCAL_CALLBACK_URL": (f"http://host.lemma.internal:{backend_port}"),
             }
         )
     # User settings retain normal last-wins semantics.

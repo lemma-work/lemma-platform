@@ -57,8 +57,7 @@ def _missing_markdown_message(file_entity: DatastoreFileEntity) -> str:
         )
     if status is FileStatus.NOT_REQUIRED:
         return (
-            f"{path} is not an indexable document, so no markdown was derived "
-            "from it."
+            f"{path} is not an indexable document, so no markdown was derived from it."
         )
     return f"Converted markdown for {path} not found"
 
@@ -530,7 +529,7 @@ class FileReader:
             return None
         except Exception:
             logger.debug(
-                'datastore.reader.load_child_manifest_s.diagnostic', exc_info=True
+                "datastore.reader.load_child_manifest_s.diagnostic", exc_info=True
             )
             return None
 
@@ -559,9 +558,7 @@ class FileReader:
             # caller that waits and one that concludes the document is
             # unreadable. Absent markdown means "not converted yet" far more
             # often than "will never exist", and both used to 404 identically.
-            raise DatastoreFileNotFoundError(
-                _missing_markdown_message(file_entity)
-            )
+            raise DatastoreFileNotFoundError(_missing_markdown_message(file_entity))
         except Exception as exc:
             raise DatastoreInfrastructureError(
                 f"Failed to download converted markdown for {file_entity.path}"

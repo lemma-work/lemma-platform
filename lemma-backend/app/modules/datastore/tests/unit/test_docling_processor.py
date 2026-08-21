@@ -89,7 +89,9 @@ async def test_extract_builds_paged_extraction_from_docling_markdown(monkeypatch
     monkeypatch.setattr(processor, "_convert", AsyncMock(return_value=raw))
 
     pdf_bytes = (_FIXTURES / "bert.pdf").read_bytes()
-    extraction = await processor.extract(pdf_bytes, "bert.pdf", mime_type="application/pdf")
+    extraction = await processor.extract(
+        pdf_bytes, "bert.pdf", mime_type="application/pdf"
+    )
 
     assert extraction.extraction_mode == "docling"
     assert "<!-- PAGE 1 -->" in extraction.markdown
@@ -119,7 +121,7 @@ async def test_convert_uses_async_submit_poll_result_endpoints(monkeypatch):
             _FakeResp(200, {"task_id": "t-123", "task_status": "pending"}),  # submit
             _FakeResp(200, {"task_id": "t-123", "task_status": "started"}),  # poll 1
             _FakeResp(200, {"task_id": "t-123", "task_status": "success"}),  # poll 2
-            _FakeResp(200, {"document": {"md_content": "# Result"}}),        # result
+            _FakeResp(200, {"document": {"md_content": "# Result"}}),  # result
         ]
     )
     monkeypatch.setattr(docling_module.aiohttp, "ClientSession", lambda **kw: session)
@@ -162,7 +164,10 @@ async def test_await_completion_times_out(monkeypatch):
 
     with pytest.raises(RuntimeError, match="timed out"):
         await processor._await_completion(
-            session=None, task_id="t-1", task={"task_status": "started"}, filename="big.pdf"
+            session=None,
+            task_id="t-1",
+            task={"task_status": "started"},
+            filename="big.pdf",
         )
 
 
@@ -172,7 +177,7 @@ async def test_submit_does_not_resubmit_on_success(monkeypatch):
     session = _FakeSession(
         [
             _FakeResp(200, {"task_id": "t-1", "task_status": "success"}),  # submit
-            _FakeResp(200, {"document": {"md_content": "ok"}}),            # result
+            _FakeResp(200, {"document": {"md_content": "ok"}}),  # result
         ]
     )
     monkeypatch.setattr(docling_module.aiohttp, "ClientSession", lambda **kw: session)

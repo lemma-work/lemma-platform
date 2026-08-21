@@ -36,9 +36,7 @@ def _registry():
     return build_kind_registry(composio_gateway=None, package_gateway=None)
 
 
-def resolve_install_kind(
-    connector: ConnectorEntity, kind: str | None
-) -> ConnectorKind:
+def resolve_install_kind(connector: ConnectorEntity, kind: str | None) -> ConnectorKind:
     """Pick which of a connector's kinds this install uses.
 
     Most connectors offer exactly one, so asking the caller to name it would be

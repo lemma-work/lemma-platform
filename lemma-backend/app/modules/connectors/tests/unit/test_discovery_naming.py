@@ -42,7 +42,10 @@ class TestNormalization:
 class TestCollisions:
     def test_two_names_that_normalize_alike_are_disambiguated(self):
         # The exact case that used to wipe an install's operation set.
-        assert assign_unique_names(["Get User", "get_user"]) == ["get_user", "get_user_2"]
+        assert assign_unique_names(["Get User", "get_user"]) == [
+            "get_user",
+            "get_user_2",
+        ]
 
     def test_three_way_collisions_keep_counting(self):
         assert assign_unique_names(["Get User", "get-user", "GET USER"]) == [

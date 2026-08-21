@@ -65,9 +65,7 @@ def test_the_negative_cache_expires_so_rotation_recovers(fetches, monkeypatch):
     """A key published after we rejected its id must become usable."""
     clock = {"t": 0.0}
     monkeypatch.setattr(jwks_guard.time, "monotonic", lambda: clock["t"])
-    monkeypatch.setattr(
-        jwks_guard.settings, "auth_jwks_unknown_kid_ttl_seconds", 60.0
-    )
+    monkeypatch.setattr(jwks_guard.settings, "auth_jwks_unknown_kid_ttl_seconds", 60.0)
 
     with pytest.raises(Exception):
         jwks_guard._guarded_get_latest_keys(object(), "rotating")

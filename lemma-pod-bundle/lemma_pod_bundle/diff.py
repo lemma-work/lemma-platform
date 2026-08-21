@@ -17,10 +17,15 @@ class TableDiff:
 
 
 def _is_system_table_column(column: dict[str, Any]) -> bool:
-    return bool(column.get("system")) or str(column.get("name") or "") in SYSTEM_TABLE_COLUMNS
+    return (
+        bool(column.get("system"))
+        or str(column.get("name") or "") in SYSTEM_TABLE_COLUMNS
+    )
 
 
-def _normalize_column_for_diff(column: dict[str, Any], *, primary_key: bool = False) -> dict[str, Any]:
+def _normalize_column_for_diff(
+    column: dict[str, Any], *, primary_key: bool = False
+) -> dict[str, Any]:
     type_name = (column.get("type_params") or {}).get("type") or column.get("type")
     normalized = {
         "name": column.get("name"),
@@ -34,7 +39,9 @@ def _normalize_column_for_diff(column: dict[str, Any], *, primary_key: bool = Fa
 
 
 def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> TableDiff:
-    primary_key = str(existing.get("primary_key_column") or desired.get("primary_key_column") or "id")
+    primary_key = str(
+        existing.get("primary_key_column") or desired.get("primary_key_column") or "id"
+    )
     existing_columns = {
         str(column.get("name")): _normalize_column_for_diff(
             column,
@@ -113,9 +120,7 @@ def _order_table_dirs_by_dependency(table_dirs: list[Path]) -> list[Path]:
     placed: set[str] = set()
     remaining = [path.name for path in table_dirs]
     while remaining:
-        ready = [
-            name for name in remaining if deps_by_name[name] <= placed
-        ]
+        ready = [name for name in remaining if deps_by_name[name] <= placed]
         if not ready:
             # Cycle or self-reference: emit the rest in stable order.
             ready = list(remaining)

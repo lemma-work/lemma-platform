@@ -38,7 +38,9 @@ def test_the_declared_default_is_off() -> None:
     assert Settings.model_fields["api_docs_enabled"].default is False
 
 
-@pytest.mark.parametrize("environment", ["local", "development", "testing", "production"])
+@pytest.mark.parametrize(
+    "environment", ["local", "development", "testing", "production"]
+)
 def test_the_environment_does_not_decide(environment: str) -> None:
     """Same answer in every environment — only the flag decides."""
     off = Settings.model_construct(environment=environment, api_docs_enabled=False)

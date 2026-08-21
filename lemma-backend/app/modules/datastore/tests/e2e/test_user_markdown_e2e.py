@@ -49,9 +49,7 @@ class TestUserMarkdown:
             b"zephyrquokka only appears in the attached markdown.\n\n"
             b"![diagram](assets/fig1.png)\n"
         )
-        await pod_api.attach_markdown(
-            doc["path"], user_md, images=[("fig1.png", _PNG)]
-        )
+        await pod_api.attach_markdown(doc["path"], user_md, images=[("fig1.png", _PNG)])
         await index_file(index_datastore_file, doc)
 
         # document.md is the user markdown; the image ref is rewritten to the

@@ -106,6 +106,8 @@ def _get_consent_cache() -> RedisJsonCache:
             ttl_seconds=60,
         )
     return _consent_check_cache
+
+
 _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
     "GMAIL": "GMAIL_NEW_GMAIL_MESSAGE",
     "OUTLOOK": "OUTLOOK_MESSAGE_TRIGGER",
@@ -173,7 +175,9 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
         # distinct names (e.g. different bots → different agents). Distinct bot
         # accounts are still enforced by the credential/account conflict checks
         # below.
-        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(platform)
+        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(
+            platform
+        )
         existing = await self.surface_repository.get_by_pod_and_name(
             pod_id=pod_id, name=resolved_name
         )
@@ -224,7 +228,9 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
                 webhook_url=self._build_public_surface_webhook_url(created.id),
                 webhook_secret=created.webhook_secret or "",
             )
-        synced = await self._sync_email_schedule(created, previous_surface=None, ctx=ctx)
+        synced = await self._sync_email_schedule(
+            created, previous_surface=None, ctx=ctx
+        )
         await notify_surface_receiver_config_changed(synced.id)
         return synced
 
@@ -424,7 +430,9 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
             if cursor is None:
                 break
         if failure_count:
-            logger.error("surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count)
+            logger.error(
+                "surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count
+            )
         return deleted
 
     def get_platform_setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
@@ -487,7 +495,11 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
                     surface.account_id
                 )
             except Exception:
-                logger.debug('agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic', account_id=surface.account_id, exc_info=True)
+                logger.debug(
+                    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic",
+                    account_id=surface.account_id,
+                    exc_info=True,
+                )
                 return None
             return credentials.get("verify_token")
         return surface_settings.whatsapp_verify_token
@@ -922,7 +934,7 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic'
+                "agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic"
             )
 
     async def _telegram_webhook_call(

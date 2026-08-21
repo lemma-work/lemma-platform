@@ -242,6 +242,21 @@ test-collect:
 lint:
 	uv run ruff check app migrations scripts
 
+# Formatting, over first-party code only. The exclusion of `lemma-connectors/`
+# here is deliberately broader than `lint-connectors` below: only
+# `src/lemma_connectors/*/generated/**` comes from provider specs, but the whole
+# package is left alone by the formatter because reformatting the generated half
+# would be undone by the next generation run and read as codegen drift. Linting
+# is the finer instrument -- the package's own `[tool.ruff]` scopes past the
+# generated clients so the hand-written half stays enforceable.
+FORMAT_PATHS = app migrations scripts sandbox_runtime load_tests standalone_app.py sitecustomize.py
+
+format:
+	uv run ruff format $(FORMAT_PATHS)
+
+format-check:
+	uv run ruff format --check $(FORMAT_PATHS)
+
 # lemma-connectors is vendored here but was outside every gate: not in `lint`'s
 # paths, excluded from basedpyright, and its tests are outside pytest.ini's
 # testpaths. Its own pyproject scopes ruff past the generated clients, so the

@@ -71,7 +71,6 @@ def test_widget_router_has_no_submit_route():
     assert not any(path.endswith("/submit") for path in paths)
 
 
-
 def _uow_factory(uow=None):
     """A factory the controller can open, standing in for `get_uow_factory`.
 
@@ -182,9 +181,7 @@ async def test_mint_non_owner_returns_404(monkeypatch):
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=viewer_id)
 
     with pytest.raises(HTTPException) as exc:
-        await ctrl.mint_widget_embed_url(
-            pod_id, uuid4(), "tc", _uow_factory(), ctx
-        )
+        await ctrl.mint_widget_embed_url(pod_id, uuid4(), "tc", _uow_factory(), ctx)
     assert exc.value.status_code == 404
 
 
@@ -243,7 +240,5 @@ async def test_mint_cross_pod_returns_404(monkeypatch):
     monkeypatch.setattr(ctrl, "WidgetAssetService", _fake_service(artifact))
     ctx = SimpleNamespace(require=AsyncMock(), user_id=uuid4())
     with pytest.raises(HTTPException) as exc:
-        await ctrl.mint_widget_embed_url(
-            uuid4(), uuid4(), "tc", _uow_factory(), ctx
-        )
+        await ctrl.mint_widget_embed_url(uuid4(), uuid4(), "tc", _uow_factory(), ctx)
     assert exc.value.status_code == 404

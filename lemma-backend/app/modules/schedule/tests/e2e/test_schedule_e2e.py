@@ -1032,22 +1032,22 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
         "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
         _returns_async(
             lambda self, payload_text, headers: {
-            "version": "V3",
-            "payload": {
-                "id": provider_id,
-                "user_id": payload["metadata"]["user_id"],
-                "toolkit_slug": payload["metadata"]["toolkit_slug"],
-                "trigger_slug": payload["type"],
-                "metadata": {
-                    "connected_account": {
-                        "id": payload["metadata"]["connected_account_id"],
-                        "auth_config_id": payload["metadata"]["auth_config_id"],
-                    }
+                "version": "V3",
+                "payload": {
+                    "id": provider_id,
+                    "user_id": payload["metadata"]["user_id"],
+                    "toolkit_slug": payload["metadata"]["toolkit_slug"],
+                    "trigger_slug": payload["type"],
+                    "metadata": {
+                        "connected_account": {
+                            "id": payload["metadata"]["connected_account_id"],
+                            "auth_config_id": payload["metadata"]["auth_config_id"],
+                        }
+                    },
+                    "payload": {**payload["data"], "source": "composio-log"},
                 },
-                "payload": {**payload["data"], "source": "composio-log"},
-            },
-            "raw_payload": payload,
-        }
+                "raw_payload": payload,
+            }
         ),
     )
     webhook = await authenticated_client.post("/webhooks/composio", json=payload)
@@ -1354,9 +1354,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
         source_run.target_outcome = ScheduleRunStatus.TARGET_FAILED.value
         source_run.completed_at = datetime.now(timezone.utc)
 
-    retry_path = (
-        f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
-    )
+    retry_path = f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
     hidden_retry = await async_client.post(
         retry_path,
         headers=auth_headers(peer),

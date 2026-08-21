@@ -71,7 +71,10 @@ async def test_pod_request_context_requires_pod_and_bearer_headers(monkeypatch):
     monkeypatch.setattr(
         mcp_server,
         "get_http_headers",
-        lambda **_: {"x-lemma-pod-id": str(pod_id), "authorization": "Bearer pod-token"},
+        lambda **_: {
+            "x-lemma-pod-id": str(pod_id),
+            "authorization": "Bearer pod-token",
+        },
     )
     actual_pod, token = await mcp_server._pod_request_context()
     assert actual_pod == pod_id

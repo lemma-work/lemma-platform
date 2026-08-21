@@ -91,9 +91,7 @@ def render_open_notifications(notifications: list[dict]) -> str:
     lines.append(
         "Call `respond_to_notification` once you have a real answer — not when"
     )
-    lines.append(
-        "they say they will get to it. If they decline, leave it open and say"
-    )
+    lines.append("they say they will get to it. If they decline, leave it open and say")
     lines.append("who was asking. Don't raise these while they're mid-topic.")
     lines.append("")
     # Without this the model treats the reply as a question to answer, and

@@ -49,7 +49,10 @@ def test_one_connector_can_be_installed_as_two_different_kinds():
     # gmail into two connector rows would rename its grant resource id, the
     # accounts.connector_id foreign key and the pod-bundle export key.
     connector = _dual_kind_connector()
-    assert connector.supported_kinds() == [ConnectorKind.PACKAGE, ConnectorKind.COMPOSIO]
+    assert connector.supported_kinds() == [
+        ConnectorKind.PACKAGE,
+        ConnectorKind.COMPOSIO,
+    ]
     assert connector.spec_for(ConnectorKind.COMPOSIO).toolkit_slug == "gmail"
     assert connector.spec_for("package").package_name == "lemma_connectors.gmail"
 
@@ -85,7 +88,9 @@ def test_provider_maps_back_to_the_kind_that_actually_shipped():
 def test_capability_for_resolves_lemma_to_the_connectors_own_native_kind():
     connector = _dual_kind_connector()
     assert connector.capability_for(AuthProvider.LEMMA).kind is ConnectorKind.PACKAGE
-    assert connector.capability_for(AuthProvider.COMPOSIO).kind is ConnectorKind.COMPOSIO
+    assert (
+        connector.capability_for(AuthProvider.COMPOSIO).kind is ConnectorKind.COMPOSIO
+    )
 
 
 def test_connector_still_accepts_provider_capabilities_from_unmigrated_callers():

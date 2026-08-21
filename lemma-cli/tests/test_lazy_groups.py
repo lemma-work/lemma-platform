@@ -6,6 +6,7 @@ whole command tree. These tests load every registered group for real and
 assert the static name/help/hidden metadata matches what eager registration
 would have shown.
 """
+
 from __future__ import annotations
 
 import importlib

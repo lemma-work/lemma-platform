@@ -17,6 +17,7 @@ from app.modules.workflow.domain.context import (
     TriggerContext,
     normalize_node_output,
 )
+
 # Keep stored failure reasons actionable, not full tracebacks. We retain the
 # head (usually the human-readable message) and the tail (usually the root
 # cause line of a chained exception) so both survive truncation.

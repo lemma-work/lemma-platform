@@ -140,7 +140,7 @@ def _is_uuid(value: str) -> bool:
     try:
         uuid.UUID(str(value))
         return True
-    except (ValueError, AttributeError, TypeError):
+    except ValueError, AttributeError, TypeError:
         return False
 
 

@@ -45,9 +45,7 @@ def _make_fake_run(fake_convs):
             pod=lambda pod_id: _make_fake_pod(fake_convs),
             conversations=fake_convs,
         )
-        state = SimpleNamespace(
-            config={"_runtime": {"pod": "pod-1"}}, output="pretty"
-        )
+        state = SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty")
         return fn(client, state)
 
     return fake_run_with_client
@@ -102,9 +100,7 @@ def test_conversations_get_dispatches_api(monkeypatch):
     fake_convs = CapturingConversations()
     monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
 
-    result = runner.invoke(
-        app, ["conversations", "get", "conv-1", "--pod", "pod-1"]
-    )
+    result = runner.invoke(app, ["conversations", "get", "conv-1", "--pod", "pod-1"])
 
     assert result.exit_code == 0, result.stdout
     assert captured.get("id") == "conv-1"
@@ -155,9 +151,7 @@ def test_conversations_stop_dispatches_api(monkeypatch):
     fake_convs = CapturingConversations()
     monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
 
-    result = runner.invoke(
-        app, ["conversations", "stop", "conv-1", "--pod", "pod-1"]
-    )
+    result = runner.invoke(app, ["conversations", "stop", "conv-1", "--pod", "pod-1"])
 
     assert result.exit_code == 0, result.stdout
     assert captured.get("id") == "conv-1"

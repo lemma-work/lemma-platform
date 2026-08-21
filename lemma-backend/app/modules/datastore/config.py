@@ -210,7 +210,12 @@ class DatastoreSettings(BaseSettings):
         ),
     )
     document_processing_table_model: Literal[
-        "tatr", "slanet_plus", "slanet_wired", "slanet_wireless", "slanet_auto", "disabled"
+        "tatr",
+        "slanet_plus",
+        "slanet_wired",
+        "slanet_wireless",
+        "slanet_auto",
+        "disabled",
     ] = Field(
         default="tatr",
         description=(
@@ -234,7 +239,9 @@ class DatastoreSettings(BaseSettings):
     )
 
     # Document-processor adapter selection
-    document_processor: Literal["auto", "kreuzberg", "xberg", "markitdown", "docling"] = Field(
+    document_processor: Literal[
+        "auto", "kreuzberg", "xberg", "markitdown", "docling"
+    ] = Field(
         default="auto",
         description=(
             "Which document-processor adapter converts non-markdown files to "

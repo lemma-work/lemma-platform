@@ -19,7 +19,7 @@ def _pretty(value: Any) -> str:
         return value
     try:
         return json.dumps(value, indent=2, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)
 
 
@@ -142,7 +142,9 @@ class ApprovalPrompt(Vertical):
     def mark_resolved(self, decision: str | None) -> None:
         self.resolved_decision = decision or "resolved"
         self._set_buttons_disabled(True)
-        self._status_view.update(Text(f"resolved: {self.resolved_decision}", style="dim"))
+        self._status_view.update(
+            Text(f"resolved: {self.resolved_decision}", style="dim")
+        )
 
     def mark_failed(self, error: str) -> None:
         self._set_buttons_disabled(False)
@@ -172,7 +174,9 @@ class UsageBar(Static):
         self.output_tokens = 0
         self.tool_calls = 0
 
-    def add(self, *, input_tokens: int, output_tokens: int, tool_call_count: int) -> None:
+    def add(
+        self, *, input_tokens: int, output_tokens: int, tool_call_count: int
+    ) -> None:
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
         self.tool_calls += tool_call_count

@@ -13,7 +13,9 @@ from app.modules.connectors.infrastructure.adapters.lemma_operation_gateway impo
 
 
 class _ProviderError(Exception):
-    def __init__(self, *, status_code=None, details=None, message="provider canary-secret"):
+    def __init__(
+        self, *, status_code=None, details=None, message="provider canary-secret"
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.details = details

@@ -166,7 +166,9 @@ class McpDiscoverer:
     async def discover(
         self, install: ResolvedInstall, credentials: dict[str, Any] | None
     ) -> list[DiscoveredOperation]:
-        from app.modules.connectors.services.discovery.mcp_discoverer import discover_mcp
+        from app.modules.connectors.services.discovery.mcp_discoverer import (
+            discover_mcp,
+        )
 
         found = await discover_mcp(
             connection_config=install.config,
@@ -196,5 +198,3 @@ def sql_installer() -> _TenantConfiguredInstaller:
 
 def mcp_installer() -> _TenantConfiguredInstaller:
     return _TenantConfiguredInstaller(url_fields=("server_url",))
-
-

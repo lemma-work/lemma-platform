@@ -25,7 +25,9 @@ def _isolate_developer_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
-    for name in [key for key in list(__import__("os").environ) if key.startswith("LEMMA_")]:
+    for name in [
+        key for key in list(__import__("os").environ) if key.startswith("LEMMA_")
+    ]:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -61,6 +63,8 @@ def json_state():
 @pytest.fixture
 def patch_run(monkeypatch):
     def _patch(module, *, client, state):
-        monkeypatch.setattr(module, "run_with_client", lambda ctx, fn: fn(client, state))
+        monkeypatch.setattr(
+            module, "run_with_client", lambda ctx, fn: fn(client, state)
+        )
 
     return _patch

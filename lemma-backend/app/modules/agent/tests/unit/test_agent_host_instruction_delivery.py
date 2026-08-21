@@ -112,9 +112,12 @@ def test_the_host_is_told_to_send_them_unless_lemma_says_otherwise() -> None:
     )
 
     assert spec.system_prompt_delivery is None
-    assert spec.model_copy(
-        update={"system_prompt_delivery": NEW_SESSION_ONLY}
-    ).system_prompt_delivery == NEW_SESSION_ONLY
+    assert (
+        spec.model_copy(
+            update={"system_prompt_delivery": NEW_SESSION_ONLY}
+        ).system_prompt_delivery
+        == NEW_SESSION_ONLY
+    )
 
 
 def _checkpoint(run_id, session_id: str) -> AgentHostRunCheckpoint:

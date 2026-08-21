@@ -127,13 +127,13 @@ async def open_notifications_for_conversation(conversation_id: UUID) -> list[dic
         # this read fails; the cost is a missed answer, not a broken reply.
         return []
     return [
-            {
-                "notification_id": str(n.id),
-                "title": n.title,
-                "body": n.body,
-                "background_instruction": n.background_instruction,
-                "expects_response": n.expects_response,
-                "responds_through_action": n.responds_through_action,
+        {
+            "notification_id": str(n.id),
+            "title": n.title,
+            "body": n.body,
+            "background_instruction": n.background_instruction,
+            "expects_response": n.expects_response,
+            "responds_through_action": n.responds_through_action,
             "action": n.action,
         }
         for n in notifications

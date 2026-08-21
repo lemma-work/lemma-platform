@@ -15,14 +15,16 @@ def pod_id(test_pod):
 
 
 def test_tables_create_and_list(backend_server, test_user, pod_id):
-    table_payload = json.dumps({
-        "name": "items",
-        "columns": [
-            {"name": "title", "type": "TEXT", "required": True},
-            {"name": "score", "type": "INTEGER"},
-        ],
-        "enable_rls": False,
-    })
+    table_payload = json.dumps(
+        {
+            "name": "items",
+            "columns": [
+                {"name": "title", "type": "TEXT", "required": True},
+                {"name": "score", "type": "INTEGER"},
+            ],
+            "enable_rls": False,
+        }
+    )
     create = cli(
         ["tables", "create", "items", "--data", table_payload],
         base_url=backend_server["base_url"],
@@ -42,13 +44,19 @@ def test_tables_create_and_list(backend_server, test_user, pod_id):
 
 
 def test_tables_get(backend_server, test_user, pod_id):
-    table_payload = json.dumps({
-        "name": "products",
-        "columns": [{"name": "sku", "type": "TEXT", "required": True}],
-        "enable_rls": False,
-    })
-    cli(["tables", "create", "products", "--data", table_payload],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    table_payload = json.dumps(
+        {
+            "name": "products",
+            "columns": [{"name": "sku", "type": "TEXT", "required": True}],
+            "enable_rls": False,
+        }
+    )
+    cli(
+        ["tables", "create", "products", "--data", table_payload],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     result = cli(
         ["tables", "get", "products"],
@@ -61,13 +69,19 @@ def test_tables_get(backend_server, test_user, pod_id):
 
 
 def test_records_create_and_list(backend_server, test_user, pod_id):
-    table_payload = json.dumps({
-        "name": "tasks",
-        "columns": [{"name": "title", "type": "TEXT", "required": True}],
-        "enable_rls": False,
-    })
-    cli(["tables", "create", "tasks", "--data", table_payload],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    table_payload = json.dumps(
+        {
+            "name": "tasks",
+            "columns": [{"name": "title", "type": "TEXT", "required": True}],
+            "enable_rls": False,
+        }
+    )
+    cli(
+        ["tables", "create", "tasks", "--data", table_payload],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     create_rec = cli(
         ["records", "create", "tasks", "--data", json.dumps({"title": "My Task"})],

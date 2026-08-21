@@ -263,7 +263,7 @@ async def process_agent_run(
         )
     except asyncio.CancelledError:
         logger.debug(
-            'agent.handlers.process_agent_run_cancelled_run.diagnostic',
+            "agent.handlers.process_agent_run_cancelled_run.diagnostic",
             agent_run_id=agent_run_id,
         )
 
@@ -401,14 +401,17 @@ async def reconcile_orphaned_agent_runs() -> None:
                         (run.conversation_id, run.id, finish_result.status)
                     )
     except Exception:
-        logger.error("agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True)
+        logger.error(
+            "agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True
+        )
         return
 
     if not finalized:
         return
 
     logger.debug(
-        'agent.handlers.reconciled_d_orphaned_agent_run.diagnostic', count=len(finalized)
+        "agent.handlers.reconciled_d_orphaned_agent_run.diagnostic",
+        count=len(finalized),
     )
     # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
     # so SSE clients refresh and workflow waits resume promptly.
@@ -428,8 +431,8 @@ async def reconcile_orphaned_agent_runs() -> None:
             logger.error(
                 "agent.handlers.publishing_reconciled_run_realtime_update.failed",
                 agent_run_id=agent_run_id,
-            exc_info=True,
-        )
+                exc_info=True,
+            )
 
 
 @streaq_cron("1-59/5 * * * *", name="reconcile_agent_host_dispatch")
@@ -455,7 +458,9 @@ async def reconcile_agent_host_dispatch() -> None:
             await agent_host_recovery.reconcile_expired_leases(uow.session)
             await uow.commit()
     except SQLAlchemyError:
-        logger.error("agent.handlers.reconcile_agent_host_dispatch_cron.failed", exc_info=True)
+        logger.error(
+            "agent.handlers.reconcile_agent_host_dispatch_cron.failed", exc_info=True
+        )
         return
     # Poke outside the transaction: the host is long-polling, and without this
     # the cancel waits out its poll deadline. poke_host never raises.
@@ -480,5 +485,6 @@ async def cleanup_agent_host_retained_state() -> None:
             await uow.commit()
     except SQLAlchemyError:
         logger.error(
-            "agent.handlers.cleanup_agent_host_retained_state_cron.failed", exc_info=True
+            "agent.handlers.cleanup_agent_host_retained_state_cron.failed",
+            exc_info=True,
         )

@@ -111,6 +111,7 @@ def apply_surface_history_window(
 
     return trimmed
 
+
 def runtime_full_run_ids(
     runs: list[AgentRun], conversation: Conversation | None = None
 ) -> set[UUID]:

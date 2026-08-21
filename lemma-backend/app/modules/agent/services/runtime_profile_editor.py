@@ -37,6 +37,7 @@ from app.modules.agent.services.runtime_profile_service import (
     _normalize_profile_name,
     _normalized_headers,
 )
+
 # Imported as a module so a patched discovery function is the one that runs.
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
@@ -82,7 +83,6 @@ class AgentRuntimeProfileEditor:
         """
         repository = self._service.repository
         return getattr(getattr(repository, "uow", None), "session", None)
-
 
     async def _load_editable(
         self,
@@ -174,7 +174,9 @@ class AgentRuntimeProfileEditor:
 
             catalog = _agent_host_model_catalog(
                 config_options,
-                supports_images=bool((harness.capabilities or {}).get("images") is True),
+                supports_images=bool(
+                    (harness.capabilities or {}).get("images") is True
+                ),
             )
             if isinstance(default_model_name, _UnsetType):
                 # The caller did not ask to change the model, so a stored one
@@ -337,7 +339,9 @@ class AgentRuntimeProfileEditor:
                 await discovery._validate_public_base_url(str(next_base_url))
 
         next_headers = (
-            stored.headers if isinstance(headers, _UnsetType) else _normalized_headers(headers)
+            stored.headers
+            if isinstance(headers, _UnsetType)
+            else _normalized_headers(headers)
         )
         next_settings = (
             stored.model_settings
@@ -351,11 +355,18 @@ class AgentRuntimeProfileEditor:
         if not isinstance(api_key, _UnsetType):
             if api_key is None or not str(api_key).strip():
                 if is_anthropic:
-                    raise ValueError("An Anthropic-compatible profile requires an API key")
+                    raise ValueError(
+                        "An Anthropic-compatible profile requires an API key"
+                    )
                 next_credentials = None
             else:
-                next_credentials = ApiKeyRuntimeCredentials(api_key=str(api_key).strip())
-        if not isinstance(api_key, _UnsetType) or next_credentials is not profile.credentials:
+                next_credentials = ApiKeyRuntimeCredentials(
+                    api_key=str(api_key).strip()
+                )
+        if (
+            not isinstance(api_key, _UnsetType)
+            or next_credentials is not profile.credentials
+        ):
             changes["credentials"] = next_credentials
 
         rediscover = (
@@ -422,8 +433,10 @@ class AgentRuntimeProfileEditor:
             # failing an edit the user did not connect to that model.
             changes["default_model_name"] = catalog[0].name
 
-        if base_url_changed or not isinstance(headers, _UnsetType) or not isinstance(
-            model_settings, _UnsetType
+        if (
+            base_url_changed
+            or not isinstance(headers, _UnsetType)
+            or not isinstance(model_settings, _UnsetType)
         ):
             config_type = (
                 AnthropicCompatibleRuntimeConfig

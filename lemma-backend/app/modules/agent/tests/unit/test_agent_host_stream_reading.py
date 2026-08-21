@@ -38,7 +38,7 @@ class _FakeRedis:
         self.requested_after: list[str] = []
 
     async def xread(self, streams: dict, count: int, block: int):
-        (key, after_id), = streams.items()
+        ((key, after_id),) = streams.items()
         self.requested_after.append(after_id)
         pending = [
             (stream_id, fields)

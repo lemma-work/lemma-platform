@@ -18,9 +18,7 @@ MAX_STATUS_CHECK = 25
 
 
 class MessageUserRequest(BaseModel):
-    to: str = Field(
-        description="Pod member id, user id, or email address."
-    )
+    to: str = Field(description="Pod member id, user id, or email address.")
     message: str = Field(
         description="Delivered verbatim. Write it to them, not about them."
     )
@@ -37,9 +35,7 @@ class MessageUserRequest(BaseModel):
         max_length=MAX_TITLE_LENGTH,
         description="Inbox label and email subject. Defaults to the message.",
     )
-    expects_response: bool = Field(
-        default=True, description="False for a pure FYI."
-    )
+    expects_response: bool = Field(default=True, description="False for a pure FYI.")
     expires_in_seconds: int | None = Field(
         default=None, gt=0, description="Default 72h."
     )

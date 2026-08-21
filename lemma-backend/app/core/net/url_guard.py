@@ -198,7 +198,9 @@ async def assert_safe_url(url: str, *, policy: GuardPolicy | None = None) -> str
             reason="port_not_allowed",
         )
 
-    resolved = await _resolve_all(host, port, allow_unresolvable=policy.allow_unresolvable)
+    resolved = await _resolve_all(
+        host, port, allow_unresolvable=policy.allow_unresolvable
+    )
     for address in resolved:
         reason = _is_disallowed_address(address, allow_private=policy.allow_private)
         if reason:
@@ -308,7 +310,9 @@ async def request_guarded(
 
         location = response.headers.get("location")
         if not location:
-            raise UnsafeUrlError("Redirect without a target.", reason="invalid_redirect")
+            raise UnsafeUrlError(
+                "Redirect without a target.", reason="invalid_redirect"
+            )
         await response.aread()
         current = str(httpx.URL(current).join(location))
         current_method, body_kwargs = _redirected_request(
@@ -379,12 +383,16 @@ async def fetch_guarded(
     raise UnsafeUrlError("Too many redirects.", reason="too_many_redirects")
 
 
-async def assert_safe_host(host: str, port: int, *, policy: GuardPolicy | None = None) -> str:
+async def assert_safe_host(
+    host: str, port: int, *, policy: GuardPolicy | None = None
+) -> str:
     """Validate a bare host/port pair, for targets that are not URLs (SQL)."""
     policy = policy or GuardPolicy.from_settings()
     if not host:
         raise UnsafeUrlError("No host supplied.", reason="missing_host")
-    resolved = await _resolve_all(host, port, allow_unresolvable=policy.allow_unresolvable)
+    resolved = await _resolve_all(
+        host, port, allow_unresolvable=policy.allow_unresolvable
+    )
     for address in resolved:
         reason = _is_disallowed_address(address, allow_private=policy.allow_private)
         if reason:

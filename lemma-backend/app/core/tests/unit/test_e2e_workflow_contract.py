@@ -31,9 +31,7 @@ def _shards() -> list[dict]:
     scripts/plan_e2e_shards.py from measured JUnit and committed as JSON, so
     the same intent is checked against the same facts in their new home.
     """
-    return json.loads(
-        (_REPO_ROOT / ".github/e2e-shards.json").read_text()
-    )["shards"]
+    return json.loads((_REPO_ROOT / ".github/e2e-shards.json").read_text())["shards"]
 
 
 def test_every_critical_module_is_covered_by_exactly_one_e2e_shard() -> None:
@@ -83,7 +81,9 @@ def test_coverage_aggregation_is_not_on_the_pull_request_critical_path() -> None
     "CI" run rather than regenerating it by re-running the whole unit suite.
     """
     e2e_workflow = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
-    coverage_workflow = (_REPO_ROOT / ".github/workflows/backend-coverage.yml").read_text()
+    coverage_workflow = (
+        _REPO_ROOT / ".github/workflows/backend-coverage.yml"
+    ).read_text()
 
     assert "aggregate-coverage" not in e2e_workflow
     assert "check_coverage_thresholds" not in e2e_workflow
@@ -95,7 +95,9 @@ def test_coverage_aggregation_is_not_on_the_pull_request_critical_path() -> None
 
 
 def test_ci_publishes_one_authoritative_module_wise_coverage_comment() -> None:
-    coverage_workflow = (_REPO_ROOT / ".github/workflows/backend-coverage.yml").read_text()
+    coverage_workflow = (
+        _REPO_ROOT / ".github/workflows/backend-coverage.yml"
+    ).read_text()
     e2e_workflow = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
     ci_workflow = (_REPO_ROOT / ".github/workflows/ci.yml").read_text()
 

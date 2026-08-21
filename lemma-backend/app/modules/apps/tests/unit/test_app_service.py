@@ -53,7 +53,9 @@ async def _get_public_app_asset(service, public_slug, *, asset_path=None):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"])
+@pytest.mark.parametrize(
+    "visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"]
+)
 async def test_public_slug_route_serves_only_apps_published_to_everyone(visibility):
     """`/public/apps` has no session, so only a PUBLIC app belongs on it.
 
@@ -510,7 +512,9 @@ async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
     repo = AsyncMock()
     storage = AsyncMock()
     entitlement = AsyncMock()
-    entitlement.can_remove_app_branding.side_effect = RuntimeError("billing unavailable")
+    entitlement.can_remove_app_branding.side_effect = RuntimeError(
+        "billing unavailable"
+    )
     service = AppService(
         repo,
         Mock(return_value=storage),

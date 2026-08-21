@@ -61,19 +61,16 @@ def _preserves_required_invariants(original: str, polished: str) -> bool:
         if (
             stripped.startswith(("<a ", "<img", "!["))
             or stripped == '<div align="center">'
-            or stripped.startswith("| ") and " **" in stripped
+            or stripped.startswith("| ")
+            and " **" in stripped
         ):
             required_exact_lines.append(stripped)
-    required_markers = [
-        marker for marker in ("## 🚀 Install",) if marker in original
-    ]
+    required_markers = [marker for marker in ("## 🚀 Install",) if marker in original]
     preserves_lines = all(line in polished for line in required_exact_lines)
     preserves_markers = all(marker in polished for marker in required_markers)
-    preserves_centering = (
-        polished.count('<div align="center">')
-        >= original.count('<div align="center">')
-        and polished.count("</div>") >= original.count("</div>")
-    )
+    preserves_centering = polished.count('<div align="center">') >= original.count(
+        '<div align="center">'
+    ) and polished.count("</div>") >= original.count("</div>")
     return preserves_lines and preserves_markers and preserves_centering
 
 

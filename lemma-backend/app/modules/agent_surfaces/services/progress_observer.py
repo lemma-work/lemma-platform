@@ -277,7 +277,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                         )
                     except Exception:
                         logger.debug(
-                            'agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic'
+                            "agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic"
                         )
         async with self.uow_factory() as uow:
             service = self.service_factory(uow)
@@ -301,7 +301,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                     if rendered_key is not None:
                         self._rendered_waiting_tool_calls.discard(rendered_key)
                     logger.debug(
-                        'agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic',
+                        "agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic",
                         tool_call_id=tool_call_id,
                     )
             except Exception:
@@ -399,7 +399,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                 )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic"
             )
             return False
         if not delivered:
@@ -499,7 +499,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic"
             )
 
     async def _deliver_run_error(self, conversation: Conversation) -> None:
@@ -540,7 +540,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             raise
         except Exception:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic',
+                "agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic",
                 conversation_id=conversation_id,
             )
 
@@ -573,5 +573,3 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             if metadata:
                 kwargs["metadata"] = metadata
             return await service.send_agent_message_for_conversation(**kwargs)
-
-

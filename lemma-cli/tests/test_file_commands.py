@@ -32,8 +32,16 @@ class FakeFiles:
         return {
             "path": path,
             "items": [
-                {"name": "document.md", "path": f"{path}/document.md", "kind": "markdown"},
-                {"name": "pages/page_0001.jpg", "path": f"{path}/pages/page_0001.jpg", "kind": "page"},
+                {
+                    "name": "document.md",
+                    "path": f"{path}/document.md",
+                    "kind": "markdown",
+                },
+                {
+                    "name": "pages/page_0001.jpg",
+                    "path": f"{path}/pages/page_0001.jpg",
+                    "kind": "page",
+                },
             ],
         }
 
@@ -50,14 +58,18 @@ def _patch(monkeypatch, fake):
     monkeypatch.setattr(
         files,
         "run_with_client",
-        lambda ctx, fn: fn(FakeClient(), SimpleNamespace(config={"_runtime": {"pod": POD}})),
+        lambda ctx, fn: fn(
+            FakeClient(), SimpleNamespace(config={"_runtime": {"pod": POD}})
+        ),
     )
 
 
 def test_write_from_argument(monkeypatch):
     fake = FakeFiles()
     _patch(monkeypatch, fake)
-    result = runner.invoke(app, ["--pod", POD, "file", "write", "/me/notes.md", "hello world"])
+    result = runner.invoke(
+        app, ["--pod", POD, "file", "write", "/me/notes.md", "hello world"]
+    )
     assert result.exit_code == 0, result.stdout
     assert fake.calls == [("write_text", "/me/notes.md", "hello world", True)]
 
@@ -85,7 +97,9 @@ def test_write_no_search_flag(monkeypatch):
 def test_append(monkeypatch):
     fake = FakeFiles()
     _patch(monkeypatch, fake)
-    result = runner.invoke(app, ["--pod", POD, "file", "append", "/me/log.md", "entry line\n"])
+    result = runner.invoke(
+        app, ["--pod", POD, "file", "append", "/me/log.md", "entry line\n"]
+    )
     assert result.exit_code == 0, result.stdout
     assert fake.calls == [("append_text", "/me/log.md", "entry line\n")]
 
@@ -115,7 +129,16 @@ def test_child_prints_text(monkeypatch):
     _patch(monkeypatch, fake)
     result = runner.invoke(
         app,
-        ["--json", "--pod", POD, "file", "child", "/docs/report.pdf/document.md", "--pages", "1"],
+        [
+            "--json",
+            "--pod",
+            POD,
+            "file",
+            "child",
+            "/docs/report.pdf/document.md",
+            "--pages",
+            "1",
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert fake.calls == [("download_child", "/docs/report.pdf/document.md", 1, 1)]
@@ -128,7 +151,14 @@ def test_child_saves_to_local(monkeypatch, tmp_path):
     out = tmp_path / "page.jpg"
     result = runner.invoke(
         app,
-        ["--pod", POD, "file", "child", "/docs/report.pdf/pages/page_0001.jpg", str(out)],
+        [
+            "--pod",
+            POD,
+            "file",
+            "child",
+            "/docs/report.pdf/pages/page_0001.jpg",
+            str(out),
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert out.read_bytes() == b"<!-- PAGE 1 -->\n\n# Title"

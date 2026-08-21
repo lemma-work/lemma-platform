@@ -348,9 +348,7 @@ async def test_embed_batch_is_sliced_so_peak_memory_is_bounded_by_slice():
 
     embedder = FastEmbedLocalEmbedder(dimension=2, model=FakeFastEmbed())
     embedder_slice = 64
-    with patch.object(
-        settings, "local_embedding_max_texts_per_call", embedder_slice
-    ):
+    with patch.object(settings, "local_embedding_max_texts_per_call", embedder_slice):
         vectors = await embedder.embed_batch([f"chunk {i}" for i in range(533)])
 
     # Every vector is still returned, in order, exactly once.

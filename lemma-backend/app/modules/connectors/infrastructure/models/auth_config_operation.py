@@ -45,8 +45,12 @@ class AuthConfigOperation(UUIDAuditBase):
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_document: Mapped[str | None] = mapped_column(Text, nullable=True)
-    input_schema: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
-    output_schema: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
+    input_schema: Mapped[dict | None] = mapped_column(
+        JSONB, default=None, nullable=True
+    )
+    output_schema: Mapped[dict | None] = mapped_column(
+        JSONB, default=None, nullable=True
+    )
     # Always present here: a discovered operation is only reachable through its
     # kind's executor, which is driven entirely by this descriptor.
     execution: Mapped[dict] = mapped_column(JSONB, nullable=False)

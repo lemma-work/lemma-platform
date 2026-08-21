@@ -5,9 +5,14 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.schedule.domain.interfaces import ScheduleTarget
-from app.modules.workflow.domain.start import EventWorkflowStartConfig, WorkflowStartType
+from app.modules.workflow.domain.start import (
+    EventWorkflowStartConfig,
+    WorkflowStartType,
+)
 from app.modules.workflow.domain.workflow import WorkflowMode
-from app.modules.workflow.infrastructure.repositories import SqlAlchemyWorkflowRepository
+from app.modules.workflow.infrastructure.repositories import (
+    SqlAlchemyWorkflowRepository,
+)
 
 
 class SqlAlchemyScheduleTargetResolver:
@@ -26,9 +31,7 @@ class SqlAlchemyScheduleTargetResolver:
     async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None:
         return self._agent_target(await self._agents.get(agent_id))
 
-    async def get_agent_by_name(
-        self, pod_id: UUID, name: str
-    ) -> ScheduleTarget | None:
+    async def get_agent_by_name(self, pod_id: UUID, name: str) -> ScheduleTarget | None:
         return self._agent_target(
             await self._agents.get_by_pod_and_name(pod_id=pod_id, name=name)
         )
@@ -45,7 +48,10 @@ class SqlAlchemyScheduleTargetResolver:
             return None
         trigger_id = None
         trigger_config = None
-        if workflow.start is not None and workflow.start.type is WorkflowStartType.EVENT:
+        if (
+            workflow.start is not None
+            and workflow.start.type is WorkflowStartType.EVENT
+        ):
             config = workflow.start.config
             if isinstance(config, EventWorkflowStartConfig):
                 trigger_id = config.connector_trigger_id

@@ -91,10 +91,7 @@ def _serialize_record_clauses(
 ) -> list[str] | None:
     if clauses is None:
         return None
-    return [
-        json.dumps(clause, separators=(",", ":"))
-        for clause in clauses
-    ]
+    return [json.dumps(clause, separators=(",", ":")) for clause in clauses]
 
 
 class PodTables(BoundResource):
@@ -129,7 +126,9 @@ class PodTables(BoundResource):
     def update(self, name: str, request: UpdateTableRequest) -> TableDetailResponse:
         return self._call(table_update, self._pod_uuid(), name, body=request)
 
-    def update_from_dict(self, name: str, payload: dict[str, Any]) -> TableDetailResponse:
+    def update_from_dict(
+        self, name: str, payload: dict[str, Any]
+    ) -> TableDetailResponse:
         return self.update(name, UpdateTableRequest.from_dict(payload))
 
     def delete(self, name: str) -> None:
@@ -190,9 +189,7 @@ class PodRecords(BoundResource):
         On an RLS table a non-admin only sees their own rows; another user's row
         (or a missing id) returns 404.
         """
-        return _as_record(
-            self._call(record_get, self._pod_uuid(), table, record_id)
-        )
+        return _as_record(self._call(record_get, self._pod_uuid(), table, record_id))
 
     def update(self, table: str, record_id: str, data: RecordData) -> RecordData:
         """Update one record; returns the bare updated record (no ``{data}`` envelope).
@@ -313,9 +310,7 @@ class Table:
     # Inside a function sandbox that is the dominant cost of the whole call:
     # a 200-row batch is one round trip against 200.
 
-    def bulk_create(
-        self, records: list[RecordData], *, upsert: bool = False
-    ) -> int:
+    def bulk_create(self, records: list[RecordData], *, upsert: bool = False) -> int:
         """Create many records in one round trip; returns the count affected.
 
         See :meth:`PodRecords.bulk_create` for the ``upsert`` semantics.

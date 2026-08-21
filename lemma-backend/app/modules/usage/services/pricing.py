@@ -44,8 +44,8 @@ class UsagePricing:
             logger.error(
                 "usage.pricing.invalid_system_model_usage_metadata.failed",
                 error_type=type(exc).__name__,
-            exc_info=True,
-        )
+                exc_info=True,
+            )
             cls._ENV_METADATA_SOURCE = raw
             return
         cls._SYSTEM_MODEL_PRICING.update(pricing)

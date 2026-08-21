@@ -78,8 +78,11 @@ def test_bundled_set_matches_repo_source():
     repo = _repo_skills_dir()
     if repo is None:
         pytest.skip("repo-root lemma-skills/ not available")
-    repo_names = {child.name for child in repo.iterdir() if (child / "SKILL.md").is_file()}
+    repo_names = {
+        child.name for child in repo.iterdir() if (child / "SKILL.md").is_file()
+    }
     assert set(skills_bundle.bundled_skill_map()) == repo_names
+
 
 # --------------------------------------------------------------------------- #
 # skill docs vs. the enums they document

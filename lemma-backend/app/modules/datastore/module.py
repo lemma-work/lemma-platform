@@ -11,7 +11,9 @@ from app.core.registry import LemmaModule
 
 logger = get_logger(__name__)
 
-EmbeddingCapabilityStatus = Literal["disabled", "lazy", "preparing", "ready", "degraded"]
+EmbeddingCapabilityStatus = Literal[
+    "disabled", "lazy", "preparing", "ready", "degraded"
+]
 
 
 @dataclass(slots=True)
@@ -180,7 +182,7 @@ async def _backfill_query_role(app):
         # never established stays unqueryable, and this is the only line that
         # says so.
         logger.warning(
-            'datastore.module.query_role_grant_backfill.degraded',
+            "datastore.module.query_role_grant_backfill.degraded",
             exc_info=True,
         )
     yield

@@ -236,9 +236,7 @@ async def test_unrelated_pod_is_still_denied(
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
     assert await ctx.can(
         Permissions.POD_READ,
-        ResourceRef(
-            resource_type=ResourceType.POD, resource_id=pod_id, pod_id=pod_id
-        ),
+        ResourceRef(resource_type=ResourceType.POD, resource_id=pod_id, pod_id=pod_id),
     )
 
     stranger = uuid4()
@@ -312,9 +310,7 @@ async def test_effective_permissions_reads_grants_once_not_once_per_permission(
                 allowed.append(permission_id)
         return allowed
 
-    unmemoized_ctx = await service.build_user_context(
-        user_id=viewer_id, pod_id=pod_id
-    )
+    unmemoized_ctx = await service.build_user_context(user_id=viewer_id, pod_id=pod_id)
     with counted_queries() as before_statements:
         before = await _effective_actions(
             unmemoized_ctx, forget_between_permissions=True
@@ -322,9 +318,7 @@ async def test_effective_permissions_reads_grants_once_not_once_per_permission(
 
     memoized_ctx = await service.build_user_context(user_id=viewer_id, pod_id=pod_id)
     with counted_queries() as after_statements:
-        after = await _effective_actions(
-            memoized_ctx, forget_between_permissions=False
-        )
+        after = await _effective_actions(memoized_ctx, forget_between_permissions=False)
 
     assert after == before, (
         "memoizing the grant lookup changed which permissions a POD_VIEWER "
@@ -333,7 +327,9 @@ async def test_effective_permissions_reads_grants_once_not_once_per_permission(
     )
     assert before, "the viewer holds no permissions at all -- the fixture is wrong"
 
-    grant_reads_after = [s for s in after_statements if "resource_permission_grants" in s]
+    grant_reads_after = [
+        s for s in after_statements if "resource_permission_grants" in s
+    ]
     grant_reads_before = [
         s for s in before_statements if "resource_permission_grants" in s
     ]

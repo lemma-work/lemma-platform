@@ -28,7 +28,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 
-
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -66,7 +65,6 @@ from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
     WorkspaceRuntimeError,
 )
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,12 +149,8 @@ class DockerSandboxProvider(DockerOpsMixin):
         binds.extend(_bind(mount) for mount in spec.mounts)
         return labels, binds
 
-    def _environment(
-        self, spec: ProviderCreateSpec, *, is_function: bool
-    ) -> list[str]:
-        env = [
-            f"LEMMA_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"
-        ]
+    def _environment(self, spec: ProviderCreateSpec, *, is_function: bool) -> list[str]:
+        env = [f"LEMMA_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"]
         if is_function:
             env.append("LEMMA_FUNCTION_CACHE_ROOT=/run/lemma-function-cache")
         env.extend(f"{name}={value}" for name, value in sorted(spec.env.items()))
@@ -314,7 +308,7 @@ class DockerSandboxProvider(DockerOpsMixin):
                 await self._wait_workspace_runtime(
                     inspected, profile=profile, deadline_at=deadline_at
                 )
-        except (ProviderNotReady, ProviderFailed):
+        except ProviderNotReady, ProviderFailed:
             raise
         except (DockerEngineError, KeyError, ValueError) as exc:
             raise ProviderFailed(str(exc)) from exc
@@ -370,7 +364,7 @@ class DockerSandboxProvider(DockerOpsMixin):
                 instance.provider_id, deadline_at=deadline_at
             )
             await client.quiesce(deadline_at=deadline_at)
-        except (WorkspaceRuntimeError, DockerEngineError, ProviderGone):
+        except WorkspaceRuntimeError, DockerEngineError, ProviderGone:
             return
         finally:
             if client is not None:
@@ -463,6 +457,7 @@ class DockerSandboxProvider(DockerOpsMixin):
 
     async def close(self) -> None:
         await self._engine.close()
+
 
 def _bind(mount: SandboxMount) -> str:
     suffix = ":ro" if mount.read_only else ""

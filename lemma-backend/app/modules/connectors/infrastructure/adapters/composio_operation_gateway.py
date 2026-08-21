@@ -35,7 +35,9 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         self,
         composio_client_factory: ComposioClientFactory | None = None,
     ):
-        self._composio_client_factory = composio_client_factory or self._default_client_factory
+        self._composio_client_factory = (
+            composio_client_factory or self._default_client_factory
+        )
 
     def _default_client_factory(self) -> Any:
         # Shared, not built here: this gateway is constructed per request and
@@ -223,7 +225,12 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         if matches({"rate_limited", "rate_limit_exceeded", "too_many_requests"}, 429):
             return OperationExecutionRateLimitedError(message, details=details)
         if matches(
-            {"invalid_arguments", "validation_error", "bad_request", "payload_too_large"},
+            {
+                "invalid_arguments",
+                "validation_error",
+                "bad_request",
+                "payload_too_large",
+            },
             400,
             409,
             413,

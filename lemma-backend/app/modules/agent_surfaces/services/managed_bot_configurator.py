@@ -52,10 +52,7 @@ async def configure_managed_bot(
         try:
             await child.call(method, payload)
         except TelegramApiError as exc:
-            if (
-                classify_telegram_error(exc)
-                is DeliveryClassification.TRANSIENT
-            ):
+            if classify_telegram_error(exc) is DeliveryClassification.TRANSIENT:
                 raise
             logger.debug(
                 "agent_surfaces.telegram_manager.bot_branding_best_effort",

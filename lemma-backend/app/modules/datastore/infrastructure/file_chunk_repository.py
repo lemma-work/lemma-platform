@@ -67,7 +67,11 @@ class DatastoreFileChunkRepository:
         # json-dumps each chunk's metadata beside it. Pure CPU, proportional to
         # the document, on the indexing hot path.
         rows = await run_blocking(
-            self._build_rows, file_id, chunks, embeddings, metadata,
+            self._build_rows,
+            file_id,
+            chunks,
+            embeddings,
+            metadata,
             limiter="cpu_bound",
         )
 

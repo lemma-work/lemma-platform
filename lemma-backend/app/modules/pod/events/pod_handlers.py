@@ -90,7 +90,7 @@ async def _process_pod_join_requested(
         pod = await pod_repository.get(parsed.pod_id)
         if not pod:
             logger.debug(
-                'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic',
+                "pod.pod_handlers.pod_not_found_skipping_notification.diagnostic",
                 pod_id=parsed.pod_id,
             )
             return
@@ -98,7 +98,7 @@ async def _process_pod_join_requested(
         requester = await user_repository.get(parsed.requester_user_id)
         if not requester:
             logger.debug(
-                'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic'
+                "pod.pod_handlers.requester_not_found_skipping_notification.diagnostic"
             )
             return
         requester_name = (

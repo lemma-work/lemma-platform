@@ -64,8 +64,12 @@ class AuthConfig(UUIDAuditBase):
 
     organization: Mapped[Any] = relationship("Organization")
     connector: Mapped["Connector"] = relationship("Connector")
-    created_by_user: Mapped[Any] = relationship("User", foreign_keys=[created_by_user_id])
-    updated_by_user: Mapped[Any] = relationship("User", foreign_keys=[updated_by_user_id])
+    created_by_user: Mapped[Any] = relationship(
+        "User", foreign_keys=[created_by_user_id]
+    )
+    updated_by_user: Mapped[Any] = relationship(
+        "User", foreign_keys=[updated_by_user_id]
+    )
 
     __table_args__ = (
         Index(

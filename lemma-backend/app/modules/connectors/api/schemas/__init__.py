@@ -8,7 +8,9 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
-from app.modules.connectors.api.schemas.connector_operation_schemas import OperationSummary
+from app.modules.connectors.api.schemas.connector_operation_schemas import (
+    OperationSummary,
+)
 
 
 class BaseSchema(BaseModel):
@@ -207,9 +209,7 @@ class AuthConfigUpdateSchema(BaseModel):
             "schema, and re-checked against the network-target guard."
         ),
     )
-    status: Optional[str] = Field(
-        default=None, description="ACTIVE or DISABLED."
-    )
+    status: Optional[str] = Field(default=None, description="ACTIVE or DISABLED.")
     is_default: Optional[bool] = Field(
         default=None,
         description=(

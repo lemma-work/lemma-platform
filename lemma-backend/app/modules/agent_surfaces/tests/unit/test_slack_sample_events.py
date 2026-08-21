@@ -12,7 +12,9 @@ from slack_sdk.web.async_client import AsyncWebClient
 from app.core.authorization.context import ActorType, Context
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ResolvedSurfaceUser,
@@ -220,7 +222,9 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     await service.execute_chat(context)
 
     conversation_service.add_user_message_and_start_run.assert_awaited_once()
-    message_kwargs = conversation_service.add_user_message_and_start_run.await_args.kwargs
+    message_kwargs = (
+        conversation_service.add_user_message_and_start_run.await_args.kwargs
+    )
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]
     assert status_updates == [
@@ -314,7 +318,9 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     await service.execute_chat(context)
 
     conversation_service.add_user_message_and_start_run.assert_awaited_once()
-    message_kwargs = conversation_service.add_user_message_and_start_run.await_args.kwargs
+    message_kwargs = (
+        conversation_service.add_user_message_and_start_run.await_args.kwargs
+    )
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]
     assert added_reactions == [

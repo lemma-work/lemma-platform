@@ -1,5 +1,3 @@
-
-
 def test_deep_resolve_refs_leaves_the_caller_spec_untouched():
     """The copy that made this quadratic was also unnecessary.
 

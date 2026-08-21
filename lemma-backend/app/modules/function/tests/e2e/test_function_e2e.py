@@ -398,7 +398,9 @@ async def {func_name}(ctx: FunctionContext, data: UppercaseInput) -> UppercaseRe
     )
     assert func["name"] == func_name
 
-    get_response = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}")
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
     assert get_response.status_code == status.HTTP_200_OK, get_response.text
     assert get_response.json()["id"] == func["id"]
 
@@ -437,7 +439,9 @@ async def test_function_list_and_access_respects_pod_roles(
     editor_name = f"editor_func_{uuid4().hex[:8]}"
     custom_name = f"custom_func_{uuid4().hex[:8]}"
 
-    await _create_function(authenticated_client, pod_id, _function_payload(default_name))
+    await _create_function(
+        authenticated_client, pod_id, _function_payload(default_name)
+    )
     await _create_function(
         authenticated_client,
         pod_id,
@@ -869,7 +873,9 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
     denied_output = denied_run["output_data"]
     assert denied_output["denied"] is True, denied_output
     assert denied_output["status_code"] == 403, denied_output
-    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", denied_output
+    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", (
+        denied_output
+    )
 
     # Grant record read/write (plus table.read for metadata). Notably NOT
     # table.update: data access is governed by record permissions only.
@@ -1106,7 +1112,9 @@ async def test_function_record_write_requires_record_write_not_table_update(
     denied_output = denied_run["output_data"]
     assert denied_output["denied"] is True, denied_output
     assert denied_output["status_code"] == 403, denied_output
-    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", denied_output
+    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", (
+        denied_output
+    )
 
     # Swap table.update for record.write -> the write now succeeds.
     await _replace_function_resource_grants(
@@ -1636,7 +1644,7 @@ async def test_function_connector_operation_fails_when_user_owned_account_missin
                 "resource_type": "connector",
                 "resource_name": connector_id,
                 "permission_ids": ["connector.use"],
-            }
+            },
         ],
     )
     await _replace_role_resource_grants(
@@ -2276,7 +2284,9 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
 
     async def probe_port() -> bool:

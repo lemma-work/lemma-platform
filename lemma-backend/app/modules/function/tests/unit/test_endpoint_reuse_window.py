@@ -40,9 +40,7 @@ from app.modules.workspace.config import workspace_settings
 def test_reuse_window_is_clamped_under_idle_release(
     monkeypatch, configured: int, idle_release: int, expected: int
 ) -> None:
-    monkeypatch.setattr(
-        settings, "function_runtime_endpoint_reuse_seconds", configured
-    )
+    monkeypatch.setattr(settings, "function_runtime_endpoint_reuse_seconds", configured)
     monkeypatch.setattr(workspace_settings, "idle_release_seconds", idle_release)
 
     assert endpoint_reuse_seconds() == expected

@@ -41,6 +41,8 @@ _TEST_PRICING: dict[str, ModelPricing] = {
         0.95, 4.00, cached_input_per_million_usd=0.16
     ),
 }
+
+
 @pytest.fixture(autouse=True)
 def _pricing_setup():
     """Register test pricing and clean up after each test."""
@@ -68,6 +70,7 @@ class _RecordingUsageRepository:
 
     async def consume_reservation(self, **kwargs):
         self.consumed.append(kwargs)
+
 
 def _service() -> UsageService:
     return UsageService(

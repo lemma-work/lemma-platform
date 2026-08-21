@@ -229,9 +229,7 @@ class _StreamingMultipartCollector:
             else None
         )
         raw_type = part.headers.get(b"content-type")
-        part.content_type = (
-            raw_type.decode("latin-1") if raw_type is not None else None
-        )
+        part.content_type = raw_type.decode("latin-1") if raw_type is not None else None
         if part.filename is not None:
             limit = self.file_limits.get(part.name)
             if limit is None:
@@ -262,7 +260,9 @@ class _StreamingMultipartCollector:
             )
         if part.filename is None:
             if part.size > 64 * 1024:
-                raise PayloadTooLargeError(max_bytes=64 * 1024, field=part.name or "form")
+                raise PayloadTooLargeError(
+                    max_bytes=64 * 1024, field=part.name or "form"
+                )
             part.text_data.extend(chunk)
             return
 
@@ -275,7 +275,10 @@ class _StreamingMultipartCollector:
         part.digest.update(chunk)
         if len(part.prefix) < SNIFF_PREFIX_BYTES:
             part.prefix.extend(chunk[: SNIFF_PREFIX_BYTES - len(part.prefix)])
-        if part.path is None and len(part.memory) + len(chunk) <= UPLOAD_MEMORY_SPOOL_BYTES:
+        if (
+            part.path is None
+            and len(part.memory) + len(chunk) <= UPLOAD_MEMORY_SPOOL_BYTES
+        ):
             part.memory.extend(chunk)
             return
         if part.path is None:

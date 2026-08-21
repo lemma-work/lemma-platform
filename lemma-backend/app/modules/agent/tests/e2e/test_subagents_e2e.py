@@ -124,7 +124,9 @@ async def _assistant_text(client, pod_id, conversation_id) -> str:
     )
 
 
-async def _wait_for_terminal_child(client, pod_id, parent_conversation_id, *, timeout=60.0):
+async def _wait_for_terminal_child(
+    client, pod_id, parent_conversation_id, *, timeout=60.0
+):
     async def probe() -> dict:
         children = await _list_children(client, pod_id, parent_conversation_id)
         if not children:
@@ -177,7 +179,9 @@ async def test_grant_agent_tool_string_output_links_child(
     )
     await _grant_agent_execute(authenticated_client, pod_id, "delegator", "echoer")
 
-    conversation_id = await _create_conversation(authenticated_client, pod_id, "delegator")
+    conversation_id = await _create_conversation(
+        authenticated_client, pod_id, "delegator"
+    )
     events = await _post_sse(
         authenticated_client,
         f"/pods/{pod_id}/conversations/{conversation_id}/messages",
@@ -196,7 +200,9 @@ async def test_grant_agent_tool_string_output_links_child(
     assert child["status"].upper() == "COMPLETED", child
     # An unstructured child finalizes its answer as {"answer": <text>}.
     output = child.get("output")
-    assert isinstance(output, dict) and "ZEBRA_TOKEN_77" in str(output.get("answer")), output
+    assert isinstance(output, dict) and "ZEBRA_TOKEN_77" in str(output.get("answer")), (
+        output
+    )
     child_text = await _assistant_text(authenticated_client, pod_id, child["id"])
     assert "ZEBRA_TOKEN_77" in child_text
 
@@ -292,7 +298,9 @@ async def test_named_agent_self_spawns_via_subagents_toolset(
     parent_text = await _assistant_text(authenticated_client, pod_id, conversation_id)
     assert "DELTA99" in parent_text
 
-    child = await _wait_for_terminal_child(authenticated_client, pod_id, conversation_id)
+    child = await _wait_for_terminal_child(
+        authenticated_client, pod_id, conversation_id
+    )
     assert child["status"].upper() == "COMPLETED", child
     # The child is a sub-agent conversation (depth=1: no spawn tools), so it just
     # answered DELTA99 directly.
@@ -360,9 +368,13 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
     """
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
     await _create_agent(authenticated_client, pod_id, "owner", "Owns children.")
-    await _create_agent(authenticated_client, pod_id, "stranger", "Owns other children.")
+    await _create_agent(
+        authenticated_client, pod_id, "stranger", "Owns other children."
+    )
 
-    owner_conversation_id = await _create_conversation(authenticated_client, pod_id, "owner")
+    owner_conversation_id = await _create_conversation(
+        authenticated_client, pod_id, "owner"
+    )
     stranger_conversation_id = await _create_conversation(
         authenticated_client, pod_id, "stranger"
     )

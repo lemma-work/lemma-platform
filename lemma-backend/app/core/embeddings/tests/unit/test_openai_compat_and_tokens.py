@@ -79,9 +79,7 @@ async def test_openai_compat_embedder_rejects_missing_credentials(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_compat_embedder_rejects_wrong_dimensions(monkeypatch):
-    client = _EmbeddingClient(
-        [_response({"data": [{"index": 0, "embedding": [1.0]}]})]
-    )
+    client = _EmbeddingClient([_response({"data": [{"index": 0, "embedding": [1.0]}]})])
     monkeypatch.setattr(
         "app.core.embeddings.openai_compat_embedder.httpx.AsyncClient",
         lambda **_: client,
@@ -115,10 +113,16 @@ def test_token_counter_caches_encoding(monkeypatch):
 
     def get_encoding(name: str):
         calls.append(name)
-        return SimpleNamespace(encode=lambda text: [text], decode=lambda values: values[0])
+        return SimpleNamespace(
+            encode=lambda text: [text], decode=lambda values: values[0]
+        )
 
     token_counter._get_encoding.cache_clear()
-    monkeypatch.setattr(token_counter, "_get_encoding", __import__("functools").lru_cache()(get_encoding))
+    monkeypatch.setattr(
+        token_counter,
+        "_get_encoding",
+        __import__("functools").lru_cache()(get_encoding),
+    )
     token_counter.num_tokens_from_string("one", "test")
     token_counter.num_tokens_from_string("two", "test")
     assert calls == ["test"]

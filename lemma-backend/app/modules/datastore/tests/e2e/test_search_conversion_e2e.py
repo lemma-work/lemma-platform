@@ -151,9 +151,7 @@ class TestDatastoreSearchAndConversion:
             seq2seq_paper.needle, search_method="TEXT"
         )
         seq2seq_hits = [
-            item
-            for item in text_results["items"]
-            if item["file_id"] == seq2seq["id"]
+            item for item in text_results["items"] if item["file_id"] == seq2seq["id"]
         ]
         assert seq2seq_hits, text_results
         assert seq2seq_hits[0]["page_number"] is not None
@@ -235,9 +233,7 @@ class TestDatastoreSearchAndConversion:
         from urllib.parse import parse_qs, urlparse
 
         content = b"hello signed url world"
-        uploaded = await pod_api.upload_file(
-            "link.txt", content, directory_path="/"
-        )
+        uploaded = await pod_api.upload_file("link.txt", content, directory_path="/")
 
         info = await pod_api.file_url(uploaded["path"])
         assert info["path"] == uploaded["path"]

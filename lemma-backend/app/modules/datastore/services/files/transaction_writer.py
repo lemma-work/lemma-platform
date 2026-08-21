@@ -333,7 +333,7 @@ class FileTransactionWriter:
             pass
         except Exception:
             logger.debug(
-                'datastore.transaction_writer.delete_user_markdown_s_s.diagnostic',
+                "datastore.transaction_writer.delete_user_markdown_s_s.diagnostic",
                 exc_info=True,
             )
         metadata = dict(entity.metadata or {})

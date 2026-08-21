@@ -72,7 +72,9 @@ async def notify_outbox_wake(session: AsyncSession) -> None:
     )
 
 
-def asyncpg_connect_kwargs(database_url: str, *, application_name: str) -> dict[str, Any]:
+def asyncpg_connect_kwargs(
+    database_url: str, *, application_name: str
+) -> dict[str, Any]:
     """Translate a SQLAlchemy URL into raw asyncpg connect arguments.
 
     The listener cannot use the SQLAlchemy pool. ``pool_recycle`` is 300s, so a
@@ -154,13 +156,15 @@ class OutboxWakeListener:
             except Exception as exc:  # noqa: BLE001 - long-lived process boundary
                 failures += 1
                 self._incident.record_failure(error_type=type(exc).__name__)
-                delay = min(30.0, 2 ** min(failures - 1, 5)) * random.uniform(0.75, 1.25)
+                delay = min(30.0, 2 ** min(failures - 1, 5)) * random.uniform(
+                    0.75, 1.25
+                )
                 await asyncio.sleep(delay)
             finally:
                 if connection is not None:
                     try:
                         await connection.close(timeout=5)
-                    except (asyncio.CancelledError, Exception):
+                    except asyncio.CancelledError, Exception:
                         # A listener that cannot close is a listener that is
                         # already gone; reconnecting is the response either way.
                         pass

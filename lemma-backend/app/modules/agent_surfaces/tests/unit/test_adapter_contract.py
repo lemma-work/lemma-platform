@@ -94,9 +94,7 @@ def test_adapter_overrides_accept_every_argument_the_base_declares(platform, ada
     working on both. Nothing failed; it just went quiet.
     """
     mismatches: list[str] = []
-    for name, base_method in inspect.getmembers(
-        BaseSurfaceAdapter, inspect.isfunction
-    ):
+    for name, base_method in inspect.getmembers(BaseSurfaceAdapter, inspect.isfunction):
         if name.startswith("_"):
             continue
         override = getattr(type(adapter), name, None)

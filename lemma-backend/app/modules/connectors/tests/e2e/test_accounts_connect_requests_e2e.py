@@ -109,10 +109,7 @@ async def test_connect_request_and_accounts_lifecycle(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
     auth_config = auth_config_response.json()
-    assert (
-        auth_config["config"]["oauth2_credentials"]["client_secret"]
-        == "********"
-    )
+    assert auth_config["config"]["oauth2_credentials"]["client_secret"] == "********"
 
     async def _fake_get_authorization_url(
         self, connector, user_id, state, redirect_uri

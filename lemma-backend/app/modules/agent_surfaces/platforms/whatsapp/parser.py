@@ -40,9 +40,7 @@ class WhatsAppMessageParser:
                 return None
             interactive = msg.get("interactive") or {}
             reply = (
-                interactive.get("button_reply")
-                or interactive.get("list_reply")
-                or {}
+                interactive.get("button_reply") or interactive.get("list_reply") or {}
             )
             reply_id = str(reply.get("id") or "")
             parts = reply_id.split(WHATSAPP_INTERACTION_SEP, 2)
@@ -144,7 +142,10 @@ class WhatsAppMessageParser:
             is_dm=True,
             mentioned_agent=True,
             should_start_conversation=True,
-            reply_target={"phone_number_id": phone_number_id, "sender_wa_id": sender_wa_id},
+            reply_target={
+                "phone_number_id": phone_number_id,
+                "sender_wa_id": sender_wa_id,
+            },
             metadata={
                 "waba_id": waba_id,
                 "phone_number_id": phone_number_id,

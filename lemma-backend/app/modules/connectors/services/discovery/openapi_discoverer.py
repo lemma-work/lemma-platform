@@ -16,7 +16,9 @@ SpecFetcher = Callable[[str, dict[str, str] | None], Awaitable[dict[str, Any]]]
 _FETCH_TIMEOUT_SECONDS = 20.0
 
 
-async def _default_fetch_spec(url: str, headers: dict[str, str] | None) -> dict[str, Any]:
+async def _default_fetch_spec(
+    url: str, headers: dict[str, str] | None
+) -> dict[str, Any]:
     """Fetch a tenant-supplied spec URL, guarded and capped.
 
     The URL comes from the install, so every hop is re-validated (a public URL
@@ -69,7 +71,9 @@ async def discover_openapi(
 
     server_url = connection_config.get("server_url") or _spec_default_server(spec)
     if not server_url:
-        raise ValueError("OpenAPI discovery requires a 'server_url' (none found in spec).")
+        raise ValueError(
+            "OpenAPI discovery requires a 'server_url' (none found in spec)."
+        )
 
     descriptors = build_operation_descriptors(
         spec,

@@ -139,7 +139,10 @@ def _encode_jpeg(image: Image.Image, max_long_edge: int, jpeg_quality: int) -> b
     long_edge = max(image.size)
     if long_edge > max_long_edge:
         ratio = max_long_edge / long_edge
-        new_size = (max(1, round(image.width * ratio)), max(1, round(image.height * ratio)))
+        new_size = (
+            max(1, round(image.width * ratio)),
+            max(1, round(image.height * ratio)),
+        )
         image = image.resize(new_size, Image.LANCZOS)
 
     buffer = io.BytesIO()

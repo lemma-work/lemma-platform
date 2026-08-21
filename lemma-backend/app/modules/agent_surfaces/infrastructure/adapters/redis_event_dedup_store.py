@@ -21,7 +21,9 @@ class RedisSurfaceEventDedupStore:
         ttl_seconds: int | None = None,
     ) -> None:
         self._redis_url = redis_url or settings.redis_url
-        self._ttl_seconds = ttl_seconds or surface_settings.surface_event_dedupe_ttl_seconds
+        self._ttl_seconds = (
+            ttl_seconds or surface_settings.surface_event_dedupe_ttl_seconds
+        )
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
 

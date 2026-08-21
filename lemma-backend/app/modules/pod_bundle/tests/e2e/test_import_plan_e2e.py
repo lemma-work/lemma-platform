@@ -100,7 +100,9 @@ async def _wait_for_plan(authenticated_client, pod_id, import_id, timeout=60) ->
     )
 
 
-async def _create_table(authenticated_client, pod_id, table_name, extra_columns) -> None:
+async def _create_table(
+    authenticated_client, pod_id, table_name, extra_columns
+) -> None:
     res = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -171,9 +173,7 @@ async def test_plan_flags_destructive_column_drop(
 
 async def test_get_import_expired_returns_410(authenticated_client, test_pod, worker):
     pod_id = test_pod["id"]
-    res = await authenticated_client.get(
-        f"/pods/{pod_id}/bundle/imports/{uuid4()}"
-    )
+    res = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{uuid4()}")
     assert res.status_code == status.HTTP_410_GONE, res.text
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 

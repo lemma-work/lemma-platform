@@ -50,9 +50,7 @@ def _domain_of(address: str | None) -> str:
     return domain.strip().lower() or _FALLBACK_DOMAIN
 
 
-def cold_thread_seed_id(
-    *, notification_id: UUID, surface: AgentSurfaceEntity
-) -> str:
+def cold_thread_seed_id(*, notification_id: UUID, surface: AgentSurfaceEntity) -> str:
     """The Message-ID we plant so the reply can be recognised.
 
     Derived from the notification id rather than randomly, so re-delivering the

@@ -53,7 +53,7 @@ class WorkspaceProcessStore:
             return 0
         try:
             return max(0, int(value))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     async def set_session_id(
@@ -83,4 +83,3 @@ class WorkspaceProcessStore:
         # every other component still using the same pool. Disposal is
         # close_redis_clients()'s job at lifespan shutdown.
         self._redis = None
-

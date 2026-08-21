@@ -117,7 +117,7 @@ async def guard(scope: str) -> None:
             pipe.ttl(open_key)
             pipe.set(announce_key, "1", ex=cooldown, nx=True)
             remaining, first_refusal = await pipe.execute()
-    except (RedisError, OSError):
+    except RedisError, OSError:
         # A breaker that cannot reach Redis must not become an outage of its
         # own. Losing the protection is strictly better than refusing traffic
         # that would have worked.
@@ -168,7 +168,7 @@ async def record_success(scope: str) -> None:
             pipe.delete(open_key)
             pipe.delete(fail_key, announce_key)
             was_open, _ = await pipe.execute()
-    except (RedisError, OSError):
+    except RedisError, OSError:
         logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
     if was_open:
@@ -206,7 +206,7 @@ async def record_failure(scope: str) -> None:
         # that re-opened moments after closing would refuse silently for the
         # remainder of the previous token's life.
         await redis.delete(f"{_PREFIX}:said:{scope}")
-    except (RedisError, OSError):
+    except RedisError, OSError:
         logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
     org_id, connector_id, operation_name = _fields(scope)

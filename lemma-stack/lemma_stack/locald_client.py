@@ -77,7 +77,7 @@ def _installed_runtime() -> tuple[Path | None, Path | None]:
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
         release_root = Path(config["installedRuntime"]["root"])
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except OSError, KeyError, TypeError, ValueError, json.JSONDecodeError:
         return None, None
     host = release_root / "local-runtime"
     managed = release_root / "managed-runtime"
@@ -233,6 +233,6 @@ class LocaldClient:
 def _event(line: str) -> dict[str, Any]:
     try:
         parsed = json.loads(line)
-    except (TypeError, json.JSONDecodeError):
+    except TypeError, json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}

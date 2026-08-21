@@ -41,7 +41,9 @@ async def test_gmail_email_surface_handles_trigger_payload_and_replies(
     message_store,
     monkeypatch,
 ):
-    monkeypatch.setattr(ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager())
+    monkeypatch.setattr(
+        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
+    )
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,

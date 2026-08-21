@@ -145,10 +145,7 @@ class GithubBundleFetcher:
                         declared_size = int(content_length)
                     except ValueError:
                         declared_size = 0
-                    if (
-                        declared_size
-                        > pod_bundle_settings.pod_bundle_max_archive_bytes
-                    ):
+                    if declared_size > pod_bundle_settings.pod_bundle_max_archive_bytes:
                         raise GithubImportError(
                             f"The {owner}/{repo} archive exceeds the maximum allowed size.",
                             code="GITHUB_ARCHIVE_TOO_LARGE",
@@ -158,10 +155,7 @@ class GithubBundleFetcher:
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
                     content.extend(chunk)
-                    if (
-                        len(content)
-                        > pod_bundle_settings.pod_bundle_max_archive_bytes
-                    ):
+                    if len(content) > pod_bundle_settings.pod_bundle_max_archive_bytes:
                         raise GithubImportError(
                             f"The {owner}/{repo} archive exceeds the maximum allowed size.",
                             code="GITHUB_ARCHIVE_TOO_LARGE",
@@ -250,7 +244,7 @@ def _extract_binary(value: object) -> bytes | None:
         return None
     try:
         return base64.b64decode(encoded, validate=True)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -273,7 +267,9 @@ def _map_connector_error(
     # prefer the provider status it records in the details.
     details = getattr(exc, "details", None)
     upstream = details.get("upstream_status") if isinstance(details, dict) else None
-    status = upstream if isinstance(upstream, int) else getattr(exc, "status_code", None)
+    status = (
+        upstream if isinstance(upstream, int) else getattr(exc, "status_code", None)
+    )
     if status == 404:
         return GithubImportError(
             f"Repository {owner}/{repo} was not found.",

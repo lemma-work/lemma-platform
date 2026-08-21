@@ -79,7 +79,9 @@ async def test_named_workload_agent_delete_requires_grant_or_approval(
     )
     try:
         ok = await _delete_agent(granted, pod_id, victim["name"])
-        assert ok.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), ok.text
+        assert ok.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), (
+            ok.text
+        )
     finally:
         await granted.aclose()
 
@@ -107,7 +109,9 @@ async def test_default_pod_agent_agent_delete_is_gated_despite_user_admin(
 
     # The human user (not delegated) can still delete it directly.
     human = await _delete_agent(authenticated_client, pod_id, victim["name"])
-    assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), human.text
+    assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), (
+        human.text
+    )
 
 
 @pytest.mark.asyncio
@@ -128,7 +132,9 @@ async def test_default_pod_agent_cannot_delete_pod(
         await client.aclose()
     # The pod still exists — the human admin can delete it.
     human = await authenticated_client.request("DELETE", f"/pods/{pod_id}")
-    assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), human.text
+    assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), (
+        human.text
+    )
 
 
 @pytest.mark.asyncio
@@ -143,9 +149,7 @@ async def test_default_pod_agent_cannot_manage_members(
     )
     try:
         # The gate fires before the (missing) member is resolved -> 403, not 404.
-        removed = await client.request(
-            "DELETE", f"/pods/{pod_id}/members/{uuid4()}"
-        )
+        removed = await client.request("DELETE", f"/pods/{pod_id}/members/{uuid4()}")
         assert removed.status_code == status.HTTP_403_FORBIDDEN, removed.text
         updated = await client.request(
             "PATCH",

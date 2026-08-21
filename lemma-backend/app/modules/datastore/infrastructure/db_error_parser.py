@@ -16,7 +16,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.modules.datastore.domain.datastore_entities import ColumnSchema, DatastoreDataType
+from app.modules.datastore.domain.datastore_entities import (
+    ColumnSchema,
+    DatastoreDataType,
+)
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
@@ -49,7 +52,9 @@ def _short_db_message(raw: str) -> str:
     return line
 
 
-def _extract_column_from_constraint(constraint_name: str, table_name: str | None) -> str | None:
+def _extract_column_from_constraint(
+    constraint_name: str, table_name: str | None
+) -> str | None:
     """Parse ``<table>_<col>_check`` / ``<table>_<col>_key`` -> column name.
 
     PostgreSQL auto-names constraints ``<table>_<column>_<suffix>``. This works
@@ -63,7 +68,7 @@ def _extract_column_from_constraint(constraint_name: str, table_name: str | None
     prefix = table_name + "_"
     if not constraint_name.startswith(prefix):
         return None
-    rest = constraint_name[len(prefix):]
+    rest = constraint_name[len(prefix) :]
     for suffix in ("_check", "_key", "_fkey", "_not_null"):
         if rest.endswith(suffix):
             col = rest[: -len(suffix)]
@@ -176,11 +181,14 @@ def parse_db_error(
             if value_str and value_str != "NULL":
                 details["value"] = value_str
             msg = (
-                f"Value '{value_str}' is not allowed for column '{col.name}'. "
-                f"Allowed values: {allowed}"
-            ) if value_str else (
-                f"Invalid value for column '{col.name}'. "
-                f"Allowed values: {allowed}"
+                (
+                    f"Value '{value_str}' is not allowed for column '{col.name}'. "
+                    f"Allowed values: {allowed}"
+                )
+                if value_str
+                else (
+                    f"Invalid value for column '{col.name}'. Allowed values: {allowed}"
+                )
             )
             return msg, details, DatastoreValidationError
 
@@ -218,7 +226,9 @@ def parse_db_error(
         col_name = m.group(1) if m else None
         if col_name is None:
             m2 = re.search(r'foreign key constraint "([^"]+)"', lower)
-            col_name = _extract_column_from_constraint(m2.group(1) if m2 else "", table_name)
+            col_name = _extract_column_from_constraint(
+                m2.group(1) if m2 else "", table_name
+            )
         fk_ref = None
         col = _lookup_col(col_name)
         if col and col.foreign_key:
@@ -227,7 +237,9 @@ def parse_db_error(
             ref_msg = f" (references {fk_ref})" if fk_ref else ""
             return (
                 f"Value for column '{col_name}' references a non-existent record{ref_msg}.",
-                {"field": col_name, "references": fk_ref} if fk_ref else {"field": col_name},
+                {"field": col_name, "references": fk_ref}
+                if fk_ref
+                else {"field": col_name},
                 DatastoreValidationError,
             )
         return (
@@ -258,7 +270,7 @@ def parse_db_error(
 
     # --- Invalid input syntax (type mismatch) ---------------------------------
     if "invalid input syntax" in lower:
-        m = re.search(r'for type (\w+)', lower)
+        m = re.search(r"for type (\w+)", lower)
         type_name = m.group(1) if m else None
         m2 = re.search(r'column "([^"]+)"', lower)
         col_name = m2.group(1) if m2 else None
@@ -266,7 +278,9 @@ def parse_db_error(
         if col_name:
             return (
                 f"Invalid value for column '{col_name}': expected {expected}.",
-                {"field": col_name, "expected_type": type_name} if type_name else {"field": col_name},
+                {"field": col_name, "expected_type": type_name}
+                if type_name
+                else {"field": col_name},
                 DatastoreValidationError,
             )
         return (
@@ -276,7 +290,9 @@ def parse_db_error(
         )
 
     # --- Numeric out of range -------------------------------------------------
-    if "out of range" in lower and ("numeric" in lower or "integer" in lower or "float" in lower):
+    if "out of range" in lower and (
+        "numeric" in lower or "integer" in lower or "float" in lower
+    ):
         m = re.search(r'column "([^"]+)"', lower)
         col_name = m.group(1) if m else None
         if col_name:

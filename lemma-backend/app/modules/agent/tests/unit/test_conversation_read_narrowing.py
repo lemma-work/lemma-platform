@@ -164,7 +164,9 @@ async def test_a_run_with_a_reply_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
+    assert (
+        await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
+    )
 
 
 @pytest.mark.asyncio
@@ -177,7 +179,9 @@ async def test_a_run_with_no_messages_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
+    assert (
+        await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
+    )
 
 
 @pytest.mark.asyncio

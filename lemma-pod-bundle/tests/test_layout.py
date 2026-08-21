@@ -82,10 +82,17 @@ def test_record_and_read_export_contents(tmp_path: Path):
     assert contents == {"resources": ["tables"], "names": ["items"], "with_data": True}
     assert _read_export_contents(tmp_path) == contents
     # No manifest -> empty on both sides.
-    assert _record_export_contents(
-        tmp_path / "nope", included=set(), excluded=set(), names=set(),
-        with_data=False, with_files=False,
-    ) == {}
+    assert (
+        _record_export_contents(
+            tmp_path / "nope",
+            included=set(),
+            excluded=set(),
+            names=set(),
+            with_data=False,
+            with_files=False,
+        )
+        == {}
+    )
     assert _read_export_contents(tmp_path / "nope") == {}
 
 

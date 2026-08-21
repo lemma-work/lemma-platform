@@ -62,9 +62,7 @@ class TestAuthenticatedAppUrl:
 
     @pytest.mark.asyncio
     async def test_app_url_url_encodes_special_characters(self, pod_api: DatastoreApi):
-        uploaded = await _upload(
-            pod_api, "/me/url enc", "weekly report.md", b"x"
-        )
+        uploaded = await _upload(pod_api, "/me/url enc", "weekly report.md", b"x")
         path = uploaded["path"]
 
         resp = await pod_api.request(
@@ -97,7 +95,9 @@ class TestSignedUrlCreation:
 
     @pytest.mark.asyncio
     async def test_defaults_apply_when_unspecified(self, pod_api: DatastoreApi):
-        uploaded = await _upload(pod_api, "/me/def", "a.txt", b"a", content_type="text/plain")
+        uploaded = await _upload(
+            pod_api, "/me/def", "a.txt", b"a", content_type="text/plain"
+        )
         resp = await self._sign(pod_api, uploaded["path"], {})
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
         body = resp.json()
@@ -107,7 +107,9 @@ class TestSignedUrlCreation:
 
     @pytest.mark.asyncio
     async def test_custom_values_respected(self, pod_api: DatastoreApi):
-        uploaded = await _upload(pod_api, "/me/cust", "b.txt", b"b", content_type="text/plain")
+        uploaded = await _upload(
+            pod_api, "/me/cust", "b.txt", b"b", content_type="text/plain"
+        )
         resp = await self._sign(
             pod_api, uploaded["path"], {"expires_seconds": 3600, "max_hits": 7}
         )
@@ -118,7 +120,9 @@ class TestSignedUrlCreation:
 
     @pytest.mark.asyncio
     async def test_clamps_max_hits_and_expiry_to_ceilings(self, pod_api: DatastoreApi):
-        uploaded = await _upload(pod_api, "/me/clamp", "c.txt", b"c", content_type="text/plain")
+        uploaded = await _upload(
+            pod_api, "/me/clamp", "c.txt", b"c", content_type="text/plain"
+        )
         resp = await self._sign(
             pod_api, uploaded["path"], {"expires_seconds": 10**9, "max_hits": 10**6}
         )
@@ -130,7 +134,9 @@ class TestSignedUrlCreation:
 
     @pytest.mark.asyncio
     async def test_floors_non_positive_inputs_to_one(self, pod_api: DatastoreApi):
-        uploaded = await _upload(pod_api, "/me/floor", "d.txt", b"d", content_type="text/plain")
+        uploaded = await _upload(
+            pod_api, "/me/floor", "d.txt", b"d", content_type="text/plain"
+        )
         resp = await self._sign(
             pod_api, uploaded["path"], {"expires_seconds": 0, "max_hits": 0}
         )
@@ -161,7 +167,11 @@ class TestSignedUrlServing:
     ):
         content = bytes(range(256)) * 8  # 2 KiB of binary, every byte value
         uploaded = await _upload(
-            pod_api, "/me/bin", "blob.dat", content, content_type="application/octet-stream"
+            pod_api,
+            "/me/bin",
+            "blob.dat",
+            content,
+            content_type="application/octet-stream",
         )
         body = await self._sign(pod_api, uploaded["path"], {"max_hits": 5})
 

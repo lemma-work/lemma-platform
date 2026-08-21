@@ -120,9 +120,9 @@ async def _upload_and_wait(
             response.raise_for_status()
             payload = response.json()
             result.file_id = str(payload["id"])
-            result.content_sha256_verified = payload.get(
-                "content_sha256"
-            ) == hashlib.sha256(content).hexdigest()
+            result.content_sha256_verified = (
+                payload.get("content_sha256") == hashlib.sha256(content).hexdigest()
+            )
             result.upload_seconds = time.perf_counter() - upload_started
 
         deadline = time.monotonic() + timeout

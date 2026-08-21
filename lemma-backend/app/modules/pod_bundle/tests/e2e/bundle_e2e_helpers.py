@@ -79,7 +79,9 @@ async def new_pod(client, org_id: str, *, label: str = "Use Case") -> str:
     return res.json()["id"]
 
 
-async def wait_import(client, pod_id: str, import_id: str, *, until, timeout: int = 120) -> dict:
+async def wait_import(
+    client, pod_id: str, import_id: str, *, until, timeout: int = 120
+) -> dict:
     async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
@@ -117,7 +119,9 @@ async def start_and_plan_import(
     )
     assert res.status_code == status.HTTP_202_ACCEPTED, res.text
     import_id = res.json()["import_id"]
-    await wait_import(client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}, timeout=timeout)
+    await wait_import(
+        client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}, timeout=timeout
+    )
     return import_id
 
 

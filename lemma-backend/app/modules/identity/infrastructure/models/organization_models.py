@@ -112,7 +112,9 @@ class OrganizationInvitation(UUIDAuditBase):
     status: Mapped[OrganizationInvitationStatus] = mapped_column(
         String(50), default=OrganizationInvitationStatus.PENDING, index=True
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

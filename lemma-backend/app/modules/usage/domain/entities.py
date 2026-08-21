@@ -116,7 +116,9 @@ class UsageSummary(BaseModel):
             },
         )
         bucket["input_tokens"] = _as_int(bucket["input_tokens"]) + record.input_tokens
-        bucket["output_tokens"] = _as_int(bucket["output_tokens"]) + record.output_tokens
+        bucket["output_tokens"] = (
+            _as_int(bucket["output_tokens"]) + record.output_tokens
+        )
         bucket["total_tokens"] = _as_int(bucket["total_tokens"]) + record.total_tokens
         bucket["units"] = _as_float(bucket["units"]) + record.units
         bucket["record_count"] = _as_int(bucket["record_count"]) + 1

@@ -29,7 +29,12 @@ async def test_extract_keeps_native_page_markers_and_rewrites_image_refs():
         {
             "content": "<!-- PAGE 1 -->\n\n# Title\n\n![](assets/image_0.png)",
             "images": [
-                {"image_index": 0, "format": "png", "data": _png_b64(), "page_number": 1}
+                {
+                    "image_index": 0,
+                    "format": "png",
+                    "data": _png_b64(),
+                    "page_number": 1,
+                }
             ],
             "pages": [{"page_number": 1, "content": "Title"}],
         }
@@ -49,7 +54,9 @@ async def test_extract_preserves_rich_content_structure_and_pages_at_byte_bounda
     # tables); Kreuzberg does NOT insert <!-- PAGE --> markers and the per-page
     # `pages[].content` is plain. The adapter must keep `content` and insert
     # markers at the per-page byte boundaries — not rebuild from the plain pages.
-    content = "# Title\n\nPage one body.\n\n## Section\n\n| a | b |\n| - | - |\n\nPage two."
+    content = (
+        "# Title\n\nPage one body.\n\n## Section\n\n| a | b |\n| - | - |\n\nPage two."
+    )
     byte_start_p2 = content.encode("utf-8").index(b"## Section")
     result = KreuzbergExtractionResult(
         {
@@ -111,7 +118,10 @@ async def test_extract_surfaces_native_chunk_page_spans():
                 {"content": "A", "metadata": {"first_page": 1, "last_page": 1}},
                 {"content": "B", "metadata": {"first_page": 2, "last_page": 3}},
             ],
-            "pages": [{"page_number": 1, "content": "A"}, {"page_number": 2, "content": "B"}],
+            "pages": [
+                {"page_number": 1, "content": "A"},
+                {"page_number": 2, "content": "B"},
+            ],
         }
     )
     extraction = await _processor(result).extract(b"pdf", "report.pdf")

@@ -124,7 +124,7 @@ class PodFileAgentHostArtifactWriter:
                 )
             except ValueError as exc:
                 warnings.append(str(exc))
-            except (DomainError, OSError, SQLAlchemyError, TimeoutError):
+            except DomainError, OSError, SQLAlchemyError, TimeoutError:
                 logger.error(
                     "agent_host.artifact.persist_failed",
                     agent_run_id=str(agent_run_id),
@@ -210,8 +210,10 @@ def _matches_image_signature(content: bytes, mime_type: str) -> bool:
             and content[8:12] == b"WEBP"
         )
     if mime_type == "image/avif":
-        return len(content) >= 16 and content[4:8] == b"ftyp" and (
-            b"avif" in content[8:32] or b"avis" in content[8:32]
+        return (
+            len(content) >= 16
+            and content[4:8] == b"ftyp"
+            and (b"avif" in content[8:32] or b"avis" in content[8:32])
         )
     return False
 

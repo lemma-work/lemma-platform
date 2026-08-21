@@ -90,7 +90,9 @@ class TestFrameEncoding:
         run_id = uuid4()
         frame = json.loads(
             encode_stream_chunk(
-                event_type="completed", data={"status": "COMPLETED"}, agent_run_id=run_id
+                event_type="completed",
+                data={"status": "COMPLETED"},
+                agent_run_id=run_id,
             ).removeprefix("data: ")
         )
         assert frame["agent_run_id"] == str(run_id)

@@ -116,12 +116,12 @@ def parse_publish_manifest(raw: bytes) -> dict[str, Any]:
         raise BundleInvalidError("The GitHub publish did not complete.")
     for key in ("publish_id", "generated_files", "sources", "chunks"):
         if key not in value:
-            raise BundleInvalidError(
-                f"The GitHub publish manifest is missing '{key}'."
-            )
+            raise BundleInvalidError(f"The GitHub publish manifest is missing '{key}'.")
     if not isinstance(value["publish_id"], str) or not value["publish_id"]:
         raise BundleInvalidError("The GitHub publish manifest has no publish id.")
-    if not all(isinstance(value[key], dict) for key in ("generated_files", "sources", "chunks")):
+    if not all(
+        isinstance(value[key], dict) for key in ("generated_files", "sources", "chunks")
+    ):
         raise BundleInvalidError("The GitHub publish manifest is malformed.")
     return value
 

@@ -8,8 +8,6 @@ from pydantic import BaseModel
 class MessageBus(Protocol):
     """Port for publishing integration/domain events."""
 
-    async def publish(
-        self, stream: str, event: BaseModel | Mapping[str, Any]
-    ) -> None:
+    async def publish(self, stream: str, event: BaseModel | Mapping[str, Any]) -> None:
         """Publish an event payload to a stream/topic."""
         ...

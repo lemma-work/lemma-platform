@@ -51,7 +51,9 @@ async def test_project_groups_children_and_shares_cwd(
     # A PROJECT is a root conversation: it shows in the default list and under a
     # type=PROJECT filter.
     assert project["id"] in await _list_ids(authenticated_client, pod_id)
-    assert project["id"] in await _list_ids(authenticated_client, pod_id, type="PROJECT")
+    assert project["id"] in await _list_ids(
+        authenticated_client, pod_id, type="PROJECT"
+    )
 
     # A conversation pinned under the project inherits the project's cwd instead of
     # getting its own c/{date}/{slug} directory.

@@ -47,9 +47,7 @@ def test_a_gap_the_whole_process_lost_is_not_blamed_on_one_path() -> None:
 def test_a_real_hold_survives_a_stall_that_only_partly_explains_it() -> None:
     """Subtracting the stall is not the same as excusing anything that happens
     near one. Two seconds of gap with 100ms of stall is still two seconds."""
-    blamed = attributable_violations(
-        [_hold(2.0)], worst_lag_seconds=0.1, threshold=0.2
-    )
+    blamed = attributable_violations([_hold(2.0)], worst_lag_seconds=0.1, threshold=0.2)
 
     assert len(blamed) == 1
 

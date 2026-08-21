@@ -52,7 +52,9 @@ def test_touch_bumps_seq_and_updated_at():
 
 def test_json_round_trip_preserves_document():
     state = _import_state()
-    state.plan = ImportPlan(format_version=2, steps=[_step(0), _step(1, destructive=True)])
+    state.plan = ImportPlan(
+        format_version=2, steps=[_step(0), _step(1, destructive=True)]
+    )
     state.status = ImportStatus.AWAITING_CONFIRMATION
     state.touch()
 

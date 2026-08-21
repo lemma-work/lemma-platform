@@ -66,7 +66,9 @@ def _origin(url: str) -> tuple[str, str, int | None]:
     return (parts.scheme.lower(), (parts.hostname or "").lower(), parts.port)
 
 
-def _target_changed(kind: ConnectorKind, before: dict[str, Any], after: dict[str, Any]) -> bool:
+def _target_changed(
+    kind: ConnectorKind, before: dict[str, Any], after: dict[str, Any]
+) -> bool:
     fields = _TARGET_FIELDS.get(kind)
     if not fields:
         return False
@@ -87,6 +89,7 @@ def _target_changed(kind: ConnectorKind, before: dict[str, Any], after: dict[str
 
 def _oauth_credentials_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
     """Whether the org swapped the OAuth app that issued the existing tokens."""
+
     def creds(config: dict[str, Any]) -> dict[str, Any]:
         nested = config.get("oauth2_credentials")
         return nested if isinstance(nested, dict) else config
@@ -110,7 +113,9 @@ def config_change_effects(
     discovery_fields = _DISCOVERY_FIELDS.get(kind, ())
     rediscover = any(old.get(field) != new.get(field) for field in discovery_fields)
 
-    invalidates = _target_changed(kind, old, new) or _oauth_credentials_changed(old, new)
+    invalidates = _target_changed(kind, old, new) or _oauth_credentials_changed(
+        old, new
+    )
     return (rediscover, invalidates)
 
 

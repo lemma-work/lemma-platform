@@ -321,9 +321,7 @@ class WorkspaceSandboxService:
             or settings.cli_auth_frontend_url
             or settings.auth_frontend_url
         )
-        host_origin = (
-            settings.workspace_callback_frontend_url or settings.frontend_url
-        )
+        host_origin = settings.workspace_callback_frontend_url or settings.frontend_url
 
         resolved_org_id = (
             str(organization_id)
@@ -392,7 +390,9 @@ class WorkspaceSandboxService:
         workspace_recreated = False
         if session_id and sandbox_info.storage_generation is not None:
             try:
-                with _tracer.start_as_current_span("lemma.workspace.storage_generation"):
+                with _tracer.start_as_current_span(
+                    "lemma.workspace.storage_generation"
+                ):
                     workspace_recreated = (
                         await self.storage_generation_store.observe_storage_generation(
                             session_id=session_id,
@@ -496,9 +496,7 @@ class WorkspaceSandboxService:
                     deadline_at=deadline_at,
                 )
             except SandboxUnavailable as exc:
-                remaining = (
-                    deadline_at - datetime.now(timezone.utc)
-                ).total_seconds()
+                remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining <= 0:
                     break
                 delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
@@ -506,9 +504,7 @@ class WorkspaceSandboxService:
                 force_reconcile = True
                 continue
             return sandbox_info
-        raise TimeoutError(
-            f"workspace sandbox {user_id} did not become usable"
-        )
+        raise TimeoutError(f"workspace sandbox {user_id} did not become usable")
 
     def _directory_cache_key(
         self,

@@ -191,9 +191,7 @@ async def test_mark_all_read_clears_the_badge_without_answering_anything(
             title=f"Question {index}",
         )
 
-    cleared = await authenticated_client.post(
-        f"/pods/{pod_id}/notifications/read-all"
-    )
+    cleared = await authenticated_client.post(f"/pods/{pod_id}/notifications/read-all")
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["unread"] == 0
 
@@ -284,7 +282,11 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
 
     created = await authenticated_client.post(
         f"/pods/{pod_id}/workflows",
-        json={"name": "expense-approval", "start": {"type": "MANUAL"}, "mode": "GLOBAL"},
+        json={
+            "name": "expense-approval",
+            "start": {"type": "MANUAL"},
+            "mode": "GLOBAL",
+        },
     )
     assert created.status_code == 201, created.text
     workflow_name = created.json()["name"]
@@ -491,15 +493,17 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
 
     pod_id = test_pod["id"]
     before = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert before == [], "this test is only meaningful in a pod with no surfaces"
 
-    created = await _notify(
-        authenticated_client, pod_id, fixed_test_user["id"]
-    )
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
 
     # Not undeliverable for want of a surface: one was created to carry it.
     assert created["undeliverable_reason"] != (
@@ -508,10 +512,14 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
 
     await db_session.commit()
     surfaces = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     assert len(surfaces) == 1
     surface = surfaces[0]
@@ -569,9 +577,7 @@ async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
     # The first pod claims a mailbox, as it would on any deployment.
     await _notify(authenticated_client, test_pod["id"], fixed_test_user["id"])
     # The second pod asks for one while that claim exists.
-    created = await _notify(
-        authenticated_client, second_pod_id, fixed_test_user["id"]
-    )
+    created = await _notify(authenticated_client, second_pod_id, fixed_test_user["id"])
 
     assert "creating a mailbox" not in (created["undeliverable_reason"] or "")
 
@@ -581,12 +587,12 @@ async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
         for row in (
             await db_session.execute(
                 select(AgentSurface).where(
-                    AgentSurface.pod_id.in_(
-                        [UUID(test_pod["id"]), UUID(second_pod_id)]
-                    )
+                    AgentSurface.pod_id.in_([UUID(test_pod["id"]), UUID(second_pod_id)])
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
 
     assert len(addresses) == 2, "both pods should hold a mailbox of their own"
@@ -625,16 +631,18 @@ async def test_resend_mailbox_is_blocked_on_a_local_url_without_polling(
     created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
 
     assert created["delivery_status"] == "UNDELIVERABLE"
-    assert "creating a mailbox for it failed" in (
-        created["undeliverable_reason"] or ""
-    )
+    assert "creating a mailbox for it failed" in (created["undeliverable_reason"] or "")
 
     await db_session.commit()
     surfaces = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert surfaces == [], "no surface should be provisioned when the gate blocks it"
 
 
@@ -671,10 +679,14 @@ async def test_resend_mailbox_is_minted_on_a_local_url_with_polling(
 
     await db_session.commit()
     surfaces = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(surfaces) == 1
     assert surfaces[0].surface_type == "RESEND"
     assert surfaces[0].surface_identity_email.endswith("@ops.example.com")

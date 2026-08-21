@@ -108,4 +108,24 @@ assert(
   'Missing focused path should report a target selection error.',
 );
 
+// An opening JSX tag cannot be matched by a regular expression, because its
+// brace expressions nest arbitrarily. The patterns that tried stopped at the
+// first `>` they saw outside two hand-spelled levels of nesting -- which, for
+// `<button onClick={() => ...}>`, is the arrow's own `>`. Every such finding
+// was reported truncated, and `allowedMatch` never saw the className it was
+// meant to check. A truncated match is recognisable: it ends at an arrow.
+const fullReport = runAudit(['--json', '--details']);
+assertStatus(fullReport, 0, 'full details audit');
+const reported = [];
+JSON.stringify(parseJson(fullReport), (key, value) => {
+  if (key === 'value' && typeof value === 'string') reported.push(value);
+  return value;
+});
+assert(reported.length > 0, 'The details report should carry match values.');
+const truncated = reported.filter((value) => /=>\s*$/.test(value));
+assert(
+  truncated.length === 0,
+  `Tag matches must run to the tag's own '>', not an arrow's. Truncated: ${JSON.stringify(truncated.slice(0, 2))}`,
+);
+
 console.log('Design audit self-test passed.');

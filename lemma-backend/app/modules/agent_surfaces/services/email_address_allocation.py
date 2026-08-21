@@ -81,9 +81,7 @@ def candidate_addresses(
     *, agent_name: str | None, pod_name: str | None, domain: str, attempts: int = 5
 ) -> list[str]:
     """The plain address first, then suffixed alternatives to try in order."""
-    first = build_agent_email(
-        agent_name=agent_name, pod_name=pod_name, domain=domain
-    )
+    first = build_agent_email(agent_name=agent_name, pod_name=pod_name, domain=domain)
     return [first] + [
         build_agent_email(
             agent_name=agent_name,

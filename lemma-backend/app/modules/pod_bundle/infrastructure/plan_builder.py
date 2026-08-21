@@ -390,7 +390,7 @@ class ServiceExistingResources:
             }
         except Exception:  # noqa: BLE001 - surfaces are best-effort in the plan
             logger.debug(
-                'pod_bundle.plan_builder.skipping_surface_snapshot_pod_s.diagnostic',
+                "pod_bundle.plan_builder.skipping_surface_snapshot_pod_s.diagnostic",
                 pod_id=self._pod_id,
             )
             return set()
@@ -428,7 +428,9 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
         connector = (meta or {}).get("connector")
         # `provider` is the pre-rename spelling, still read so bundles exported
         # before it keep planning.
-        connector_kind = (meta or {}).get("connector_kind") or (meta or {}).get("provider")
+        connector_kind = (meta or {}).get("connector_kind") or (meta or {}).get(
+            "provider"
+        )
         specs.append(
             VariableSpec(
                 name=str(name),

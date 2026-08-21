@@ -237,9 +237,7 @@ async def test_execute_backfills_legacy_revision_before_creating_run():
         activate_revision_if_missing=AsyncMock(return_value=activated),
     )
     code = (
-        "# input_type_name: Input\n"
-        "# output_type_name: Output\n"
-        "# function_name: run\n"
+        "# input_type_name: Input\n# output_type_name: Output\n# function_name: run\n"
     )
     compiler = SimpleNamespace(
         read_code=AsyncMock(return_value=code),
@@ -325,9 +323,7 @@ async def test_execute_raises_when_a_second_backfill_attempt_is_still_legacy():
         activate_revision_if_missing=AsyncMock(return_value=activated),
     )
     code = (
-        "# input_type_name: Input\n"
-        "# output_type_name: Output\n"
-        "# function_name: run\n"
+        "# input_type_name: Input\n# output_type_name: Output\n# function_name: run\n"
     )
     compiler = SimpleNamespace(
         read_code=AsyncMock(return_value=code),

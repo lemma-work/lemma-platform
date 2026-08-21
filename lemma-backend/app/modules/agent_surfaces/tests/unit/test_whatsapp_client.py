@@ -25,7 +25,9 @@ from app.modules.agent_surfaces.platforms.whatsapp.service import (
 
 
 def test_resolve_api_base_prefers_credential_override():
-    assert resolve_api_base({"api_base_url": "http://fake/v21.0"}) == "http://fake/v21.0"
+    assert (
+        resolve_api_base({"api_base_url": "http://fake/v21.0"}) == "http://fake/v21.0"
+    )
     assert resolve_api_base({}) == "https://graph.facebook.com/v21.0"
     assert resolve_api_base(None) == "https://graph.facebook.com/v21.0"
 
@@ -48,18 +50,22 @@ def test_parse_raises_with_body_excerpt_on_error():
 
 
 def test_classify_whatsapp_error():
-    assert classify_whatsapp_error(
-        WhatsAppApiError(method="m", status_code=429)
-    ) is DeliveryClassification.TRANSIENT
-    assert classify_whatsapp_error(
-        WhatsAppApiError(method="m", status_code=503)
-    ) is DeliveryClassification.TRANSIENT
-    assert classify_whatsapp_error(
-        WhatsAppApiError(method="m", status_code=400)
-    ) is DeliveryClassification.PERMANENT
-    assert classify_whatsapp_error(
-        httpx.ConnectError("boom")
-    ) is DeliveryClassification.TRANSIENT
+    assert (
+        classify_whatsapp_error(WhatsAppApiError(method="m", status_code=429))
+        is DeliveryClassification.TRANSIENT
+    )
+    assert (
+        classify_whatsapp_error(WhatsAppApiError(method="m", status_code=503))
+        is DeliveryClassification.TRANSIENT
+    )
+    assert (
+        classify_whatsapp_error(WhatsAppApiError(method="m", status_code=400))
+        is DeliveryClassification.PERMANENT
+    )
+    assert (
+        classify_whatsapp_error(httpx.ConnectError("boom"))
+        is DeliveryClassification.TRANSIENT
+    )
     assert classify_whatsapp_error(ValueError("x")) is DeliveryClassification.PERMANENT
 
 
@@ -120,7 +126,11 @@ def _inbound_event(*, message_id: str | None) -> ParsedInboundSurfaceEvent:
 @pytest.mark.asyncio
 async def test_add_processing_indicator_marks_read_and_typing(monkeypatch):
     service = WhatsAppPlatformService(
-        {"access_token": "t", "phone_number_id": "phone-1", "api_base_url": "http://x/v21.0"}
+        {
+            "access_token": "t",
+            "phone_number_id": "phone-1",
+            "api_base_url": "http://x/v21.0",
+        }
     )
     calls: list[dict] = []
 
@@ -143,7 +153,11 @@ async def test_add_processing_indicator_marks_read_and_typing(monkeypatch):
 @pytest.mark.asyncio
 async def test_add_processing_indicator_noop_without_message_id(monkeypatch):
     service = WhatsAppPlatformService(
-        {"access_token": "t", "phone_number_id": "phone-1", "api_base_url": "http://x/v21.0"}
+        {
+            "access_token": "t",
+            "phone_number_id": "phone-1",
+            "api_base_url": "http://x/v21.0",
+        }
     )
     calls: list[dict] = []
 

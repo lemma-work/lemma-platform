@@ -586,7 +586,7 @@ class DockerEngineClient:
         if response.status_code not in expected:
             try:
                 message = DockerErrorResponse.model_validate(response.json()).message
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 message = f"Docker Engine returned HTTP {response.status_code}"
             raise DockerEngineError(message, status_code=response.status_code)
         return response

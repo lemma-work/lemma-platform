@@ -66,9 +66,7 @@ class _Command:
     lease_epoch: int | None
     state: str = AgentHostCommandState.QUEUED.value
     created_at: datetime = field(default_factory=_now)
-    expires_at: datetime = field(
-        default_factory=lambda: _now() + timedelta(minutes=5)
-    )
+    expires_at: datetime = field(default_factory=lambda: _now() + timedelta(minutes=5))
     delivered_at: datetime | None = None
     acknowledged_at: datetime | None = None
     rejection: dict | None = None
@@ -343,9 +341,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
             config_revision=harness_revision,
             config_options=config_options or [],
         )
-        session = _Session(
-            leases=[lease], commands=[command], harnesses=[harness]
-        )
+        session = _Session(leases=[lease], commands=[command], harnesses=[harness])
         rejection = AgentHostCommandRejection(
             command_id=command.id,
             run_id=run_id,
@@ -361,9 +357,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
     ) -> None:
         session, command, lease, rejection, host_id = self._stale()
 
-        changed = await apply_rejection(
-            session, host_id=host_id, rejection=rejection
-        )
+        changed = await apply_rejection(session, host_id=host_id, rejection=rejection)
 
         assert changed
         assert command.payload["profile_revision"] == "rev-2"
@@ -379,9 +373,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         has no attempt column. Without this the requeue is a 1s spin until the
         command's five-minute TTL.
         """
-        session, command, lease, rejection, host_id = self._stale(
-            remint_attempts=2
-        )
+        session, command, lease, rejection, host_id = self._stale(remint_attempts=2)
 
         await apply_rejection(session, host_id=host_id, rejection=rejection)
 

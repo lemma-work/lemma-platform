@@ -115,7 +115,9 @@ class ContextReader(Protocol):
 
     def resolve_condition(self, expression: str) -> bool: ...
 
-    def resolve_inputs(self, input_mapping: dict[str, InputBinding]) -> dict[str, Any]: ...
+    def resolve_inputs(
+        self, input_mapping: dict[str, InputBinding]
+    ) -> dict[str, Any]: ...
 
 
 class RunContextReader:

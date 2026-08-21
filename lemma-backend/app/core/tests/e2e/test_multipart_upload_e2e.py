@@ -81,9 +81,7 @@ async def _read_back(store, key: str) -> bytes:
     return (await response.bytes_async()).to_bytes()
 
 
-async def test_a_datastore_file_larger_than_one_part_uploads(
-    s3_store, staged_payload
-):
+async def test_a_datastore_file_larger_than_one_part_uploads(s3_store, staged_payload):
     """The path production was failing: POST /pods/{id}/datastore/files."""
     storage = ObstoreDatastoreStorage(s3_store)
 

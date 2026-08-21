@@ -17,9 +17,7 @@ def _native_app(connector_id: str) -> ConnectorEntity:
     """A native app row as stored in the DB: LEMMA capability, no OAuth defaults."""
     return ConnectorEntity(
         id=connector_id,
-        provider_capabilities=[
-            LemmaProviderCapability(auth_scheme=AuthScheme.OAUTH2)
-        ],
+        provider_capabilities=[LemmaProviderCapability(auth_scheme=AuthScheme.OAUTH2)],
     )
 
 

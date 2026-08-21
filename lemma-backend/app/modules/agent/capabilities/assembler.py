@@ -83,6 +83,7 @@ def configure_caching_capability(cls: type[PromptCachingCapability]) -> None:
     global _caching_capability_cls
     _caching_capability_cls = cls
 
+
 _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 
 # Toolsets whose usage guidance is part of their contract. Workspace CLI is
@@ -194,9 +195,7 @@ def _deferred_capability(toolset: object) -> object:
     if guidance is None:
         return ToolsetCapability(deferred)
     name, loader = guidance
-    return InstructedToolsetCapability(
-        deferred, name=name, instructions_loader=loader
-    )
+    return InstructedToolsetCapability(deferred, name=name, instructions_loader=loader)
 
 
 async def build_lemma_harness_tooling(
@@ -265,9 +264,7 @@ async def _build_lemma_harness_tooling(
     # Appended AFTER the caching-sensitive fragments above and rebuilt each run
     # on purpose: unlike per-platform guidance, this changes the moment somebody
     # answers, and a cached copy would have the agent chasing a closed question.
-    open_notifications = await build_open_notifications_capability(
-        ctx.conversation_id
-    )
+    open_notifications = await build_open_notifications_capability(ctx.conversation_id)
     if open_notifications is not None:
         capabilities.append(open_notifications)
 

@@ -133,7 +133,9 @@ async def publish_event_stream(
             {
                 "type": "snapshot",
                 "seq": snapshot_seq,
-                "state": PublishStatusResponse.from_state(state).model_dump(mode="json"),
+                "state": PublishStatusResponse.from_state(state).model_dump(
+                    mode="json"
+                ),
             }
         )
         if state.status in _TERMINAL:

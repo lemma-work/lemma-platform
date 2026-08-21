@@ -90,9 +90,7 @@ async def test_exchange_code_uses_clean_redirect_uri_for_token_exchange():
         "https://example.ngrok.app/connectors/connect-requests/oauth/callback"
     )
     assert FakeOAuth2Session.last_init["redirect_uri"] == expected_redirect_uri
-    assert (
-        FakeOAuth2Session.last_fetch_token["authorization_response"] == callback_url
-    )
+    assert FakeOAuth2Session.last_fetch_token["authorization_response"] == callback_url
     assert "redirect_uri" not in FakeOAuth2Session.last_fetch_token
     assert credentials.access_token == "access-token"
 

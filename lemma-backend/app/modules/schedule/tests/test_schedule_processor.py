@@ -29,9 +29,12 @@ async def test_processor_rejects_missing_or_inactive_schedule():
 
     with pytest.raises(ValueError, match="schedule is required"):
         await processor.process_event(schedule=None, payload={}, user_id=uuid4())
-    assert await processor.process_event(
-        schedule=_schedule(is_active=False), payload={}, user_id=uuid4()
-    ) is False
+    assert (
+        await processor.process_event(
+            schedule=_schedule(is_active=False), payload={}, user_id=uuid4()
+        )
+        is False
+    )
     processor.event_publisher.publish_schedule_fired.assert_not_awaited()
 
 
@@ -79,13 +82,16 @@ async def test_processor_publishes_filter_output_and_source_identity():
     row_owner = uuid4()
     assert row_owner != schedule.user_id
 
-    assert await processor.process_event(
-        schedule=schedule,
-        payload={"id": 1},
-        user_id=row_owner,
-        metadata={"provider": "custom"},
-        source_event_id="provider:event-1",
-    ) is True
+    assert (
+        await processor.process_event(
+            schedule=schedule,
+            payload={"id": 1},
+            user_id=row_owner,
+            metadata={"provider": "custom"},
+            source_event_id="provider:event-1",
+        )
+        is True
+    )
     publisher.publish_schedule_fired.assert_awaited_once_with(
         schedule=schedule,
         payload={"id": 1},

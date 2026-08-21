@@ -63,13 +63,17 @@ async def _expect_accept_and_ready(communicator: ApplicationCommunicator) -> dic
     return ready
 
 
-async def _recv_json(communicator: ApplicationCommunicator, timeout: float = 10) -> dict:
+async def _recv_json(
+    communicator: ApplicationCommunicator, timeout: float = 10
+) -> dict:
     message = await communicator.receive_output(timeout=timeout)
     assert message["type"] == "websocket.send", message
     return json.loads(message["text"])
 
 
-async def _assert_no_frame(communicator: ApplicationCommunicator, timeout: float = 3) -> None:
+async def _assert_no_frame(
+    communicator: ApplicationCommunicator, timeout: float = 3
+) -> None:
     # receive_nothing polls the output queue without cancelling the app task,
     # unlike receive_output which kills the websocket on timeout.
     assert await communicator.receive_nothing(timeout=timeout, interval=0.05)
@@ -352,9 +356,7 @@ async def test_changes_ws_concurrent_subscribers_all_receive_events(
     record_id = record["id"]
 
     # All three connections must receive the same insert frame.
-    frames = await asyncio.gather(
-        _recv_json(c1), _recv_json(c2), _recv_json(c3)
-    )
+    frames = await asyncio.gather(_recv_json(c1), _recv_json(c2), _recv_json(c3))
     for frame in frames:
         assert frame["type"] == "datastore.record.insert"
         assert frame["record_id"] == record_id

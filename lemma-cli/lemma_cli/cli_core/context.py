@@ -101,11 +101,14 @@ def remember_org(
 
 def remember_pod(state: CliState, pod_id: str) -> dict[str, Any]:
     return update_config(
-        state, lambda config: config.setdefault("defaults", {}).update({"pod_id": pod_id})
+        state,
+        lambda config: config.setdefault("defaults", {}).update({"pod_id": pod_id}),
     )
 
 
-def remember_conversation(state: CliState, conversation_id: str | None) -> dict[str, Any]:
+def remember_conversation(
+    state: CliState, conversation_id: str | None
+) -> dict[str, Any]:
     def mutate(config: dict[str, Any]) -> None:
         defaults = config.setdefault("defaults", {})
         if conversation_id:
@@ -133,7 +136,9 @@ def render_session_selection(
     ``eval "$(lemma … select X -x)"``; otherwise print a human summary plus the
     eval one-liner. JSON output mode emits a structured payload for scripts.
     """
-    exports = [f"export {key}={shlex.quote(value)}" for key, value in env.items() if value]
+    exports = [
+        f"export {key}={shlex.quote(value)}" for key, value in env.items() if value
+    ]
     if export_only:
         for line in exports:
             print(line)  # plain stdout — must be eval-safe (no rich markup)
@@ -148,7 +153,7 @@ def render_session_selection(
     )
     if saved:
         console.print(f"[dim]also saved as this server's default {label}.[/dim]")
-    console.print('[dim]apply to your shell:[/dim] ' + f'eval "$({command_hint} -x)"')
+    console.print("[dim]apply to your shell:[/dim] " + f'eval "$({command_hint} -x)"')
     for line in exports:
         console.print(f"  [dim]{line}[/dim]")
 
@@ -197,9 +202,7 @@ def resolve_pod(
     raise AssertionError("unreachable")
 
 
-def pod_lookup_error(
-    pod_id: str, state: CliState, exc: Exception | None = None
-) -> str:
+def pod_lookup_error(pod_id: str, state: CliState, exc: Exception | None = None) -> str:
     """A pod-not-found/forbidden message that names the server, so a folder pointed
     at the wrong server (or a stale ``LEMMA_POD_ID``) is obvious. Non 403/404 API
     errors fall through to the normal humanized message."""

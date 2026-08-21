@@ -148,12 +148,15 @@ async def test_a_killed_runtime_leaves_a_sandbox_the_provider_still_calls_runnin
     # The VM keeps running; only the process is gone.
     await asyncio.sleep(3)
 
-    assert "NO_RUNTIME" in (
-        await sdk.commands.run(
-            "pgrep -af '[l]emma-function-runtime' || echo NO_RUNTIME",
-            timeout=30,
-        )
-    ).stdout
+    assert (
+        "NO_RUNTIME"
+        in (
+            await sdk.commands.run(
+                "pgrep -af '[l]emma-function-runtime' || echo NO_RUNTIME",
+                timeout=30,
+            )
+        ).stdout
+    )
 
     poisoned = await _runtime_status(provider, instance.provider_id)
     assert poisoned == 502, (
@@ -227,9 +230,7 @@ async def test_a_function_sandbox_keeps_its_memory_across_pause_and_resume(
     before = await sdk.commands.run(f"pgrep -c -f '{tag}' || true", timeout=30)
     assert int((before.stdout or "0").strip() or 0) >= 1, "the marker never started"
 
-    await provider.release(
-        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
-    )
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
 
     resumed_at = time.monotonic()
     resumed = await provider.create(_spec(sandbox_id, epoch=2))
@@ -285,9 +286,7 @@ async def test_releasing_a_function_sandbox_leaves_it_serving_when_resumed(
     instance = await _create(provider, sandbox_id)
     assert await _runtime_status(provider, instance.provider_id) == 404
 
-    await provider.release(
-        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
-    )
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
     resumed = await provider.create(_spec(sandbox_id, epoch=2))
     provider._liveness_created.append(resumed.provider_id)  # type: ignore[attr-defined]
     await provider.wait_ready(

@@ -310,12 +310,20 @@ class ScheduleRunRecoveryService:
             (
                 "WORKFLOW",
                 WorkflowRunModel,
-                (WorkflowRunModel.id, WorkflowRunModel.status, WorkflowRunModel.completed_at),
+                (
+                    WorkflowRunModel.id,
+                    WorkflowRunModel.status,
+                    WorkflowRunModel.completed_at,
+                ),
             ),
             (
                 "AGENT",
                 ConversationModel,
-                (ConversationModel.id, ConversationModel.status, ConversationModel.updated_at),
+                (
+                    ConversationModel.id,
+                    ConversationModel.status,
+                    ConversationModel.updated_at,
+                ),
             ),
         ):
             target_ids = by_kind[kind]

@@ -95,9 +95,7 @@ def test_an_unreadable_meminfo_sheds_nothing(monkeypatch) -> None:
     monkeypatch.setattr(browser_guard, "available_memory_mb", lambda: None)
     monkeypatch.setattr(browser_guard, "browser_process_ids", lambda: (1, 2))
     killed = []
-    monkeypatch.setattr(
-        browser_guard, "shed_browser", lambda: killed.append(1) or 1
-    )
+    monkeypatch.setattr(browser_guard, "shed_browser", lambda: killed.append(1) or 1)
 
     assert shed_browser_if_starved() is None
     assert killed == []

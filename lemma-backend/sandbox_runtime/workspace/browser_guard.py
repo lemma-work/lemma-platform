@@ -66,7 +66,7 @@ def available_memory_mb() -> int | None:
         for line in Path("/proc/meminfo").read_text().splitlines():
             if line.startswith("MemAvailable:"):
                 return int(line.split()[1]) // 1024
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         return None
     return None
 
@@ -113,7 +113,7 @@ def shed_browser() -> int:
     for process_id in process_ids:
         try:
             os.kill(process_id, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             continue
         signalled += 1
     return signalled
