@@ -208,11 +208,10 @@ export default function AgentDetailPage({
     const canUpdateCurrentAgent = resourceAllows(localAgent, 'agent.update', canUpdateAgent);
     const openConversationId = searchParams.get('conversation');
 
-    // The same line the sidebar's cast rail draws: declared inputs mean this is
-    // called, not conversed with, so there is no talk mode to default to.
-    // Every agent gets a home; what differs is how you invoke it. A declared
-    // input schema means this one is called with arguments rather than talked to,
-    // so its home offers no message box and its run form lives in the dock.
+    // The same line the sidebar's agents rail draws. Every agent gets a home;
+    // what differs is how you invoke it. A declared input schema means this one
+    // is called with arguments rather than talked to, so its home offers no
+    // message box and its run form lives in the dock.
     const canConverse = Boolean(localAgent) && !agentTakesInput(localAgent);
     const editing = isEditing;
 
