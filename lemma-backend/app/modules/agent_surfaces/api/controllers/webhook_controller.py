@@ -42,15 +42,6 @@ from app.modules.agent_surfaces.services.telegram_manager_service import (
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
 
 
-_MODAL_OPENING_ACTION_IDS = {
-    "lemma_channel_setup",
-    "lemma_dm_agent_setup",
-}
-# App Home taps that must feel instant. Starter prompts carry no trigger_id but
-# a visible lag on a "try this" button reads as a dead button.
-_FAST_LANE_ACTION_PREFIXES = ("lemma_agent_dm",)
-
-
 @router.post(
     "/webhooks/telegram-manager",
     operation_id="surface.webhook.handle_telegram_manager",

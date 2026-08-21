@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 from pydantic_ai.tools import RunContext
 
-from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
@@ -40,8 +39,6 @@ from app.modules.agent_surfaces.platforms.email_models import (
     ResendReplyEmailParams,
     ResendReplyEmailResult,
 )
-
-logger = get_logger(__name__)
 
 _RESEND_API_BASE = "https://api.resend.com"
 

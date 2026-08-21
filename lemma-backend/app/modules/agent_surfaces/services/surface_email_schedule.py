@@ -30,10 +30,6 @@ from app.modules.schedule.contracts import (
     ScheduleType,
     ScheduleUpdateEntity,
 )
-from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
 
 _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
     "GMAIL": "GMAIL_NEW_GMAIL_MESSAGE",
@@ -42,12 +38,6 @@ _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
 
 if TYPE_CHECKING:
     from app.core.authorization.context import Context
-_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 class SurfaceEmailScheduleMixin:

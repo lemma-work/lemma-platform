@@ -47,7 +47,6 @@ from app.modules.agent_surfaces.services.resend_polling_receiver import (
 
 logger = get_logger(__name__)
 
-_TELEGRAM_CONFLICT_GRACE_SECONDS = 75
 _RECEIVER_CHANGED_CHANNEL = "agent_surfaces.receiver.changed"
 _LEASE_TTL_SECONDS = 30
 _LEASE_REFRESH_SECONDS = 10

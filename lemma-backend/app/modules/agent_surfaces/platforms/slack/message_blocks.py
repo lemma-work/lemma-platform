@@ -19,9 +19,6 @@ from app.modules.agent_surfaces.platforms.slack.models import (
     SLACK_APPROVAL_ACTION_ID_BY_DECISION,
     SLACK_FORM_SUBMIT_ACTION_ID,
 )
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
 
 
 def _markdown_chunk(text: str) -> dict[str, Any]:

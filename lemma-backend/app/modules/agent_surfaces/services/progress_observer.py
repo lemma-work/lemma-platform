@@ -65,11 +65,6 @@ _STREAM_PROGRESS_PLATFORMS = {
     SurfacePlatform.TEAMS.value,
 }
 _MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
-# Token flush policy: batch deltas so a fast model does not spend the Slack
-# rate limit one word at a time, while staying frequent enough to read as live.
-_TOKEN_FLUSH_CHARS = 280
-_TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
-_MAX_PROGRESS_TEXT_LENGTH = 120
 # Email recipients should get one composed reply, not a stream of chat
 # messages. Agents reply via the platform reply tools; the observer only
 # falls back to emailing the final assistant text if no reply was sent.
@@ -81,9 +76,6 @@ _MAX_PROGRESS_TEXT_LENGTH = 120
 # broken fallback credentials on every real Resend reply.
 _EMAIL_PLATFORMS = {
     caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
-}
-_EMAIL_REPLY_TOOL_NAMES = {
-    caps.reply_tool for caps in PLATFORM_CAPABILITIES.values() if caps.reply_tool
 }
 
 

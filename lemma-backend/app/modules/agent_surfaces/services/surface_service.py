@@ -35,7 +35,6 @@ from app.composition.surface_connectors import (
     ConnectorTriggerRepository,
 )
 from app.composition.surface_schedule import ScheduleService
-from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -71,12 +70,6 @@ if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
         SurfaceCredentialResolver,
     )
-_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 class AgentSurfaceService(

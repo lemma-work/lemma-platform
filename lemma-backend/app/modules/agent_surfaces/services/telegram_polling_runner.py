@@ -35,16 +35,6 @@ from app.modules.agent_surfaces.services.native_receiver_base import (
 logger = get_logger(__name__)
 
 _TELEGRAM_CONFLICT_GRACE_SECONDS = 75
-_RECEIVER_CHANGED_CHANNEL = "agent_surfaces.receiver.changed"
-_LEASE_TTL_SECONDS = 30
-_LEASE_REFRESH_SECONDS = 10
-_DEFAULT_SCAN_INTERVAL_SECONDS = 15.0
-_RELEASE_LOCK_SCRIPT = """
-if redis.call('get', KEYS[1]) == ARGV[1] then
-  return redis.call('del', KEYS[1])
-end
-return 0
-"""
 
 
 def _poll_params(offset: int | None) -> dict[str, Any]:

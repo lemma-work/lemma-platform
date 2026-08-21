@@ -14,52 +14,8 @@ from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
 )
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    PLATFORM_CAPABILITIES,
-)
 
 logger = get_logger(__name__)
-
-_TYPING_REFRESH_INTERVAL_SECONDS = {
-    SurfacePlatform.TELEGRAM.value: 4.0,
-    SurfacePlatform.TEAMS.value: 10.0,
-}
-_MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
-# Slack/Telegram/Teams render progress as a live, edited message (streaming):
-# Slack via chat.update, Telegram via editMessageText, Teams via PUT activity.
-# WhatsApp has no message-edit API, so it gets no per-step progress (the inbound
-# reaction indicator signals work) and email gets a single composed reply.
-_TEXT_PROGRESS_PLATFORMS: set[str] = set()
-# Slack is deliberately absent: it streams the answer token by token, and a
-# step chunk appended into that same stream lands *inside* the sentence being
-# written — splitting it mid-word. The streamed text is the progress indicator,
-# so a separate step timeline is both redundant and destructive.
-_STREAM_PROGRESS_PLATFORMS = {
-    SurfacePlatform.TELEGRAM.value,
-    SurfacePlatform.TEAMS.value,
-}
-_MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
-# Token flush policy: batch deltas so a fast model does not spend the Slack
-# rate limit one word at a time, while staying frequent enough to read as live.
-_TOKEN_FLUSH_CHARS = 280
-_TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
-_MAX_PROGRESS_TEXT_LENGTH = 120
-# Email recipients should get one composed reply, not a stream of chat
-# messages. Agents reply via the platform reply tools; the observer only
-# falls back to emailing the final assistant text if no reply was sent.
-#
-# Derived from the platform-capability registry (not hand-maintained) so a
-# newly added email platform is automatically covered here too — a hardcoded
-# set previously let Resend fall through both checks even after it shipped as
-# a full `is_email=True` platform, causing a duplicate auto-echoed send via
-# broken fallback credentials on every real Resend reply.
-_EMAIL_PLATFORMS = {
-    caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
-}
-_EMAIL_REPLY_TOOL_NAMES = {
-    caps.reply_tool for caps in PLATFORM_CAPABILITIES.values() if caps.reply_tool
-}
 
 
 class ProgressWaitingMixin:

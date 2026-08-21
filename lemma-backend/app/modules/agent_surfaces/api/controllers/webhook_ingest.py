@@ -13,7 +13,6 @@ import json
 import hashlib
 from typing import Any
 from uuid import UUID
-from fastapi import APIRouter
 
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.events.inbox import stable_event_id
@@ -42,9 +41,6 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
     slack_candidates_for_workspace,
     slack_team_id,
 )
-
-router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
-
 
 _MODAL_OPENING_ACTION_IDS = {
     "lemma_channel_setup",

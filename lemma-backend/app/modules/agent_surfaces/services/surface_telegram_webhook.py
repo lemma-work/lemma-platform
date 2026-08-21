@@ -36,7 +36,6 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfacePlatformError,
     AgentSurfaceValidationError,
 )
-from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_telegram_account,
 )
@@ -50,12 +49,6 @@ _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
 
 if TYPE_CHECKING:
     pass
-_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 @dataclass(frozen=True, slots=True)
