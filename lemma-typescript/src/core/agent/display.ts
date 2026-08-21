@@ -1265,7 +1265,13 @@ function repairCompactLine(line: string): string {
   // owner; the strings they match are unchanged.
   return breakAfterDelimiterRow(
     line
-      .replace(/[ \t]+---[ \t]+/g, "\n\n")
+      // The lookbehind is what keeps this linear. Without it the scan may start
+      // at every character of a whitespace run, and each start consumes the
+      // rest of the run before failing on `---` -- quadratic in the length of
+      // the run. A run can only be entered at its first character now, and the
+      // strings that match are unchanged: the greedy `[ \t]+` always claimed
+      // the whole run anyway.
+      .replace(/(?<![ \t])[ \t]+---[ \t]+/g, "\n\n")
       .replace(/\|\s+\|/g, "|\n|")
       .replace(/\|[ \t]+(?=\|[ \t]*:?-{3,}|:?-{3,})/g, "|\n"),
   );

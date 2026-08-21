@@ -494,6 +494,17 @@ describe("normalizeAssistantMarkdown", () => {
     );
   });
 
+  it("rejects a long run of tabs in the separator rule in linear time", () => {
+    // `[ \t]+---[ \t]+` could start at every character of a whitespace run,
+    // and each start consumed the rest of the run before failing on `---`.
+    // 16k tabs took 209ms; 64k now takes under a millisecond. The budget is
+    // wide enough not to be flaky and far below quadratic.
+    const hostile = "\t".repeat(64_000) + "x";
+    const started = Date.now();
+    normalizeAssistantMarkdown(hostile);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("rejects a long run of tabs without backtracking over it", () => {
     // A regular expression cannot express "two or more delimiter cells, then
     // whitespace" unambiguously -- the whitespace inside a cell and the run
