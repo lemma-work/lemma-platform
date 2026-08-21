@@ -975,6 +975,19 @@ class Settings(BaseSettings):
         default=None,
         description="Override SameSite for auth session cookies",
     )
+    session_older_cookie_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Cookie domain the session cookies used to be set on. A browser "
+            "that holds cookies from before a host change sends two of each, "
+            "which SuperTokens rejects on refresh with a 500 that only "
+            "clearing cookies by hand resolves; naming the previous domain "
+            "lets it clear them instead. An EMPTY string is meaningful and "
+            "distinct from unset — it means the old cookies were host-only "
+            "(no Domain attribute), which is the case here. Deliberately not "
+            "blank-to-None normalised for that reason."
+        ),
+    )
 
     @field_validator(
         "session_cookie_domain",

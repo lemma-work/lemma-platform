@@ -260,3 +260,23 @@ def test_build_thirdparty_providers_skips_unconfigured_providers():
         settings.microsoft_tenant_id = original_microsoft_tenant_id
 
     assert providers == []
+
+
+def test_older_cookie_domain_keeps_empty_string_distinct_from_unset(monkeypatch):
+    """An empty ``SESSION_OLDER_COOKIE_DOMAIN`` must survive as ``""``.
+
+    SuperTokens reads ``""`` as "the previous cookies were host-only" and
+    ``None`` as "this feature is off". Normalising blank to None — as several
+    neighbouring URL settings do — would silently turn the feature off and
+    bring back the 500 on refresh that it exists to prevent.
+    """
+    monkeypatch.setenv("SESSION_OLDER_COOKIE_DOMAIN", "")
+    assert Settings().session_older_cookie_domain == ""
+
+    monkeypatch.delenv("SESSION_OLDER_COOKIE_DOMAIN", raising=False)
+    assert Settings().session_older_cookie_domain is None
+
+
+def test_older_cookie_domain_accepts_an_explicit_domain(monkeypatch):
+    monkeypatch.setenv("SESSION_OLDER_COOKIE_DOMAIN", ".lemma.work")
+    assert Settings().session_older_cookie_domain == ".lemma.work"
