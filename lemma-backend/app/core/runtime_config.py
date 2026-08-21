@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 from urllib.parse import urlencode
 from uuid import UUID
 
+from app.core.auth_urls import auth_ui_url
 from app.core.config import settings
 
 # Sentinel attribute marking the injected <script>. Idempotency keys off this,
@@ -64,7 +65,7 @@ def build_runtime_config(
     config: dict[str, object] = {
         "podId": str(pod_id),
         "apiUrl": settings.api_url,
-        "authUrl": settings.auth_frontend_url,
+        "authUrl": auth_ui_url(),
     }
     if app_id:
         # Two things at once: the app names itself so its API calls resolve to

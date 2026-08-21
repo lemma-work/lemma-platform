@@ -38,6 +38,7 @@ from typing import Any, Callable
 from uuid import UUID
 
 from app.core.concurrency.offload import run_blocking
+from app.core.auth_urls import auth_ui_url
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
@@ -148,7 +149,7 @@ class AppSandboxBuilder:
         ``dist/index.html``."""
         env = {
             "VITE_LEMMA_API_URL": settings.api_url,
-            "VITE_LEMMA_AUTH_URL": settings.auth_frontend_url,
+            "VITE_LEMMA_AUTH_URL": auth_ui_url(),
             "VITE_LEMMA_POD_ID": str(pod_id),
         }
         session = await self._service().get_session(

@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry import trace
 
+from app.core.auth_urls import cli_auth_ui_url
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -316,11 +317,9 @@ class WorkspaceSandboxService:
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
         api_url = self._resolve_workspace_api_url()
-        auth_url = (
-            settings.workspace_callback_auth_url
-            or settings.cli_auth_frontend_url
-            or settings.auth_frontend_url
-        )
+        # An explicit workspace override is taken verbatim; otherwise the
+        # sandbox gets the same auth URL the CLI is told to open.
+        auth_url = settings.workspace_callback_auth_url or cli_auth_ui_url()
         host_origin = (
             settings.workspace_callback_frontend_url or settings.frontend_url
         )
