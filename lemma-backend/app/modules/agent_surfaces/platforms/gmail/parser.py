@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.modules.agent_surfaces.platforms.common import (
+    payload_first,
     payload_section,
     payload_text,
 )
@@ -70,8 +71,8 @@ def _read_email_body(data: dict[str, Any]) -> str:
         or ""
     )
     if isinstance(body, dict):
-        content = str(body.get("content") or body.get("text") or "")
-        content_type = str(body.get("contentType") or body.get("content_type") or "")
+        content = payload_first(body, "content", "text")
+        content_type = payload_first(body, "contentType", "content_type")
         if content_type.lower() == "html":
             return plain_text_from_html(content)
         return content
@@ -86,7 +87,7 @@ def _read_gmail_payload_body(data: dict[str, Any]) -> str:
     candidates = [payload, *_walk_parts(payload)]
 
     for part in candidates:
-        mime_type = str(part.get("mimeType") or part.get("mime_type") or "").strip()
+        mime_type = payload_first(part, "mimeType", "mime_type").strip()
         if not mime_type.startswith("text/plain"):
             continue
         body = part.get("body")
@@ -97,7 +98,7 @@ def _read_gmail_payload_body(data: dict[str, Any]) -> str:
             return decoded
 
     for part in candidates:
-        mime_type = str(part.get("mimeType") or part.get("mime_type") or "").strip()
+        mime_type = payload_first(part, "mimeType", "mime_type").strip()
         if not mime_type.startswith("text/html"):
             continue
         body = part.get("body")
@@ -189,9 +190,7 @@ class GmailMessageParser:
             or data.get("id")
             or ""
         ).strip()
-        message_id = str(
-            data.get("message_id") or data.get("messageId") or data.get("id") or ""
-        ).strip()
+        message_id = payload_first(data, "message_id", "messageId", "id").strip()
         sender_identity = parse_email_identity(
             data.get("sender") or data.get("from") or headers.get("from"),
             fallback_email=data.get("sender_email") or data.get("from_email"),

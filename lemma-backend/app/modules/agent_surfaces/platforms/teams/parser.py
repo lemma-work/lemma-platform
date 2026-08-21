@@ -11,6 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.platforms.common import (
+    payload_first,
     payload_section,
     payload_text,
     render_attachment_prompt_block,
@@ -150,9 +151,7 @@ class TeamsMessageParser:
             # ID was resolvable, it — not the bot-framework `id` — is what got
             # stored as the conversation link's external_user_id. Reading only
             # `id` here would reject every native submission's authz check.
-            external_user_id=(
-                str(from_user.get("aadObjectId") or from_user.get("id") or "") or None
-            ),
+            external_user_id=(payload_first(from_user, "aadObjectId", "id") or None),
             callback_id=callback_id,
             values=field_values,
             approval_decision=approval_decision,
@@ -203,7 +202,7 @@ class TeamsMessageParser:
         external_thread_id = (
             payload_text(conversation, "id")
             if is_dm
-            else str(payload.get("replyToId") or payload.get("id") or "")
+            else payload_first(payload, "replyToId", "id")
         )
         if not external_channel_id or not external_thread_id:
             return None
@@ -284,7 +283,7 @@ class TeamsMessageParser:
         external_thread_id = (
             payload_text(conversation, "id")
             if is_dm
-            else str(message.get("replyToId") or message.get("id") or "")
+            else payload_first(message, "replyToId", "id")
         )
         if not external_channel_id or not external_thread_id:
             return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.modules.agent_surfaces.platforms.common import (
+    payload_first,
     payload_text,
 )
 
@@ -44,8 +45,8 @@ def _body_text(data: dict[str, Any]) -> str:
         or ""
     )
     if isinstance(body, dict):
-        content = str(body.get("content") or body.get("text") or "")
-        content_type = str(body.get("contentType") or body.get("content_type") or "")
+        content = payload_first(body, "content", "text")
+        content_type = payload_first(body, "contentType", "content_type")
         if content_type.lower() == "html":
             return plain_text_from_html(content)
         return content
@@ -80,10 +81,8 @@ def _normalize_attachment(
             str(content_bytes).strip() or None if content_bytes is not None else None
         ),
         "is_inline": bool(raw.get("isInline") or raw.get("is_inline")),
-        "content_id": str(raw.get("contentId") or raw.get("content_id") or "").strip()
-        or None,
-        "odata_type": str(raw.get("@odata.type") or raw.get("odata_type") or "").strip()
-        or None,
+        "content_id": payload_first(raw, "contentId", "content_id").strip() or None,
+        "odata_type": payload_first(raw, "@odata.type", "odata_type").strip() or None,
     }
 
 
@@ -91,18 +90,14 @@ class OutlookMessageParser:
     def parse(self, payload: dict[str, Any]) -> ParsedInboundSurfaceEvent | None:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         headers = _header_map(data.get("internetMessageHeaders"))
-        thread_id = str(
-            data.get("thread_id")
-            or data.get("conversation_id")
-            or data.get("conversationId")
-            or data.get("id")
-            or ""
+        thread_id = payload_first(
+            data, "thread_id", "conversation_id", "conversationId", "id"
         ).strip()
-        provider_message_id = str(
-            data.get("message_id") or data.get("messageId") or data.get("id") or ""
+        provider_message_id = payload_first(
+            data, "message_id", "messageId", "id"
         ).strip()
-        internet_message_id = str(
-            data.get("internet_message_id") or data.get("internetMessageId") or ""
+        internet_message_id = payload_first(
+            data, "internet_message_id", "internetMessageId"
         ).strip()
         external_message_id = internet_message_id or provider_message_id
         sender_identity = parse_email_identity(

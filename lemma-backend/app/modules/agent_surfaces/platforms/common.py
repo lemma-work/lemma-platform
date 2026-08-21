@@ -352,6 +352,21 @@ def payload_text(source: Any, key: str) -> str:
     return str(source.get(key) or "")
 
 
+def payload_first(source: Any, *keys: str) -> str:
+    """The first of these keys that carries a value, as a string.
+
+    Providers spell the same field several ways -- `conversation_id`,
+    `conversationId`, `id` -- and a parser has to try each. Written inline that
+    is a chain of `or`s, and every link counted as a branch. The loop is here
+    once instead.
+    """
+    for key in keys:
+        value = payload_text(source, key)
+        if value:
+            return value
+    return ""
+
+
 def payload_section(source: Any, key: str) -> dict[str, Any]:
     """A nested object from a payload, or an empty one to keep reading from."""
     if not source:

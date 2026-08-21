@@ -10,6 +10,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceLifecycleKind,
 )
 from app.modules.agent_surfaces.platforms.common import (
+    payload_first,
     payload_section,
     payload_text,
     render_attachment_prompt_block,
@@ -334,14 +335,12 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                 continue
             file_id = payload_text(raw, "id").strip() or None
             download_url = (
-                str(
-                    raw.get("url_private_download") or raw.get("url_private") or ""
-                ).strip()
+                payload_first(raw, "url_private_download", "url_private").strip()
                 or None
             )
             permalink = payload_text(raw, "permalink").strip() or None
             name = (
-                str(raw.get("name") or raw.get("title") or "").strip()
+                payload_first(raw, "name", "title").strip()
                 or self._filename_from_url(download_url or permalink or "")
                 or None
             )
