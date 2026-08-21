@@ -59,8 +59,21 @@ function decodeHtmlEntities(value: string): string {
         .replaceAll('&amp;', '&');
 }
 
+// A single pass is not a strip. `<<p>p>` leaves `<p>` behind, because removing
+// the inner match splices the outer one back together -- so anything built on
+// one pass is claiming a guarantee it does not have. Repeat until the string
+// stops changing; each pass only ever removes characters, so it terminates.
+function stripUntilStable(value: string, pattern: RegExp, replacement: string): string {
+    let current = value;
+    for (;;) {
+        const next = current.replace(pattern, replacement);
+        if (next === current) return current;
+        current = next;
+    }
+}
+
 function stripHtml(value: string): string {
-    return decodeHtmlEntities(value.replace(/<[^>]+>/g, ' '))
+    return decodeHtmlEntities(stripUntilStable(value, /<[^>]+>/g, ' '))
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -72,13 +85,31 @@ function humanizeRepositoryName(value: string): string {
         .trim();
 }
 
+// Matching a host as a substring of the whole URL is not matching a host:
+// `https://example.com/?x=shields.io` contains it, and so does
+// `https://shields.io.example.com/`. Parse once and ask the URL its own
+// questions. A README image may be a relative path, which has no host at all --
+// the placeholder base exists only so parsing succeeds, and its host never
+// matches any of the tests below.
+const RELATIVE_IMAGE_BASE = 'https://readme.invalid';
+
 function isDecorativeReadmeImage(value: string): boolean {
-    const source = value.toLowerCase();
+    let url: URL;
+    try {
+        url = new URL(value.trim(), RELATIVE_IMAGE_BASE);
+    } catch {
+        return false;
+    }
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    const isBadgeHost = host === 'shields.io' || host.endsWith('.shields.io');
+    const isOwnActions =
+        host === 'github.com' && path.startsWith('/lemma-work/lemma-platform/actions/');
     return (
-        source.includes('shields.io') ||
-        source.includes('/badge') ||
-        source.includes('install-remix-on-lemma') ||
-        source.includes('github.com/lemma-work/lemma-platform/actions/')
+        isBadgeHost ||
+        isOwnActions ||
+        path.includes('/badge') ||
+        path.includes('install-remix-on-lemma')
     );
 }
 
@@ -129,8 +160,14 @@ function cleanReadmeBody(markdown: string): string {
         .split(/(```[\s\S]*?```)/g)
         .map((part) => {
             if (part.startsWith('```')) return part;
-            return part
-                .replace(/<!--[\s\S]*?-->/g, '')
+            return (
+                stripUntilStable(part, /<!--[\s\S]*?-->/g, '')
+                    // A marker can outlive the comment it belonged to: an
+                    // unclosed `<!--`, or two fragments spliced into a new one
+                    // by the removal above (`<!-` + `<!-- x -->` + `-`). Either
+                    // way it is not markup anyone meant to publish.
+                    .replace(/<!--|-->/g, '')
+            )
                 .replace(/<br\s*\/?>/gi, '\n')
                 .replace(
                     /<\/?(?:a|b|center|details|div|em|img|kbd|p|picture|source|span|strong|sub|summary|sup|u)\b[^>]*>/gi,

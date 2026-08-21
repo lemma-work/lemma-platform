@@ -140,7 +140,10 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
             "GET",
             "/v3/teams/19%3Ateam%40thread.tacv2",
             200,
-            json_data={"id": "19:team@thread.tacv2", "aadGroupId": "11111111-2222-4333-8444-555555555555"},
+            json_data={
+                "id": "19:team@thread.tacv2",
+                "aadGroupId": "11111111-2222-4333-8444-555555555555",
+            },
         ),
         _PlannedResponse(
             "GET",
@@ -292,7 +295,10 @@ async def test_teams_get_recent_thread_messages_include_files(
             "GET",
             "/v3/teams/19%3Ateam%40thread.tacv2",
             200,
-            json_data={"id": "19:team@thread.tacv2", "aadGroupId": "11111111-2222-4333-8444-555555555555"},
+            json_data={
+                "id": "19:team@thread.tacv2",
+                "aadGroupId": "11111111-2222-4333-8444-555555555555",
+            },
         ),
         _PlannedResponse(
             "GET",
@@ -350,8 +356,13 @@ async def test_teams_get_recent_thread_messages_include_files(
     response = await tool.function(ctx, request)
 
     assert response.success is True
-    assert [message.text for message in response.messages] == ["[File shared: diagram.png]"]
-    assert response.messages[0].attachments[0].download_url == "https://files.example/diagram.png"
+    assert [message.text for message in response.messages] == [
+        "[File shared: diagram.png]"
+    ]
+    assert (
+        response.messages[0].attachments[0].download_url
+        == "https://files.example/diagram.png"
+    )
     assert response.messages[0].attachments[0].content_type == "image/png"
 
 
@@ -506,7 +517,9 @@ async def test_teams_download_refuses_bot_token_for_untrusted_host(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_teams_download_still_uses_bot_token_for_real_attachment_host(monkeypatch):
+async def test_teams_download_still_uses_bot_token_for_real_attachment_host(
+    monkeypatch,
+):
     from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
 
     monkeypatch.setattr(
@@ -554,3 +567,27 @@ async def test_teams_download_drops_credential_across_redirect():
     assert session.calls[1]["url"] == "https://cdn.attacker.test/blob"
     assert "Authorization" not in session.calls[1]["headers"]
     assert all(call["allow_redirects"] is False for call in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_lookalike_sharepoint_host_is_not_treated_as_sharepoint():
+    """`"sharepoint.com" in hostname` is true of a host an attacker can own.
+
+    `sharepoint.com.example.net` contains the string and is not SharePoint, so
+    the substring check let an attachment URL from any such host through into
+    the Graph site-resolution path. The domain check every other SharePoint
+    helper in this module already uses accepts the domain itself and real
+    subdomains of it, and nothing else.
+    """
+    from app.modules.agent_surfaces.platforms.teams import service as teams_service
+
+    async def _fail(**_kwargs):
+        raise AssertionError("a lookalike host must never reach site resolution")
+
+    resolved = await teams_service._resolve_sharepoint_file_content_url(
+        session=SimpleNamespace(get=_fail),
+        token="graph-token",
+        url="https://sharepoint.com.example.net/sites/Engineering/Documents/x.pdf",
+    )
+
+    assert resolved is None

@@ -1269,7 +1269,12 @@ function repairCompactLine(line: string): string {
     .replace(/\|\s+\|/g, "|\n|")
     .replace(/\|[ \t]+(?=\|[ \t]*:?-{3,}|:?-{3,})/g, "|\n")
     .replace(
-      /(\|[ \t]*:?-{3,}:?(?:[ \t]*\|[ \t]*:?-{3,}:?)+[ \t]*\|)[ \t]+/g,
+      // One delimiter cell per repetition, each ending at its own pipe, so a
+      // run of tabs belongs to exactly one cell. Spelling it as "dashes, then
+      // a pipe, repeated" instead of "dashes, then (pipe, dashes) repeated,
+      // then a pipe" matches the same rows -- two or more cells between
+      // pipes -- with no choice about where a repetition ends.
+      /(\|(?:[ \t]*:?-{3,}:?[ \t]*\|){2,})[ \t]+/g,
       "$1\n",
     );
 }

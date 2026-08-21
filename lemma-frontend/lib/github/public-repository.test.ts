@@ -84,4 +84,38 @@ Useful detail.
         expect(result.intro).toContain('&lt;script&gt;');
         expect(result.intro).not.toContain('<script>');
     });
+    it('reads the badge host from the URL rather than from anywhere in the string', () => {
+        // `source.includes('shields.io')` is true of a URL that merely mentions
+        // it, so a README could hide its own cover image by naming a badge host
+        // in a query string -- and a real badge served from a lookalike host
+        // would not be recognised at all.
+        const markdown = [
+            '# Project',
+            '![cover](https://example.com/cover.png?ref=shields.io)',
+            '<p align="center">A shared board where people and agents work together on things.</p>',
+        ].join('\n\n');
+
+        const result = extractReadmePresentation(markdown, 'project');
+
+        expect(result.coverImage).toBe(
+            'https://example.com/cover.png?ref=shields.io',
+        );
+    });
+
+    it('strips nested HTML comments completely', () => {
+        // One pass is not a strip: removing the inner `<!-- -->` splices the
+        // outer one back together, so `<!--` survived into the rendered body.
+        const markdown = [
+            '# Project',
+            '<p align="center">A shared board where people and agents work together on things.</p>',
+            '<!-<!-- hidden -->-',
+            'Visible body text that should survive the clean.',
+        ].join('\n\n');
+
+        const result = extractReadmePresentation(markdown, 'project');
+
+        expect(result.body).not.toContain('<!--');
+        expect(result.body).not.toContain('-->');
+        expect(result.body).toContain('Visible body text');
+    });
 });
