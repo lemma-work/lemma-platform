@@ -183,6 +183,14 @@ def build_agent_instructions(
             )
         )
 
+    # The task list the conversation already has, if any. Without this a run
+    # starts blind: the list lives in conversation metadata, and the tool return
+    # that last showed it is an old message that history trimming can drop. An
+    # agent that cannot see its own plan cannot tick anything off it, which is
+    # exactly how a checklist written in turn one stays unchecked forever.
+    # Appended unconditionally; the join below drops it when it is empty.
+    sections.append(_task_list_section(conversation, enabled=enabled))
+
     if agent.instruction.strip():
         sections.append("# Agent Instructions\n" + agent.instruction.strip())
     if conversation.instructions and conversation.instructions.strip():
@@ -211,13 +219,77 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
         return str(cwd)
     get_cwd = getattr(ctx, "get_workspace_cwd", None)
     if callable(get_cwd):
-        try:
-            value = get_cwd()
-        except Exception:  # pragma: no cover - defensive
-            value = None
+        # Not guarded. The only implementation reads a field and formats a
+        # string, and swallowing a failure here would put a directory in the
+        # prompt that the tools do not use -- which is the precise bug this
+        # resolution exists to prevent, made silent.
+        value = get_cwd()
         if value:
             return str(value)
     return f"/workspace/conversations/{conversation.id}"
+
+
+
+def _stored_todos(conversation: Conversation) -> list[tuple[str, bool]]:
+    """The conversation's task list as ``(content, done)``, oldest first."""
+    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+    raw = metadata.get("todos")
+    if not isinstance(raw, list):
+        return []
+    items: list[tuple[str, bool]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        content = str(entry.get("content") or "").strip()
+        if content:
+            # `status == "completed"` is the pre-simplification shape; rows in
+            # that form are still in metadata on older conversations.
+            items.append(
+                (content, bool(entry.get("done")) or entry.get("status") == "completed")
+            )
+    return items
+
+
+def _task_list_section(
+    conversation: Conversation, *, enabled: set[AgentToolset]
+) -> str:
+    """Show the run its own task list, and say what finishing an item requires.
+
+    Empty for an agent without the todo toolset, and for a conversation that has
+    never planned anything: an agent with no list should decide whether the work
+    needs one, not be nagged about a checklist that does not exist.
+    """
+    if AgentToolset.TODO not in enabled:
+        return ""
+    items = _stored_todos(conversation)
+    if not items:
+        return ""
+    rendered = "\n".join(
+        f"- [{'x' if done else ' '}] {content}" for content, done in items
+    )
+    done_count = sum(1 for _, done in items if done)
+    if done_count == len(items):
+        return (
+            "# Task list\n"
+            "Every item on this conversation's list is finished:\n\n"
+            f"{rendered}\n\n"
+            "That plan is history. If this message needs multi-step work, call "
+            "`write_todos` with the new plan and it replaces the old one."
+        )
+    first_open = next(content for content, done in items if not done)
+    return (
+        "# Task list\n"
+        "This conversation already has a task list. Lemma stores it, the person "
+        f"can see it, and right now it reads ({done_count} of {len(items)} "
+        "done):\n\n"
+        f"{rendered}\n\n"
+        f"Pick up at the first unchecked item — **{first_open}** — unless this "
+        "message sends you somewhere else. The moment you finish an item, call "
+        "`write_todos` with that one line checked "
+        f"(`[\"- [x] {first_open}\"]`) and only then start the next. A finished "
+        "item still showing unchecked is not a cosmetic problem: it is what the "
+        "person is reading to know where you are."
+    )
 
 
 def _workspace_repo(ctx: AgentContext):
