@@ -199,7 +199,10 @@ describe("sending a message", () => {
 
 describe("the turn you just sent", () => {
   it("is on screen before the conversation exists", async () => {
-    let releaseCreate: (() => void) | null = null;
+    // Definite assignment, not `| null`: the executor runs synchronously, but
+    // TypeScript's narrowing does not know that and would type every call
+    // below as `never`.
+    let releaseCreate!: () => void;
     const createGate = new Promise<void>((resolve) => {
       releaseCreate = resolve;
     });
@@ -220,7 +223,7 @@ describe("the turn you just sent", () => {
     expect(controller.current?.activeConversationId).toBeNull();
     expect(controller.current?.messages.map((message) => message.content)).toEqual(["show me immediately"]);
 
-    releaseCreate?.();
+    releaseCreate();
     await act(async () => {
       await sent;
     });
@@ -253,22 +256,22 @@ describe("the turn you just sent", () => {
 describe("the stream a send just opened", () => {
   it("survives the conversation id reaching the session", async () => {
     const { client, sendMessageStream } = fakeClient([]);
-    let releaseCreate: (() => void) | null = null;
+    let releaseCreate!: () => void;
     const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
     (client.conversations.create as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       await createGate;
       return conversation("c-new", "WAITING");
     });
 
-    let releaseStream: (() => void) | null = null;
+    let releaseStream!: () => void;
     const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
     let streamSignal: AbortSignal | undefined;
-    let streamOpened: (() => void) | null = null;
+    let streamOpened!: () => void;
     const streamOpenedPromise = new Promise<void>((resolve) => { streamOpened = resolve; });
     (sendMessageStream as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       async (_id: string, _body: unknown, options: { signal?: AbortSignal }) => {
         streamSignal = options?.signal;
-        streamOpened?.();
+        streamOpened();
         // The gap every real send has: the request is in flight, and React is
         // free to commit the state the create queued a moment ago.
         await streamGate;
@@ -287,7 +290,7 @@ describe("the stream a send just opened", () => {
     // React is given a chance to commit. That is the real ordering: a create
     // takes a network round-trip, so the render it queues lands while the
     // stream request is already in flight.
-    releaseCreate?.();
+    releaseCreate();
     await streamOpenedPromise;
     expect(streamSignal).toBeDefined();
 
@@ -296,7 +299,7 @@ describe("the stream a send just opened", () => {
     await settle();
     expect(streamSignal?.aborted).toBe(false);
 
-    releaseStream?.();
+    releaseStream();
     await act(async () => { await sent; });
     await settle();
 
