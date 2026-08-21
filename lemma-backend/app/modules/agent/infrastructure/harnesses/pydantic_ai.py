@@ -771,222 +771,50 @@ class PydanticAIHarness:
         async with node.stream(run.ctx) as request_stream:
             async for event in request_stream:
                 if isinstance(event, PartStartEvent):
-                    parts.objects[event.index] = event.part
-                    if isinstance(event.part, TextPart):
-                        parts.kinds[event.index] = "text"
-                        content = event.part.content or ""
-                        parts.contents[event.index] = content
-                        for token_chunk in parts.append_token_text("text", content):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                    elif isinstance(event.part, ThinkingPart):
-                        parts.kinds[event.index] = "thinking"
-                        content = event.part.content or ""
-                        parts.contents[event.index] = content
-                        for token_chunk in parts.append_token_text("thinking", content):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                    elif isinstance(event.part, ToolCallPart):
-                        parts.kinds[event.index] = "tool_call"
-                        parts.tool_names[event.index] = event.part.tool_name
-                        for token_chunk in parts.start_tool_stream(
-                            event.index,
-                            event.part.tool_name,
-                        ):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                        initial_args = _tool_call_args_text(event.part.args)
-                        if initial_args:
-                            parts.tool_stream_has_args.add(event.index)
-                            for token_chunk in parts.append_token_text(
-                                "tool", initial_args
-                            ):
-                                yield AgentEvent(
-                                    type=AgentEventType.TOKEN,
-                                    data=token_chunk,
-                                    agent_run_id=agent_run_id,
-                                )
-                                if await self._should_stop(should_stop):
-                                    yield self._stopped_event(agent_run_id)
-                                    return
-
-                elif isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, TextPartDelta):
-                        parts.kinds[event.index] = "text"
-                        content_delta = event.delta.content_delta or ""
-                        parts.contents[event.index] = (
-                            parts.contents.get(event.index, "") + content_delta
-                        )
-                        for token_chunk in parts.append_token_text(
-                            "text", content_delta
-                        ):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                    elif isinstance(event.delta, ThinkingPartDelta):
-                        parts.kinds.setdefault(event.index, "thinking")
-                        content_delta = getattr(event.delta, "content_delta", "") or ""
-                        if content_delta:
-                            parts.contents[event.index] = (
-                                parts.contents.get(event.index, "") + content_delta
-                            )
-                            for token_chunk in parts.append_token_text(
-                                "thinking",
-                                content_delta,
-                            ):
-                                yield AgentEvent(
-                                    type=AgentEventType.TOKEN,
-                                    data=token_chunk,
-                                    agent_run_id=agent_run_id,
-                                )
-                                if await self._should_stop(should_stop):
-                                    yield self._stopped_event(agent_run_id)
-                                    return
-                    elif isinstance(event.delta, ToolCallPartDelta):
-                        parts.kinds.setdefault(event.index, "tool_call")
-                        if event.delta.tool_name_delta:
-                            parts.tool_names[event.index] = (
-                                parts.tool_names.get(event.index, "")
-                                + event.delta.tool_name_delta
-                            )
-                        tool_delta = _tool_call_delta_text(event.delta)
-                        if tool_delta:
-                            for token_chunk in parts.start_tool_stream(
-                                event.index,
-                                parts.tool_names.get(event.index, ""),
-                            ):
-                                yield AgentEvent(
-                                    type=AgentEventType.TOKEN,
-                                    data=token_chunk,
-                                    agent_run_id=agent_run_id,
-                                )
-                                if await self._should_stop(should_stop):
-                                    yield self._stopped_event(agent_run_id)
-                                    return
-                            parts.tool_stream_has_args.add(event.index)
-                            for token_chunk in parts.append_token_text(
-                                "tool", tool_delta
-                            ):
-                                yield AgentEvent(
-                                    type=AgentEventType.TOKEN,
-                                    data=token_chunk,
-                                    agent_run_id=agent_run_id,
-                                )
-                                if await self._should_stop(should_stop):
-                                    yield self._stopped_event(agent_run_id)
-                                    return
-
-                elif isinstance(event, PartEndEvent):
-                    part_kind = parts.kinds.pop(event.index, None)
-                    part_content = parts.contents.pop(event.index, None)
-                    parts.objects.pop(event.index, None)
-                    if isinstance(event.part, ToolCallPart) or part_kind == "tool_call":
-                        for token_chunk in parts.start_tool_stream(
-                            event.index,
-                            getattr(event.part, "tool_name", None)
-                            or parts.tool_names.get(event.index, ""),
-                        ):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                        if event.index not in parts.tool_stream_has_args:
-                            final_args = _tool_call_args_text(
-                                getattr(event.part, "args", None)
-                            )
-                            for token_chunk in parts.append_token_text(
-                                "tool",
-                                final_args or "{}",
-                            ):
-                                yield AgentEvent(
-                                    type=AgentEventType.TOKEN,
-                                    data=token_chunk,
-                                    agent_run_id=agent_run_id,
-                                )
-                                if await self._should_stop(should_stop):
-                                    yield self._stopped_event(agent_run_id)
-                                    return
-                        for token_chunk in parts.append_token_text("tool", "}"):
-                            yield AgentEvent(
-                                type=AgentEventType.TOKEN,
-                                data=token_chunk,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                        parts.forget_tool_part(event.index)
-                    for token_chunk in parts.drain_all_token_buffers(force=True):
-                        yield AgentEvent(
-                            type=AgentEventType.TOKEN,
-                            data=token_chunk,
-                            agent_run_id=agent_run_id,
-                        )
-                        if await self._should_stop(should_stop):
-                            yield self._stopped_event(agent_run_id)
-                            return
-                    message = parts.completed_part_message(
-                        part=event.part,
-                        part_kind=part_kind,
-                        part_content=part_content,
+                    handler = self._stream_part_start(
+                        event,
+                        parts,
+                        agent_run_id=agent_run_id,
+                        should_stop=should_stop,
                     )
-                    if message is not None:
-                        yield AgentEvent(
-                            type=AgentEventType.MESSAGE,
-                            data=message,
-                            agent_run_id=agent_run_id,
-                        )
-                        if await self._should_stop(should_stop):
-                            yield self._stopped_event(agent_run_id)
-                            return
-
+                elif isinstance(event, PartDeltaEvent):
+                    handler = self._stream_part_delta(
+                        event,
+                        parts,
+                        agent_run_id=agent_run_id,
+                        should_stop=should_stop,
+                    )
+                elif isinstance(event, PartEndEvent):
+                    handler = self._stream_part_end(
+                        event,
+                        parts,
+                        agent_run_id=agent_run_id,
+                        should_stop=should_stop,
+                    )
                 elif isinstance(event, FinalResultEvent):
-                    for token_chunk in parts.drain_all_token_buffers(force=True):
-                        yield AgentEvent(
-                            type=AgentEventType.TOKEN,
-                            data=token_chunk,
-                            agent_run_id=agent_run_id,
-                        )
-                        if await self._should_stop(should_stop):
-                            yield self._stopped_event(agent_run_id)
-                            return
+                    handler = self._stream_final_result(
+                        parts,
+                        agent_run_id=agent_run_id,
+                        should_stop=should_stop,
+                    )
+                else:
+                    continue
+                async for agent_event in handler:
+                    yield agent_event
+                    # Every early exit inside a handler is a stop check, and
+                    # it announces itself by emitting STOPPED. Reading that
+                    # here is what lets the handlers stay ordinary
+                    # generators instead of needing a second channel to end
+                    # the stream.
+                    if agent_event.type is AgentEventType.STOPPED:
+                        return
 
-        for token_chunk in parts.drain_all_token_buffers(force=True):
-            yield AgentEvent(
-                type=AgentEventType.TOKEN,
-                data=token_chunk,
-                agent_run_id=agent_run_id,
-            )
-            if await self._should_stop(should_stop):
-                yield self._stopped_event(agent_run_id)
-                return
+        async for token_event in self._emit_token_chunks(
+            parts.drain_all_token_buffers(force=True),
+            agent_run_id=agent_run_id,
+            should_stop=should_stop,
+        ):
+            yield token_event
 
         for part_index in sorted(parts.kinds):
             part = parts.objects.get(part_index)
@@ -1006,6 +834,249 @@ class PydanticAIHarness:
                 if await self._should_stop(should_stop):
                     yield self._stopped_event(agent_run_id)
                     return
+
+    async def _emit_token_chunks(
+        self,
+        chunks: list[dict[str, str]],
+        *,
+        agent_run_id: UUID,
+        should_stop: StopChecker | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Emit token events, giving a stop request a chance between each.
+
+        This shape appeared five times: a run cancelled mid-response should not
+        keep streaming to the end of a buffered chunk list, so every chunk is a
+        place the stream can end. Emitting STOPPED is how it ends -- the driver
+        in `_stream_model_request` returns on seeing one, which closes whichever
+        handler is suspended here.
+        """
+        for chunk in chunks:
+            yield AgentEvent(
+                type=AgentEventType.TOKEN,
+                data=chunk,
+                agent_run_id=agent_run_id,
+            )
+            if await self._should_stop(should_stop):
+                yield self._stopped_event(agent_run_id)
+                return
+
+    async def _stream_part_start(
+        self,
+        event,
+        parts: StreamingParts,
+        *,
+        agent_run_id: UUID,
+        should_stop: StopChecker | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """A part has begun: record its kind and open its token stream.
+
+        Stops the stream by emitting STOPPED; the driver returns on seeing one.
+        """
+        parts.objects[event.index] = event.part
+        if isinstance(event.part, TextPart):
+            parts.kinds[event.index] = "text"
+            content = event.part.content or ""
+            parts.contents[event.index] = content
+            async for token_event in self._emit_token_chunks(
+                parts.append_token_text("text", content),
+                agent_run_id=agent_run_id,
+                should_stop=should_stop,
+            ):
+                yield token_event
+        elif isinstance(event.part, ThinkingPart):
+            parts.kinds[event.index] = "thinking"
+            content = event.part.content or ""
+            parts.contents[event.index] = content
+            async for token_event in self._emit_token_chunks(
+                parts.append_token_text("thinking", content),
+                agent_run_id=agent_run_id,
+                should_stop=should_stop,
+            ):
+                yield token_event
+        elif isinstance(event.part, ToolCallPart):
+            parts.kinds[event.index] = "tool_call"
+            parts.tool_names[event.index] = event.part.tool_name
+            for token_chunk in parts.start_tool_stream(
+                event.index,
+                event.part.tool_name,
+            ):
+                yield AgentEvent(
+                    type=AgentEventType.TOKEN,
+                    data=token_chunk,
+                    agent_run_id=agent_run_id,
+                )
+                if await self._should_stop(should_stop):
+                    yield self._stopped_event(agent_run_id)
+                    return
+            initial_args = _tool_call_args_text(event.part.args)
+            if initial_args:
+                parts.tool_stream_has_args.add(event.index)
+                async for token_event in self._emit_token_chunks(
+                    parts.append_token_text("tool", initial_args),
+                    agent_run_id=agent_run_id,
+                    should_stop=should_stop,
+                ):
+                    yield token_event
+
+    async def _stream_part_delta(
+        self,
+        event,
+        parts: StreamingParts,
+        *,
+        agent_run_id: UUID,
+        should_stop: StopChecker | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """A part grew: append the delta to what it is accumulating.
+
+        Stops the stream by emitting STOPPED; the driver returns on seeing one.
+        """
+        if isinstance(event.delta, TextPartDelta):
+            parts.kinds[event.index] = "text"
+            content_delta = event.delta.content_delta or ""
+            parts.contents[event.index] = (
+                parts.contents.get(event.index, "") + content_delta
+            )
+            async for token_event in self._emit_token_chunks(
+                parts.append_token_text("text", content_delta),
+                agent_run_id=agent_run_id,
+                should_stop=should_stop,
+            ):
+                yield token_event
+        elif isinstance(event.delta, ThinkingPartDelta):
+            parts.kinds.setdefault(event.index, "thinking")
+            content_delta = getattr(event.delta, "content_delta", "") or ""
+            if content_delta:
+                parts.contents[event.index] = (
+                    parts.contents.get(event.index, "") + content_delta
+                )
+                for token_chunk in parts.append_token_text(
+                    "thinking",
+                    content_delta,
+                ):
+                    yield AgentEvent(
+                        type=AgentEventType.TOKEN,
+                        data=token_chunk,
+                        agent_run_id=agent_run_id,
+                    )
+                    if await self._should_stop(should_stop):
+                        yield self._stopped_event(agent_run_id)
+                        return
+        elif isinstance(event.delta, ToolCallPartDelta):
+            parts.kinds.setdefault(event.index, "tool_call")
+            if event.delta.tool_name_delta:
+                parts.tool_names[event.index] = (
+                    parts.tool_names.get(event.index, "") + event.delta.tool_name_delta
+                )
+            tool_delta = _tool_call_delta_text(event.delta)
+            if tool_delta:
+                for token_chunk in parts.start_tool_stream(
+                    event.index,
+                    parts.tool_names.get(event.index, ""),
+                ):
+                    yield AgentEvent(
+                        type=AgentEventType.TOKEN,
+                        data=token_chunk,
+                        agent_run_id=agent_run_id,
+                    )
+                    if await self._should_stop(should_stop):
+                        yield self._stopped_event(agent_run_id)
+                        return
+                parts.tool_stream_has_args.add(event.index)
+                async for token_event in self._emit_token_chunks(
+                    parts.append_token_text("tool", tool_delta),
+                    agent_run_id=agent_run_id,
+                    should_stop=should_stop,
+                ):
+                    yield token_event
+
+    async def _stream_part_end(
+        self,
+        event,
+        parts: StreamingParts,
+        *,
+        agent_run_id: UUID,
+        should_stop: StopChecker | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """A part finished: drain its buffer and persist what it became.
+
+        Stops the stream by emitting STOPPED; the driver returns on seeing one.
+        """
+        part_kind = parts.kinds.pop(event.index, None)
+        part_content = parts.contents.pop(event.index, None)
+        parts.objects.pop(event.index, None)
+        if isinstance(event.part, ToolCallPart) or part_kind == "tool_call":
+            for token_chunk in parts.start_tool_stream(
+                event.index,
+                getattr(event.part, "tool_name", None)
+                or parts.tool_names.get(event.index, ""),
+            ):
+                yield AgentEvent(
+                    type=AgentEventType.TOKEN,
+                    data=token_chunk,
+                    agent_run_id=agent_run_id,
+                )
+                if await self._should_stop(should_stop):
+                    yield self._stopped_event(agent_run_id)
+                    return
+            if event.index not in parts.tool_stream_has_args:
+                final_args = _tool_call_args_text(getattr(event.part, "args", None))
+                for token_chunk in parts.append_token_text(
+                    "tool",
+                    final_args or "{}",
+                ):
+                    yield AgentEvent(
+                        type=AgentEventType.TOKEN,
+                        data=token_chunk,
+                        agent_run_id=agent_run_id,
+                    )
+                    if await self._should_stop(should_stop):
+                        yield self._stopped_event(agent_run_id)
+                        return
+            async for token_event in self._emit_token_chunks(
+                parts.append_token_text("tool", "}"),
+                agent_run_id=agent_run_id,
+                should_stop=should_stop,
+            ):
+                yield token_event
+            parts.forget_tool_part(event.index)
+        async for token_event in self._emit_token_chunks(
+            parts.drain_all_token_buffers(force=True),
+            agent_run_id=agent_run_id,
+            should_stop=should_stop,
+        ):
+            yield token_event
+        message = parts.completed_part_message(
+            part=event.part,
+            part_kind=part_kind,
+            part_content=part_content,
+        )
+        if message is not None:
+            yield AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=message,
+                agent_run_id=agent_run_id,
+            )
+            if await self._should_stop(should_stop):
+                yield self._stopped_event(agent_run_id)
+                return
+
+    async def _stream_final_result(
+        self,
+        parts: StreamingParts,
+        *,
+        agent_run_id: UUID,
+        should_stop: StopChecker | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """The model reached its final result.
+
+        Stops the stream by emitting STOPPED; the driver returns on seeing one.
+        """
+        async for token_event in self._emit_token_chunks(
+            parts.drain_all_token_buffers(force=True),
+            agent_run_id=agent_run_id,
+            should_stop=should_stop,
+        ):
+            yield token_event
 
     async def _stream_tool_calls(
         self,

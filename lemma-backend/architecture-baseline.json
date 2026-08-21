@@ -41,9 +41,9 @@
     "workspace:total": 9
   },
   "complex_functions": {
-    "agent:count": 16,
-    "agent:max": 59,
-    "agent:total": 430,
+    "agent:count": 15,
+    "agent:max": 42,
+    "agent:total": 371,
     "agent_surfaces:count": 48,
     "agent_surfaces:max": 54,
     "agent_surfaces:total": 1177,
@@ -85,7 +85,7 @@
   },
   "module_cycles": [],
   "oversized_files": {
-    "app/modules/agent/infrastructure/harnesses/pydantic_ai.py": 1228,
+    "app/modules/agent/infrastructure/harnesses/pydantic_ai.py": 1299,
     "app/modules/agent/infrastructure/repositories.py": 1117,
     "app/modules/agent/services/agent_runner_service.py": 1115,
     "app/modules/agent/services/conversation_service.py": 1557,
