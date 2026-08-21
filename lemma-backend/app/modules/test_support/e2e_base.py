@@ -992,7 +992,9 @@ _CREATED_TABLES: dict[str, set[str]] = {}
 async def _ensure_schema_once(database_url: str) -> None:
     """Create the extension once, and any tables not yet created."""
     known = _CREATED_TABLES.setdefault(database_url, set())
-    pending = [table for name, table in Base.metadata.tables.items() if name not in known]
+    pending = [
+        table for name, table in Base.metadata.tables.items() if name not in known
+    ]
     if not pending:
         return
 
