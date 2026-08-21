@@ -52,7 +52,9 @@ def test_build_approval_render_plan_session_button_gated():
 
 
 def test_slack_approval_blocks_and_parse_round_trip():
-    from app.modules.agent_surfaces.platforms.slack.service import _approval_blocks
+    from app.modules.agent_surfaces.platforms.slack.message_blocks import (
+        _approval_blocks,
+    )
     from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
 
     plan = _plan(allow_session=True)
@@ -92,7 +94,7 @@ def test_slack_approval_blocks_and_parse_round_trip():
 
 
 def test_teams_approval_card_and_parse_round_trip():
-    from app.modules.agent_surfaces.platforms.teams.adapter import _teams_approval_card
+    from app.modules.agent_surfaces.platforms.teams.cards import _teams_approval_card
     from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
 
     plan = _plan()

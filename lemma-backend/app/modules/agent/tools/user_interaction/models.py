@@ -56,7 +56,8 @@ class DisplayResourceRequest(BaseModel):
     content: str | None = Field(
         default=None,
         description=(
-            "Inline SVG or HTML, for WIDGET. No DOCTYPE/<html>/<head>/<body>."
+            "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. "
+            "An SVG image is a pod file, shown with type=FILE."
         ),
     )
     loading_messages: list[str] = Field(

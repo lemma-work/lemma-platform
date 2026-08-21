@@ -76,7 +76,16 @@ PINNED = [
         "dirs": ["app/modules/agent/tests/e2e"],
         "workers": 1,
         "markers": FAST_MARKERS,
-        "needs_sandbox_images": False,
+        # True, even though the agent module is not the sandbox module. Its
+        # `fast_workspace` journeys provision a real Docker workspace, and
+        # conftest exempts them from the `workspace` marker precisely so they
+        # stay in the fast lane -- so this shard needs the image too. Without
+        # this it still got one: the `workspace_image` fixture built it on
+        # demand, inside the test step, uncached, and invisibly (pytest
+        # captures the build output, so the job log shows no build at all). The
+        # sandbox shard pays 79s to build and 27s to restore from cache; this
+        # shard was paying the 79s every run with nothing to show for it.
+        "needs_sandbox_images": True,
         # Under xdist the production worker subprocess's coverage files race
         # and are lost, swinging the agent e2e-union floor by several points
         # run to run. Raising this needs the coverage race fixed first.

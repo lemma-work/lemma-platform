@@ -11,16 +11,16 @@ from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
-from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,
-    build_surface_event_metadata,
-)
-from app.modules.agent_surfaces.platforms.common import (
-    background_channel_context_note,
-    channel_author_label,
 )
 from app.modules.agent_surfaces.platforms.teams import client
+from app.modules.agent_surfaces.platforms.teams.channel_history import (
+    TeamsChannelHistoryMixin,
+)
+from app.modules.agent_surfaces.platforms.teams.credentials import (
+    tenant_id_from_credentials,
+)
 from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
     encode_share_url,
     filename_from_url,
@@ -31,15 +31,7 @@ from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
     looks_like_bot_attachment_url,
 )
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
-from app.modules.agent_surfaces.platforms.teams.parser import strip_html
-from app.modules.agent_surfaces.platforms.teams.models import (
-    TeamsChannelMessageSnapshot,
-    TeamsGetRecentMessagesParams,
-    TeamsGetRecentMessagesResult,
-    TeamsMessageAttachmentSnapshot,
-)
 from app.core.log.log import get_logger
-from app.core.net.aiohttp_client import new_aiohttp_session
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
@@ -51,7 +43,7 @@ logger = get_logger(__name__)
 _MAX_DOWNLOAD_REDIRECTS = 5
 
 
-class TeamsPlatformService:
+class TeamsPlatformService(TeamsChannelHistoryMixin):
     def __init__(self, *, credentials: dict[str, Any]) -> None:
         self.credentials = credentials
         self._graph_base = str(
@@ -75,7 +67,7 @@ class TeamsPlatformService:
         if not download_url:
             return None
         content_type = str(attachment.get("content_type") or "").strip()
-        tenant_id = _tenant_id_from_credentials(self.credentials)
+        tenant_id = tenant_id_from_credentials(self.credentials)
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
@@ -106,225 +98,6 @@ class TeamsPlatformService:
             or "application/octet-stream"
         )
         return content, file_name, mime_type
-
-    async def get_recent_channel_messages(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: TeamsGetRecentMessagesParams,
-    ) -> TeamsGetRecentMessagesResult:
-        if ctx.deps.surface_platform != "TEAMS":
-            return TeamsGetRecentMessagesResult(
-                success=False,
-                error="This tool is only available in Teams conversations.",
-            )
-
-        tenant_id = _tenant_id_from_credentials(self.credentials)
-        if not tenant_id:
-            logger.debug(
-                "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic"
-            )
-            return TeamsGetRecentMessagesResult(
-                success=False,
-                error="Cannot determine Teams tenant_id from account credentials.",
-            )
-
-        token = await client.get_graph_token(tenant_id)
-        if not token:
-            logger.debug(
-                "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic",
-                tenant_id=tenant_id,
-            )
-            return TeamsGetRecentMessagesResult(
-                success=False,
-                error="Could not acquire Graph API token for channel history.",
-            )
-
-        teams_meta = self._teams_metadata(ctx)
-        team_id = teams_meta.team_id if teams_meta is not None else None
-        team_aad_group_id = (
-            teams_meta.team_aad_group_id if teams_meta is not None else None
-        )
-        service_url = teams_meta.service_url if teams_meta is not None else None
-        channel_id = ctx.deps.external_channel_id
-        current_thread = ctx.deps.external_thread_id
-        if not team_id or not channel_id:
-            return TeamsGetRecentMessagesResult(
-                success=False,
-                error="Channel history is only available for team channel conversations.",
-            )
-
-        try:
-            async with new_aiohttp_session() as session:
-                graph_team_id = await client.resolve_graph_team_id(
-                    raw_team_id=team_id,
-                    team_aad_group_id=team_aad_group_id,
-                    service_url=service_url,
-                    session=session,
-                )
-                if not graph_team_id:
-                    return TeamsGetRecentMessagesResult(
-                        success=False,
-                        error="Could not resolve the Microsoft Teams team ID required for channel history.",
-                    )
-
-                scope = request.scope
-                if scope == "auto":
-                    scope = (
-                        "thread"
-                        if current_thread and str(current_thread) != str(channel_id)
-                        else "channel"
-                    )
-
-                if scope == "thread":
-                    if not current_thread or str(current_thread) == str(channel_id):
-                        return TeamsGetRecentMessagesResult(
-                            success=False,
-                            error="There is no current Teams thread to inspect in this conversation.",
-                        )
-                    url = (
-                        f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
-                        f"{quote(str(channel_id))}/messages/{quote(str(current_thread))}/replies"
-                        f"?$top={request.limit}"
-                    )
-                else:
-                    url = (
-                        f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
-                        f"{quote(str(channel_id))}/messages?$top={request.limit}"
-                    )
-
-                async with session.get(
-                    url, headers=client.auth_headers(token)
-                ) as response:
-                    if response.status >= 400:
-                        await response.text()
-                        logger.debug(
-                            "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic",
-                            status=response.status,
-                        )
-                        return TeamsGetRecentMessagesResult(
-                            success=False,
-                            error=f"Graph API returned HTTP {response.status}.",
-                        )
-                    data = await response.json()
-        except Exception:
-            logger.debug(
-                "agent_surfaces.service.teams_get_recent_channel_messages.propagated",
-                conversation_id=ctx.deps.conversation_id,
-                exc_info=True,
-            )
-            raise
-
-        messages: list[TeamsChannelMessageSnapshot] = []
-        for item in reversed((data or {}).get("value") or []):
-            if not isinstance(item, dict):
-                continue
-            snapshot = _message_snapshot_from_graph_item(item)
-            if snapshot is None:
-                continue
-            if (
-                request.scope != "thread"
-                and snapshot.message_id
-                and current_thread
-                and snapshot.message_id == current_thread
-            ):
-                continue
-            if snapshot.author_label is None:
-                snapshot.author_label = channel_author_label(
-                    snapshot.display_name, snapshot.user_id
-                )
-            messages.append(snapshot)
-            if len(messages) >= request.limit:
-                break
-
-        return TeamsGetRecentMessagesResult(
-            success=True,
-            message=background_channel_context_note(len(messages)),
-            messages=messages,
-        )
-
-    async def fetch_recent_context(
-        self,
-        *,
-        event: ParsedInboundSurfaceEvent,
-        limit: int = 15,
-    ) -> list[SurfaceContextMessage]:
-        """Recent channel/thread messages via Graph for background context on a
-        mention. Best-effort: missing tenant/team/token or any error → empty."""
-        tenant_id = _tenant_id_from_credentials(self.credentials)
-        channel_id = event.external_channel_id
-        if not tenant_id or not channel_id:
-            return []
-        meta = build_surface_event_metadata("TEAMS", event.metadata or {})
-        team_id = getattr(meta, "team_id", None)
-        if not team_id:
-            return []
-        current_thread = event.external_thread_id
-        scope = (
-            "thread"
-            if current_thread and str(current_thread) != str(channel_id)
-            else "channel"
-        )
-        try:
-            token = await client.get_graph_token(tenant_id)
-            if not token:
-                return []
-            async with new_aiohttp_session() as session:
-                graph_team_id = await client.resolve_graph_team_id(
-                    raw_team_id=team_id,
-                    team_aad_group_id=getattr(meta, "team_aad_group_id", None),
-                    service_url=getattr(meta, "service_url", None),
-                    session=session,
-                )
-                if not graph_team_id:
-                    return []
-                base = (
-                    f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
-                    f"{quote(str(channel_id))}/messages"
-                )
-                url = (
-                    f"{base}/{quote(str(current_thread))}/replies?$top={limit}"
-                    if scope == "thread"
-                    else f"{base}?$top={limit}"
-                )
-                async with session.get(
-                    url, headers=client.auth_headers(token)
-                ) as response:
-                    if response.status >= 400:
-                        return []
-                    data = await response.json()
-        except Exception:
-            logger.debug(
-                "agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic",
-                channel_id=channel_id,
-            )
-            return []
-
-        out: list[SurfaceContextMessage] = []
-        for item in reversed((data or {}).get("value") or []):
-            if not isinstance(item, dict):
-                continue
-            snapshot = _message_snapshot_from_graph_item(item)
-            if snapshot is None or not snapshot.text.strip():
-                continue
-            if (
-                scope != "thread"
-                and snapshot.message_id
-                and current_thread
-                and snapshot.message_id == current_thread
-            ):
-                continue
-            author = snapshot.author_label or channel_author_label(
-                snapshot.display_name, snapshot.user_id
-            )
-            out.append(
-                SurfaceContextMessage(
-                    author=author, text=snapshot.text.strip(), ts=snapshot.message_id
-                )
-            )
-            if len(out) >= limit:
-                break
-        return out
 
     def _teams_metadata(
         self,
@@ -460,19 +233,6 @@ class TeamsPlatformService:
         return None
 
 
-def _tenant_id_from_credentials(credentials: dict[str, Any]) -> str | None:
-    user_data = credentials.get("user_data") or {}
-    raw = credentials.get("raw_response") or {}
-    return (
-        user_data.get("tenant_id")
-        or user_data.get("tid")
-        or raw.get("tenant_id")
-        or raw.get("tid")
-        or credentials.get("tenant_id")
-        or credentials.get("tid")
-    ) or None
-
-
 async def _resolve_shared_item_content_request(
     *,
     session: aiohttp.ClientSession,
@@ -564,55 +324,3 @@ async def _resolve_sharepoint_site_id(
         data = await response.json()
     site_id = data.get("id")
     return str(site_id) if site_id else None
-
-
-def _extract_graph_message_attachments(
-    item: dict[str, Any],
-) -> list[TeamsMessageAttachmentSnapshot]:
-    results: list[TeamsMessageAttachmentSnapshot] = []
-    for raw in item.get("attachments") or []:
-        if not isinstance(raw, dict):
-            continue
-        content_url = str(raw.get("contentUrl") or "").strip()
-        if not content_url:
-            continue
-        name = str(raw.get("name") or "").strip() or None
-        content_type = str(raw.get("contentType") or "").strip()
-        file_type = ""
-        if name and "." in name:
-            file_type = name.rsplit(".", 1)[-1].lower()
-        elif "/" in content_type:
-            file_type = content_type.split("/")[-1].lower()
-        results.append(
-            TeamsMessageAttachmentSnapshot(
-                name=name,
-                download_url=content_url,
-                file_type=file_type,
-                content_type=content_type,
-            )
-        )
-    return results
-
-
-def _message_snapshot_from_graph_item(
-    item: dict[str, Any],
-) -> TeamsChannelMessageSnapshot | None:
-    body = item.get("body") or {}
-    text = strip_html(str(body.get("content") or "")).strip()
-    attachments = _extract_graph_message_attachments(item)
-    if not text and attachments:
-        names = ", ".join(att.name or "file" for att in attachments)
-        text = f"[File shared: {names}]"
-    if not text:
-        return None
-
-    sender = item.get("from") or {}
-    user = sender.get("user") or sender.get("application") or {}
-    return TeamsChannelMessageSnapshot(
-        message_id=str(item.get("id") or "") or None,
-        reply_to_id=str(item.get("replyToId") or "") or None,
-        user_id=str(user.get("id") or "") or None,
-        display_name=str(user.get("displayName") or "") or None,
-        text=text,
-        attachments=attachments,
-    )

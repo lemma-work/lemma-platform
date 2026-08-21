@@ -1,6 +1,6 @@
 """What reaches the model when somebody emails an agent.
 
-All three email providers share ``email_common``, so these are the guarantees
+All three email providers share ``email_text``, so these are the guarantees
 that hold for Resend, Gmail and Outlook alike. None of them held before: there
 was no quoted-reply trimming anywhere, stylesheets were extracted as text, and
 every newline was collapsed, so an HTML email arrived as one unbroken line.
@@ -12,9 +12,9 @@ import base64
 
 import pytest
 
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.email_identity import email_thread_root
+from app.modules.agent_surfaces.platforms.email_text import (
     decode_email_html,
-    email_thread_root,
     inbound_email_text,
     plain_text_from_html,
     strip_quoted_reply,
@@ -212,7 +212,7 @@ def test_an_enormous_html_body_is_bounded_before_parsing():
     """
     import time
 
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_text import (
         _MAX_HTML_CHARS,
         plain_text_from_html,
     )
@@ -229,6 +229,6 @@ def test_an_enormous_html_body_is_bounded_before_parsing():
 
 
 def test_an_ordinary_body_is_untouched_by_the_cap():
-    from app.modules.agent_surfaces.platforms.email_common import plain_text_from_html
+    from app.modules.agent_surfaces.platforms.email_text import plain_text_from_html
 
     assert "Hi there" in plain_text_from_html("<p>Hi there</p><p>Thanks!</p>")

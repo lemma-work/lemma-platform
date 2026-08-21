@@ -77,6 +77,22 @@ def resend_candidate_from_surface(
     )
 
 
+def _email_id(item: dict[str, Any]) -> str:
+    return str(item.get("id") or "")
+
+
+def _emails_before_cursor(
+    data: list[dict[str, Any]], cursor: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """The emails on this page newer than ``cursor``, and whether it was reached."""
+    fresh: list[dict[str, Any]] = []
+    for item in data:
+        if _email_id(item) == cursor:
+            return fresh, True
+        fresh.append(item)
+    return fresh, False
+
+
 class ResendPollingReceiverRunner:
     def __init__(self, candidate: NativeReceiverCandidate) -> None:
         self._candidate = candidate
@@ -121,28 +137,23 @@ class ResendPollingReceiverRunner:
         new_items: list[dict[str, Any]] = []
         newest_id: str | None = None
         after: str | None = None
-        pages = 0
-        while pages < _RESEND_POLL_PAGE_CAP:
+        for _ in range(_RESEND_POLL_PAGE_CAP):
             page = await service.list_received_emails(after=after, limit=100)
             data = page.get("data") or []
             if not data:
                 break
             if newest_id is None:
-                newest_id = str(data[0].get("id") or "") or None
+                newest_id = _email_id(data[0]) or None
             if cursor is None:
                 break
-            reached_cursor = False
-            for item in data:
-                if str(item.get("id") or "") == cursor:
-                    reached_cursor = True
-                    break
-                new_items.append(item)
+
+            fresh, reached_cursor = _emails_before_cursor(data, cursor)
+            new_items.extend(fresh)
             if reached_cursor or not page.get("has_more"):
                 break
-            after = str(data[-1].get("id") or "") or None
+            after = _email_id(data[-1]) or None
             if not after:
                 break
-            pages += 1
         return new_items, newest_id
 
     async def _ingest_email(self, item: dict[str, Any]) -> None:

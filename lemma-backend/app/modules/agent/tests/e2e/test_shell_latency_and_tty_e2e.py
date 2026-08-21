@@ -44,7 +44,14 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e, pytest.mark.anyio]
+# asyncio, not anyio, like the other 139 e2e files. Neither of these two files
+# uses anyio for anything -- no anyio API, no trio, no task groups -- but the
+# marker made pytest-anyio run each test in its own fresh event loop while every
+# fixture around them runs in the session loop pytest.ini configures. That is
+# invisible until something is held across the boundary: a pooled Postgres
+# connection opened during fixture setup and reused in the test body dies with
+# "got Future attached to a different loop".
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 # The window a silent command used to burn. Anything near it is the bug back.
 # Deliberately far below 29s and far above a healthy round trip (~0.1-1s), so

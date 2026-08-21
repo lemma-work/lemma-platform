@@ -28,6 +28,9 @@ from app.modules.agent_surfaces.platforms.teams.adapter import (
 from app.modules.agent_surfaces.platforms.teams import (
     adapter as teams_adapter_module,
 )
+from app.modules.agent_surfaces.platforms.teams import (
+    adapter_egress as teams_egress_module,
+)
 
 
 def test_surface_adapter_registry_accepts_surface_platform_enum():
@@ -267,7 +270,7 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
     adapter = TeamsSurfaceAdapter()
     adapter._get_bot_token = AsyncMock(return_value="bot-token")
     monkeypatch.setattr(
-        teams_adapter_module.aiohttp,
+        teams_egress_module.aiohttp,
         "ClientSession",
         lambda *args, **kwargs: _Session(),
     )
@@ -334,7 +337,7 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
     adapter = TeamsSurfaceAdapter()
     adapter._get_bot_token = AsyncMock(return_value="bot-token")
     monkeypatch.setattr(
-        teams_adapter_module.aiohttp,
+        teams_egress_module.aiohttp,
         "ClientSession",
         lambda *args, **kwargs: _Session(),
     )
@@ -413,7 +416,7 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
     adapter = TeamsSurfaceAdapter()
     adapter._get_bot_token = AsyncMock(return_value="bot-token")
     monkeypatch.setattr(
-        teams_adapter_module.aiohttp,
+        teams_egress_module.aiohttp,
         "ClientSession",
         lambda *args, **kwargs: _Session(),
     )

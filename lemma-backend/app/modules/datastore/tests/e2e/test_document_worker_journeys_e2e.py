@@ -18,6 +18,7 @@ from app.modules.datastore.tests.e2e.harness import (
 from app.modules.datastore.tests.e2e.fake_document_processors import (
     FakeDocumentProcessorServer,
 )
+from app.modules.test_support.e2e.prerequisites import require_module
 from app.modules.test_support.e2e.waiters import wait_for_status
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -332,6 +333,11 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
     PDF parser produces, page markers derived from real page boundaries, and a
     search hit for a phrase that exists nowhere but inside the document.
     """
+    require_module(
+        "xberg",
+        fix="Install it with `uv sync --extra local` from lemma-backend.",
+    )
+
     fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/arxiv/seq2seq.pdf"
     pdf_bytes = fixture.read_bytes()
 

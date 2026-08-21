@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -23,6 +24,41 @@ logger = get_logger(__name__)
 class _UserMatch:
     user_id: UUID | None
     cacheable: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _KnownSender:
+    """What the platform said about this person, before a Lemma user is matched.
+
+    Both the profile the adapter fetched and the event itself carry these, in
+    that order of trust, and the same five reads were being spelled out at each
+    of the two upsert sites.
+    """
+
+    external_user_id: str | None
+    email: str | None
+    phone: str | None
+    display_name: str | None
+    raw_profile: Any
+
+    @classmethod
+    def of(
+        cls,
+        profile: SurfaceSenderProfile,
+        event: ParsedInboundSurfaceEvent,
+    ) -> "_KnownSender":
+        return cls(
+            external_user_id=str(
+                profile.external_user_id or event.sender_external_user_id or ""
+            )
+            or None,
+            email=profile.email or event.sender_email,
+            phone=_normalize_phone_number(profile.phone or event.sender_phone),
+            display_name=profile.display_name or event.sender_display_name,
+            raw_profile=profile.raw_profile
+            or profile.model_dump(exclude_none=True)
+            or event.raw_payload,
+        )
 
 
 class SurfaceIdentityResolutionService:
@@ -55,28 +91,12 @@ class SurfaceIdentityResolutionService:
         event: ParsedInboundSurfaceEvent,
         sender_profile: SurfaceSenderProfile | None = None,
     ) -> ResolvedSurfaceUser:
-        profile = sender_profile or SurfaceSenderProfile()
-        external_user_id = (
-            str(profile.external_user_id or event.sender_external_user_id or "") or None
-        )
-        email = profile.email or event.sender_email
-        phone = _normalize_phone_number(profile.phone or event.sender_phone)
-        display_name = profile.display_name or event.sender_display_name
+        known = _KnownSender.of(sender_profile or SurfaceSenderProfile(), event)
 
         # ── 1. Upsert the ExternalSurfaceUser row with whatever we know ─────
         external_user = None
-        if external_user_id:
-            external_user = await self.external_user_repository.upsert(
-                platform=event.platform,
-                tenant_id=event.tenant_id,
-                external_user_id=external_user_id,
-                email=email,
-                phone=phone,
-                display_name=display_name,
-                raw_profile=profile.raw_profile
-                or profile.model_dump(exclude_none=True)
-                or event.raw_payload,
-            )
+        if known.external_user_id:
+            external_user = await self._upsert(event, known)
             # Cache hit — previously resolved, skip DB lookup.
             if external_user.resolved_user_id:
                 return ResolvedSurfaceUser(
@@ -90,34 +110,42 @@ class SurfaceIdentityResolutionService:
         # ── 2-4. Match against Lemma users: telegram username, then email,
         #         then phone ─────────────────────────────────────────────────
         match = await self._match_user_result(
-            email=email,
-            phone=phone,
+            email=known.email,
+            phone=known.phone,
             telegram_username=_telegram_username(event),
         )
-        user_id = match.user_id
 
         # Persist the resolved_user_id so the next message is a cache hit.
-        if external_user_id and match.cacheable:
-            external_user = await self.external_user_repository.upsert(
-                platform=event.platform,
-                tenant_id=event.tenant_id,
-                external_user_id=external_user_id,
-                email=email,
-                phone=phone,
-                display_name=display_name,
-                raw_profile=profile.raw_profile
-                or profile.model_dump(exclude_none=True)
-                or event.raw_payload,
-                resolved_user_id=user_id,
+        if known.external_user_id and match.cacheable:
+            external_user = await self._upsert(
+                event, known, resolved_user_id=match.user_id
             )
 
         return ResolvedSurfaceUser(
-            internal_user_id=user_id,
-            external_user_id=external_user_id,
-            email=email,
-            phone=phone,
-            display_name=display_name
+            internal_user_id=match.user_id,
+            external_user_id=known.external_user_id,
+            email=known.email,
+            phone=known.phone,
+            display_name=known.display_name
             or (external_user.display_name if external_user else None),
+        )
+
+    async def _upsert(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        known: "_KnownSender",
+        **extra: Any,
+    ) -> Any:
+        """Write what we know about this sender, with whatever else is settled."""
+        return await self.external_user_repository.upsert(
+            platform=event.platform,
+            tenant_id=event.tenant_id,
+            external_user_id=known.external_user_id,
+            email=known.email,
+            phone=known.phone,
+            display_name=known.display_name,
+            raw_profile=known.raw_profile,
+            **extra,
         )
 
     async def _match_user(

@@ -395,7 +395,7 @@ async def test_only_modal_opening_clicks_take_the_synchronous_fast_lane():
     modal has to be opened inside the HTTP request instead. Only those clicks
     may take that path; anything else belongs on the queue.
     """
-    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
+    from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
         _opens_a_slack_modal,
     )
 
