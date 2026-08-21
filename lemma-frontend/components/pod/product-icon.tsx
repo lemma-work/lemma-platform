@@ -71,8 +71,10 @@ const iconByKind: Record<ProductIconKind, typeof FolderOpen> = {
  * expressive axes here: a column of these icons is read by silhouette, and a
  * glyph that thickens or fills on interaction changes how much ink one row
  * carries relative to its neighbours, which is exactly what makes a nav look
- * unsettled. Selection is carried by colour and the row's accent bar; the
- * pointer is answered by a small scale in CSS.
+ * unsettled. The day-to-day kinds each carry their own jewel tone in every
+ * state (see `.lemma-product-icon[data-kind]` in primitives.css) — colour is
+ * the place's identity and stays put, while the pointer is answered by a
+ * small scale in CSS and selection by the row's fill and accent bar.
  */
 export function ProductIcon({
     kind,

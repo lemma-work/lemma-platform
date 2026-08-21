@@ -444,6 +444,14 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         Replaced once, not retried: the same dead sandbox would fail the same way
         forever, and a function sandbox holds no files, so rebuilding it costs a
         cold start and nothing else.
+
+        That last clause is why the recovery branches on kind. It is only true
+        of a function sandbox. A workspace owns the user's disk -- on a
+        SANDBOX_NATIVE provider the sandbox *is* the disk -- so the same
+        recovery would answer a twenty-second readiness failure by deleting
+        everything the user had. `kind` was already computed here and simply
+        never consulted, which left that one call away from happening the first
+        time any caller asked a workspace to verify.
         """
         deadline = deadline_at or datetime.now(timezone.utc) + timedelta(seconds=30)
         kind = (
@@ -462,8 +470,16 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
                 "workspace.local_sandbox_client.adopted_sandbox_not_serving",
                 sandbox_id=str(sandbox_id),
                 error_type=type(exc).__name__,
+                kind=kind.value,
             )
         self._service.forget(sandbox_id)
+        if kind is not SandboxKind.FUNCTION:
+            # Re-ensure without destroying. Forgetting the handle is enough to
+            # send the next ensure back to the provider, which resumes a paused
+            # sandbox or provisions a replacement if it has genuinely gone --
+            # and if it is merely slow to answer, the disk is still there when
+            # it does.
+            return await self._service.ensure(sandbox_id)
         await self._service.destroy(sandbox_id)
         await self._ensure_row(sandbox_id, workload_kind)
         return await self._service.ensure(sandbox_id)

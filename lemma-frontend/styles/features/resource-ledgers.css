@@ -1292,8 +1292,12 @@
   height: 2rem;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--border-subtle);
+  /* Adding a capability is an action, so the tile wears action violet — the
+     same soft fill the model picker's selected row and the sidebar's active
+     row use, rather than the drawer-grey it used to share with everything
+     else on the page. */
+  border: 1px solid color-mix(in srgb, var(--action-primary) 22%, transparent);
   border-radius: var(--radius-md);
-  background: var(--surface-2);
-  color: var(--text-secondary);
+  background: var(--action-primary-soft);
+  color: var(--action-primary);
 }

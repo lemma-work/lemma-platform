@@ -95,7 +95,7 @@ describe('the first ten minutes are paced, in order', () => {
         expect(instructions).toContain('lemma-widget');
     });
 
-    it('binds the bot to the pod assistant, so no agent has to exist first', () => {
+    it('binds the bot to Lem, so no agent has to exist first', () => {
         expect(firstRun()).toContain('Pass no `--agent`');
     });
 

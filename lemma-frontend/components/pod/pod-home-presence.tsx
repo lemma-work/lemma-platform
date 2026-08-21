@@ -9,6 +9,7 @@ import { usePodMembers } from '@/lib/hooks/use-pod-members';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { useSchedules } from '@/lib/hooks/use-schedules';
+import { TONE_COUNT as IDENTITY_TONE_COUNT } from '@/lib/identity/seeded-identity';
 import { getSurfaceDefinition } from '@/lib/surfaces/registry';
 import { getSurfacePlatformKey } from '@/lib/utils/surfaces';
 import { getScheduleTargetName } from '@/lib/utils/schedules';
@@ -23,13 +24,30 @@ function initialOf(label: string): string {
     return trimmed ? trimmed[0].toUpperCase() : '?';
 }
 
-/** Deterministic per-person tint, so the same face keeps the same colour. */
+/**
+ * Deterministic per-person tint, so the same face keeps the same colour — drawn
+ * from the identity system's tone pool, the palette built for "a distinct
+ * being" and already worn by the agent faces standing beside these avatars.
+ *
+ * It used to draw from four fixed tints of its own, three of which were state
+ * colours: `--accent-rgb`, `--state-success` and `--state-warning`. The comment
+ * defending that pool said it existed so a hash would not "drift into the state
+ * colours and start implying an agent is failing" — and then picked them
+ * anyway, which put two people in success-green one scroll above an Activity
+ * panel that uses success-green for "Completed". A person is not a status, and
+ * a hue cannot mean both.
+ */
 function avatarToneClass(seed: string): string {
     let hash = 0;
     for (let index = 0; index < seed.length; index += 1) {
         hash = (hash * 31 + seed.charCodeAt(index)) % 997;
     }
-    return `pod-home-presence-avatar-t${hash % 4}`;
+    // `hue`, not `tone`: the tone variant also sets `color`, and
+    // `resource-identity.css` imports after this feature sheet, so it would win
+    // over the avatar's white initial and paint the letter the same colour as
+    // the disc behind it. The hue variant carries the custom properties only —
+    // which is the split that file documents, for exactly this case.
+    return `lm-identity-hue-${hash % IDENTITY_TONE_COUNT}`;
 }
 
 interface PresenceFace {
@@ -171,12 +189,18 @@ export function PodHomePresence({
                 {hasSurfaces ? (
                     // The agents index is `/ai`; `/agents` only holds `[agentId]`
                     // and `new`, so a bare link there is a 404.
+                    /* The marks carry their own colour, so they take no
+                       `surface-logo-chip` plate. That plate is for a monochrome
+                       mark that would vanish on dark stock; on these it only
+                       pasted three near-white tiles into a line of prose, which
+                       is the one thing on the row that did not belong to either
+                       appearance. */
                     <Link href={`/pod/${podId}/ai`} className="pod-home-presence-link custom-focus-ring">
                         <span className="pod-home-presence-surfaces">
                             {surfacePlatforms.map((platform) => (
-                                <span key={platform.key} className="pod-home-presence-surface surface-logo-chip" title={platform.label}>
+                                <span key={platform.key} className="pod-home-presence-surface" title={platform.label}>
                                     {platform.logoSrc ? (
-                                        <Image src={platform.logoSrc} alt="" width={13} height={13} className="object-contain" aria-hidden="true" />
+                                        <Image src={platform.logoSrc} alt="" width={15} height={15} className="object-contain" aria-hidden="true" />
                                     ) : (
                                         initialOf(platform.label)
                                     )}

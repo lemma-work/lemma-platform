@@ -12,6 +12,7 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { AssistantSurface } from '@/lib/types';
 import { StepLoader } from '@/components/brand/loader';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 export const DEFAULT_AGENT_VALUE = '__pod_default_agent__';
 
@@ -119,7 +120,7 @@ export function SurfaceConfigureStep({
                     <SelectContent>
                         {/* Named the same as the route picker below, because it
                             means the same thing to a person. */}
-                        <SelectItem value={DEFAULT_AGENT_VALUE}>Pod assistant</SelectItem>
+                        <SelectItem value={DEFAULT_AGENT_VALUE}>{DEFAULT_RESPONDER_NAME}</SelectItem>
                         {assistants.map((assistant) => (
                             <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
                                 {assistant.name}
@@ -397,7 +398,7 @@ function ChannelRouteRow({
                                 the pod's own assistant, one named agent. The middle one
                                 is a choice, not a fallback — see POD_ASSISTANT_VALUE. */}
                             <SelectItem value={DEFAULT_AGENT_VALUE}>Whoever answers here by default</SelectItem>
-                            <SelectItem value={POD_ASSISTANT_VALUE}>Pod assistant</SelectItem>
+                            <SelectItem value={POD_ASSISTANT_VALUE}>{DEFAULT_RESPONDER_NAME}</SelectItem>
                             {assistants.map((assistant) => (
                                 <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
                                     {assistant.name}

@@ -322,7 +322,7 @@ class FakeE2B:
                 world.sandboxes.pop(self.sandbox_id, None)
                 return True
 
-            async def beta_pause(self, keep_memory=True, **_kwargs):
+            async def pause(self, keep_memory=True, **_kwargs):
                 # Recorded because the default is the bug: a workspace pause
                 # that keeps memory restores whatever was running into the
                 # next conversation.
@@ -330,6 +330,14 @@ class FakeE2B:
                 world.paused.append(self.sandbox_id)
                 world.sandboxes[self.sandbox_id].state = "paused"
                 return True
+
+            async def beta_pause(self, keep_memory=True, **_kwargs):
+                # Kept because the real SDK still carries it, deprecated, and a
+                # double that drops a method the provider might call would
+                # certify a call that no longer exists. It delegates rather
+                # than duplicating, so the two can never disagree about what a
+                # pause records.
+                return await self.pause(keep_memory=keep_memory, **_kwargs)
 
             def get_host(self, port):
                 return f"{port}-{self.sandbox_id}.e2b.test"

@@ -73,7 +73,7 @@ describe('surface reaches', () => {
             kind: 'dm',
             detail: '2 people chose this agent',
         });
-        // Choosing the pod assistant is stored, so it reaches too.
+        // Choosing Lem is stored, so it reaches too.
         expect(surfaceAnswersDirectMessages(surface, null)).toBe(true);
     });
 
@@ -83,7 +83,7 @@ describe('surface reaches', () => {
             { channel_id: 'C9', channel_name: 'general' },
         ]);
 
-        // Explicit: the pod assistant answers, and no agent does.
+        // Explicit: Lem answers, and no agent does.
         expect(surfaceReaches(surface, null).map((reach) => reach.label)).toEqual(['#asks']);
         expect(surfaceReachesDefaultAgent(surface)).toBe(true);
         // Unset: falls to the surface default, which is a *different* answer.

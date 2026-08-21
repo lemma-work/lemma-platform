@@ -21,7 +21,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.core.log.log import get_logger
-from app.modules.workspace.domain.sandbox import SandboxDesiredState
+from app.modules.workspace.domain.sandbox import (
+    SandboxDesiredState,
+    SandboxInstanceState,
+)
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
 from app.modules.workspace.providers.base import (
@@ -34,6 +37,11 @@ from app.modules.workspace.providers.base import (
 from sandbox_runtime.errors import SandboxError
 
 logger = get_logger(__name__)
+
+# How many unattributed provider ids to name in the aggregated report. Enough to
+# identify which environment they belong to, few enough that the line stays
+# readable when an account holds hundreds.
+_UNATTRIBUTED_SAMPLE = 10
 
 
 class SandboxSweeper:
@@ -146,21 +154,23 @@ class SandboxSweeper:
         return any(not _has_stopped(p) for p in processes)
 
     async def reclaim_orphans(self, *, dry_run: bool = False) -> tuple[str, ...]:
-        """Destroy provider objects no live sandbox row accounts for.
+        """Destroy provider objects this environment created and no longer wants.
 
-        An object is orphaned when it belongs to a sandbox that no longer
-        exists or is deleted, or when it is behind the sandbox's current epoch.
-        Anything this module cannot identify is left strictly alone -- a sweep
-        that guesses would delete somebody else's containers.
+        Reclaimable means *this database* asked for the object to be gone -- see
+        `_reclaim_reason`. An object this database has never heard of is not
+        reclaimable at any confidence, and that is the distinction this method
+        exists to hold.
         """
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         objects = await self._provider.list_objects(deadline_at=deadline_at)
 
         reclaimed: list[str] = []
+        unattributed: list[str] = []
         for obj in objects:
             if obj.sandbox_id is None:
-                # Not identifiable as ours. Leaving a stray object running is
-                # recoverable; deleting a stranger's container is not.
+                # Not identifiable as ours at all. Leaving a stray object
+                # running is recoverable; deleting a stranger's container is
+                # not.
                 continue
 
             async with self._uow_factory() as uow:
@@ -173,23 +183,39 @@ class SandboxSweeper:
                 )
 
             if sandbox is None:
-                reason = "no sandbox row"
-            elif sandbox.desired_state is SandboxDesiredState.DELETED:
-                reason = "sandbox deleted"
-            elif obj.legacy:
-                # A pre-cutover object carries no epoch, so it cannot be judged
-                # by one. While both provisioning paths exist it may still be
-                # the *only* container serving this sandbox, and destroying it
-                # would kill a live workspace. It is only reclaimable once this
-                # module has provisioned a replacement.
-                if instance is None:
-                    continue
-                reason = "superseded by the current provisioning path"
-            elif self._epoch_is_a_fence and obj.epoch is not None and (
-                obj.epoch < sandbox.epoch
-            ):
-                reason = f"epoch {obj.epoch} is behind {sandbox.epoch}"
-            else:
+                # Identifiable, but not ours -- and this is the branch that must
+                # never destroy.
+                #
+                # A sandbox this environment created always has a row. Nothing
+                # hard-deletes one (`SandboxService.destroy` sets
+                # `desired_state=DELETED` and keeps it), and `begin_instance`
+                # commits the row *before* the provider is asked to create
+                # anything, so even a create whose response was lost leaves a
+                # row behind. "No row" therefore cannot mean "ours and
+                # forgotten". It can only mean another database's: a second
+                # environment sharing this provider account, a developer's local
+                # backend, or a database restored from before the object existed.
+                #
+                # Destroying on it is an unfalsifiable negative that resolves
+                # towards deleting a stranger's live workspace, and on a
+                # SANDBOX_NATIVE provider that is the user's disk. It is what
+                # happened: dev and prod held two API keys for one E2B team,
+                # both defaulted to the same metadata namespace, and each
+                # environment's sweep destroyed the other's sandboxes every five
+                # minutes -- five times inside one twenty-minute conversation,
+                # each kill seconds after the other side rebuilt it.
+                #
+                # The namespace is the boundary that stops the two seeing each
+                # other at all, and it is derived rather than shared now
+                # (`provider_factory.resolve_metadata_namespace`). This is the
+                # second line: a namespace can be misconfigured again, and a
+                # report costs money while a destroy costs work nobody can get
+                # back.
+                unattributed.append(obj.provider_id)
+                continue
+
+            reason = self._reclaim_reason(obj, sandbox, instance)
+            if reason is None:
                 continue
 
             if dry_run:
@@ -227,7 +253,63 @@ class SandboxSweeper:
                 sandbox_id=str(obj.sandbox_id),
                 reason=reason,
             )
+
+        if unattributed:
+            # One line per sweep, not one per object. A shared provider account
+            # can hold hundreds of these, and a per-object log would bury the
+            # signal the report exists to raise: a rising count means another
+            # environment has started writing into this account.
+            logger.info(
+                "workspace.sandbox_sweeper.unattributed_objects",
+                count=len(unattributed),
+                # Joined, not a tuple: the log pipeline drops any value that is
+                # not a scalar, so a tuple arrives as `dropped_fields` and the
+                # sample that makes the count actionable is lost.
+                sample=",".join(sorted(unattributed)[:_UNATTRIBUTED_SAMPLE]),
+            )
         return tuple(reclaimed)
+
+    def _reclaim_reason(self, obj, sandbox, instance) -> str | None:
+        """Why this object may be destroyed, or None to leave it alone.
+
+        Split from the loop so the loop is about *doing* a reclaim and this is
+        about *deciding* one -- and so neither trips the complexity ratchet,
+        which the two together did.
+
+        Note what is absent: "there is no row". That never reaches here, because
+        it is not a reason at any confidence. See the caller.
+        """
+        if sandbox.desired_state is SandboxDesiredState.DELETED:
+            if instance is not None and (
+                instance.state is SandboxInstanceState.CREATING
+            ):
+                # A provision is in flight against a row that still reads
+                # DELETED. `destroy` sets DELETED, and the `_provision` that
+                # follows only sets it back to PRESENT at the very end -- so
+                # between `begin_instance` and that write, a live create looks
+                # exactly like an abandoned sandbox. Destroying here kills the
+                # sandbox the caller is waiting on.
+                #
+                # CREATING is the whole window and not merely most of it:
+                # `mark_instance_ready` and `set_desired_state(PRESENT)` commit
+                # in one unit of work, so READY is never observable while the
+                # row still says DELETED.
+                return None
+            return "sandbox deleted"
+        if obj.legacy:
+            # A pre-cutover object carries no epoch, so it cannot be judged by
+            # one. While both provisioning paths exist it may still be the
+            # *only* container serving this sandbox, and destroying it would
+            # kill a live workspace. It is only reclaimable once this module has
+            # provisioned a replacement.
+            if instance is None:
+                return None
+            return "superseded by the current provisioning path"
+        if self._epoch_is_a_fence and obj.epoch is not None and (
+            obj.epoch < sandbox.epoch
+        ):
+            return f"epoch {obj.epoch} is behind {sandbox.epoch}"
+        return None
 
     async def _still_present(self, obj, *, deadline_at: datetime) -> bool:
         """Whether the provider can still see *this* object after the destroy.

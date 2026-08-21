@@ -21,7 +21,7 @@ export function getSurfaceStatus(surface: AssistantSurface): { label: string; to
 }
 
 /**
- * Stored when a person explicitly picks the pod assistant for their own DMs.
+ * Stored when a person explicitly picks Lem for their own DMs.
  *
  * Absence from the map means "never picked", which is a different answer — it
  * falls to the surface default. Mirrors `SurfaceSlackConfig.POD_ASSISTANT`.
@@ -29,15 +29,15 @@ export function getSurfaceStatus(surface: AssistantSurface): { label: string; to
 export const POD_ASSISTANT_CHOICE = '__pod_assistant__';
 
 /** The surface's default responder — whoever answers where nothing else says.
- * `null` = the pod assistant. */
+ * `null` = Lem. */
 function surfaceDefaultAgent(surface: AssistantSurface): string | null {
     return surfaceUsesDefaultAgent(surface) ? null : surface.agent_name ?? null;
 }
 
 /**
- * Who actually answers in one routed channel. `null` = the pod assistant.
+ * Who actually answers in one routed channel. `null` = Lem.
  *
- * Three states, and the order matters: the pod assistant is the *absence* of an
+ * Three states, and the order matters: Lem is the *absence* of an
  * agent, so an explicit pick has to short-circuit before the surface-default
  * fallback — otherwise choosing it silently routes to whichever agent the
  * surface happens to default to. Mirrors `_resolve_route_agent` in the backend.
@@ -58,7 +58,7 @@ export function surfaceChannelAgents(surface: AssistantSurface): Array<string | 
 
 /**
  * Slack user ids that picked this agent for their own DMs. `reachFor === null`
- * counts the people who picked the pod assistant, which is stored explicitly.
+ * counts the people who picked Lem, which is stored explicitly.
  */
 export function surfaceDirectMessageChoosers(
     surface: AssistantSurface,
@@ -91,7 +91,7 @@ export function surfaceUsesDefaultAgent(surface: AssistantSurface): boolean {
  * messages *or* routes a channel with no agent of its own.
  *
  * The channel half matters on Slack and Teams, where a workspace whose DMs
- * belong to one agent can still route `#general` to the pod assistant — which
+ * belong to one agent can still route `#general` to Lem — which
  * `surfaceUsesDefaultAgent` alone would read as "not reached here".
  */
 export function surfaceReachesDefaultAgent(surface: AssistantSurface): boolean {

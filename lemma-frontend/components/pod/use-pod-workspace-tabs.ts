@@ -31,6 +31,8 @@ interface UsePodWorkspaceTabsOptions {
     currentHref: string;
     routeTitle: string;
     appSlug: string | null;
+    /** Used only to give the ephemeral focused-app tab its real title/icon —
+     *  never to pin anything. */
     pages: AppPageRef[];
     appsLoaded: boolean;
     conversations: Conversation[];
@@ -134,16 +136,11 @@ export function usePodWorkspaceTabs({
             return;
         }
 
-        if (activeTabId.startsWith('app:')) {
-            const activeApp = pages.find((candidate) => candidate.slug === appSlug);
-            if (activeApp) {
-                updatePodWorkspaceTabs(
-                    podId,
-                    (current) => upsertWorkspaceTab(current, appWorkspaceTab(activeApp)),
-                );
-            }
-            return;
-        }
+        // App tabs are ephemeral: the focused app's tab is derived for display
+        // below, and never written into the working set. Falling through to
+        // the conversation branch here used to be impossible when every app
+        // route pinned a tab — with pinning gone the guard is load-bearing.
+        if (activeTabId.startsWith('app:')) return;
 
         if (activeTabId.startsWith('route:')) {
             const routeKey = activeTabId.slice('route:'.length);
@@ -170,7 +167,7 @@ export function usePodWorkspaceTabs({
             }
             return upsertWorkspaceTab(current, nextTab);
         });
-    }, [activeTabId, appSlug, conversations, currentHref, enabled, pages, podId, routeTitle]);
+    }, [activeTabId, conversations, currentHref, enabled, podId, routeTitle]);
 
     // A new conversation starts without an id. Capture the conversation that was
     // active before entering /new; when a different id appears while that route is
@@ -211,15 +208,32 @@ export function usePodWorkspaceTabs({
         updatePodWorkspaceTabs(
             podId,
             (current) => syncWorkspaceTabMetadata(
-                syncAppWorkspaceTabs(current, pages),
+                // Clears any app tabs pinned before the rail existed; apps are
+                // never kept, so this no longer needs the pages list.
+                syncAppWorkspaceTabs(current),
                 conversations,
             ),
         );
-    }, [appsLoaded, conversations, enabled, pages, podId]);
+    }, [appsLoaded, conversations, enabled, podId]);
 
     const closeTab = useCallback((tabId: string) => {
         updatePodWorkspaceTabs(podId, (current) => closeWorkspaceTab(current, tabId));
     }, [podId]);
+
+    // The strip still marks the app you are looking at: while the viewer is
+    // focused, its tab is appended for display only. Nothing writes it to the
+    // store, so it is gone the moment you navigate anywhere else — a tab you
+    // cannot keep, for a thing the rail already keeps.
+    const displayTabs = useMemo(() => {
+        if (!activeTabId?.startsWith('app:')) return tabs;
+        if (tabs.some((tab) => tab.id === activeTabId)) return tabs;
+
+        const activeApp = pages.find((candidate) => candidate.slug === appSlug);
+        return [...tabs, appWorkspaceTab(activeApp ?? {
+            slug: appSlug ?? '',
+            title: formatWorkspaceAppTitle(appSlug),
+        })];
+    }, [activeTabId, appSlug, pages, tabs]);
 
     const openAppSlugs = useMemo(
         () => {
@@ -233,7 +247,7 @@ export function usePodWorkspaceTabs({
     );
 
     return {
-        tabs,
+        tabs: displayTabs,
         activeTabId,
         closeTab,
         openAppSlugs,

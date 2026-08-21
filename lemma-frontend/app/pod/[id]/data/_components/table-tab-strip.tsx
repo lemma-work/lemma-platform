@@ -2,6 +2,7 @@
 
 import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
+import { useHorizontalOverflow } from '@/lib/hooks/use-horizontal-overflow';
 import { cn } from '@/lib/utils';
 
 export interface TableTabStripProps {
@@ -28,6 +29,13 @@ export interface TableTabStripProps {
  * ledgers use — rather than a second tab look invented for this page. No counts:
  * the tables list has no row totals in it, and a strip of em-dashes is worse
  * than no column at all.
+ *
+ * A pod with more tables than fit gets a strip that scrolls, and the scrollbar
+ * is hidden here on purpose — which left the overflow reachable by trackpad and
+ * by keyboard and by nothing else. On a wheel mouse the tables past the edge
+ * were not merely awkward: there was no gesture that reached them and no mark
+ * saying they were there. `useHorizontalOverflow` gives the wheel to the strip
+ * and fades whichever edge still has something behind it.
  */
 export function TableTabStrip({
     tables,
@@ -35,6 +43,8 @@ export function TableTabStrip({
     loadingTables,
     onSelectTable,
 }: TableTabStripProps) {
+    const { ref, hiddenLeft, hiddenRight } = useHorizontalOverflow<HTMLDivElement>();
+
     if (loadingTables && tables.length === 0) {
         return (
             <div className="data-table-strip flex min-w-0 items-center gap-5">
@@ -52,7 +62,13 @@ export function TableTabStrip({
     // you are on without claiming keyboard behaviour we don't implement — the
     // same call `ResourceMetricButton` makes.
     return (
-        <div className="data-table-strip flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Tables">
+        <div
+            ref={ref}
+            className="data-table-strip flex min-w-0 items-center gap-1 overflow-x-auto"
+            data-hidden-left={hiddenLeft ? 'true' : undefined}
+            data-hidden-right={hiddenRight ? 'true' : undefined}
+            aria-label="Tables"
+        >
             {tables.map((item) => {
                 const isActive = item.name === activeTableName;
                 return (

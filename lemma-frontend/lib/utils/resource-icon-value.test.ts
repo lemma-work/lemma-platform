@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     formatIdentityIcon,
+    identityHueClass,
     identityVariantSeed,
     isResourceIconGlyph,
     parseResourceIcon,
@@ -94,5 +95,44 @@ describe('generated identity variants', () => {
     it('does not mistake a real url or emoji for a variant', () => {
         expect(parseResourceIcon('https://cdn.example.com/a.png')?.kind).toBe('url');
         expect(parseResourceIcon('🦊')?.kind).toBe('glyph');
+    });
+});
+
+describe('identityHueClass', () => {
+    it('names one of the five sanctioned hue classes', () => {
+        expect(identityHueClass(null, 'agent-1')).toMatch(/^lm-identity-hue-[0-4]$/);
+    });
+
+    it('is stable for the same seed and differs across seeds only as buckets allow', () => {
+        expect(identityHueClass(null, 'agent-1')).toBe(identityHueClass(null, 'agent-1'));
+        // Not a guarantee of difference, just that the class is derived from
+        // the seed at all: enough seeds must produce more than one hue.
+        const hues = new Set(
+            Array.from({ length: 20 }, (_, i) => identityHueClass(null, `agent-${i}`)),
+        );
+        expect(hues.size).toBeGreaterThan(1);
+    });
+
+    it('follows a chosen variant, so the row and the face draw the same hue', () => {
+        // Find a variant that changes the hue, then require the class to track
+        // it — a row that ignored the variant would trim itself in the colour
+        // of a face the resource no longer wears.
+        const base = identityHueClass(null, 'agent-1');
+        const shifted = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            .map((variant) => identityHueClass(formatIdentityIcon(variant), 'agent-1'))
+            .find((hue) => hue !== base);
+        expect(shifted).toBeDefined();
+        expect(identityHueClass(formatIdentityIcon(3), 'agent-1')).toBe(
+            identityHueClass(null, 'agent-1#3'),
+        );
+    });
+
+    it('keeps the resource hue under a picture or glyph icon', () => {
+        // The identity is not drawn then, but the trim hue must stay the
+        // resource's own — derived from the seed, not from the icon's shape.
+        expect(identityHueClass('https://cdn.example.com/a.png', 'agent-1')).toBe(
+            identityHueClass(null, 'agent-1'),
+        );
+        expect(identityHueClass('🦊', 'agent-1')).toBe(identityHueClass(null, 'agent-1'));
     });
 });

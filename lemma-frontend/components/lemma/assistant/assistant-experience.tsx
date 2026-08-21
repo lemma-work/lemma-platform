@@ -29,6 +29,9 @@ import {
 import { buildChatTurns } from "@/lib/assistant/turns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
+import { LEM_SEED } from "@/lib/identity/seeded-identity";
+import { ResourceIdentity } from "@/components/shared/resource-identity";
 import type {
   AssistantRenderableMessage,
 } from "lemma-sdk/react";
@@ -61,7 +64,6 @@ import {
 // Standalone presentational parts (plan strip, thinking, empty state, icons) extracted.
 import {
   EmptyState,
-  LemmaMarkIcon,
   LiveRunStatusLine,
   ThinkingIndicator,
 } from "./assistant-parts";
@@ -140,7 +142,7 @@ export interface AssistantExperienceViewProps extends AssistantExperienceCustomi
 
 export function AssistantExperienceView({
   controller,
-  title = "Lemma Assistant",
+  title = DEFAULT_RESPONDER_NAME,
   subtitle = "Ask across your workspace and organization.",
   badge,
   headerLeadingActions,
@@ -149,7 +151,7 @@ export function AssistantExperienceView({
   className,
   contentWidthClassName,
   composerWidthClassName,
-  placeholder = "Message Lemma Assistant",
+  placeholder = `Message ${DEFAULT_RESPONDER_NAME}`,
   emptyState,
   emptyStateSuggestions,
   emptyStateFillsViewport = false,
@@ -490,7 +492,7 @@ export function AssistantExperienceView({
   const canRecheckLocalAgents = isDesktopShell && isLocalAgentSignInFailure(assistantErrorDetails);
   const assistantErrorTitle = assistantErrorDetails && assistantErrorDetails.length <= 120 && !assistantErrorDetails.includes("\n")
     ? assistantErrorDetails
-    : "Assistant error";
+    : `${DEFAULT_RESPONDER_NAME} hit an error`;
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
   // The transcript's live status is the running turn's pill, not a bottom line.
@@ -515,8 +517,19 @@ export function AssistantExperienceView({
       ) : null}
     </>
   );
+  // The dock's badge is Lem itself, drawn by the same renderer as the sidebar
+  // row and the front door, so the thing answering here is visibly the thing
+  // you clicked. It was a generic shield-and-check glyph on a brand tile, which
+  // named a category rather than a responder.
   const resolvedHeaderBadge = badge === undefined
-    ? <LemmaMarkIcon className="size-4.5 text-[var(--text-on-brand)]" />
+    ? (
+      <ResourceIdentity
+        seed={LEM_SEED}
+        label={DEFAULT_RESPONDER_NAME}
+        kind="being"
+        size={density === "compact" ? 28 : 36}
+      />
+    )
     : badge;
   // Memoized element: the transcript is memoized on its props, and an element
   // rebuilt every render is a changed prop.

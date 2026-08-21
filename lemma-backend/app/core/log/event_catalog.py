@@ -649,8 +649,9 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.step.suspended': EventSpec('debug', frozenset({'node_id', 'run_id', 'wait_type'})),
     'workspace.e2b.profile_drift_tolerated': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.e2b.template_drift_replacing': EventSpec('info', frozenset({'configured', 'kind', 'recorded', 'sandbox_id'})),
-    'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
+    'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'error_type', 'kind', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
+    'workspace.provider_factory.metadata_namespace_derived': EventSpec('info', frozenset({'environment', 'namespace'})),
     'workspace.sandbox_service.ensure_retrying': EventSpec('info', frozenset({'attempt', 'sandbox_id'})),
     'workspace.sandbox_service.provisioning_claim_expired': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.sandbox_service.workspace_storage_recreated': EventSpec('info', frozenset({'sandbox_id'})),
@@ -663,4 +664,5 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.sandbox_sweeper.orphan_reclaimed': EventSpec('info', frozenset({'reason', 'sandbox_id'})),
     'workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed': EventSpec('info', frozenset({'reclaimed_count'})),
     'workspace.sandbox_sweeper.released_idle_sandboxes.observed': EventSpec('info', frozenset({'released_count'})),
+    'workspace.sandbox_sweeper.unattributed_objects': EventSpec('info', frozenset({'count', 'sample'})),
 }

@@ -45,6 +45,7 @@ class AgentSummaryResponse:
             has_pinned_runtime (bool | Unset):  Default: False.
             icon_url (None | str | Unset):
             metadata (AgentSummaryResponseMetadataType0 | None | Unset):
+            takes_input (bool | Unset):  Default: False.
             toolsets (list[AgentToolset] | Unset):
             visibility (str | Unset):  Default: 'POD'.
     """
@@ -61,6 +62,7 @@ class AgentSummaryResponse:
     has_pinned_runtime: bool | Unset = False
     icon_url: None | str | Unset = UNSET
     metadata: AgentSummaryResponseMetadataType0 | None | Unset = UNSET
+    takes_input: bool | Unset = False
     toolsets: list[AgentToolset] | Unset = UNSET
     visibility: str | Unset = "POD"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -120,6 +122,8 @@ class AgentSummaryResponse:
         else:
             metadata = self.metadata
 
+        takes_input = self.takes_input
+
         toolsets: list[str] | Unset = UNSET
         if not isinstance(self.toolsets, Unset):
             toolsets = []
@@ -153,6 +157,8 @@ class AgentSummaryResponse:
             field_dict["icon_url"] = icon_url
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
+        if takes_input is not UNSET:
+            field_dict["takes_input"] = takes_input
         if toolsets is not UNSET:
             field_dict["toolsets"] = toolsets
         if visibility is not UNSET:
@@ -249,6 +255,8 @@ class AgentSummaryResponse:
 
         metadata = _parse_metadata(d.pop("metadata", UNSET))
 
+        takes_input = d.pop("takes_input", UNSET)
+
         _toolsets = d.pop("toolsets", UNSET)
         toolsets: list[AgentToolset] | Unset = UNSET
         if _toolsets is not UNSET:
@@ -273,6 +281,7 @@ class AgentSummaryResponse:
             has_pinned_runtime=has_pinned_runtime,
             icon_url=icon_url,
             metadata=metadata,
+            takes_input=takes_input,
             toolsets=toolsets,
             visibility=visibility,
         )

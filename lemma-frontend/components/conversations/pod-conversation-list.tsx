@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getConversationStatusView, isConversationRunningStatus } from '@/lib/utils/conversations';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 /** Titles vary, so the placeholders do — equal bars read as a table, not a list.
  * Widths double as the row count: five lines, matching the settled row height. */
@@ -85,8 +86,8 @@ export function PodConversationList({
                     icon={<Sparkles className="h-4 w-4" />}
                     title="No conversations yet"
                     description={isAssistantScope
-                        ? 'Start a conversation with this assistant and continue it here later.'
-                        : 'Start a Lemma Assistant conversation and continue it here later.'}
+                        ? 'Start a conversation with this agent and continue it here later.'
+                        : `Start a conversation with ${DEFAULT_RESPONDER_NAME} and continue it here later.`}
                     action={(
                         <Button variant="secondary" size="sm" onClick={startNewConversation} className="shrink-0 gap-1.5">
                             <Plus className="h-3.5 w-3.5" />
@@ -154,8 +155,8 @@ export function PodConversationList({
                             {entityName
                                 ? `${entityName} chats.`
                                 : isAssistantScope
-                                    ? 'Assistant chat history.'
-                                    : 'Lemma Assistant chat history.'}
+                                    ? "This agent's chat history."
+                                    : "This pod's chat history."}
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -181,12 +182,12 @@ export function PodConversationList({
                 <div className="mb-5 flex items-center justify-between gap-3">
                     <div>
                         <h1 className="font-display text-3xl font-normal text-[var(--text-primary)]">
-                            {isAssistantScope ? 'Assistant Conversations' : 'Pod Conversations'}
+                            {isAssistantScope ? `${entityName} Conversations` : 'Pod Conversations'}
                         </h1>
                         <p className="mt-1 text-sm text-[var(--text-secondary)]">
                             {isAssistantScope
-                                ? 'Reopen and continue conversations for this assistant.'
-                                : 'Reopen and continue assistant threads for this pod.'}
+                                ? "Reopen and continue this agent's conversations."
+                                : "Reopen and continue this pod's conversations."}
                         </p>
                     </div>
                     <Button variant="primary" onClick={startNewConversation} className="gap-2">

@@ -75,12 +75,23 @@ export function ResourceCover({ seed, label, className }: { seed: string; label?
               * says "this is a running app" before any of the blocks below are
               * even parsed.
               */}
-            <rect x="0" y="0" width="160" height="15" fill="currentColor" opacity=".5" />
+            <rect x="0" y="0" width="160" height="15" fill="currentColor" opacity=".34" />
             <circle cx="9" cy="7.5" r="2.3" fill="var(--lm-identity-soft)" />
             <circle cx="17" cy="7.5" r="2.3" fill="var(--lm-identity-soft)" />
             <circle cx="25" cy="7.5" r="2.3" fill="var(--lm-identity-soft)" />
+            {/*
+              * The layout blocks sit well back from full strength. At `1` a card
+              * is a near-flat slab of its own tone, and two of them made the
+              * largest saturated areas on pod home by a wide margin — louder
+              * than the composer, for artwork that is admittedly a stand-in and
+              * whose colour identifies nothing the app's name below it does not.
+              * Turned down, the card reads as tinted paper with a hint of
+              * layout: same seeded identity, a fraction of the volume, and the
+              * 16:9 box a real thumbnail will drop into unchanged.
+              */}
             <g
                 fill="currentColor"
+                opacity=".26"
                 transform={flip ? 'translate(160 0) scale(-1 1)' : undefined}
                 dangerouslySetInnerHTML={{ __html: screen }}
             />

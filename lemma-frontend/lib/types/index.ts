@@ -250,6 +250,14 @@ export type Agent = Omit<SdkAgent, 'agent_runtime' | 'input_schema' | 'output_sc
   agent_runtime?: SdkAgent['agent_runtime'];
   harness_kind?: string;
   input_schema: Record<string, unknown>;
+  /**
+   * Whether the agent declares typed inputs. The list endpoint omits
+   * `input_schema` entirely (`AgentSummaryResponse` is deliberately lean), so
+   * `input_schema` is always `{}` on a listed agent and cannot answer this.
+   * The server sends the boolean instead. Optional because an older backend
+   * will not send it, and the callers that filter on it must fail open.
+   */
+  takes_input?: boolean;
   model_name?: AgentRuntime['model_name'];
   output_schema: Record<string, unknown>;
   tool_sets: ToolSet[];

@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+    AppWindow,
     Check,
     ChevronDown,
     ChevronsUpDown,
@@ -29,6 +30,7 @@ import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon
 import { AccountMenu } from '@/components/shared/account-menu';
 import { PodMark } from '@/components/pod/pod-mark';
 import { ResourceIcon } from '@/components/shared/resource-icon';
+import { ResourceIdentity } from '@/components/shared/resource-identity';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -41,7 +43,9 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
-import { agentsQueryOptions } from '@/lib/hooks/use-agents';
+import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
+import { useAppPages } from '@/lib/hooks/use-app';
+import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
 import {
     tableQueryOptions,
     tableRecordsQueryOptions,
@@ -50,10 +54,14 @@ import {
 import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
+import { identityHueClass } from '@/lib/utils/resource-icon-value';
+import { LEM_SEED } from '@/lib/identity/seeded-identity';
 import {
     filterSidebarConversations,
+    getConversationMark,
     mergeSidebarConversations,
     SIDEBAR_CONVERSATION_LIMIT,
+    type ConversationMark,
 } from '@/lib/assistant/sidebar-conversations';
 import {
     filterSwitcherPodGroups,
@@ -62,7 +70,7 @@ import {
     toPodDisplayLabel,
 } from '@/lib/pods/pod-switcher';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
-import type { Conversation } from '@/lib/types';
+import type { Agent, Conversation } from '@/lib/types';
 import { getConversationSignal } from '@/lib/utils/conversations';
 import { Skeleton } from '@/components/shared/loading';
 
@@ -79,6 +87,15 @@ interface WorkspaceSidebarProps {
 }
 
 const DATASTORE_NAME = 'default';
+
+/** The agents rail shows who works here, it is not the roster — the pod
+ *  assistant plus a handful of faces, the rest one click away. Same answer
+ *  the recents list makes, and the apps rail makes it for software. */
+/** Which slice of the pod's history Recents is showing. */
+type ConversationScope = 'assistant' | 'all' | 'agent';
+
+const SIDEBAR_AGENT_LIMIT = 5;
+const SIDEBAR_APP_LIMIT = 5;
 
 /**
  * Whether the setup places are disclosed. Kept per-user rather than per-pod:
@@ -223,6 +240,7 @@ function getAssistantCreationInstructions(kind: AssistantCreationKind): string {
  */
 export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: WorkspaceSidebarProps) {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const router = useRouter();
     const queryClient = useQueryClient();
     const [assistantCreationKind, setAssistantCreationKind] = useState<AssistantCreationKind | null>(null);
@@ -232,7 +250,17 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const [conversationFilter, setConversationFilter] = useState('');
     const [filterOpen, setFilterOpen] = useState(false);
-    const [conversationScope, setConversationScope] = useState<'assistant' | 'all'>('assistant');
+    /* The scope is *chosen*, and the choice is remembered against the page it
+       was made on. Landing on an agent defaults Recents to that agent — asking
+       "where do I see this one's conversations" and being handed the pod's whole
+       history is the list refusing to answer the question the route just asked —
+       and picking a different scope sticks until you navigate somewhere the
+       choice no longer applies. Derived rather than an effect, so there is no
+       frame where the list shows one scope and the control reads another. */
+    const [scopeChoice, setScopeChoice] = useState<{
+        scope: ConversationScope;
+        forAgent: string | null;
+    } | null>(null);
     const moreDisclosed = useSyncExternalStore(
         subscribeToMoreDisclosed,
         getMoreDisclosed,
@@ -258,7 +286,57 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canUpdatePod = podAccess.can('pod.update');
     const basePath = `/pod/${podId}`;
     const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+    // The agent whose page is open, if any. `/agents/<name>` only; `/agents/new`
+    // has no conversations to scope to.
+    const routeAgentName = useMemo(() => {
+        const match = pathname.match(/^\/pod\/[^/]+\/agents\/([^/]+)$/);
+        const name = match ? decodeURIComponent(match[1]) : null;
+        return name && name !== 'new' ? name : null;
+    }, [pathname]);
+    const conversationScope: ConversationScope = scopeChoice && scopeChoice.forAgent === routeAgentName
+        ? scopeChoice.scope
+        : (routeAgentName ? 'agent' : 'assistant');
+    const setConversationScope = (scope: ConversationScope) => {
+        setScopeChoice({ scope, forAgent: routeAgentName });
+    };
     const isConversationRoute = isActive(`${basePath}/conversations`);
+
+    // The agents rail. This query is already warm — the Agents place prefetches
+    // it on pointer-intent and home's presence row reads the same list — so the
+    // rail renders straight from cache rather than growing a skeleton of its own.
+    // One slot goes to Lem, so the faces cap a row shorter.
+    //
+    // Only the agents you can *talk to*. An agent that declares typed inputs is
+    // something another resource calls with arguments — it belongs beside the
+    // functions and workflows that call it, not in a cast of people you open a
+    // conversation with. `takes_input` is the server's answer because the list
+    // endpoint does not carry `input_schema`; when it is absent (older backend)
+    // the filter fails open rather than emptying the rail.
+    const { data: sidebarAgentsData } = useAgents(canUseAgents ? podId : undefined);
+    const allSidebarAgents = useMemo(
+        () => sidebarAgentsData?.items || [],
+        [sidebarAgentsData?.items],
+    );
+    const sidebarAgents = useMemo(
+        () => allSidebarAgents
+            .filter((agent) => agent.takes_input !== true)
+            .slice(0, SIDEBAR_AGENT_LIMIT - 1),
+        [allSidebarAgents],
+    );
+
+    // Recents draw the face of whoever ran them, so the history needs to resolve
+    // an agent id. It reads the *unfiltered* list: a conversation with a
+    // structured agent is still a conversation you had, and hiding that agent
+    // from the rail is not a reason to strip its face off the row.
+    const agentsById = useMemo(() => {
+        const byId = new Map<string, Agent>();
+        allSidebarAgents.forEach((agent) => {
+            if (agent.id) byId.set(agent.id, agent);
+        });
+        return byId;
+    }, [allSidebarAgents]);
+
     const {
         conversations: controllerConversations,
         openedConversationId,
@@ -268,7 +346,14 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         isLoading: isLoadingConversationHistory,
         refetch: refetchConversationHistory,
     } = useScopedConversations(
-        { podId, agentName: conversationScope === 'assistant' ? POD_DEFAULT_AGENT_SELECTOR : undefined },
+        {
+            podId,
+            agentName: conversationScope === 'agent'
+                ? routeAgentName ?? undefined
+                : conversationScope === 'assistant'
+                    ? POD_DEFAULT_AGENT_SELECTOR
+                    : undefined,
+        },
         { limit: SIDEBAR_CONVERSATION_LIMIT, enabled: canUseConversations },
     );
 
@@ -293,10 +378,24 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     // after merging — otherwise a brand new conversation could push the list
     // past the limit it is meant to hold.
     const scopedControllerConversations = useMemo(
-        () => conversationScope === 'assistant'
-            ? controllerConversations.filter((conversation) => !conversation.agent_id)
-            : controllerConversations,
-        [controllerConversations, conversationScope],
+        () => {
+            if (conversationScope === 'assistant') {
+                return controllerConversations.filter((conversation) => !conversation.agent_id);
+            }
+            // The controller holds ids; the route holds a name. Only the rows it
+            // can actually attribute are kept — an unresolvable id under an agent
+            // scope would be a conversation claiming to be this agent's on no
+            // evidence, which is worse than a row arriving a refetch late.
+            if (conversationScope === 'agent') {
+                const scopedAgentId = allSidebarAgents
+                    .find((agent) => agent.name === routeAgentName)?.id;
+                if (!scopedAgentId) return [];
+                return controllerConversations
+                    .filter((conversation) => conversation.agent_id === scopedAgentId);
+            }
+            return controllerConversations;
+        },
+        [allSidebarAgents, controllerConversations, conversationScope, routeAgentName],
     );
     const conversations = useMemo(
         () => mergeSidebarConversations(
@@ -313,6 +412,37 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     );
     const hasFilter = conversationFilter.trim().length > 0;
     const hasVisibleConversations = visibleConversations.length > 0;
+
+    /* Reserve the responder gutter for the whole list, or for none of it.
+       Per-row it produced the worst of both: the assistant answers most pods'
+       history and most rows rest, so the slot drew neither a face nor a dot and
+       the titles simply sat 30px further right than every other row in the
+       sidebar, indented past a column that was always empty. Deciding once per
+       list keeps the titles aligned with each other — the reason to reserve it
+       at all — and lets a pod that has nothing to draw stop paying for the
+       column. It appears when the list has news in it, which is when it earns
+       the space. */
+    const showResponderSlot = useMemo(
+        () => visibleConversations.some((conversation) => (
+            getConversationMark(conversation, agentsById)?.kind === 'agent'
+            || getConversationSignal(conversation).tone !== 'none'
+        )),
+        [agentsById, visibleConversations],
+    );
+
+    // The apps rail. Same story: the app index is one cached read shared with
+    // home's apps panel and the Apps page, so the rail draws from cache.
+    const { pages: sidebarAppPages } = useAppPages(canUseApps ? podId : '');
+    const sidebarApps = useMemo(
+        () => sidebarAppPages.slice(0, SIDEBAR_APP_LIMIT),
+        [sidebarAppPages],
+    );
+    // Apps all open on the one viewer route, so the active row is decided by
+    // the `page` query, not the pathname — the only row in this sidebar that
+    // needs the search string to know where you are.
+    const viewingAppSlug = pathname === `${basePath}/app/view`
+        ? searchParams.get('page')
+        : null;
 
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
@@ -354,24 +484,11 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     }, [basePath, podId, queryClient, router]);
 
     // The places are fixed and ordered the same on every route, so their
-    // positions can be learned. These four are where a day is spent, so they
-    // hold permanent slots.
+    // positions can be learned. Apps and agents are not places: the rails
+    // above list them as things with their own pages, and the indexes live
+    // behind each rail's "View all". What stays a place is what you browse
+    // *through*, not what you open: data and docs.
     const primaryPlaces = [
-        {
-            href: `${basePath}/app/pages`,
-            label: 'Apps',
-            kind: 'apps' as const,
-            active: isActive(`${basePath}/app`),
-            visible: canUseApps,
-        },
-        {
-            href: `${basePath}/ai`,
-            label: 'Agents',
-            kind: 'agents' as const,
-            active: isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`),
-            visible: canUseAgents,
-            onIntent: prefetchAgents,
-        },
         {
             href: `${basePath}/data`,
             label: 'Data',
@@ -392,7 +509,28 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     // Setup surfaces: you author a workflow, wire a connector, or change a pod
     // setting when something changes, not on the way through. One disclosure
     // costs a slot; three permanent rows cost three.
+    //
+    // The index routes for apps and agents live here too, permanently. An empty
+    // rail used to keep its header so its route stayed reachable, which put an
+    // "Apps / View all" line above nothing at all — a section advertising itself
+    // as absent, and on a new pod two of them stacked. A header with no rows
+    // under it is not a preserved route, it is a broken one. The rails now
+    // appear only when they have something to show, and the route someone needs
+    // on an empty pod is a fixed one that does not move when content arrives.
     const morePlaces = [
+        {
+            href: `${basePath}/app/pages`,
+            label: 'Apps',
+            kind: 'apps' as const,
+            active: isActive(`${basePath}/app`),
+            // Only while the rail is not drawing apps. Keeping it here always —
+            // for a nav position that never moves — put "Apps" on screen twice,
+            // and when you were on an app route the *active* fill landed on the
+            // buried copy inside `More` while the rail above it sat plain. A
+            // stable position is worth less than one unambiguous answer to
+            // "where am I".
+            visible: canUseApps && sidebarApps.length === 0,
+        },
         {
             href: `${basePath}/flows`,
             label: 'Workflows',
@@ -517,8 +655,8 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         label={podName || 'Current pod'}
                                         identityKind="team"
                                         identitySeed={podId}
-                                        identitySize={24}
-                                        className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
+                                        identitySize={28}
+                                        className="h-7 w-7 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
                                         fallback={<PodMark name={podName} />}
                                     />
                                     <span className="block min-w-0 flex-1 truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
@@ -674,31 +812,141 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 </div>
             ) : null}
 
-            {primaryPlaces.length || morePlaces.length ? (
-                <nav
-                    aria-label="Pod places"
-                    className="workspace-sidebar-places shrink-0 space-y-0.5 px-3 pb-2 pt-2"
-                >
-                    {primaryPlaces.map((place) => (
-                        <PlaceLink key={place.href} {...place} />
-                    ))}
-                    {morePlaces.length ? (
-                        <>
-                            <MoreDisclosureRow
-                                expanded={moreExpanded}
-                                onToggle={moreHoldsActivePlace
-                                    ? undefined
-                                    : () => setMoreDisclosed(!moreDisclosed)}
-                            />
-                            {moreExpanded
-                                ? morePlaces.map((place) => (
-                                    <PlaceLink key={place.href} {...place} />
-                                ))
-                                : null}
-                        </>
+            {/* The apps rail — the software this pod has shipped, one click
+                from anywhere. Marks, not covers: the 16:9 cover is the card
+                face on the index, a rail row wants the square mark the identity
+                system seeds for inert things. The rail leads the sidebar
+                because apps and agents are what this pod *is* — and leading it
+                is the whole of the emphasis. It carries the app's hue class so
+                the active bar can wear the app's own colour, and nothing else:
+                a hue that paints every row on hover stops identifying anything,
+                because on hover every app looks like the app under the pointer.
+                One click opens the app in the viewer; the index is the "View
+                all" beside the header, which stays put even with no apps so the
+                route is never stranded. */}
+            {canUseApps && sidebarApps.length > 0 ? (
+                <div className="shrink-0">
+                    <div className="flex items-center justify-between px-2 pt-2">
+                        <span className="text-xs leading-5 text-[var(--text-tertiary)]">Apps</span>
+                        <Link
+                            href={`${basePath}/app/pages`}
+                            className="custom-focus-ring rounded px-1 text-xs leading-5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+                        >
+                            View all
+                        </Link>
+                    </div>
+                    {sidebarApps.length > 0 ? (
+                        <div className="px-3 pb-1 pt-1.5">
+                            {sidebarApps.map((page) => (
+                                <Link
+                                    key={page.slug}
+                                    href={`${basePath}/app/view?page=${encodeURIComponent(page.slug)}`}
+                                    data-active={viewingAppSlug === page.slug ? 'true' : undefined}
+                                    title={page.title}
+                                    className={cn(
+                                        'lemma-sidebar-row workspace-sidebar-resource-row custom-focus-ring',
+                                        identityHueClass(null, page.slug),
+                                    )}
+                                >
+                                    <ResourceIcon
+                                        alt={`${page.title} icon`}
+                                        label={page.title}
+                                        identityKind="mark"
+                                        identitySeed={page.slug}
+                                        identityGlyph={AppWindow}
+                                        identitySize={32}
+                                        className="workspace-sidebar-resource-icon h-8 w-8 shrink-0 rounded-md"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{page.title}</span>
+                                </Link>
+                            ))}
+                        </div>
                     ) : null}
-                </nav>
+                </div>
             ) : null}
+
+            {/* The agents rail — who works here, as faces rather than a count.
+                A pod's agents are its cast, and a cast you can see is the whole
+                point of the messenger sidebar this mirrors. Lem
+                leads the rail: it is the responder every conversation already
+                knows, so it wears the mark rather than a seeded face, and takes
+                the brand violet hue rather than a seeded one. Faces get 32px:
+                the size a being's rich motion turns on, so reaching for a row
+                wakes the face up, and comfortably above the 20px floor where
+                the status pip renders. Only agents you can talk to — see
+                `sidebarAgents` — so the cast is people, not callable
+                contracts. One click opens the agent's own page; the roster is
+                the "View all" beside the header, which stays put even with no
+                faces so the route is never stranded, and it lists every agent
+                including the ones this rail filters out. */}
+            {/* No empty-rail guard here: Lem always leads this rail,
+                so it is never a header above nothing the way Apps could be. */}
+            {canUseAgents ? (
+                <div className="shrink-0">
+                    <div className="flex items-center justify-between px-2 pt-2">
+                        <span className="text-xs leading-5 text-[var(--text-tertiary)]">Agents</span>
+                        <Link
+                            href={`${basePath}/ai`}
+                            onPointerEnter={prefetchAgents}
+                            onFocus={prefetchAgents}
+                            className="custom-focus-ring rounded px-1 text-xs leading-5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+                        >
+                            View all
+                        </Link>
+                    </div>
+                    <div className="px-3 pb-1 pt-1.5">
+                        <Link
+                            href={`${basePath}/ai/assistant`}
+                            data-active={isActive(`${basePath}/ai/assistant`) ? 'true' : undefined}
+                            title={DEFAULT_RESPONDER_NAME}
+                            className="lemma-sidebar-row workspace-sidebar-resource-row lm-identity-hue-0 custom-focus-ring"
+                        >
+                            {/* Drawn by the same renderer as the agents below it,
+                                at the same 32px, on the reserved seed. The tinted
+                                tile is gone with the trademark that sat on it: a
+                                being needs no ground, and the tile was the last
+                                thing claiming this row was a different *kind* of
+                                thing from the cast it leads. */}
+                            <ResourceIdentity
+                                seed={LEM_SEED}
+                                label={DEFAULT_RESPONDER_NAME}
+                                kind="being"
+                                size={32}
+                                className="workspace-sidebar-resource-icon h-8 w-8 shrink-0"
+                            />
+                            <span className="min-w-0 flex-1 truncate">{DEFAULT_RESPONDER_NAME}</span>
+                        </Link>
+                        {sidebarAgents.map((agent) => {
+                            const displayName = formatAgentName(agent.name);
+                            const href = `${basePath}/agents/${encodeURIComponent(agent.name)}`;
+                            return (
+                                <Link
+                                    key={agent.name}
+                                    href={href}
+                                    data-active={isActive(href) ? 'true' : undefined}
+                                    title={displayName}
+                                    className={cn(
+                                        'lemma-sidebar-row workspace-sidebar-resource-row custom-focus-ring',
+                                        identityHueClass(agent.icon_url, agent.name),
+                                    )}
+                                >
+                                    <ResourceIcon
+                                        iconUrl={agent.icon_url}
+                                        alt={`${displayName} icon`}
+                                        label={displayName}
+                                        identityKind="being"
+                                        identitySeed={agent.name}
+                                        identitySize={32}
+                                        className="workspace-sidebar-resource-icon h-8 w-8 shrink-0 rounded-md"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{displayName}</span>
+                                </Link>
+                            );
+                        })}
+                    </div>
+                </div>
+            ) : null}
+
 
             <Dialog open={assistantCreationKind !== null} onOpenChange={(open) => {
                 if (!open) closeAssistantCreation();
@@ -834,6 +1082,25 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             role="group"
                             aria-label="Conversation scope"
                         >
+                            {routeAgentName ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => setConversationScope('agent')}
+                                        className={cn(
+                                            'custom-focus-ring max-w-24 truncate rounded px-1 transition-colors',
+                                            conversationScope === 'agent'
+                                                ? 'text-[var(--text-secondary)]'
+                                                : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+                                        )}
+                                        aria-pressed={conversationScope === 'agent'}
+                                        title={`${formatAgentName(routeAgentName)} conversations`}
+                                    >
+                                        {formatAgentName(routeAgentName)}
+                                    </button>
+                                    <span className="text-[var(--text-tertiary)]" aria-hidden="true">·</span>
+                                </>
+                            ) : null}
                             <button
                                 type="button"
                                 onClick={() => setConversationScope('assistant')}
@@ -844,9 +1111,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
                                 )}
                                 aria-pressed={conversationScope === 'assistant'}
-                                title="Pod assistant conversations"
+                                title={`${DEFAULT_RESPONDER_NAME}'s conversations`}
                             >
-                                Assistant
+                                {DEFAULT_RESPONDER_NAME}
                             </button>
                             <span className="text-[var(--text-tertiary)]" aria-hidden="true">·</span>
                             <button
@@ -900,6 +1167,8 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         conversation={conversation}
                                         active={isConversationRoute && openedConversationId === conversation.id}
                                         onOpen={() => openConversation(conversation.id)}
+                                        mark={getConversationMark(conversation, agentsById)}
+                                        showResponder={showResponderSlot}
                                     />
                                 ))}
                             </>
@@ -907,11 +1176,18 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         {!hasFilter ? (
                             <Link
                                 href={`${basePath}/conversations`}
-                                className="lemma-sidebar-row workspace-sidebar-conversation-row workspace-sidebar-show-more custom-focus-ring text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                                className={cn(
+                                    'lemma-sidebar-row workspace-sidebar-conversation-row workspace-sidebar-show-more custom-focus-ring text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
+                                    showResponderSlot ? 'workspace-sidebar-conversation-row-marked' : null,
+                                )}
                             >
-                                {/* Empty dot gutter so the label starts on the
-                                    same x as the titles above it. */}
-                                <span className="w-3.5 shrink-0" aria-hidden="true" />
+                                {/* Empty gutter so the label starts on the same
+                                    x as the titles above it, at whichever width
+                                    the list settled on. */}
+                                <span
+                                    className={cn('shrink-0', showResponderSlot ? 'w-5' : 'w-3.5')}
+                                    aria-hidden="true"
+                                />
                                 <span className="min-w-0 flex-1 truncate">All conversations</span>
                             </Link>
                         ) : null}
@@ -921,10 +1197,46 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <div className="min-h-0 flex-1" />
             )}
 
+            {/* The places, as a footer.
+                They used to sit between the agents rail and the history, where
+                they read as a demoted tail of the rail above rather than a band
+                of their own: every other section carries a header and this one
+                cannot plausibly have one ("Browse"? "Material"?), and the only
+                rule near it fell on its *lower* edge, so it attached upward to
+                the agents and detached from the history it was introducing.
+                A footer needs no header, and the things you open — apps,
+                agents, recents — become one contiguous column above it. The
+                strip is pinned outside the scrolling history, so a long list of
+                conversations can never push Data and Docs off the bottom. */}
+            {primaryPlaces.length || morePlaces.length ? (
+                <nav
+                    aria-label="Pod places"
+                    className="workspace-sidebar-places shrink-0 space-y-0.5 px-3 pb-2 pt-2"
+                >
+                    {primaryPlaces.map((place) => (
+                        <PlaceLink key={place.href} {...place} />
+                    ))}
+                    {morePlaces.length ? (
+                        <>
+                            <MoreDisclosureRow
+                                expanded={moreExpanded}
+                                onToggle={moreHoldsActivePlace
+                                    ? undefined
+                                    : () => setMoreDisclosed(!moreDisclosed)}
+                            />
+                            {moreExpanded
+                                ? morePlaces.map((place) => (
+                                    <PlaceLink key={place.href} {...place} />
+                                ))
+                                : null}
+                        </>
+                    ) : null}
+                </nav>
+            ) : null}
             {/* Local settings is the desktop shell's own control centre, not a
                 pod place, so it stays down here with the account rather than
                 joining the nav above. */}
-            <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_62%,transparent)] px-3 pb-3 pt-2">
+            <div className="shrink-0 px-3 pb-3 pt-1">
                 <LocalSettingsButton className="mb-1.5" />
                 <div className="flex items-center gap-1.5">
                     <Link
@@ -956,16 +1268,74 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
 /** Conversation titles vary in length, so the placeholders do too. */
 const CONVERSATION_ROW_SKELETON_WIDTHS = ['w-3/5', 'w-5/12', 'w-2/3', 'w-1/2', 'w-7/12', 'w-1/2'];
 
-function ConversationRow({
+/* Exported for the agent page's conversation rail: one conversation reads the
+   same whether it is listed under the pod or under one agent — same halo, same
+   row. The agent page passes no mark: every conversation there belongs to the
+   agent whose page you are already on, so drawing its face fifteen times
+   identifies nothing and it keeps the dot gutter. */
+/* The status dot, for a row with no face to hang a pip on. */
+function ConversationSignalDot({ signal }: { signal: ReturnType<typeof getConversationSignal> }) {
+    if (signal.pulse) {
+        /* Live work gets the ping halo the chat's status pill wears — a dot
+           that breathes reads as *happening now* in a way a blinking dot never
+           quite did. The tone stays the sidebar's own (delight gold), only the
+           motion arrives. */
+        return (
+            <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inset-0 animate-ping rounded-full bg-[var(--delight)] opacity-40" />
+                <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--delight)]" />
+            </span>
+        );
+    }
+
+    /* A resting row keeps its hollow ring. Removing it — on the argument that
+       "nothing is happening" is better said with nothing — read fine as a
+       sentence and wrong on screen: the dot is not only a status report, it is
+       the row's left anchor. Without one, a column of titles hangs off a blank
+       gutter with nothing explaining the indent, and the history stops reading
+       as a list at all. A mark that costs one faint circle and buys the
+       list its left edge is worth the ink. */
+    return (
+        <span
+            className={cn(
+                'block h-1.5 w-1.5 rounded-full',
+                signal.filled ? 'bg-current' : 'border opacity-45',
+                // A resting dot takes a fixed border colour rather than
+                // `currentColor`: the row's text brightens on hover and when
+                // active, and a mark that brightens with the pointer reads as a
+                // status that changed.
+                signal.tone === 'none' && 'border-[var(--text-tertiary)]',
+                signal.tone === 'live' && 'text-[var(--delight)]',
+                signal.tone === 'warning' && 'text-[var(--state-warning)]',
+                signal.tone === 'danger' && 'text-[var(--state-error)]',
+            )}
+        />
+    );
+}
+
+export function ConversationRow({
     conversation,
     active,
     onOpen,
+    mark,
+    showResponder,
 }: {
     conversation: Conversation;
     active: boolean;
     onOpen: () => void;
+    mark?: ConversationMark | null;
+    /** Reserve the responder slot. The sidebar sets it; the agent page does not. */
+    showResponder?: boolean;
 }) {
     const signal = getConversationSignal(conversation);
+    /* Only an agent gets drawn. The assistant is the default responder — in most
+       pods it answers everything — so drawing it put the Lemma mark on all
+       fifteen rows at once, which is a logo wall, not identification. Removing
+       the tile under it was half the fix and left the other half: the mark was
+       still there, fifteen times. "Mark the exception" has to mean the default
+       draws *nothing*. The slot stays reserved either way so every title keeps
+       one left edge, and the empty ones carry the status dot they always had. */
+    const face = showResponder && mark?.kind === 'agent' ? mark : null;
 
     return (
         <button
@@ -973,25 +1343,49 @@ function ConversationRow({
             onClick={onOpen}
             data-active={active ? 'true' : undefined}
             title={conversation.title || 'Untitled conversation'}
-            className="lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring"
+            className={cn(
+                'lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring',
+                showResponder ? 'workspace-sidebar-conversation-row-marked' : null,
+            )}
         >
-            <span className="flex w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-                <span
-                    className={cn(
-                        'block h-1.5 w-1.5 rounded-full',
-                        signal.filled ? 'bg-current' : 'border opacity-45',
-                        // A resting dot takes a fixed border colour rather than
-                        // `currentColor`: the row's text brightens on hover and
-                        // when active, and a mark that brightens with the
-                        // pointer reads as a status that changed.
-                        signal.tone === 'none' && 'border-[var(--text-tertiary)]',
-                        signal.tone === 'live' && 'text-[var(--delight)]',
-                        signal.tone === 'warning' && 'text-[var(--state-warning)]',
-                        signal.tone === 'danger' && 'text-[var(--state-error)]',
-                        signal.pulse && 'lemma-live-pulse',
+            {showResponder ? (
+                <span className="workspace-sidebar-conversation-mark shrink-0">
+                    {face ? (
+                        <>
+                            <ResourceIcon
+                                iconUrl={face.iconUrl}
+                                alt=""
+                                label={face.label}
+                                identityKind="being"
+                                identitySeed={face.seed}
+                                identitySize={20}
+                                className="h-5 w-5 shrink-0 rounded-md"
+                            />
+                            {/* The face carries *who*, the pip carries *what this
+                                run is doing*. Separate objects on purpose: the
+                                identity system's own `state` describes the agent,
+                                and an agent with three runs in flight is not "the
+                                state" of any one of them. */}
+                            {signal.tone !== 'none' ? (
+                                <span
+                                    className="workspace-sidebar-conversation-pip"
+                                    data-tone={signal.tone}
+                                    data-pulse={signal.pulse ? 'true' : undefined}
+                                    aria-hidden="true"
+                                />
+                            ) : null}
+                        </>
+                    ) : (
+                        <span className="flex h-5 w-5 items-center justify-center" aria-hidden="true">
+                            <ConversationSignalDot signal={signal} />
+                        </span>
                     )}
-                />
-            </span>
+                </span>
+            ) : (
+                <span className="flex w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+                    <ConversationSignalDot signal={signal} />
+                </span>
+            )}
             <span className="min-w-0 flex-1 truncate">
                 {conversation.title || 'Untitled conversation'}
             </span>

@@ -7,7 +7,11 @@ import {
     FORM_DEPTH,
     GROUNDS,
     IDENTITY_BUCKETS,
+    LEM_FORM,
+    LEM_GENES,
+    LEM_SEED,
     MOTION_PHASES,
+    RESERVED_FORM_COUNT,
     STATE_LOOKS,
     TONE_COUNT,
     hashSeed,
@@ -47,10 +51,39 @@ describe('seeded identity', () => {
         }
     });
 
-    it('has one depth overlay per form', () => {
-        expect(FORMS).toHaveLength(FORM_COUNT);
-        expect(FORM_DEPTH).toHaveLength(FORM_COUNT);
+    it('has one depth overlay per form, reserved bodies included', () => {
+        expect(FORMS).toHaveLength(FORM_COUNT + RESERVED_FORM_COUNT);
+        expect(FORM_DEPTH).toHaveLength(FORM_COUNT + RESERVED_FORM_COUNT);
         expect(CRESTS).toHaveLength(CREST_COUNT);
+    });
+
+    it('never rolls a reserved body', () => {
+        // The whole guarantee behind Lem's face: appended past the generator's
+        // range rather than carved out of it, so no seed can reach it and no
+        // agent loses a bucket to it.
+        for (let index = 0; index < 2000; index += 1) {
+            expect(identityGenes(`seed-${index}`).form).toBeLessThan(FORM_COUNT);
+        }
+    });
+
+    it('draws the reserved creature for the reserved seed, and only for it', () => {
+        expect(identityGenes(LEM_SEED)).toEqual(LEM_GENES);
+        expect(LEM_GENES.form).toBe(LEM_FORM);
+        expect(FORMS[LEM_GENES.form]).toBeTypeOf('string');
+        expect(FORM_DEPTH[LEM_GENES.form]).toBeTypeOf('string');
+        // Lem is the same creature in every pod — that is the point of it being
+        // the responder you already know — so the seed must not be reachable by
+        // a resource id or an agent name that happens to collide.
+        expect(identityGenes('lem')).not.toEqual(LEM_GENES);
+        expect(identityGenes('Lem')).not.toEqual(LEM_GENES);
+    });
+
+    it('keeps the reserved eyes inside the reserved body', () => {
+        // The plinth carries its mass high and pinches at the waist, so the
+        // seeded eye band (48-55) would have put the eyes on the neck.
+        const outerEdge = 50 + LEM_GENES.eyeSpacing + LEM_GENES.eyeR * 1.24;
+        expect(outerEdge).toBeLessThan(80);
+        expect(LEM_GENES.eyeY + LEM_GENES.eyeR * 1.12).toBeLessThan(60);
     });
 
     it('starts every crest below the surface of every form', () => {
