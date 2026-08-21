@@ -223,6 +223,15 @@ jobs:
           enable-cache: true
       - name: Sync deps
         run: uv sync --extra local
+      # `make quality` has run format-check first for a while; CI never did,
+      # because this job runs the individual targets rather than `quality`. So
+      # `ruff check` was mandatory and `ruff format` was advisory, and the tree
+      # drifted between reformats with nothing to catch it. Runs from the repo
+      # root because formatting covers the CLI and both SDKs too, not only the
+      # backend this job is named for.
+      - name: Formatting
+        working-directory: .
+        run: make format-check
       - name: Ruff handwritten backend
         run: make lint
       - name: Async-safety lint
@@ -243,6 +252,11 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # Also only ever ran in `make quality`. Main had drifted 35 modules above
+      # its baseline before anybody looked, which is precisely what this gate
+      # exists to prevent -- growth nobody decided on.
+      - name: Import budget
+        run: make lint-import-budget
       # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
       # from eroding back into ~50 duplicated hand-rolled poll loops.
       - name: e2e wait patterns (no new hand-rolled poll loops)

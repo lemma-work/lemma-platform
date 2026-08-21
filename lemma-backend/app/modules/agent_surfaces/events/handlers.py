@@ -24,7 +24,6 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.core.log.log import get_logger
 from app.composition.surface_agent import get_conversation_service
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
@@ -55,8 +54,6 @@ from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
-
-logger = get_logger(__name__)
 
 router = RedisRouter()
 

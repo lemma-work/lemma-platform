@@ -157,23 +157,47 @@ class SlackConfigurationParserMixin:
         self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
     ) -> dict[str, Any] | None:
         view = payload.get("view") or {}
-        callback_id = view.get("callback_id")
         values = (view.get("state") or {}).get("values") or {}
+        callback_id = view.get("callback_id")
         if callback_id == DM_AGENT_VIEW_CALLBACK_ID:
-            selected = self._selected_value(
-                values, DM_AGENT_BLOCK_ID, DM_AGENT_SELECT_ACTION_ID
-            )
-            if not selected or not actor:
-                return None
-            return {
-                "kind": "submit_dm",
-                "agent_name": self._agent_or_pod_assistant(selected),
-                "tenant_id": tenant_id,
-                "actor_external_user_id": actor,
-                "surface_id": str(view.get("private_metadata") or "").strip() or None,
-            }
-        if callback_id != CHANNEL_SETUP_VIEW_CALLBACK_ID:
+            return self._dm_submission(view, values, tenant_id, actor)
+        if callback_id == CHANNEL_SETUP_VIEW_CALLBACK_ID:
+            return self._channel_submission(view, values, tenant_id, actor)
+        return None
+
+    def _dm_submission(
+        self,
+        view: dict[str, Any],
+        values: dict[str, Any],
+        tenant_id: str | None,
+        actor: str | None,
+    ) -> dict[str, Any] | None:
+        """Who answers this person's direct messages."""
+        selected = self._selected_value(
+            values, DM_AGENT_BLOCK_ID, DM_AGENT_SELECT_ACTION_ID
+        )
+        if not selected or not actor:
             return None
+        return {
+            "kind": "submit_dm",
+            "agent_name": self._agent_or_pod_assistant(selected),
+            "tenant_id": tenant_id,
+            "actor_external_user_id": actor,
+            "surface_id": str(view.get("private_metadata") or "").strip() or None,
+        }
+
+    def _channel_submission(
+        self,
+        view: dict[str, Any],
+        values: dict[str, Any],
+        tenant_id: str | None,
+        actor: str | None,
+    ) -> dict[str, Any] | None:
+        """Who answers in one channel.
+
+        The channel id rides in ``private_metadata``, either inside an encoded
+        object or -- from before that encoding existed -- as the bare id.
+        """
         raw_metadata = str(view.get("private_metadata") or "").strip()
         metadata = self._decode_metadata(raw_metadata)
         channel_id = str(metadata.get("channel_id") or raw_metadata).strip()

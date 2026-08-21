@@ -6,7 +6,6 @@ from urllib.parse import quote, urlencode
 from uuid import UUID
 
 from app.core.config import settings
-from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent.contracts import (
     AskUserRequest,
@@ -26,8 +25,6 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionOption,
     SurfaceQuestionRenderPlan,
 )
-
-logger = get_logger(__name__)
 
 # Separates conversation id and tool_call id inside an interaction callback id so
 # an inbound interaction (e.g. an ask_user answer) can be routed back to the

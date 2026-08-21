@@ -15,7 +15,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
 )
-from app.modules.agent_surfaces.platforms.email_common import render_email_content
+from app.modules.agent_surfaces.platforms.email_render import render_email_content
 from app.modules.agent_surfaces.platforms.gmail.tools import build_gmail_surface_toolset
 from app.modules.agent_surfaces.platforms.outlook.tools import (
     build_outlook_surface_toolset,

@@ -2,7 +2,7 @@
 
 Resend is a system-credentialed email surface: outbound mail goes to the Resend
 REST API, inbound mail arrives via a webhook (parsed by ``ResendInboundParser``).
-Rendering and attachment handling reuse ``email_common`` so Resend behaves like
+Rendering and attachment handling reuse the shared email modules so Resend behaves like
 Gmail/Outlook for the agent, but over native HTTP rather than Composio.
 """
 
@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 from pydantic_ai.tools import RunContext
 
-from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
@@ -27,19 +26,19 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     ResendSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import attachment_cap
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
-    coerce_display_resource_plans,
-    render_email_content,
-    reply_subject,
     resolve_outbound_email_attachments,
 )
+from app.modules.agent_surfaces.platforms.email_render import (
+    coerce_display_resource_plans,
+    render_email_content,
+)
+from app.modules.agent_surfaces.platforms.email_text import reply_subject
 from app.modules.agent_surfaces.platforms.email_models import (
     ResendReplyEmailParams,
     ResendReplyEmailResult,
 )
-
-logger = get_logger(__name__)
 
 _RESEND_API_BASE = "https://api.resend.com"
 
