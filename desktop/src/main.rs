@@ -3083,7 +3083,16 @@ fn sandbox_image_status(_window: Webview, app: AppHandle) -> Value {
     let shell: State<Shell> = app.state();
     let ui = shell.ui.lock().unwrap();
     json!({
-        "state": ui.sandbox_images,
+        // `pending`, not the empty default, when locald has not said anything
+        // yet. The workspace stops asking once the answer can no longer change,
+        // and it reads a state it does not recognise as one of those -- so an
+        // empty string here meant a page that opened before the first report
+        // never saw the download at all.
+        "state": if ui.sandbox_images.is_empty() {
+            "pending"
+        } else {
+            ui.sandbox_images.as_str()
+        },
         "detail": ui.sandbox_images_detail,
     })
 }

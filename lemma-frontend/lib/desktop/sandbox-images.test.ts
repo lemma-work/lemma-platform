@@ -63,3 +63,18 @@ describe('shouldKeepPolling', () => {
         expect(shouldKeepPolling('failed')).toBe(false);
     });
 });
+
+describe('an unreported state', () => {
+    it('is not mistaken for an ending', () => {
+        // The shell answers `pending` until locald reports, precisely so this
+        // never happens — but a state this file does not recognise must not
+        // silently look like a finished download either.
+        expect(sandboxImageNotice(null, status('unknown')).kind).toBe('none');
+        expect(shouldKeepPolling('unknown')).toBe(false);
+    });
+
+    it('keeps asking while the shell says pending', () => {
+        expect(sandboxImageNotice(null, status('pending')).kind).toBe('none');
+        expect(shouldKeepPolling('pending')).toBe(true);
+    });
+});

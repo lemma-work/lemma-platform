@@ -613,6 +613,79 @@ async def test_files_written_to_a_workspace_outlive_its_container(
         )
 
 
+async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
+    guest_provider,
+) -> None:
+    """What the service actually does to a stopped desktop workspace.
+
+    It cannot resume one, so it provisions again — and provisioning always
+    moves the epoch, which changes the container name. The guest keys a
+    workspace's disk on the sandbox id *without* the epoch precisely so that
+    this stays the same workspace; if it did not, the fix for "a stopped
+    workspace never comes back" would come back with an empty disk instead.
+    """
+    sandbox_id = uuid4()
+    first_name = naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1)
+    second_name = naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 2)
+    marker = f"rebuilt-{uuid4().hex}"
+
+    instance = await guest_provider.create(
+        _spec(sandbox_id, name=first_name, volume_name=naming.volume_name(sandbox_id, 1))
+    )
+    try:
+        await guest_provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+
+        async def chunks():
+            yield marker.encode()
+
+        await guest_provider.write_file(
+            instance,
+            path="/workspace/rebuild-check.txt",
+            data=chunks(),
+            expected_sha256=None,
+            deadline_at=_deadline(120),
+        )
+        await guest_provider.release(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline(120)
+        )
+
+        rebuilt = await guest_provider.create(
+            _spec(
+                sandbox_id,
+                name=second_name,
+                volume_name=naming.volume_name(sandbox_id, 2),
+            )
+        )
+        await guest_provider.wait_ready(
+            rebuilt, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+
+        restored = b"".join(
+            [
+                chunk
+                async for chunk in guest_provider.open_file(
+                    rebuilt,
+                    path="/workspace/rebuild-check.txt",
+                    byte_range=ByteRange(offset=0, length=None),
+                    deadline_at=_deadline(120),
+                )
+            ]
+        )
+        assert restored == marker.encode(), (
+            "a rebuilt workspace came back on a different disk; the epoch is "
+            "leaking into the guest's storage key"
+        )
+    finally:
+        await guest_provider.destroy(second_name, deadline_at=_deadline(120))
+        await guest_provider.destroy(first_name, deadline_at=_deadline(120))
+        await guest_provider.purge_storage(
+            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
+            deadline_at=_deadline(120),
+        )
+
+
 async def test_a_workspace_volume_is_not_shared_between_sandboxes(
     guest_provider, workspace
 ) -> None:
