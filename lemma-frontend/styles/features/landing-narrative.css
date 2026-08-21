@@ -111,7 +111,7 @@
 
   .lp-site-footer-inner {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 1fr));
     gap: clamp(24px, 3vw, 44px);
   }
 

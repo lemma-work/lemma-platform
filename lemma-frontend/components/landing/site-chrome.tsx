@@ -158,8 +158,21 @@ export function SiteFooter({ hashPrefix = '' }: { hashPrefix?: string }) {
                 <nav aria-label="Developers">
                     <p className="lp-site-footer-label">Developers</p>
                     <Link href="/docs">Docs</Link>
+                    {/* Plain anchors, not Link: these are file/route responses,
+                        not app-router pages, so client-side navigation to them
+                        has nothing to render. */}
+                    <a href="/openapi.json">OpenAPI spec</a>
+                    <a href="/llms.txt">llms.txt</a>
                     <Link href="/blog">Blog</Link>
                     <Link href="/changelog">Changelog</Link>
+                </nav>
+
+                <nav aria-label="Company">
+                    <p className="lp-site-footer-label">Company</p>
+                    <Link href="/about">About</Link>
+                    <Link href="/contact">Contact</Link>
+                    <Link href="/privacy">Privacy</Link>
+                    <Link href="/tos">Terms</Link>
                 </nav>
 
                 <nav aria-label="Licence">
