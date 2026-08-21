@@ -18,6 +18,10 @@ from app.modules.workspace.domain.sandbox import (
     SandboxKind,
     SandboxOwnerKind,
 )
+from sqlalchemy import update
+
+from app.modules.workspace.domain.sandbox import SandboxInstanceState
+from app.modules.workspace.infrastructure.models import SandboxInstanceModel
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -343,6 +347,49 @@ async def test_rebuilding_a_stopped_container_keeps_the_files(
     await service.ensure(sandbox.id)
 
     assert provider.created[1].volume_name == provider.created[0].volume_name
+
+
+async def test_a_claim_on_a_stopped_container_rebuilds_when_it_cannot_resume(
+    sandbox_uow_factory,
+) -> None:
+    """The same branch, one screen down, and it had the same bug.
+
+    A caller that arrives while another replica's row says CREATING waits for
+    that container. Finding it stopped, it used to call `_start` regardless —
+    which for a provider that cannot resume is the identical dead end the
+    ensure path above was fixed for. It should give the claim up and rebuild.
+    """
+    import asyncio
+
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    # The shape a claim leaves behind: a row pointing at a container that is
+    # there but not running.
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    async with sandbox_uow_factory() as uow:
+        instance = await SandboxRepository(uow).current_instance(sandbox.id)
+        await uow.session.execute(
+            update(SandboxInstanceModel)
+            .where(SandboxInstanceModel.id == instance.id)
+            .values(state=SandboxInstanceState.CREATING.value)
+        )
+        await uow.commit()
+
+    service.forget(sandbox.id)
+    SandboxService._inflight.clear()
+    second = await asyncio.wait_for(service.ensure(sandbox.id), timeout=30)
+
+    assert len(provider.created) == 2, "the claim was adopted instead of rebuilt"
+    assert second.epoch > first.epoch
 
 
 async def test_a_running_container_is_still_reused_by_a_non_resuming_provider(

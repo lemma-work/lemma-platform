@@ -186,10 +186,20 @@ fn clock_sync_due(
 /// fetching it used to sit in the middle of the startup bar and hold "Lemma is
 /// ready" behind a download nobody had asked for yet. It now runs behind the
 /// workspace, and this is what the app shows about it.
+/// Nothing has been said yet, and the workspace should keep asking.
+pub const SANDBOX_IMAGES_PENDING: &str = "pending";
+pub const SANDBOX_IMAGES_DOWNLOADING: &str = "downloading";
+pub const SANDBOX_IMAGES_READY: &str = "ready";
+pub const SANDBOX_IMAGES_FAILED: &str = "failed";
+/// This deployment does not manage sandbox images at all -- there is no guest
+/// to warm. Terminal, so the workspace stops asking rather than polling a
+/// question nothing will ever answer.
+pub const SANDBOX_IMAGES_UNSUPPORTED: &str = "unsupported";
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxImageStatus {
-    /// `pending`, `downloading`, `ready`, or `failed`.
+    /// One of the `SANDBOX_IMAGES_*` constants above.
     pub state: String,
     pub detail: String,
 }
@@ -205,7 +215,7 @@ impl SandboxImageStatus {
 
 impl Default for SandboxImageStatus {
     fn default() -> Self {
-        Self::new("pending", "")
+        Self::new(SANDBOX_IMAGES_PENDING, "")
     }
 }
 
@@ -329,6 +339,13 @@ impl ManagedRuntimeController {
     }
 
     pub fn shutdown(&self) -> io::Result<()> {
+        // Before the VM goes, like `stop_infrastructure`. The keeper holds an
+        // `Arc` to this controller, so leaving it running outlives the guest it
+        // is correcting and ticks once a second at a control socket with
+        // nothing behind it. Today the process exits immediately afterwards and
+        // nobody notices; the first caller to use this for a soft stop would
+        // inherit a thread that never ends.
+        self.stop_clock_keeper();
         self.clear_forwarders();
         self.runtime.stop()
     }
@@ -421,28 +438,48 @@ impl ManagedRuntimeController {
         self: &Arc<Self>,
         report: impl Fn(&SandboxImageStatus) + Send + 'static,
     ) {
+        // Claimed under the lock, before anything is spawned. Both the ready
+        // path and the recovery path call this, and two runs would interleave
+        // their downloading/ready events into one stream the app reads as a
+        // single download finishing twice.
+        let claimed = {
+            let mut current = self
+                .sandbox_images
+                .lock()
+                .expect("sandbox image status poisoned");
+            if current.state == SANDBOX_IMAGES_DOWNLOADING {
+                None
+            } else {
+                let started = SandboxImageStatus::new(
+                    SANDBOX_IMAGES_DOWNLOADING,
+                    "Downloading the image pods run their work in",
+                );
+                *current = started.clone();
+                Some(started)
+            }
+        };
+        let Some(started) = claimed else {
+            return;
+        };
+        report(&started);
+
         let controller = Arc::clone(self);
         thread::spawn(move || {
             let parameters = json!({
                 "images": controller.spec.images,
                 "credentials": controller.spec.credentials,
             });
-            controller.publish_sandbox_images(
-                SandboxImageStatus::new(
-                    "downloading",
-                    "Downloading the image pods run their work in",
-                ),
-                &report,
-            );
             let status = match controller
                 .runtime
                 .request("core.sandbox_images", parameters)
             {
-                Ok(_) => SandboxImageStatus::new("ready", "The workspace sandbox is ready"),
+                Ok(_) => {
+                    SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
+                }
                 Err(error) => {
                     eprintln!("locald: sandbox images could not be warmed up: {error}");
                     SandboxImageStatus::new(
-                        "failed",
+                        SANDBOX_IMAGES_FAILED,
                         "Lemma is ready; the first task in a pod will fetch it",
                     )
                 }

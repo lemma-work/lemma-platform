@@ -19,6 +19,8 @@ import json
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from app.core import security
 
 
@@ -35,6 +37,13 @@ def _connection(*, cookie: str | None = None, header: str | None = None):
         cookies={"sAccessToken": cookie} if cookie else {},
         headers={"authorization": header} if header else {},
     )
+
+
+@pytest.fixture(autouse=True)
+def _report_again():
+    """The throttle is process-local, so each test starts from a clean slate."""
+    security._last_skew_report = -security.CLOCK_SKEW_REPORT_INTERVAL_SECONDS
+    yield
 
 
 def _events(caplog) -> list[dict]:
@@ -75,3 +84,15 @@ def test_an_unreadable_token_is_not_worth_an_exception(caplog):
         security._report_expired_access_token(_connection(cookie=value))
 
     assert _events(caplog) == []
+
+
+def test_a_loop_of_expired_requests_is_reported_once_per_window(caplog):
+    """The state this reports is a loop — every request in it carries the same
+    expired token. Saying so on each one is the log flood the branch exists to
+    stop, arriving from the other side."""
+    connection = _connection(cookie=_token(time.time() - 41_250))
+
+    for _ in range(50):
+        security._report_expired_access_token(connection)
+
+    assert len(_events(caplog)) == 1

@@ -102,7 +102,7 @@ def test_a_client_that_refuses_attributes_still_gets_the_right_answer() -> None:
 
         def __init__(self):
             self.connectors = SimpleNamespace(
-                auth_configs=SimpleNamespace(list=lambda *, limit: _one_install())
+                auth_configs=_AuthConfigs(_one_install)
             )
 
     assert connectors._auth_config_items(Slotted()) == [

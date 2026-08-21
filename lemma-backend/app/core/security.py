@@ -46,6 +46,18 @@ logger = get_logger(__name__)
 # one line saying why.
 CLOCK_SKEW_SUSPECT_SECONDS = 300
 
+# How often that observation is worth repeating.
+#
+# The state it reports is a loop: every request in it carries the same expired
+# token, so an un-throttled warning is hundreds of identical lines a minute --
+# which is the log flood this whole branch exists to stop, arriving from the
+# other side. One line a minute is enough to see it and enough to date it.
+CLOCK_SKEW_REPORT_INTERVAL_SECONDS = 60
+
+# Monotonic, so a corrected wall clock cannot push the next report into the far
+# future. Process-local by design: this describes the machine, not a request.
+_last_skew_report = -CLOCK_SKEW_REPORT_INTERVAL_SECONDS
+
 
 def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
     """The `exp` the presented access token claims, without verifying it.
@@ -75,12 +87,18 @@ def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
 
 def _report_expired_access_token(connection: HTTPConnection) -> None:
     """Say so when a token is expired by more than an expiry explains."""
+    global _last_skew_report
+
     expiry = _unverified_token_expiry(connection)
     if expiry is None:
         return
     expired_by_seconds = int(time.time() - expiry)
     if expired_by_seconds < CLOCK_SKEW_SUSPECT_SECONDS:
         return
+    now = time.monotonic()
+    if now - _last_skew_report < CLOCK_SKEW_REPORT_INTERVAL_SECONDS:
+        return
+    _last_skew_report = now
     logger.warning(
         "identity.session.access_token_expiry_implausible.degraded",
         expired_by_seconds=expired_by_seconds,

@@ -13,7 +13,9 @@ use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
 use crate::host_process::HostProcessManager;
-use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
+use crate::managed_runtime::{
+    ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
+};
 use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
 use crate::paths::LocalPaths;
@@ -1661,6 +1663,16 @@ impl Daemon {
     /// notice it can take away again, rather than as a phase of starting.
     fn warm_sandbox_images(self: &Arc<Self>) {
         let Some(runtime) = self.managed_runtime.as_ref() else {
+            // No guest to warm -- this is a supervisor-mode stack. Said out
+            // loud, and terminally, because the workspace polls until it hears
+            // an answer that cannot change; silence here left it asking every
+            // two seconds for the rest of the session.
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": SANDBOX_IMAGES_UNSUPPORTED,
+                "detail": "",
+            }));
             return;
         };
         let daemon = Arc::clone(self);

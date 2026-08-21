@@ -18,6 +18,8 @@ export type SandboxImageState =
     | 'downloading'
     | 'ready'
     | 'failed'
+    /** No guest to warm — a supervisor-mode stack manages no sandbox images. */
+    | 'unsupported'
     | 'unknown';
 
 export type SandboxImageStatus = {
@@ -78,7 +80,14 @@ export function sandboxImageNotice(
     return NOTHING;
 }
 
-/** Is there any point asking again? */
+/**
+ * Is there any point asking again?
+ *
+ * Only while the answer can still change. `unsupported` is as terminal as
+ * `ready`: a stack with no guest to warm will never report anything else, and
+ * treating it as "not decided yet" left the workspace asking every two seconds
+ * for the rest of the session.
+ */
 export function shouldKeepPolling(state: SandboxImageState | null): boolean {
     return state === null || state === 'pending' || state === 'downloading';
 }
@@ -91,6 +100,7 @@ function readStatus(value: unknown): SandboxImageStatus {
         'downloading',
         'ready',
         'failed',
+        'unsupported',
     ];
     return {
         state: known.includes(state as SandboxImageState)

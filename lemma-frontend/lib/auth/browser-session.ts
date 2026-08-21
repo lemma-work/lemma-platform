@@ -61,6 +61,18 @@ export function clearFrontendSessionState(
 }
 
 /**
+ * The sentence supertokens-website throws when it gives up refreshing.
+ *
+ * Matched as a string because the SDK throws a bare `Error` — there is no type
+ * or code to key on. That is fragile across upgrades, so
+ * `browser-session.test.ts` reads the installed SDK bundle and fails if this
+ * sentence is no longer in it. An upgrade that reworded it breaks a test rather
+ * than quietly restoring the old broken UX.
+ */
+export const REFRESH_CEILING_MESSAGE =
+    'The maximum session refresh limit has been reached';
+
+/**
  * Did this failure come from a session that refreshing cannot repair?
  *
  * The SDK refreshes and retries a 401 up to `maxRetryAttemptsForSessionRefresh`
@@ -68,6 +80,10 @@ export function clearFrontendSessionState(
  * so the session is real — while the access token it produced authorized
  * nothing. No amount of further refreshing changes that, and treating it as a
  * transient error is what leaves the app signed in and unable to do anything.
+ *
+ * A secondary signal, not the only one: the auth portal reads a 401 that
+ * survived the interceptor directly from the response status, so a reworded
+ * message degrades to that rather than to nothing.
  */
 export function isUnrepairableSessionFailure(error: unknown): boolean {
   const message =
@@ -76,7 +92,7 @@ export function isUnrepairableSessionFailure(error: unknown): boolean {
       : typeof error === "string"
         ? error
         : "";
-  return message.includes("The maximum session refresh limit has been reached");
+  return message.includes(REFRESH_CEILING_MESSAGE);
 }
 
 /** Every domain a cookie on this host could have been scoped to. */

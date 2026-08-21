@@ -64,6 +64,15 @@ describe('shouldKeepPolling', () => {
     });
 });
 
+describe('a stack with no guest to warm', () => {
+    it('is terminal, and says nothing', () => {
+        // Supervisor mode manages no sandbox images. Polling on for an answer
+        // that cannot change is the shape this state exists to end.
+        expect(sandboxImageNotice(null, status('unsupported')).kind).toBe('none');
+        expect(shouldKeepPolling('unsupported')).toBe(false);
+    });
+});
+
 describe('an unreported state', () => {
     it('is not mistaken for an ending', () => {
         // The shell answers `pending` until locald reports, precisely so this

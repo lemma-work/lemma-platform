@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import {
+  REFRESH_CEILING_MESSAGE,
   clearFrontendSessionState,
   cookieDomainsFor,
   isUnrepairableSessionFailure,
@@ -77,5 +82,21 @@ describe("clearFrontendSessionState", () => {
     expect(cleared).toEqual(
       expect.arrayContaining(["st-access-token", "st-refresh-token"]),
     );
+  });
+});
+
+describe("the sentence we match on", () => {
+  it("is still the one the installed SDK throws", () => {
+    // The SDK throws a bare `Error`, so there is no type or code to key on and
+    // the match has to be textual. This is what stops an upgrade that reworded
+    // it from silently restoring the broken UX: it breaks here instead.
+    const require = createRequire(import.meta.url);
+    const entry = require.resolve("supertokens-website");
+    const bundle = readFileSync(
+      join(dirname(entry), "lib", "build", "fetch.js"),
+      "utf8",
+    );
+
+    expect(bundle).toContain(REFRESH_CEILING_MESSAGE);
   });
 });

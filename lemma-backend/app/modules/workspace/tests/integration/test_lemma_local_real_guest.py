@@ -217,6 +217,11 @@ async def workspace(guest_provider):
     container and creating one costs a container start each time. Cleanup is
     unconditional because a leak here is not a stray row — it is a container
     and a disk inside a VM that outlives the test session.
+
+    **Shared, so nothing here may assume a clean disk.** The tests that use it
+    write under distinct, uuid-suffixed names for that reason. A test that needs
+    an empty workspace — or that stops, releases or destroys the container —
+    builds its own, the way the lifecycle tests at the bottom of this file do.
     """
 
     sandbox_id = uuid4()

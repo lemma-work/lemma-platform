@@ -240,6 +240,10 @@ def scoped_connection_guard():
             try:
                 await watchdog
             except asyncio.CancelledError:
+                # The cancellation this block just requested, arriving. Awaiting
+                # is what makes the task actually finish before the readings are
+                # totted up; the exception it raises on the way out is the
+                # acknowledgement, not a failure.
                 pass
             connection_scope.stop_connection_scope_monitor()
         worst_lag = max(lag, default=0.0)

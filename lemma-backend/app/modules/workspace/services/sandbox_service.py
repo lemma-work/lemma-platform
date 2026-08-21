@@ -354,6 +354,10 @@ class SandboxService(SandboxVolumeMixin):
             if found is None:
                 continue
             if not found.running:
+                if not resumes_stopped_instances(self._provider):
+                    # Same reason as the ensure path: nothing can start it where
+                    # it is, so the caller should rebuild rather than adopt it.
+                    return None
                 await self._start(sandbox, found, deadline_at=deadline_at)
             await self._touch(sandbox.id)
             return self._handle(sandbox, found)

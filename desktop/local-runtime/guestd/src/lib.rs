@@ -2041,10 +2041,12 @@ fn snapshot_from_inspect(
         "RUNNING"
     } else if matches!(state_text, "created" | "restarting") {
         "CREATING"
-    } else if matches!(
-        state_text,
-        "exited" | "stopped" | "removing" | "paused" | "dead"
-    ) {
+    } else if matches!(state_text, "exited" | "stopped" | "removing" | "paused") {
+        // `paused` is here defensively: nothing in Lemma pauses a sandbox, and
+        // if something did it is suspended rather than faulted. `dead` is
+        // deliberately *not* here -- a container the engine could not clean up
+        // is a fault, and calling it the ordinary resting state of an idle
+        // workspace would hide exactly the case worth seeing.
         "STOPPED"
     } else if state_text.is_empty() && state.is_some_and(container_has_exited) {
         // nerdctl does not always fill `State.Status`. A container that is not
@@ -3037,6 +3039,54 @@ mod tests {
 
         assert_eq!(snapshot["status"]["status"], "STOPPED");
         assert_eq!(snapshot["status"]["ready"], false);
+    }
+
+    /// The two places that set this guest's clock have to agree on what a
+    /// believable host epoch is, and until now only a comment said so.
+    ///
+    /// `lemma-set-host-time` runs at boot from the trusted control share;
+    /// `system.clock` runs for the rest of the VM's life. A range that drifted
+    /// apart would mean a clock the daemon refuses and the boot script accepts,
+    /// or the reverse -- and the symptom would be a guest silently running in
+    /// the wrong year.
+    #[test]
+    fn the_boot_script_and_the_daemon_trust_the_same_epoch_range() {
+        let script = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../guest-image/rootfs-overlay/usr/local/bin/lemma-set-host-time"
+        ))
+        .expect("the boot-time clock script ships with the guest image");
+
+        assert!(
+            script.contains(&MIN_TRUSTED_EPOCH.to_string()),
+            "lemma-set-host-time does not mention {MIN_TRUSTED_EPOCH}"
+        );
+        assert!(
+            script.contains(&MAX_TRUSTED_EPOCH.to_string()),
+            "lemma-set-host-time does not mention {MAX_TRUSTED_EPOCH}"
+        );
+    }
+
+    /// `dead` is a container the engine could not clean up. Reporting it as the
+    /// ordinary end of an idle release would hide the one state here worth
+    /// looking at.
+    #[test]
+    fn a_dead_container_is_a_fault_not_a_resting_state() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false, "Status": "dead", "ExitCode": 137},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "ERROR");
     }
 
     /// A container that never ran and reports nothing is still a fault. The
