@@ -3,6 +3,10 @@
 Split from the adapter because it is the opposite direction of travel from the
 parsing and enrichment left there, and because these are the methods that talk
 to two different APIs -- Bot Framework for messages, Graph for everything else.
+
+A layer over :class:`BaseSurfaceAdapter` rather than a mixin beside it: every
+method here overrides a real fallback on the base, and a linear chain says which
+wins without the reader having to work out an MRO.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
 )
+from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
@@ -30,7 +35,7 @@ from app.modules.agent_surfaces.platforms.teams.cards import (
 logger = get_logger(__name__)
 
 
-class TeamsSurfaceEgressMixin:
+class TeamsSurfaceEgress(BaseSurfaceAdapter):
     """The outbound half of :class:`TeamsSurfaceAdapter`."""
 
     async def send_message(

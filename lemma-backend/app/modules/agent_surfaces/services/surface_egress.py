@@ -491,7 +491,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
     async def _try_send_file_attachment(
         self,
         *,
-        target: "SurfaceEgressTarget",
+        target: SurfaceEgressTarget,
         conversation_id: UUID,
         path: str,
         caption: str | None,

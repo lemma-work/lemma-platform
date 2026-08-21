@@ -675,10 +675,11 @@ def test_decode_email_html_data_uri_and_plain_passthrough():
 
 
 def test_render_email_content_html_and_markdown_fallback(monkeypatch):
-    import app.modules.agent_surfaces.platforms.email_render as email_render_module
-    from app.modules.agent_surfaces.platforms.email_render import render_email_content
+    from app.modules.agent_surfaces.platforms import email_render as email_render_module
 
-    plain, html = render_email_content(content="<p>Hi</p>", content_type="html")
+    plain, html = email_render_module.render_email_content(
+        content="<p>Hi</p>", content_type="html"
+    )
     assert plain == "Hi"
     assert html == "<p>Hi</p>"
 

@@ -15,11 +15,10 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
-from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.common import payload_any
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.adapter_egress import (
-    TeamsSurfaceEgressMixin,
+    TeamsSurfaceEgress,
 )
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
 from app.modules.agent_surfaces.platforms.teams.parser import (
@@ -47,7 +46,7 @@ def _graph_message_url(
     return f"{base}/{quote(str(message_id))}"
 
 
-class TeamsSurfaceAdapter(TeamsSurfaceEgressMixin, BaseSurfaceAdapter):
+class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     platform = "TEAMS"
 
     def __init__(self) -> None:
