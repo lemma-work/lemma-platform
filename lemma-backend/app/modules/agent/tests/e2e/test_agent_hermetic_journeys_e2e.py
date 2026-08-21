@@ -1014,6 +1014,290 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
 
 
 @pytest.mark.asyncio
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
+async def test_the_shell_and_python_share_the_conversations_one_directory(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+    configure_workspace_api_url,
+):
+    """One conversation is one directory, whichever tool the agent reaches for.
+
+    The conversation's metadata is the single source of truth for where it
+    works. `exec_command` honoured it and `execute_python` did not: on a
+    provider with no resident interpreter the cwd was only ever passed when the
+    session was created, and the E2B provider dropped it there and started each
+    execution wherever the sandbox image defaults to. The agent saw `pwd` and
+    `os.getcwd()` disagree, and a file one tool wrote by relative path was
+    invisible to the other -- which reads, from inside the run, as work
+    vanishing.
+
+    So this asserts the two facts that make the directory real: both tools
+    report the path metadata records, and each one can read what the other
+    wrote by relative name.
+    """
+    del worker, configure_workspace_api_url
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"cwd_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Report the working directory.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["WORKSPACE_CLI"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "exec_command",
+            {"cmd": "pwd", "comment": "Where the shell is"},
+            tool_call_id="shell-pwd-1",
+        ),
+        script_tool_call(
+            "execute_python",
+            {
+                "code": "import os\nprint(os.getcwd())",
+                "comment": "Where the interpreter is",
+            },
+            tool_call_id="python-cwd-1",
+        ),
+        script_tool_call(
+            "execute_python",
+            {
+                # Relative on purpose: an absolute path would pass even with the
+                # interpreter sitting in the wrong directory, which is exactly
+                # the bug this is here to catch.
+                "code": (
+                    "from pathlib import Path\n"
+                    "Path('python-wrote.txt').write_text('python-was-here')"
+                ),
+                "comment": "Write a file by relative name",
+            },
+            tool_call_id="python-write-1",
+        ),
+        script_tool_call(
+            "exec_command",
+            {"cmd": "cat python-wrote.txt", "comment": "Read what Python wrote"},
+            tool_call_id="shell-read-1",
+        ),
+        script_tool_call(
+            "exec_command",
+            {
+                "cmd": "printf 'shell-was-here' > shell-wrote.txt",
+                "comment": "Write a file by relative name",
+            },
+            tool_call_id="shell-write-1",
+        ),
+        script_tool_call(
+            "execute_python",
+            {
+                "code": (
+                    "from pathlib import Path\n"
+                    "print(Path('shell-wrote.txt').read_text())"
+                ),
+                "comment": "Read what the shell wrote",
+            },
+            tool_call_id="python-read-1",
+        ),
+        script_text("Working directory confirmed."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Working directory",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    # Creation stamps the directory; everything below must agree with it rather
+    # than with any path recomputed on the side.
+    recorded_cwd = conversation.json()["metadata"]["cwd"]
+    assert recorded_cwd.startswith("/workspace/"), conversation.json()["metadata"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Say where you are working.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    async def _returns_by_id() -> dict[str, list[dict]]:
+        messages = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+        )
+        assert messages.status_code == status.HTTP_200_OK, messages.text
+        grouped: dict[str, list[dict]] = {}
+        for item in messages.json()["items"]:
+            if item["kind"] == "TOOL_RETURN":
+                grouped.setdefault(item["tool_call_id"], []).append(
+                    item["tool_result"]
+                )
+        return grouped
+
+    returns = await _returns_by_id()
+
+    shell_cwd = (returns["shell-pwd-1"][0]["stdout"] or "").strip()
+    python_cwd = (returns["python-cwd-1"][0]["stdout"] or "").strip()
+    assert shell_cwd == recorded_cwd, returns["shell-pwd-1"]
+    assert python_cwd == recorded_cwd, returns["python-cwd-1"]
+
+    assert returns["python-write-1"][0]["success"] is True, returns["python-write-1"]
+    assert "python-was-here" in str(returns["shell-read-1"][0]), returns["shell-read-1"]
+    assert returns["shell-write-1"][0]["success"] is True, returns["shell-write-1"]
+    assert "shell-was-here" in str(returns["python-read-1"][0]), returns["python-read-1"]
+
+    # A second turn in the same conversation, because the directory is a
+    # property of the conversation rather than of a run. Anything that
+    # recomputed it per run -- a default, a fresh slug, a fallback -- would move
+    # house here and leave the first turn's files behind, which is the failure
+    # the recorded cwd exists to prevent.
+    second = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Where are you working now?",
+    )
+    assert second[-1]["type"] == "completed", second
+
+    returns = await _returns_by_id()
+    assert len(returns["shell-pwd-1"]) == 2, returns["shell-pwd-1"]
+    assert (returns["shell-pwd-1"][1]["stdout"] or "").strip() == recorded_cwd
+    assert (returns["python-cwd-1"][1]["stdout"] or "").strip() == recorded_cwd
+    # And the previous turn's files are still under it, read by relative name.
+    assert "shell-was-here" in str(returns["python-read-1"][1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
+async def test_a_project_conversation_is_checked_out_before_python_runs(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+    configure_workspace_api_url,
+):
+    """Picking a project is picking a directory -- for both tools, not one.
+
+    A conversation started against a repo resolves its cwd to
+    `/workspace/repos/{owner}/{repo}`, and `get_session` creates that directory
+    whether or not anything was ever cloned into it. Only `exec_command` ran the
+    checkout, so an agent whose first tool call was `execute_python` opened its
+    project, found an empty folder, and was told nothing about why.
+
+    The repo here cannot exist, so the clone fails for a stable reason and the
+    assertion is on the part that matters: the agent is *told*, on the Python
+    result, rather than left to infer something from an empty directory.
+    """
+    del worker, configure_workspace_api_url
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"project_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Work in the project.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["WORKSPACE_CLI"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    owner = "lemma-work"
+    repo = f"no-such-repo-{uuid4().hex[:12]}"
+    script = [
+        # Python first, deliberately: this is the order that used to skip the
+        # checkout entirely.
+        script_tool_call(
+            "execute_python",
+            {
+                "code": "import os\nprint(os.getcwd())",
+                "comment": "Open the project with Python",
+            },
+            tool_call_id="python-first-1",
+        ),
+        script_tool_call(
+            "exec_command",
+            {"cmd": "pwd", "comment": "And the shell, for comparison"},
+            tool_call_id="shell-after-1",
+        ),
+        script_text("Project directory reported."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "On a project",
+            "metadata": {
+                "mock_llm_script": script,
+                "repo": {"owner": owner, "repo": repo},
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    # The repo derives the directory: one source of truth, not two to keep in
+    # step.
+    recorded_cwd = conversation.json()["metadata"]["cwd"]
+    assert recorded_cwd == f"/workspace/repos/{owner}/{repo}", conversation.json()
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Start work on the project.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    python_stdout = returns["python-first-1"]["stdout"] or ""
+    # Said, not left to be inferred -- and said on the Python result, which is
+    # where this conversation's first tool call actually was.
+    assert "[workspace notice]" in python_stdout, returns["python-first-1"]
+    assert f"{owner}/{repo}" in python_stdout, returns["python-first-1"]
+    # And still the conversation's own directory, the one the shell reports.
+    assert recorded_cwd in python_stdout, returns["python-first-1"]
+    assert (returns["shell-after-1"]["stdout"] or "").strip().endswith(
+        recorded_cwd
+    ), returns["shell-after-1"]
+
+
+@pytest.mark.asyncio
 async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_input(
     authenticated_client,
     fixed_test_org,
@@ -1120,6 +1404,117 @@ async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_
     assert persisted.json()["metadata"]["todos"] == [
         {"content": "Draft the proposal", "done": False},
         {"content": "Send the invoice", "done": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_plan_is_ticked_off_and_the_tool_says_what_is_next(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """The half of the task list that was never happening, end to end.
+
+    Agents wrote the plan and then left it: every item unchecked for the rest of
+    the conversation, which is what the person watching reads as "still on step
+    one". Two things had to change for that, and both are asserted here -- the
+    tool result now names the next item and when to flip it, and a check-off in
+    slightly different words lands on the planned task instead of appending a
+    near-duplicate beside it.
+    """
+    del worker  # session fixture keeps the production streaq worker alive
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"todo_flow_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Plan, then work the plan.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["TODO"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "write_todos",
+            {"todos": ["- [ ] Fetch the Q3 report", "- [ ] Summarize findings"]},
+            tool_call_id="todo-plan-1",
+        ),
+        script_tool_call(
+            "write_todos",
+            # Reworded on purpose: "the" dropped, which is exactly how a model
+            # restates its own task, and exactly what used to append a second
+            # completed item while the planned one stayed open.
+            {"todos": ["- [x] Fetch Q3 report"]},
+            tool_call_id="todo-flip-1",
+        ),
+        script_text("First step done."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Working the plan",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Research Q3 and summarize it.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    plan = returns["todo-plan-1"]
+    assert plan["next"] == "Fetch the Q3 report"
+    assert "0 of 2 done" in plan["reminder"]
+    # The literal call to make next, so flipping it is copying rather than
+    # remembering.
+    assert '- [x] Fetch the Q3 report' in plan["reminder"]
+
+    flip = returns["todo-flip-1"]
+    assert flip["todos"] == [
+        "- [x] Fetch the Q3 report",
+        "- [ ] Summarize findings",
+    ]
+    assert flip["next"] == "Summarize findings"
+    assert "1 of 2 done" in flip["reminder"]
+
+    persisted = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.text
+    # Stored under the wording the person already saw, with one item done --
+    # not two tasks that mean the same thing.
+    assert persisted.json()["metadata"]["todos"] == [
+        {"content": "Fetch the Q3 report", "done": True},
+        {"content": "Summarize findings", "done": False},
     ]
 
 

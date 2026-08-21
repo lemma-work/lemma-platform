@@ -168,6 +168,32 @@ The LLM pipeline defaults to independent deterministic 1% sampling. Configure
 `make dev LLM_OTEL=1` sets `always_on` sampling instead, so every local call
 shows up in Phoenix.
 
+### A conversation is a session, not a trace
+
+One agent run is one trace, rooted at the `agent.run` span. A conversation is
+many runs, so a conversation is many traces — and what joins them back together
+in Phoenix is the OpenInference `session.id` attribute, which
+`agent_run_telemetry_context` sets to the conversation id. Our own
+`lemma.conversation_id` rides along beside it for the general pipeline, but it
+is a filter, not a grouping key: Phoenix's Sessions view reads `session.id` and
+nothing else. `user.id` is set the same way, from the same context, and the
+`lemma.*` fields are restated as a JSON `metadata` blob so they are filterable
+as an object rather than as a dozen loose attributes.
+
+The root `agent.run` span is created on the **general** tracer, because the SQL
+and HTTP work beneath it belongs in the infrastructure pipeline, while the model
+spans below it are created on the LLM tracer. Two providers, one trace id — so
+the root has to be copied across, or Phoenix receives children whose parent it
+was never sent and shows every run as a headless fragment with no session, no
+input and no output. `_build_llm_fanout_processor` is that copy, and it forwards
+only spans that already carry an OpenInference kind: fanning out everything is
+what once filled Phoenix with `db.operation` noise.
+
+The consequence for sampling: **the general ratio must not be lower than the LLM
+ratio.** Set it lower and the root is sampled away while its children are kept,
+which is the headless-fragment failure by another route. Both are `1.0` wherever
+Phoenix is enabled today.
+
 ## The dashboard
 
 `make observability-up` provisions "Lemma API Overview" in HyperDX
