@@ -1,0 +1,282 @@
+name: Backend coverage
+
+# Coverage aggregation for the backend, split out of "Backend E2E".
+#
+# It used to be the last job of that workflow, and it cost more than it looked
+# like it did. It runs only after every shard finishes, so its 256 seconds sat
+# on the end of the critical path of every PR; it is not a required check, so
+# those 256 seconds gated nothing; and it was the single largest source of red
+# on PRs — 23 of 32 observed e2e failures were this job, not a shard.
+#
+# It also re-ran the entire unit suite from scratch, ~152 of its ~233 seconds.
+# That was supposed to be a fallback: the fast path downloaded the already
+# validated `backend-unit-coverage` artifact, but only `if: workflow_run`,
+# while the shard job's own `if:` excluded workflow_run — so the producer was
+# always skipped on that event, the aggregate job never ran there, and the
+# "fallback" was in fact the only path that ever executed.
+#
+# As its own workflow_run consumer both problems go away: it is off the PR
+# critical path, and it can reach artifacts from *both* upstream runs (this
+# workflow's own trigger for the e2e shards, and the "CI" run for the same
+# commit for unit coverage) by run id, which is the thing a pull_request event
+# cannot do.
+#
+# The floors it enforces are real and still enforced; they are just no longer
+# enforced in front of the merge button. Deliberately not a required check:
+# it also enforces separately-tracked module floors that several modules are
+# still below, so requiring it would block every PR for an unrelated reason.
+
+on:
+  workflow_run:
+    workflows: ["Backend E2E"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-coverage-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  aggregate-coverage:
+    name: backend aggregate coverage gate
+    # A skipped or failed e2e run has no complete set of coverage artifacts.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Sync dependencies
+        run: uv sync --extra local
+      - name: Download E2E coverage shards
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: backend-e2e-*-coverage
+          path: lemma-backend/coverage-artifacts/e2e
+      # Unit coverage is produced by "CI", a different workflow, so it has to
+      # be located by commit rather than inherited from the trigger. CI may
+      # still be running its slower jobs (the Windows desktop check alone
+      # averages 940s) long after `lemma-backend unit` has uploaded, so wait
+      # for the artifact rather than for the run.
+      - name: Locate the CI run that validated this commit
+        id: ci-run
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const headSha = context.payload.workflow_run.head_sha;
+            const deadline = Date.now() + 10 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const runs = await github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,
+                {owner, repo, head_sha: headSha, per_page: 100},
+              );
+              const candidates = runs
+                .filter((run) => run.name === 'CI')
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              for (const run of candidates) {
+                const {data} = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner, repo, run_id: run.id, per_page: 100,
+                });
+                if (data.artifacts.some((a) => a.name === 'backend-unit-coverage')) {
+                  core.info(`Using unit coverage from CI run ${run.id}.`);
+                  core.setOutput('id', String(run.id));
+                  return;
+                }
+              }
+              core.info('backend-unit-coverage not uploaded yet; waiting 30s.');
+              await new Promise((resolve) => setTimeout(resolve, 30_000));
+            }
+            core.setFailed(
+              `No CI run for ${headSha} produced backend-unit-coverage within 10 minutes.`,
+            );
+      - name: Download validated unit coverage
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.ci-run.outputs.id }}
+          name: backend-unit-coverage
+          path: lemma-backend/coverage-artifacts/unit
+      - name: Combine E2E-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/e2e-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/e2e-combined/.coverage.e2e.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e -type f -name '.coverage.backend')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw E2E coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage combine coverage-artifacts/e2e-combined
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage json -o coverage-backend/e2e-union.json
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage xml -o coverage-backend/e2e-union.xml
+          uv run python scripts/backend_coverage_report.py \
+            --phase e2e-union \
+            --coverage-json coverage-backend/e2e-union.json \
+            --junit-glob 'coverage-artifacts/e2e/*/coverage-backend/junit-*.xml' \
+            --markdown-out coverage-backend/e2e-union.md \
+            --summary-json-out coverage-backend/e2e-union-summary.json
+      - name: Prepare unit-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/unit-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/unit-combined/.coverage.unit.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw unit coverage artifact was downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage combine coverage-artifacts/unit-combined
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage json -o coverage-backend/unit.json
+      - name: Combine unit and E2E coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            # Coverage.py discovers parallel inputs by appending a suffix to
+            # the configured data-file basename. COVERAGE_FILE below is
+            # `.coverage.backend`, so retain that basename here.
+            cp "$coverage_file" "coverage-artifacts/combined/.coverage.backend.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage combine coverage-artifacts/combined
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage json -o coverage-backend/coverage.json
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage xml -o coverage-backend/coverage.xml
+      - name: Build authoritative coverage report
+        run: >-
+          uv run python scripts/backend_coverage_report.py
+          --unit-coverage-json coverage-backend/unit.json
+          --e2e-coverage-json coverage-backend/e2e-union.json
+          --combined-coverage-json coverage-backend/coverage.json
+          --unit-junit-glob 'coverage-artifacts/unit/**/junit-*.xml'
+          --e2e-junit-glob 'coverage-artifacts/e2e/**/junit-*.xml'
+          --markdown-out coverage-backend/overall.md
+          --summary-json-out coverage-backend/overall-summary.json
+      - name: Add authoritative coverage to job summary
+        run: cat coverage-backend/overall.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish one authoritative PR coverage comment
+        if: hashFiles('lemma-backend/coverage-backend/overall.md') != ''
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-backend-coverage:overall -->';
+            const body = fs.readFileSync(
+              'lemma-backend/coverage-backend/overall.md',
+              'utf8',
+            );
+            const pr = (context.payload.workflow_run?.pull_requests || [])[0];
+            if (!pr) {
+              core.info('No PR is associated with this workflow run.');
+              return;
+            }
+            const {owner, repo} = context.repo;
+            const {data: pull} = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping coverage comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const obsoleteComments = comments.filter((comment) =>
+              comment.user?.type === 'Bot' &&
+              /<!-- lemma-backend-coverage:(?!overall)[^>]+ -->/.test(comment.body || '')
+            );
+            for (const comment of obsoleteComments) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+      - name: Enforce critical-module E2E floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/e2e-union.json
+          --min-total 0
+          --min-module agent=80
+          --min-module agent_surfaces=80
+          --min-module datastore=80
+          --min-module function=80
+      - name: Enforce total and module floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/coverage.json
+          --min-total 70
+          --min-module schedule=65
+      - name: Enforce changed-code coverage
+        run: >-
+          uv run diff-cover coverage-backend/coverage.xml
+          --compare-branch origin/main
+          --fail-under=85
+      - name: Upload aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-aggregate-coverage
+          path: |
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            lemma-backend/coverage-backend/unit.json
+            lemma-backend/coverage-backend/e2e-union.json
+            lemma-backend/coverage-backend/e2e-union.xml
+            lemma-backend/coverage-backend/e2e-union.md
+            lemma-backend/coverage-backend/e2e-union-summary.json
+            lemma-backend/coverage-backend/overall.md
+            lemma-backend/coverage-backend/overall-summary.json
+          if-no-files-found: error

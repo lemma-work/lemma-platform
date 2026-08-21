@@ -282,21 +282,33 @@ class TestFailureHandling:
             )
 
     async def test_statement_timeout_stops_a_runaway_query(
-        self, connection_config, credentials
+        self, connection_config, credentials, monkeypatch
     ):
-        # pg_sleep well past the 30s statement_timeout would hang the worker if
-        # the timeout were not actually applied to the connection.
+        # What is under test is that a statement_timeout is applied to the
+        # connection at all -- a runaway tenant query has to be stopped by
+        # Postgres rather than by hanging a worker. Which number it is set to
+        # is configuration, and waiting out the real 30s default made this the
+        # fifth-slowest test in the e2e suite for no extra proof. Shrink the
+        # timeout and sleep past the small one instead.
+        monkeypatch.setattr(
+            "app.modules.connectors.infrastructure.adapters.sql_executor."
+            "_DEFAULT_STATEMENT_TIMEOUT_MS",
+            1_000,
+        )
         executor = SqlExecutor()
         with pytest.raises(OperationExecutionInfrastructureError):
             await asyncio.wait_for(
                 _run(
                     executor,
                     "query",
-                    {"query": "SELECT pg_sleep(45)"},
+                    {"query": "SELECT pg_sleep(30)"},
                     connection_config,
                     credentials,
                 ),
-                timeout=40,
+                # Comfortably longer than the patched timeout and far shorter
+                # than the pg_sleep: if this deadline is what fires, the
+                # statement_timeout did not.
+                timeout=15,
             )
         await executor.dispose_all()
 

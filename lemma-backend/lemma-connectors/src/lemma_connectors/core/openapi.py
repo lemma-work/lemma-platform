@@ -19,7 +19,11 @@ from lemma_connectors.core.auth import (
     OAuth2Credentials,
 )
 from lemma_connectors.core.descriptors import ToolDescriptor
-from lemma_connectors.core.errors import IntegrationExecutionError, ToolValidationError
+from lemma_connectors.core.errors import (
+    IntegrationExecutionError,
+    ToolNotFoundError,
+    ToolValidationError,
+)
 from lemma_connectors.core.metadata import ToolMetadata
 from lemma_connectors.core.results import BinaryContentResult
 
