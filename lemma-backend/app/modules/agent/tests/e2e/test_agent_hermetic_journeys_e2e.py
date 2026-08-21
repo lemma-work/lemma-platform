@@ -1138,25 +1138,50 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
     )
     assert events[-1]["type"] == "completed", events
 
-    messages = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-    )
-    assert messages.status_code == status.HTTP_200_OK, messages.text
-    returns = {
-        item["tool_call_id"]: item["tool_result"]
-        for item in messages.json()["items"]
-        if item["kind"] == "TOOL_RETURN"
-    }
+    async def _returns_by_id() -> dict[str, list[dict]]:
+        messages = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+        )
+        assert messages.status_code == status.HTTP_200_OK, messages.text
+        grouped: dict[str, list[dict]] = {}
+        for item in messages.json()["items"]:
+            if item["kind"] == "TOOL_RETURN":
+                grouped.setdefault(item["tool_call_id"], []).append(
+                    item["tool_result"]
+                )
+        return grouped
 
-    shell_cwd = (returns["shell-pwd-1"]["stdout"] or "").strip()
-    python_cwd = (returns["python-cwd-1"]["stdout"] or "").strip()
+    returns = await _returns_by_id()
+
+    shell_cwd = (returns["shell-pwd-1"][0]["stdout"] or "").strip()
+    python_cwd = (returns["python-cwd-1"][0]["stdout"] or "").strip()
     assert shell_cwd == recorded_cwd, returns["shell-pwd-1"]
     assert python_cwd == recorded_cwd, returns["python-cwd-1"]
 
-    assert returns["python-write-1"]["success"] is True, returns["python-write-1"]
-    assert "python-was-here" in str(returns["shell-read-1"]), returns["shell-read-1"]
-    assert returns["shell-write-1"]["success"] is True, returns["shell-write-1"]
-    assert "shell-was-here" in str(returns["python-read-1"]), returns["python-read-1"]
+    assert returns["python-write-1"][0]["success"] is True, returns["python-write-1"]
+    assert "python-was-here" in str(returns["shell-read-1"][0]), returns["shell-read-1"]
+    assert returns["shell-write-1"][0]["success"] is True, returns["shell-write-1"]
+    assert "shell-was-here" in str(returns["python-read-1"][0]), returns["python-read-1"]
+
+    # A second turn in the same conversation, because the directory is a
+    # property of the conversation rather than of a run. Anything that
+    # recomputed it per run -- a default, a fresh slug, a fallback -- would move
+    # house here and leave the first turn's files behind, which is the failure
+    # the recorded cwd exists to prevent.
+    second = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Where are you working now?",
+    )
+    assert second[-1]["type"] == "completed", second
+
+    returns = await _returns_by_id()
+    assert len(returns["shell-pwd-1"]) == 2, returns["shell-pwd-1"]
+    assert (returns["shell-pwd-1"][1]["stdout"] or "").strip() == recorded_cwd
+    assert (returns["python-cwd-1"][1]["stdout"] or "").strip() == recorded_cwd
+    # And the previous turn's files are still under it, read by relative name.
+    assert "shell-was-here" in str(returns["python-read-1"][1])
 
 
 @pytest.mark.asyncio

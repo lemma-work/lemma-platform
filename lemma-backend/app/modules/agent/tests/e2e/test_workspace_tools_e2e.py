@@ -304,6 +304,317 @@ async def test_agent_uses_lemma_cli_through_selected_workspace_provider(
     assert fixed_test_user["email"] in assistant_text, assistant_text
 
 
+@pytest.mark.slow
+@pytest.mark.provider
+@pytest.mark.real_llm
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(
+    not e2e_real_llm(),
+    reason="set E2E_LLM_MODE=real to run the live two-tool directory acceptance test",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+async def test_a_real_agent_finds_with_the_shell_what_it_wrote_with_python(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    db_manager,
+    e2e_settings,
+):
+    """The failure as a person actually hits it, with a real model driving.
+
+    `execute_python` ran in the sandbox image's default directory while
+    `exec_command` ran in the conversation's own, so a relative path meant two
+    different files and an agent watched its own work disappear between tools.
+    The scripted journeys pin the contract; this pins the experience -- nobody
+    tells this agent a directory, it just uses both tools the way a model does.
+
+    Deliberately no absolute paths in the prompt: an absolute path passes even
+    with the interpreter sitting in the wrong place, which is the whole bug.
+    """
+    del db_manager
+    await workspace_runtime.close_workspace_tool_runtimes()
+    provider = configure_workspace_api_url["provider"]
+
+    pod_response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Two Tool Directory Pod {uuid4().hex[:8]}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
+    pod = pod_response.json()
+
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod['id']}/agents",
+        json={
+            "name": f"Two Tool Directory Agent {uuid4().hex[:8]}",
+            "instruction": (
+                "You do small workspace tasks with the tools you are given. "
+                "Use execute_python for Python and exec_command for shell "
+                "commands. Never answer from memory -- run the tools."
+            ),
+            "toolsets": ["WORKSPACE_CLI"],
+            "agent_runtime": {
+                "profile_id": "system:lemma",
+                "model_name": _ACCEPTANCE_MODEL,
+            },
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+    agent = create_agent.json()
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "title": f"{provider} two-tool directory acceptance",
+            "type": "CHAT",
+        },
+    )
+    assert create_conversation.status_code == status.HTTP_201_CREATED, (
+        create_conversation.text
+    )
+    conversation = create_conversation.json()
+    conversation_id = conversation["id"]
+    recorded_cwd = conversation["metadata"]["cwd"]
+
+    async with production_worker_process(
+        e2e_settings,
+        log_prefix=f"sandbox_{provider}_two_tool_directory",
+    ) as acceptance_worker:
+        events = await _post_sse(
+            authenticated_client,
+            f"/pods/{pod['id']}/conversations/{conversation_id}/messages",
+            {
+                "content": (
+                    "Use execute_python to write the text TWO_TOOL_PROOF into a "
+                    "file called handoff.txt, using that relative filename and "
+                    "no directory. Then use exec_command to `cat handoff.txt`, "
+                    "also with no directory. Reply with what cat printed."
+                )
+            },
+        )
+        if any(event.get("type") == "error" for event in events):
+            pytest.fail(
+                "Two-tool directory acceptance run failed.\nWorker log:\n"
+                + acceptance_worker.read_log_tail()
+            )
+    _assert_completed_without_error(events)
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+
+    def _returns(tool_name: str) -> list[dict]:
+        return [
+            item
+            for item in items
+            if item["kind"] == "TOOL_RETURN" and item["tool_name"] == tool_name
+        ]
+
+    python_returns = _returns("execute_python")
+    shell_returns = _returns("exec_command")
+    assert python_returns, items
+    assert shell_returns, items
+
+    # The handoff itself: the shell found, by relative name, the file Python
+    # wrote by relative name. This is the assertion that fails when the two
+    # tools are in different directories, and it fails for the reason the
+    # person experiences rather than on an internal detail.
+    shell_output = json.dumps(
+        [item.get("tool_result") for item in shell_returns], sort_keys=True
+    )
+    assert "TWO_TOOL_PROOF" in shell_output, shell_output
+    assert "No such file" not in shell_output, shell_output
+
+    assistant_text = " ".join(
+        item.get("text") or ""
+        for item in items
+        if item["role"] == "assistant" and item["kind"] == "TEXT"
+    )
+    assert "TWO_TOOL_PROOF" in assistant_text, assistant_text
+
+    # And the file is in the conversation's own directory, so the handoff
+    # worked because both tools were there -- not because they happened to
+    # share the image's default.
+    probe = await exec_command_internal(
+        BaseAgentContext(
+            user_id=UUID(fixed_test_user["id"]),
+            org_id=UUID(fixed_test_org["id"]),
+            pod_id=UUID(pod["id"]),
+            conversation_id=UUID(conversation_id),
+            agent_name="two_tool_directory_probe",
+            workspace_cwd=recorded_cwd,
+        ),
+        ExecCommandRequest(
+            cmd=f"cat {shlex.quote(recorded_cwd)}/handoff.txt", timeout_seconds=30
+        ),
+    )
+    assert probe.success is True, probe
+    assert "TWO_TOOL_PROOF" in (probe.stdout or ""), probe
+
+
+@pytest.mark.slow
+@pytest.mark.provider
+@pytest.mark.real_llm
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(
+    not e2e_real_llm(),
+    reason="set E2E_LLM_MODE=real to run the live task-list acceptance test",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+async def test_a_real_agent_picks_up_its_plan_in_a_later_turn_and_finishes_it(
+    authenticated_client,
+    fixed_test_org,
+    configure_workspace_api_url,
+    db_manager,
+    e2e_settings,
+):
+    """A live agent working a plan across two turns, end to end.
+
+    Read this for what it is: a guard, not a proof. The reported failure -- a
+    checklist written at the start of a session and never updated again -- did
+    not reproduce here against the pre-fix code (3/3 passed on the acceptance
+    model, 2/3 on the weaker default, and that one failure was the model never
+    calling `write_todos` at all rather than never updating it). The mechanism
+    the prompt section addresses needs a conversation long enough for
+    summarization to bite: it keeps the last 40 messages, and past that the
+    `write_todos` return carrying the list is simply gone from history. Getting
+    there costs ~70k tokens of conversation, which no e2e should spend, so the
+    section is pinned at unit level instead.
+
+    What this does hold: the whole loop works with a real model across a turn
+    boundary, and the outcome the person sees is right -- the stored list ends
+    ticked off, holding the tasks that were planned rather than a re-plan or
+    paraphrases beside them.
+    """
+    del db_manager
+    await workspace_runtime.close_workspace_tool_runtimes()
+    provider = configure_workspace_api_url["provider"]
+
+    pod_response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Task List Pod {uuid4().hex[:8]}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
+    pod = pod_response.json()
+
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod['id']}/agents",
+        json={
+            "name": f"Task List Agent {uuid4().hex[:8]}",
+            "instruction": (
+                "You do multi-step workspace tasks. Track work that takes "
+                "several steps with write_todos, and keep the list current as "
+                "you go. Do the work with the workspace tools -- never answer "
+                "from memory."
+            ),
+            "toolsets": ["WORKSPACE_CLI", "TODO"],
+            "agent_runtime": {
+                "profile_id": "system:lemma",
+                "model_name": _ACCEPTANCE_MODEL,
+            },
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+    agent = create_agent.json()
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "title": f"{provider} task list acceptance",
+            "type": "CHAT",
+        },
+    )
+    assert create_conversation.status_code == status.HTTP_201_CREATED, (
+        create_conversation.text
+    )
+    conversation_id = create_conversation.json()["id"]
+    messages_url = f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+
+    async with production_worker_process(
+        e2e_settings,
+        log_prefix=f"sandbox_{provider}_task_list",
+    ) as acceptance_worker:
+        first = await _post_sse(
+            authenticated_client,
+            messages_url,
+            {
+                "content": (
+                    "Four steps in the workspace, please: (1) write ALPHA into "
+                    "alpha.txt, (2) write the number of characters in alpha.txt "
+                    "into beta.txt, (3) join both files into gamma.txt, (4) "
+                    "print gamma.txt. Plan all four before you start, then do "
+                    "only the first two and stop -- I will tell you when to "
+                    "carry on."
+                )
+            },
+        )
+        if any(event.get("type") == "error" for event in first):
+            pytest.fail(
+                "Task list acceptance run failed.\nWorker log:\n"
+                + acceptance_worker.read_log_tail()
+            )
+        _assert_completed_without_error(first)
+
+        second = await _post_sse(
+            authenticated_client,
+            messages_url,
+            {"content": "Carry on with the rest of the plan."},
+        )
+        if any(event.get("type") == "error" for event in second):
+            pytest.fail(
+                "Task list continuation run failed.\nWorker log:\n"
+                + acceptance_worker.read_log_tail()
+            )
+        _assert_completed_without_error(second)
+
+    messages = await authenticated_client.get(messages_url)
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+
+    todo_calls = [
+        item
+        for item in items
+        if item["kind"] == "TOOL_CALL" and item["tool_name"] == "write_todos"
+    ]
+    # More than once is the whole point: writing the plan was never the part
+    # that failed.
+    assert len(todo_calls) >= 2, [item.get("tool_args") for item in todo_calls]
+
+    persisted = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}"
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.text
+    stored = persisted.json()["metadata"]["todos"]
+    assert stored, persisted.json()["metadata"]
+    assert all(item["done"] for item in stored), stored
+
+    # The list the person reads is the plan, not the plan plus paraphrases of
+    # it: a check-off in different words used to append beside the task it
+    # meant. Compare against what the agent actually planned first.
+    planned = (todo_calls[0].get("tool_args") or {}).get("todos") or []
+    assert len(stored) <= max(len(planned), 1) + 1, (planned, stored)
+
+    # And the work itself really happened.
+    assistant_text = " ".join(
+        item.get("text") or ""
+        for item in items
+        if item["role"] == "assistant" and item["kind"] == "TEXT"
+    )
+    assert "ALPHA" in assistant_text.upper(), assistant_text
+
+
 async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     authenticated_client,
     fixed_test_org,
