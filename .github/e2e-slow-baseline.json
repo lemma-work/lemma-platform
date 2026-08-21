@@ -1,10 +1,4 @@
 {
   "_comment": "Fast-lane e2e tests allowed past the PR-lane duration budget in scripts/e2e_durations.py. Every entry is a test a pull request waits for, so keep this list short and shrinking. Adding one needs a reason; the usual answer is @pytest.mark.slow instead.",
-  "allowed": [
-    {
-      "test": "app.modules.agent.tests.e2e.test_agent_hermetic_journeys_e2e::test_scripted_todo_and_workspace_tools_stream_and_persist_real_results",
-      "seconds": 90.1,
-      "why": "provisions a real Docker sandbox (fast_workspace); the agent tool-calling contract has no in-process fake that proves it, so this is genuine work rather than a wait. Splitting a cheaper wiring half out of it is the way to remove it from this list."
-    }
-  ]
+  "allowed": []
 }

@@ -28,6 +28,7 @@ from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
 )
+from app.modules.agent_surfaces.platforms.common import payload_any
 
 # Reserved key the surface credential resolver stamps with the account's
 # auth-config kind. Falls back to connection_id sniffing for credential
@@ -81,17 +82,13 @@ async def fetch_composio_file_bytes(data: Any) -> bytes:
         payload.get("file") if isinstance(payload.get("file"), dict) else payload
     )
 
-    inline_b64 = (
-        file_info.get("content_b64")
-        or file_info.get("contentBytes")
-        or file_info.get("data")
-    )
+    inline_b64 = payload_any(file_info, "content_b64", "contentBytes", "data")
     if isinstance(inline_b64, str) and inline_b64.strip():
         import base64
 
         return base64.b64decode(inline_b64.encode("ascii"))
 
-    s3url = file_info.get("s3url") or file_info.get("s3_url") or file_info.get("url")
+    s3url = payload_any(file_info, "s3url", "s3_url", "url")
     if not isinstance(s3url, str) or not s3url.strip():
         raise ValueError(
             "Composio file-download result did not include an s3url or inline content."

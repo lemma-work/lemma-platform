@@ -1312,7 +1312,7 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
         _StubResolver,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.ingress_service.create_authorization_data_service",
+        "app.modules.agent_surfaces.services.surface_inbound_message.create_authorization_data_service",
         lambda uow: SimpleNamespace(
             build_user_context=AsyncMock(return_value=SimpleNamespace())
         ),
@@ -1664,7 +1664,7 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
 
 
 async def test_ask_user_request_dict_accepts_both_shapes():
-    from app.modules.agent_surfaces.services.ingress_service import (
+    from app.modules.agent_surfaces.services.pending_interaction_resume import (
         _ask_user_request_dict,
     )
 
@@ -1797,7 +1797,7 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
     )
 
     with patch(
-        "app.modules.agent_surfaces.services.ingress_service."
+        "app.modules.agent_surfaces.services.surface_interactions."
         "retry_interaction_conversation",
         new=AsyncMock(),
     ) as retry:

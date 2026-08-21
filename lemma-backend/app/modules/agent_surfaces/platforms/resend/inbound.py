@@ -13,7 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.modules.agent_surfaces.platforms.email_common import parse_email_identity
+from app.modules.agent_surfaces.platforms.common import payload_any
+from app.modules.agent_surfaces.platforms.email_identity import parse_email_identity
 
 
 def email_address(value: Any) -> str | None:
@@ -21,7 +22,7 @@ def email_address(value: Any) -> str | None:
     if isinstance(value, list):
         return email_address(value[0]) if value else None
     if isinstance(value, dict):
-        return email_address(value.get("address") or value.get("email"))
+        return email_address(payload_any(value, "address", "email"))
     if isinstance(value, str):
         text = value.strip()
         if "<" in text and ">" in text:
@@ -112,14 +113,14 @@ def normalize_attachments(raw: Any) -> list[dict[str, Any]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = item.get("filename") or item.get("name")
+        name = payload_any(item, "filename", "name")
         normalized.append(
             {
                 "id": str(item.get("id") or "").strip() or None,
                 "name": str(name).strip() if name else None,
-                "content_type": item.get("content_type") or item.get("contentType"),
+                "content_type": payload_any(item, "content_type", "contentType"),
                 "size": item.get("size"),
-                "content_id": item.get("content_id") or item.get("contentId"),
+                "content_id": payload_any(item, "content_id", "contentId"),
                 "is_inline": str(item.get("content_disposition") or "").lower()
                 == "inline",
             }

@@ -311,7 +311,9 @@ class WhatsAppClient:
             )
         try:
             data = response.json()
-        except Exception:
+        except ValueError:
+            # httpx raises json.JSONDecodeError -- a ValueError -- for a body
+            # that is not JSON. Anything else here is our bug, not theirs.
             data = {}
         return data if isinstance(data, dict) else {}
 

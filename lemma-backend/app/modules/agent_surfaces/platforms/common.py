@@ -338,6 +338,60 @@ class ProviderFailure:
     provider_error: str | None = None
 
 
+def payload_text(source: Any, key: str) -> str:
+    """A webhook field as a string, with absent, null and empty all reading as "".
+
+    Every parser digs strings out of a payload it does not control, so every
+    read carries the same `or ""` to survive a missing key or an explicit null.
+    Ninety-five of them across six parsers, and each one counted as a branch --
+    which is most of why the parsers measured as the most complex code in the
+    module while doing nothing more complicated than reading a dictionary.
+    """
+    if not source:
+        return ""
+    return str(source.get(key) or "")
+
+
+def payload_first(source: Any, *keys: str) -> str:
+    """The first of these keys that carries a value, as a string.
+
+    Providers spell the same field several ways -- `conversation_id`,
+    `conversationId`, `id` -- and a parser has to try each. Written inline that
+    is a chain of `or`s, and every link counted as a branch. The loop is here
+    once instead.
+    """
+    for key in keys:
+        value = payload_text(source, key)
+        if value:
+            return value
+    return ""
+
+
+def payload_any(source: Any, *keys: str) -> Any:
+    """The first of these keys with a value, left as it arrived.
+
+    `payload_first` for values that are not text -- attachment bytes, sizes,
+    nested objects -- where stringifying would be wrong. Same reason it exists:
+    providers spell one field several ways, and the chain of `or`s that tries
+    each counted as a branch per spelling.
+    """
+    if not source:
+        return None
+    for key in keys:
+        value = source.get(key)
+        if value:
+            return value
+    return None
+
+
+def payload_section(source: Any, key: str) -> dict[str, Any]:
+    """A nested object from a payload, or an empty one to keep reading from."""
+    if not source:
+        return {}
+    value = source.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def provider_failure(exc: Exception) -> ProviderFailure:
     """What went wrong, in terms safe to write to a log.
 
@@ -367,3 +421,16 @@ def provider_failure(exc: Exception) -> ProviderFailure:
         status_code=status,
         provider_error=name if isinstance(name, str) and name else None,
     )
+
+
+def text_or_none(value: Any) -> str | None:
+    """A value as trimmed text, or None when it is absent or blank.
+
+    The `or None` half of the family. `payload_text` answers "" for a missing
+    field because a parser usually wants to keep reading; a field on its way
+    into a record wants the absence kept, and spelling that out per field is
+    three branches each.
+    """
+    if value is None:
+        return None
+    return str(value).strip() or None

@@ -2,12 +2,91 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
+from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
+    payload_section,
+    payload_text,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _TelegramSender:
+    """Who sent the message, as Telegram spells it."""
+
+    user_id: str
+    display_name: str
+    username: str | None
+
+    @property
+    def label(self) -> str | None:
+        """A name to show: the full name, else the @username."""
+        return self.display_name or self.username
+
+
+@dataclass(frozen=True, slots=True)
+class _TelegramMentions:
+    """Who a message appears to address, before the bot's identity is known.
+
+    A ``mention`` entity is a plain @username and does not say *which* user was
+    meant, so nothing here counts as addressing this bot on its own. Only
+    ``bot_command`` is unambiguous; the rest is carried for the ingress
+    enrichment step to check against the bot's own username and id.
+    """
+
+    usernames: list[str]
+    text_mention_user_ids: list[str]
+    has_bot_command: bool
+
+
+def _sender(message: dict[str, Any]) -> _TelegramSender:
+    from_user = payload_section(message, "from")
+    display = str(from_user.get("first_name", ""))
+    last_name = from_user.get("last_name")
+    if last_name:
+        display += f" {last_name}"
+    return _TelegramSender(
+        user_id=str(from_user.get("id", "")),
+        display_name=display,
+        username=from_user.get("username"),
+    )
+
+
+def _batch(payload: dict[str, Any], message: dict[str, Any]) -> list[Any]:
+    """The messages this event covers: a debounced batch, or just the one."""
+    batch = payload.get("_lemma_batch_messages")
+    if isinstance(batch, list) and batch:
+        return batch
+    return [message]
+
+
+def _batch_message_id(message: dict[str, Any], batch: list[Any]) -> str:
+    """One id for the whole batch, or the single message's own id."""
+    ids = [
+        str(item.get("message_id"))
+        for item in batch
+        if isinstance(item, dict) and item.get("message_id") is not None
+    ]
+    if len(ids) > 1:
+        return f"batch:{ids[0]}-{ids[-1]}"
+    return str(message.get("message_id", ""))
+
+
+def _media_group_ids(batch: list[Any]) -> list[str]:
+    """Album ids in the batch, de-duplicated, in the order they appeared."""
+    return list(
+        dict.fromkeys(
+            str(item.get("media_group_id"))
+            for item in batch
+            if isinstance(item, dict) and item.get("media_group_id") is not None
+        )
+    )
 
 
 class TelegramMessageParser:
@@ -17,120 +96,47 @@ class TelegramMessageParser:
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         del headers
-        message = payload.get("message") or payload.get("edited_message")
+        message = payload_any(payload, "message", "edited_message")
         if not message:
             # Inline-keyboard taps arrive as ``callback_query`` and are owned by
             # the interaction path (``parse_inbound_interaction``); they are not
             # chat messages, so the message parser ignores them.
             return None
-        batch_messages = payload.get("_lemma_batch_messages")
-        if not isinstance(batch_messages, list) or not batch_messages:
-            batch_messages = [message]
-        message_text = "\n".join(
-            text
-            for item in batch_messages
-            if isinstance(item, dict)
-            for text in [self._extract_text(item).strip()]
-            if text
-        )
 
-        if not message_text:
-            message_text = ""
-
-        chat = message.get("chat") or {}
+        batch = _batch(payload, message)
+        message_text = self._batch_text(batch)
+        chat = payload_section(message, "chat")
         chat_id = str(chat.get("id", ""))
         chat_type = chat.get("type", "private")
-
-        from_user = message.get("from") or {}
-        sender_id = str(from_user.get("id", ""))
-        sender_display = from_user.get("first_name", "")
-        if from_user.get("last_name"):
-            sender_display += f" {from_user['last_name']}"
-        sender_username = from_user.get("username")
-        contact_details = self._extract_contact_details(
-            message=message, sender_id=sender_id
-        )
-
         is_dm = chat_type == "private"
-        conversation_type = (
-            ConversationType.EXTERNAL_DM if is_dm else ConversationType.EXTERNAL_GROUP
-        )
 
-        thread_id = str(message.get("message_thread_id") or chat_id)
-        message_ids = [
-            str(item.get("message_id"))
-            for item in batch_messages
-            if isinstance(item, dict) and item.get("message_id") is not None
-        ]
-        message_id = (
-            f"batch:{message_ids[0]}-{message_ids[-1]}"
-            if len(message_ids) > 1
-            else str(message.get("message_id", ""))
+        sender = _sender(message)
+        mentions = self._scan_mentions(message, message_text)
+        contact = self._extract_contact_details(
+            message=message, sender_id=sender.user_id
         )
-
-        # A mention can be a plain @username (`mention`), a name-link to a
-        # username-less user/bot (`text_mention`), or a slash command
-        # (`bot_command`). Mentions also live in `caption_entities` for media
-        # messages with a caption, so check both entity lists.
-        #
-        # IMPORTANT: a `mention` entity is just a plain @username — it does NOT
-        # indicate *which* user was mentioned. Treating every mention as a bot
-        # mention makes the bot wake up whenever anyone @-mentions anyone else in
-        # a group. So here we only record that a mention entity exists (and
-        # capture the @username / text_mention user id for later verification
-        # against the bot's identity in the ingress enrichment step). Only
-        # `bot_command` entities are unambiguously directed at this bot.
-        _mention_entities = list(message.get("entities") or []) + list(
-            message.get("caption_entities") or []
-        )
-        mentioned_usernames: list[str] = []
-        text_mention_user_ids: list[str] = []
-        has_bot_command = False
-        source_text = message_text or ""
-        for entity in _mention_entities:
-            entity_type = entity.get("type")
-            if entity_type == "bot_command":
-                has_bot_command = True
-            elif entity_type == "mention":
-                username = self._extract_mention_username(entity, source_text)
-                if username:
-                    mentioned_usernames.append(username)
-            elif entity_type == "text_mention":
-                user = entity.get("user") or {}
-                user_id = str(user.get("id") or "").strip()
-                if user_id:
-                    text_mention_user_ids.append(user_id)
         # A reply to one of the bot's own messages continues the conversation in
         # a group without re-@mentioning. Telegram privacy mode only delivers
         # replies to THIS bot's messages, so reply_to_message.from.is_bot is a
         # safe signal here.
-        reply_to_message = message.get("reply_to_message") or {}
-        is_reply_to_bot = bool((reply_to_message.get("from") or {}).get("is_bot"))
-
-        attachments = [
-            attachment
-            for item in batch_messages
-            if isinstance(item, dict)
-            for attachment in self._parse_attachments(item)
-        ]
-        media_group_ids = list(
-            dict.fromkeys(
-                str(item.get("media_group_id"))
-                for item in batch_messages
-                if isinstance(item, dict) and item.get("media_group_id") is not None
-            )
-        )
+        reply_to_message = payload_section(message, "reply_to_message")
+        is_reply_to_bot = bool(payload_section(reply_to_message, "from").get("is_bot"))
+        message_id = _batch_message_id(message, batch)
 
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
-            conversation_type=conversation_type,
+            conversation_type=(
+                ConversationType.EXTERNAL_DM
+                if is_dm
+                else ConversationType.EXTERNAL_GROUP
+            ),
             tenant_id=None,
             external_channel_id=chat_id,
-            external_thread_id=thread_id,
+            external_thread_id=str(message.get("message_thread_id") or chat_id),
             external_message_id=message_id,
-            sender_external_user_id=sender_id,
-            sender_phone=contact_details["sender_phone"],
-            sender_display_name=sender_display or sender_username,
+            sender_external_user_id=sender.user_id,
+            sender_phone=contact["sender_phone"],
+            sender_display_name=sender.label,
             message_text=message_text,
             is_dm=is_dm,
             # Only bot commands and DM/reply-to-bot unambiguously address this
@@ -138,34 +144,84 @@ class TelegramMessageParser:
             # against the bot's identity in the ingress enrichment step
             # (_telegram_text_mention_enrich) so the bot doesn't wake up on
             # @mentions of other users in a group.
-            mentioned_agent=has_bot_command or is_dm or is_reply_to_bot,
+            mentioned_agent=mentions.has_bot_command or is_dm or is_reply_to_bot,
             should_start_conversation=True,
             reply_target={
                 "chat_id": chat_id,
                 "message_id": message_id,
                 # Forum-topic id so replies land in the same topic; empty for
                 # ordinary chats.
-                "message_thread_id": str(message.get("message_thread_id") or ""),
+                "message_thread_id": payload_text(message, "message_thread_id"),
             },
             metadata={
                 "chat_type": chat_type,
                 "chat_id": chat_id,
                 "is_topic_message": bool(message.get("is_topic_message")),
-                "message_thread_id": str(message.get("message_thread_id") or ""),
+                "message_thread_id": payload_text(message, "message_thread_id"),
                 "is_thread_reply": is_reply_to_bot,
-                "sender_username": sender_username,
-                "contact_shared": contact_details["contact_shared"],
-                "contact_shared_by_sender": contact_details["contact_shared_by_sender"],
-                "shared_contact_phone": contact_details["shared_contact_phone"],
-                "attachments": attachments,
-                "batched_message_count": len(batch_messages),
-                "media_group_ids": media_group_ids,
+                "sender_username": sender.username,
+                "contact_shared": contact["contact_shared"],
+                "contact_shared_by_sender": contact["contact_shared_by_sender"],
+                "shared_contact_phone": contact["shared_contact_phone"],
+                "attachments": self._batch_attachments(batch),
+                "batched_message_count": len(batch),
+                "media_group_ids": _media_group_ids(batch),
                 # Carried for the ingress enrichment step to verify against the
                 # bot's actual @username / user id.
-                "mentioned_usernames": mentioned_usernames,
-                "text_mention_user_ids": text_mention_user_ids,
+                "mentioned_usernames": mentions.usernames,
+                "text_mention_user_ids": mentions.text_mention_user_ids,
             },
             raw_payload=payload,
+        )
+
+    def _batch_text(self, batch: list[Any]) -> str:
+        """The batch as one message: each message's own text, one per line."""
+        return "\n".join(
+            text
+            for item in batch
+            if isinstance(item, dict)
+            for text in [self._extract_text(item).strip()]
+            if text
+        )
+
+    def _batch_attachments(self, batch: list[Any]) -> list[Any]:
+        return [
+            attachment
+            for item in batch
+            if isinstance(item, dict)
+            for attachment in self._parse_attachments(item)
+        ]
+
+    def _scan_mentions(
+        self, message: dict[str, Any], source_text: str
+    ) -> _TelegramMentions:
+        """Mention entities on a message, from both lists Telegram uses.
+
+        Mentions also live in ``caption_entities`` for media with a caption, so
+        reading only ``entities`` misses half of them.
+        """
+        entities = list(message.get("entities") or []) + list(
+            message.get("caption_entities") or []
+        )
+        usernames: list[str] = []
+        user_ids: list[str] = []
+        has_bot_command = False
+        for entity in entities:
+            entity_type = entity.get("type")
+            if entity_type == "bot_command":
+                has_bot_command = True
+            elif entity_type == "mention":
+                username = self._extract_mention_username(entity, source_text)
+                if username:
+                    usernames.append(username)
+            elif entity_type == "text_mention":
+                user_id = payload_text(payload_section(entity, "user"), "id").strip()
+                if user_id:
+                    user_ids.append(user_id)
+        return _TelegramMentions(
+            usernames=usernames,
+            text_mention_user_ids=user_ids,
+            has_bot_command=has_bot_command,
         )
 
     def _extract_text(self, message: dict[str, Any]) -> str:
@@ -233,8 +289,8 @@ class TelegramMessageParser:
                 "sender_phone": None,
             }
 
-        contact_user_id = str(contact.get("user_id") or "").strip() or None
-        shared_contact_phone = str(contact.get("phone_number") or "").strip() or None
+        contact_user_id = payload_text(contact, "user_id").strip() or None
+        shared_contact_phone = payload_text(contact, "phone_number").strip() or None
         shared_by_sender = bool(
             contact_user_id
             and sender_id

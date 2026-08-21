@@ -714,6 +714,137 @@ async def test_public_http_sse_lifecycle_persists_messages_title_usage_and_histo
 
 @pytest.mark.asyncio
 @pytest.mark.fast_workspace
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
+async def test_scripted_tool_calls_reach_the_runtime_and_persist(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+    configure_workspace_api_url,
+):
+    """A scripted tool call reaches the real runtime, streams back, and persists.
+
+    The PR-lane half of the 23-step journey below. That test measured 97.7s --
+    the slowest in the entire e2e suite and the only one left above the 45s
+    per-test budget -- because it scripts twenty-three tool calls in strict
+    sequence through one real Docker workspace.
+
+    The guarantee it uniquely carries needs three of them. `write_todos` is the
+    only step whose side effect lands in conversation *metadata* rather than in
+    the sandbox. `exec_command` proves the shell transport carries a real result
+    back. `execute_python` is a genuinely different transport -- a resident
+    interpreter session rather than a command exec -- not a repeat of the shell.
+
+    Everything else there is tool-surface variation: tty and process lifecycle,
+    image inspection, skills, speech, web fetch. Those cannot break without this
+    failing too, so they run nightly instead of in front of the merge button.
+    """
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"tools_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Execute the scripted tools.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["TODO", "WORKSPACE_CLI"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "write_todos",
+            {"todos": ["- [ ] Inspect input", "- [x] Persist result"]},
+            tool_call_id="todo-1",
+        ),
+        script_tool_call(
+            "exec_command",
+            {
+                "cmd": "printf 'workspace-proof' > proof.txt && cat proof.txt",
+                "comment": "Create deterministic workspace proof",
+            },
+            tool_call_id="shell-1",
+        ),
+        script_tool_call(
+            "execute_python",
+            {
+                "code": "print(21 * 2)",
+                "comment": "Compute a value in the resident interpreter",
+            },
+            tool_call_id="python-1",
+        ),
+        script_text("Tool proof steps completed."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Tool execution",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Run the todo and workspace proof steps.",
+    )
+    assert events[-1]["type"] == "completed", events
+    assert {event.get("kind") for event in events if event["type"] == "token"} >= {
+        "text",
+        "tool",
+    }
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+    tool_calls = {item["tool_name"] for item in items if item["kind"] == "TOOL_CALL"}
+    tool_returns_by_id = {
+        item["tool_call_id"]: item for item in items if item["kind"] == "TOOL_RETURN"
+    }
+    assert {"write_todos", "exec_command", "execute_python"} <= tool_calls
+    assert tool_returns_by_id["todo-1"]["tool_result"]["success"] is True
+    assert "workspace-proof" in str(tool_returns_by_id["shell-1"]["tool_result"])
+    assert "42" in str(tool_returns_by_id["python-1"]["tool_result"])
+
+    persisted = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.text
+    assert persisted.json()["metadata"]["todos"] == [
+        {"content": "Inspect input", "done": False},
+        {"content": "Persist result", "done": True},
+    ]
+
+
+# @pytest.mark.slow: the exhaustive tool-surface matrix, moved off the PR lane.
+# It scripts twenty-three tool calls in strict sequence through one real Docker
+# workspace and measured 97.7s -- the slowest test in the suite. The wiring it
+# uniquely proves is covered above in ~20s; what is left here is variation
+# (tty/process lifecycle, image inspection, skills, speech, web fetch), which
+# cannot break without that test failing too.
+#
+# Moving it also takes a live `https://example.com/` fetch out of the required
+# merge lane -- a real outbound network call, in a file whose docstring says
+# "hermetic", against docs/testing.md's rule that a test must not depend on the
+# machine it runs on.
+@pytest.mark.slow
 @pytest.mark.timeout(300)
 async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results(
     authenticated_client,

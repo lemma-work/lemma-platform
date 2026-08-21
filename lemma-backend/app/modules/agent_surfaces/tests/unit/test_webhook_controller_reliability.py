@@ -255,7 +255,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
             new=AsyncMock(),
         ) as publish,
         patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "app.modules.agent_surfaces.api.controllers.webhook_ingest."
             "get_surface_service",
             return_value=service,
         ),

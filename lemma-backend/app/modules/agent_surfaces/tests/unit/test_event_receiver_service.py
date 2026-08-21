@@ -16,12 +16,17 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.telegram.client import normalize_bot_base_url
+from app.modules.agent_surfaces.platforms.telegram.update_batching import (
+    assemble_telegram_updates as _assemble_telegram_updates,
+)
+from app.modules.agent_surfaces.services import native_receiver_base
+from app.modules.agent_surfaces.services.telegram_polling_runner import (
+    TelegramPollingReceiverRunner,
+)
 from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeReceiverCandidate,
     NativeSurfaceReceiverCoordinator,
     ResendPollingReceiverRunner,
-    TelegramPollingReceiverRunner,
-    _assemble_telegram_updates,
     _candidate_from_surface,
     _publish_native_receiver_event,
     _receiver_key,
@@ -191,7 +196,7 @@ async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeyp
         published.append((stream, event))
 
     monkeypatch.setattr(
-        event_receiver_service.EventPublisher,
+        native_receiver_base.EventPublisher,
         "publish",
         publish,
     )
