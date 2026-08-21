@@ -1,0 +1,26 @@
+# The Rust this repository builds with, everywhere, deliberately.
+#
+# CI used to install whatever `stable` meant on the day it ran. That is not a
+# pin, it is a subscription: clippy adds lints every six weeks, and the first
+# job to run after a release fails on code nobody touched. It happened here —
+# `chunks_exact` with a constant size became an error in 1.98 and turned the
+# Desktop job red on a pull request with no Rust changes in it at all.
+#
+# The second half of the problem is worse than the first. Without this file a
+# contributor's clippy is whatever they last installed, so the gate they run
+# before pushing is not the gate that judges them: a fix verified locally on
+# 1.97 passed and failed in CI on 1.98, which is the least useful shape a
+# check can have.
+#
+# Bumping is a deliberate change, not a background one. Move `channel` here and
+# the `dtolnay/rust-toolchain@<version>` refs in .github/workflows/{ci,
+# release-desktop,release-local-images}.yml together — they must agree, or CI
+# installs one toolchain and then downloads another to actually build with.
+#
+# Cross-compilation targets stay out of this file. The two jobs that need one
+# ask for it through the action, and listing them here would make every
+# contributor download a Windows and a macOS standard library they never build
+# against.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]

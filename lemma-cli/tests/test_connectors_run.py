@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-import pytest
 from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
@@ -135,13 +134,6 @@ def _fake_client(captured: dict):
             return {"result": {"ok": True}}
 
     return SimpleNamespace(connectors=Connectors())
-
-
-@pytest.fixture(autouse=True)
-def _clear_resolver_cache():
-    connectors._AUTH_CONFIG_CACHE.clear()
-    yield
-    connectors._AUTH_CONFIG_CACHE.clear()
 
 
 def _patch(monkeypatch, client):

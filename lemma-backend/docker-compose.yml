@@ -39,6 +39,15 @@ services:
       - "${DEV_SUPERTOKENS_PORT:-3567}:3567"
     environment:
       POSTGRESQL_CONNECTION_URI: postgresql://postgres:postgres@db:5432/supertokens
+      # Five minutes, not the one-hour default. Session refresh is on the hot
+      # path of every long-lived tab and is the half of auth that only breaks
+      # after you have stopped looking: a desktop install once spent days
+      # refreshing successfully into tokens that authorized nothing, because
+      # nobody had ever kept a local session open long enough to reach a
+      # refresh. At five minutes a normal afternoon of development exercises it
+      # dozens of times. Raise it with DEV_ACCESS_TOKEN_VALIDITY if a long-
+      # running manual test needs the token to outlive it.
+      ACCESS_TOKEN_VALIDITY: ${DEV_ACCESS_TOKEN_VALIDITY:-300}
     restart: unless-stopped
     healthcheck:
       test: >

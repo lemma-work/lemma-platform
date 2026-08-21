@@ -143,7 +143,7 @@ jobs:
           python-version: "3.14"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -442,7 +442,7 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: x86_64-pc-windows-msvc
 

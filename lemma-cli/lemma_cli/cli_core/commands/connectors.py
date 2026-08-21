@@ -24,10 +24,34 @@ operations_app = typer.Typer(
 triggers_app = typer.Typer(help="Connector trigger list and detail commands.")
 
 
-# The installed auth configs, memoized per client for the life of one command.
-# Resolution consults them up to twice (once to classify a positional, once to
-# resolve it), and that should still cost one request, not two.
-_AUTH_CONFIG_CACHE: dict[int, list[dict]] = {}
+# The installed auth configs, memoized on the client for the life of one
+# command. Resolution consults them up to twice (once to classify a positional,
+# once to resolve it), and that should still cost one request, not two.
+#
+# On the client, not in a module-level map. This was `dict[int, ...]` keyed on
+# `id(client)`, which is an address, and addresses are reused: CPython hands a
+# freshly allocated object the address a just-freed one had, reliably enough
+# that a loop allocating the same type hits it on the first attempt. So a new
+# client read a dead client's listing -- and a listing that had *errored*, which
+# is cached as None, became "No connectors are installed in this organization"
+# for a client that would have answered perfectly well. It surfaced as one CI
+# failure that reproduced on Linux and not on macOS, because whether the address
+# is reused depends on the allocator's state and nothing in this file.
+#
+# A weak-keyed map fixes the aliasing but not the shape of the problem: it
+# declines, silently, to memoize anything that is not weak-referenceable, and
+# `types.SimpleNamespace` -- what every fake client in this suite is -- is
+# exactly that. The memo would have been live in production and absent under
+# test, which is the arrangement where a test proves the least.
+#
+# An attribute is bound to the client's own lifetime, so there is no address to
+# collide on, nothing retained after the client is gone, and no global to reset
+# between tests.
+_AUTH_CONFIG_MEMO = "_lemma_auth_config_memo"
+
+# `None` is a meaningful memoized value here -- "we asked and could not find
+# out" -- so absence needs its own marker.
+_NOT_CACHED = object()
 
 
 def _auth_config_items(client: Any) -> list[dict] | None:
@@ -41,9 +65,9 @@ def _auth_config_items(client: Any) -> list[dict] | None:
     ids. Collapsing them routed `search "send email"` into a request for an
     install literally named "send email".
     """
-    key = id(client)
-    if key in _AUTH_CONFIG_CACHE:
-        return _AUTH_CONFIG_CACHE[key]
+    memoized = getattr(client, _AUTH_CONFIG_MEMO, _NOT_CACHED)
+    if memoized is not _NOT_CACHED:
+        return memoized  # type: ignore[return-value]
     try:
         data = to_plain(client.connectors.auth_configs.list(limit=200))
     except Exception:  # noqa: BLE001 — resolution degrades, never blocks
@@ -54,7 +78,12 @@ def _auth_config_items(client: Any) -> list[dict] | None:
         items = [item for item in data.get("items", []) if isinstance(item, dict)]
     else:
         items = None
-    _AUTH_CONFIG_CACHE[key] = items
+    try:
+        setattr(client, _AUTH_CONFIG_MEMO, items)
+    except (AttributeError, TypeError):
+        # A client that refuses attributes (`__slots__`) still gets the right
+        # answer; only the memoization is lost.
+        pass
     return items
 
 

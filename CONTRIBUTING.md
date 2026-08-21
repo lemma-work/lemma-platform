@@ -29,8 +29,16 @@ place the version is written. `nvm use` (or `fnm use`, or any tool that reads
 `package.json` files declare it under `engines`, and the frontend Dockerfile
 builds on the matching image. Change it in one place and everything follows.
 
-Python is 3.14 for the backend, managed by `uv`; Rust follows the toolchain the
-desktop workspace pins.
+Python is 3.14 for the backend, managed by `uv`.
+
+Rust is pinned by [`rust-toolchain.toml`](rust-toolchain.toml) at the repo root,
+the same way as `.nvmrc` above: rustup reads it, downloads that version if you
+do not have it, and uses it for every crate here. CI installs the same version
+explicitly, so the clippy that judges a pull request is the clippy you ran
+before opening it — which is worth having, because clippy adds lints every six
+weeks and one of them once turned CI red on a change containing no Rust at all.
+Bumping it means moving the `channel` and the `dtolnay/rust-toolchain@<version>`
+refs in the workflows together.
 
 One 3.14 feature is worth calling out because it reads as a bug to anyone (or
 anything) expecting older Python: [PEP 758][pep758] allows `except` to take an
