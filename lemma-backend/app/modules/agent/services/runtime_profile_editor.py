@@ -21,13 +21,11 @@ from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     AnthropicCompatibleRuntimeConfig,
-    ApiKeyRuntimeCredentials,
     HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
-    reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.runtime_profile_service import (
@@ -35,7 +33,10 @@ from app.modules.agent.services.runtime_profile_service import (
 )
 from app.modules.agent.services.runtime_profile_creation import (
     _normalize_profile_name,
-    _normalized_headers,
+)
+from app.modules.agent.services.runtime_provider_patch import (
+    resolve_catalog_names,
+    resolve_provider_patch,
 )
 from app.modules.agent.services.runtime_system_profiles import (
     _agent_host_model_catalog,
@@ -313,114 +314,38 @@ class AgentRuntimeProfileEditor:
         assert self._service.repository is not None
         is_anthropic = protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
         stored = _provider_config(profile)
+        patch = resolve_provider_patch(
+            profile,
+            stored,
+            is_anthropic=is_anthropic,
+            name=name,
+            description=description,
+            base_url=base_url,
+            api_key=api_key,
+            model_names=model_names,
+            headers=headers,
+            model_settings=model_settings,
+            refresh_models=refresh_models,
+        )
+        changes = patch.changes
 
-        changes: dict[str, object] = {}
-        if not isinstance(name, UnsetType):
-            changes["name"] = _normalize_profile_name(name)
-        if not isinstance(description, UnsetType):
-            changes["description"] = description.strip() if description else None
-
-        if isinstance(base_url, UnsetType):
-            next_base_url = stored.base_url
-        elif base_url is None:
-            if not is_anthropic:
-                raise ValueError("An OpenAI-compatible profile requires a base URL")
-            next_base_url = None
-        else:
-            next_base_url = base_url
-        base_url_changed = not isinstance(base_url, UnsetType) and str(
-            next_base_url
-        ) != str(stored.base_url)
-
-        if base_url_changed and next_base_url is not None:
+        if patch.base_url_changed and patch.base_url is not None:
             # Validate directly rather than relying on discovery to do it: an
             # edit that changes the URL without re-discovering would otherwise
             # never see the SSRF guard at all. Released for the same reason as
             # the discovery below -- the guard resolves DNS, so it is a network
             # call however quick it usually is.
             async with connection_released(self._session()):
-                await discovery._validate_public_base_url(str(next_base_url))
+                await discovery._validate_public_base_url(str(patch.base_url))
 
-        next_headers = (
-            stored.headers
-            if isinstance(headers, UnsetType)
-            else _normalized_headers(headers)
-        )
-        next_settings = (
-            stored.model_settings
-            if isinstance(model_settings, UnsetType)
-            else (model_settings or {})
-        )
-
-        # Credentials have three states: absent keeps, a string rotates, an
-        # explicit null clears.
-        next_credentials = profile.credentials
-        if not isinstance(api_key, UnsetType):
-            if api_key is None or not str(api_key).strip():
-                if is_anthropic:
-                    raise ValueError(
-                        "An Anthropic-compatible profile requires an API key"
-                    )
-                next_credentials = None
-            else:
-                next_credentials = ApiKeyRuntimeCredentials(
-                    api_key=str(api_key).strip()
-                )
-        if (
-            not isinstance(api_key, UnsetType)
-            or next_credentials is not profile.credentials
-        ):
-            changes["credentials"] = next_credentials
-
-        rediscover = (
-            refresh_models
-            or base_url_changed
-            or not isinstance(api_key, UnsetType)
-            or not isinstance(model_names, UnsetType)
-        )
-        if rediscover:
-            revealed = reveal_credentials(next_credentials) or {}
-            secret = revealed.get("api_key")
-            discovery_url = str(next_base_url or "https://api.anthropic.com")
-            # The profile was read above and nothing has been written yet, so
-            # the connection can go back for the length of the provider call --
-            # an HTTP round trip to a caller-supplied base URL, which is as slow
-            # as whatever is at the other end. The write below re-acquires.
-            async with connection_released(self._session()):
-                discovered = (
-                    await discovery._discover_anthropic_compatible_models(
-                        base_url=discovery_url,
-                        api_key=str(secret or ""),
-                        headers=next_headers,
-                    )
-                    if is_anthropic
-                    else await discovery._discover_openai_compatible_models(
-                        base_url=discovery_url,
-                        api_key=str(secret) if secret else None,
-                        headers=next_headers,
-                    )
-                )
-            if not isinstance(model_names, UnsetType):
-                fallback_names = list(model_names)
-            elif discovered:
-                # _provider_model_catalog unions its fallback with what it
-                # discovered, so passing the stored names here would keep a
-                # model the provider has dropped selectable forever.
-                fallback_names = []
-            else:
-                # Discovery came back empty - a brief outage, or a provider with
-                # no /models endpoint. Keep the working catalog rather than
-                # blanking it.
-                fallback_names = [entry.name for entry in profile.model_catalog]
-            catalog = discovery._provider_model_catalog(
-                discovered_models=discovered,
-                fallback_model_names=fallback_names,
-                default_vision=is_anthropic,
+        if patch.rediscover:
+            catalog = await self._rediscovered_catalog(
+                profile, patch, model_names=model_names, is_anthropic=is_anthropic
             )
             changes["model_catalog"] = catalog
             changes["metadata"] = {
                 **profile.metadata,
-                "catalog_discovered": bool(discovered),
+                "catalog_discovered": bool(catalog),
             }
         else:
             catalog = list(profile.model_catalog)
@@ -436,25 +361,55 @@ class AgentRuntimeProfileEditor:
             # failing an edit the user did not connect to that model.
             changes["default_model_name"] = catalog[0].name
 
-        if (
-            base_url_changed
-            or not isinstance(headers, UnsetType)
-            or not isinstance(model_settings, UnsetType)
-        ):
+        if patch.config_changed:
             config_type = (
                 AnthropicCompatibleRuntimeConfig
                 if is_anthropic
                 else OpenAICompatibleRuntimeConfig
             )
             changes["config"] = config_type(
-                base_url=next_base_url,
-                headers=next_headers,
-                model_settings=next_settings,
+                base_url=patch.base_url,
+                headers=patch.headers,
+                model_settings=patch.model_settings,
             )
 
         if not changes:
             return profile
         return await self._service.repository.update(profile.with_changes(**changes))
+
+    async def _rediscovered_catalog(
+        self, profile, patch, *, model_names, is_anthropic: bool
+    ):
+        """Ask the provider what it serves now, and rebuild the catalog from it.
+
+        The profile was read above and nothing has been written yet, so the
+        connection goes back for the length of the call -- an HTTP round trip to
+        a caller-supplied base URL, which is as slow as whatever is at the other
+        end. The write afterwards re-acquires.
+        """
+        secret = patch.api_secret()
+        discovery_url = str(patch.base_url or "https://api.anthropic.com")
+        async with connection_released(self._session()):
+            discovered = (
+                await discovery._discover_anthropic_compatible_models(
+                    base_url=discovery_url,
+                    api_key=str(secret or ""),
+                    headers=patch.headers,
+                )
+                if is_anthropic
+                else await discovery._discover_openai_compatible_models(
+                    base_url=discovery_url,
+                    api_key=secret,
+                    headers=patch.headers,
+                )
+            )
+        return discovery._provider_model_catalog(
+            discovered_models=discovered,
+            fallback_model_names=resolve_catalog_names(
+                profile, model_names, discovered
+            ),
+            default_vision=is_anthropic,
+        )
 
     async def archive_profile(
         self,

@@ -20,6 +20,9 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentEventType, HarnessOptions
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
+    ModelRequestStreamer,
+)
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.tools.tool_errors import AgentInputRequired
@@ -65,20 +68,22 @@ class _Run:
 
 @pytest.mark.asyncio
 async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> None:
-    harness = PydanticAIHarness()
     should_stop = False
     events = []
 
     async def stop_requested() -> bool:
         return should_stop
 
+    streamer = ModelRequestStreamer(
+        emit_tokens=True,
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000001"),
+        should_stop=stop_requested,
+    )
     with anyio.move_on_after(10, shield=True):
-        async for event in harness._stream_model_request(
+        async for event in streamer._stream_model_request(
             _Node(),
             _Run(),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000001"),
             malformed_tool_call_ids=set(),
-            should_stop=stop_requested,
         ):
             events.append(event)
             should_stop = True
