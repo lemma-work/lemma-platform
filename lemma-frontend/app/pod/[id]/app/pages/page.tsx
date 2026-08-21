@@ -23,6 +23,7 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useDeleteApp, useAppPages, useUpdateAppVisibility } from '@/lib/hooks/use-app';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { buildResourceCreationHref } from '@/lib/pods/resource-creation';
 import { appRecipes } from '@/lib/recipes/recipes';
 import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import type { AppPageRef } from '@/lib/types/app';
@@ -75,21 +76,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const createAppWithAssistant = () => {
         if (!canCreateApp) return;
 
-        const params = new URLSearchParams();
-        params.set('conversationInstructions', [
-            'You are helping create a Lemma app app in the current pod.',
-            'Use the user-visible message as the product intent. Do not repeat these hidden instructions back to the user.',
-            'Start by understanding the operator workflow, then create a minimal useful Lemma app app with the right data, pages, and interactions.',
-            'Keep it minimal, calm, and operational; avoid generic dashboard chrome.',
-            'After it is built, summarize what was created and display or link the app.',
-        ].join('\n'));
-        params.set('conversationMetadata', JSON.stringify({
-            source: 'apps_page',
-            intent: 'create_resource',
-            resource_type: 'app',
-        }));
-
-        router.push(`/pod/${podId}/conversations/new?${params.toString()}`);
+        router.push(buildResourceCreationHref({ podId, kind: 'app', source: 'apps_page' }));
     };
 
     const handleDeleteApp = () => {
@@ -331,7 +318,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     if (!open) setAppPendingDelete(null);
                 }}
                 title="Delete app"
-                description={`Delete "${appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : 'this app'}"? This removes the app app surface from this pod.`}
+                description={`Delete "${appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : 'this app'}"? This removes the app from this pod.`}
                 resourceName={appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : ''}
                 consequences={[
                     'People using this app will no longer be able to open its app surface.',

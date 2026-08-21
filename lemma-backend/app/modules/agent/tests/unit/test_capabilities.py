@@ -254,7 +254,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     )
 
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -369,6 +369,127 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     ]
 
 
+@pytest.mark.anyio
+async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
+    """The usage prompt is many tool calls away by the time an item finishes.
+
+    Writing a plan is the half models do reliably; checking items off is the
+    half they drop, and the instruction to do it lived only in the system
+    prompt. It rides back on the tool result now, where the model is already
+    looking, naming the next item and when to flip it.
+    """
+    from pydantic_ai.tools import RunContext
+    from pydantic_ai.usage import RunUsage
+
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.tools.context import BaseAgentContext
+
+    store: dict = {}
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
+    )
+    capability = build_todo_capability(
+        uow_factory=_FakeUoW, conversation_id=uuid4()
+    )
+    toolset = capability.get_toolset()
+    run_ctx = RunContext(
+        deps=BaseAgentContext(
+            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
+        ),
+        model=None,  # type: ignore[arg-type]
+        usage=RunUsage(),
+        prompt=None,
+    )
+
+    async def call(args: dict):
+        prepared = await toolset.for_run(run_ctx)
+        async with prepared:
+            tools = await prepared.get_tools(run_ctx)
+            tool = tools["write_todos"]
+            validated = tool.args_validator.validate_python(
+                args, context=run_ctx.validation_context
+            )
+            return await prepared.call_tool("write_todos", validated, run_ctx, tool)
+
+    planned = await call({"todos": ["- [ ] Fetch the Q3 report", "- [ ] Summarize"]})
+    assert planned["next"] == "Fetch the Q3 report"
+    assert "0 of 2 done" in planned["reminder"]
+    # The exact call to make, in the task's own words, so flipping it is copying.
+    assert '- [x] Fetch the Q3 report' in planned["reminder"]
+
+    flipped = await call({"todos": ["- [x] Fetch the Q3 report"]})
+    assert flipped["todos"] == ["- [x] Fetch the Q3 report", "- [ ] Summarize"]
+    assert flipped["next"] == "Summarize"
+    assert "1 of 2 done" in flipped["reminder"]
+
+    finished = await call({"todos": ["- [x] Summarize"]})
+    assert "next" not in finished
+    assert "Every item is checked off" in finished["reminder"]
+
+
+@pytest.mark.anyio
+async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeypatch):
+    """Text is how a single line finds its task, and models paraphrase.
+
+    "- [x] Fetch Q3 report" against a planned "Fetch the Q3 report" used to
+    append a second, completed item: the planned one stayed open forever and
+    the list grew a near-duplicate. Adding a genuinely new task must still add.
+    """
+    from pydantic_ai.tools import RunContext
+    from pydantic_ai.usage import RunUsage
+
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.tools.context import BaseAgentContext
+
+    store: dict = {}
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
+    )
+    capability = build_todo_capability(
+        uow_factory=_FakeUoW, conversation_id=uuid4()
+    )
+    toolset = capability.get_toolset()
+    run_ctx = RunContext(
+        deps=BaseAgentContext(
+            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
+        ),
+        model=None,  # type: ignore[arg-type]
+        usage=RunUsage(),
+        prompt=None,
+    )
+
+    async def call(args: dict):
+        prepared = await toolset.for_run(run_ctx)
+        async with prepared:
+            tools = await prepared.get_tools(run_ctx)
+            tool = tools["write_todos"]
+            validated = tool.args_validator.validate_python(
+                args, context=run_ctx.validation_context
+            )
+            return await prepared.call_tool("write_todos", validated, run_ctx, tool)
+
+    await call({"todos": ["- [ ] Fetch the Q3 report", "- [ ] Summarize findings"]})
+
+    reworded = await call({"todos": ["- [x] Fetch Q3 report"]})
+
+    # Flipped in place, and stored under the wording the person already saw.
+    assert reworded["todos"] == [
+        "- [x] Fetch the Q3 report",
+        "- [ ] Summarize findings",
+    ]
+
+    # An unrelated new task is still an addition, not a mangled match.
+    added = await call({"todos": ["- [ ] Email the board"]})
+    assert added["todos"][-1] == "- [ ] Email the board"
+
+    # An unchecked line that resembles an open task is left alone too: only a
+    # check-off is treated as "I meant the one already on the list".
+    restated = await call({"todos": ["- [ ] Summarise findings"]})
+    assert "- [ ] Summarise findings" in restated["todos"]
+
+
 def test_normalize_stored_todos_recovers_observed_corrupt_history():
     from app.modules.agent.capabilities.todo import _normalize_stored
 
@@ -423,7 +544,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -611,7 +732,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -686,7 +807,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -739,7 +860,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         if supports_vision:
             toolsets = [*full_toolsets, view_image_toolset]
         return await build_lemma_harness_tooling(
-            uow_factory=lambda: _FakeUoW(),
+            uow_factory=_FakeUoW,
             agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
             ctx=deps,
             full_toolsets=toolsets,
@@ -815,7 +936,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -901,7 +1022,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     )
     full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=agent_entity,
         ctx=deps,
         full_toolsets=full_toolsets,

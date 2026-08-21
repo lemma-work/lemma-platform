@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import suppress
 import asyncio
 import time
@@ -17,7 +18,11 @@ from opentelemetry import trace
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.core.observability.telemetry import agent_run_telemetry_context
+from app.core.observability.telemetry import (
+    agent_run_telemetry_context,
+    record_span_input,
+    record_span_output,
+)
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.transport_errors import (
@@ -43,6 +48,8 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
     JsonValue,
+    MessageKind,
+    MessageRole,
 )
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
@@ -165,6 +172,25 @@ def _rejected_run_error_message(data: object) -> str:
         if isinstance(detail, str) and detail.strip():
             return detail.strip()
     return "The Agent Host rejected this run before dispatch. Try again."
+
+
+def _run_input_text(messages: Sequence[Message]) -> str | None:
+    """The prompt this run is answering: the last thing the user said.
+
+    The harness is handed the whole selected history, but a trace's input is the
+    turn, not the transcript -- the earlier turns are already their own traces in
+    the same session. Tool returns and thinking blocks are skipped for the same
+    reason: they are rows in the run, not the thing that started it.
+    """
+    for message in reversed(messages):
+        if message.role != MessageRole.USER.value:
+            continue
+        if message.kind is not MessageKind.TEXT:
+            continue
+        text = (message.text or "").strip()
+        if text:
+            return text
+    return None
 
 
 def _profile_model_settings(
@@ -425,6 +451,11 @@ class AgentRunnerService:
                         "gen_ai.request.model",
                         resolved_runtime.model_name_for_harness,
                     )
+                    # What a trace UI shows as the run's input and output. Without
+                    # them a session reads as a column of timestamps: the turns are
+                    # grouped correctly and every row is blank, so finding the run
+                    # you want means opening each one.
+                    record_span_input(span, _run_input_text(messages))
                     if observer is not None:
                         try:
                             await observer.on_run_started(conversation, ctx)
@@ -507,6 +538,10 @@ class AgentRunnerService:
                                 if should_stop:
                                     terminal_event_seen = True
                     finally:
+                        # In `finally`, because a run that failed or was
+                        # cancelled part-way is the one worth reading, and it
+                        # still has whatever the model produced before it went.
+                        record_span_output(span, output_data)
                         if observer is not None and observer_started:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
