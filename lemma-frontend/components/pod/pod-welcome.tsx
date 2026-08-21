@@ -2,19 +2,38 @@
 
 import { useState } from 'react';
 
-import { POD_WELCOME_ART } from '@/components/pod/pod-welcome-art';
 import { ResourceIdentity } from '@/components/shared/resource-identity';
+import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { ArrowRight } from '@/components/ui/icons';
+import { AppWindow, ArrowRight, Bot, MessageCircle, Users, type LemmaIcon } from '@/components/ui/icons';
+import { Input } from '@/components/ui/input';
 import { LEM_SEED } from '@/lib/identity/seeded-identity';
 import {
     POD_WELCOME_OPTIONS,
     POD_WELCOME_OWN_WORDS_INSTRUCTIONS,
     POD_WELCOME_SURPRISE,
+    type PodWelcomeCardId,
     type PodWelcomeOptionId,
 } from '@/lib/pods/pod-welcome';
 import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 import { cn } from '@/lib/utils';
+
+/**
+ * A mark per option, from the icon vocabulary rather than drawn here.
+ *
+ * These started as bespoke illustrations, back when each option owned a 92px
+ * picture panel and the difference between them had to be *drawn*. At 34px
+ * that stopped being true — three shapes in a row reads the same whether it
+ * means agents or people — and a file of hand-rolled SVG for four glyphs is
+ * exactly what the icon set exists to prevent. `Bot` against `Users` separates
+ * the two middle rows better than any silhouette did at this size.
+ */
+const OPTION_MARKS: Record<PodWelcomeCardId, LemmaIcon> = {
+    surface: MessageCircle,
+    app: AppWindow,
+    agent: Bot,
+    people: Users,
+};
 
 export interface PodWelcomeChoice {
     message: string;
@@ -43,6 +62,10 @@ interface PodWelcomeProps {
  * four rows, a field, and a way past. An earlier pass had this backwards, with
  * four large picture panels and Lem at favicon size in the corner, so the
  * introduction was the smallest thing on the introduction screen.
+ *
+ * Appearance lives in `styles/features/pod-welcome.css` rather than in class
+ * strings here, because every control is a `Button` or an `Input` and skinning
+ * those inline is exactly the drift the design audit exists to catch.
  */
 export function PodWelcome({ onStart, onSkip }: PodWelcomeProps) {
     const [ownWords, setOwnWords] = useState('');
@@ -66,7 +89,7 @@ export function PodWelcome({ onStart, onSkip }: PodWelcomeProps) {
                     {/* Lem's half. Tone 0 is its own colour, washed into the
                         sheet rather than laid on top of it, so the panel reads
                         as the creature's ground and not as a coloured box. */}
-                    <aside className="lm-identity-hue-0 flex flex-col justify-center gap-[18px] border-b border-[color:var(--border-subtle)] bg-[color:color-mix(in_srgb,var(--lm-identity-soft)_62%,var(--surface-1))] p-7 sm:border-b-0 sm:border-r">
+                    <aside className="lm-identity-hue-0 pod-welcome-portrait">
                         <ResourceIdentity
                             seed={LEM_SEED}
                             label={DEFAULT_RESPONDER_NAME}
@@ -82,11 +105,11 @@ export function PodWelcome({ onStart, onSkip }: PodWelcomeProps) {
                             {/* One line for every pod, because it is true in
                                 every pod: Lem is the only thing in here yet, and
                                 "first" is what makes the second one — the row
-                                below that offers to hire one — read as the
-                                natural next thought rather than as an upsell.
-                                It also drops a split where a fifth pod was being
-                                told it was somebody's first. */}
-                            <DialogTitle className="text-[21px] font-medium leading-[1.2] tracking-[-0.012em] text-[var(--text-primary)] text-balance">
+                                that offers to hire one — read as the natural next
+                                thought rather than as an upsell. It also drops a
+                                split where a fifth pod was being told it was
+                                somebody's first. */}
+                            <DialogTitle className="pod-welcome-title">
                                 {DEFAULT_RESPONDER_NAME} is the first agent here.
                             </DialogTitle>
                             {/* "Answers where you already chat" was the weakest
@@ -94,7 +117,7 @@ export function PodWelcome({ onStart, onSkip }: PodWelcomeProps) {
                                 like a support desk waiting to be asked. The
                                 point of a surface is the opposite — once it is
                                 on Telegram it can start the conversation. */}
-                            <DialogDescription className="mt-2.5 text-[13.5px] leading-[1.55] text-[var(--text-secondary)]">
+                            <DialogDescription className="pod-welcome-lede">
                                 It builds what you ask for, and it can work from
                                 Telegram or Slack.
                             </DialogDescription>
@@ -103,92 +126,94 @@ export function PodWelcome({ onStart, onSkip }: PodWelcomeProps) {
                         {/* The one control that asks for nothing — no decision,
                             no sentence — so it belongs with the introduction
                             rather than at the end of a list of decisions. */}
-                        <button
+                        <Button
                             type="button"
+                            variant="secondary"
+                            className="pod-welcome-surprise"
                             onClick={() => onStart({
                                 message: POD_WELCOME_SURPRISE.message,
                                 instructions: POD_WELCOME_SURPRISE.instructions,
                                 optionId: POD_WELCOME_SURPRISE.id,
                             })}
-                            className="group mt-1 flex w-fit items-center gap-2 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--lm-identity-tone)_32%,var(--border-default))] bg-[var(--surface-1)] px-3 py-2 text-[13.5px] text-[var(--text-primary)] shadow-[var(--shadow-raised-quiet)] transition-gentle hover:border-[color:var(--lm-identity-tone)] focus-ring"
                         >
                             {POD_WELCOME_SURPRISE.title}
-                            <ArrowRight className="h-3.5 w-3.5 text-[var(--lm-identity-tone)] transition-gentle group-hover:translate-x-0.5" />
-                        </button>
+                            <ArrowRight className="pod-welcome-surprise-arrow h-3.5 w-3.5" />
+                        </Button>
                     </aside>
 
                     {/* The menu half. */}
-                    <div className="flex flex-col gap-3 p-5">
-                        <div className="pr-7 text-xs uppercase tracking-[0.07em] text-[var(--text-soft)]">
-                            Point it somewhere
-                        </div>
+                    <div className="pod-welcome-menu">
+                        <div className="pod-welcome-eyebrow">Point it somewhere</div>
 
-                        <div className="flex flex-col gap-1">
+                        <div className="pod-welcome-options">
                             {POD_WELCOME_OPTIONS.map((option) => {
-                                const Mark = POD_WELCOME_ART[option.id];
+                                const Mark = OPTION_MARKS[option.id];
                                 return (
-                                    <button
+                                    <Button
                                         key={option.id}
                                         type="button"
+                                        variant="quiet"
+                                        className={cn(
+                                            // `hue` rather than `tone`: the row adopts
+                                            // the colour for its mark without it
+                                            // inheriting onto the title and the note.
+                                            `lm-identity-hue-${option.tone}`,
+                                            'pod-welcome-option',
+                                        )}
                                         onClick={() => onStart({
                                             message: option.message,
                                             instructions: option.instructions,
                                             optionId: option.id,
                                         })}
-                                        className={cn(
-                                            // `hue` rather than `tone`: the row adopts
-                                            // the colour for its tile without it
-                                            // inheriting onto the title and the note.
-                                            `lm-identity-hue-${option.tone}`,
-                                            'group flex items-center gap-3 rounded-[var(--radius-md)] border border-transparent p-2 text-left transition-gentle hover:border-[color:var(--border-subtle)] hover:bg-[var(--surface-2)] focus-ring',
-                                        )}
                                     >
-                                        <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[color:color-mix(in_srgb,var(--lm-identity-tone)_15%,var(--surface-1))] text-[var(--lm-identity-tone)] transition-gentle group-hover:bg-[color:color-mix(in_srgb,var(--lm-identity-tone)_24%,var(--surface-1))]">
-                                            <Mark />
+                                        <span className="pod-welcome-option-mark">
+                                            <Mark className="h-[18px] w-[18px]" />
                                         </span>
                                         <span className="min-w-0">
-                                            <span className="block text-[13.5px] text-[var(--text-primary)]">
+                                            <span className="pod-welcome-option-title">
                                                 {option.title}
                                             </span>
-                                            <span className="block text-xs text-[var(--text-tertiary)]">
+                                            <span className="pod-welcome-option-note">
                                                 {option.note}
                                             </span>
                                         </span>
-                                    </button>
+                                    </Button>
                                 );
                             })}
                         </div>
 
-                        <div className="mt-auto flex flex-col gap-2 pt-1">
-                            <form onSubmit={submitOwnWords} className="flex items-center gap-2.5 rounded-[var(--radius-md)] border border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 focus-within:border-[color:color-mix(in_srgb,var(--action-primary)_55%,var(--border-default))]">
-                                <input
-                                    type="text"
+                        <div className="pod-welcome-tail">
+                            <form onSubmit={submitOwnWords} className="pod-welcome-field">
+                                <Input
                                     value={ownWords}
                                     onChange={(event) => setOwnWords(event.target.value)}
                                     placeholder="Or say it in your own words"
                                     aria-label={`Tell ${DEFAULT_RESPONDER_NAME} what you need`}
-                                    className="min-w-0 flex-1 bg-transparent text-[13.5px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
+                                    className="pod-welcome-field-input"
                                 />
-                                <button
+                                <Button
                                     type="submit"
+                                    variant="quiet"
+                                    size="icon"
                                     aria-label="Send"
                                     disabled={!ownWords.trim()}
-                                    className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full border border-[color:var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)] transition-gentle hover:border-[color:var(--action-primary)] hover:text-[var(--action-primary)] disabled:opacity-50 disabled:hover:border-[color:var(--border-subtle)] disabled:hover:text-[var(--text-tertiary)] focus-ring"
+                                    className="pod-welcome-send"
                                 >
                                     <ArrowRight className="h-3.5 w-3.5" />
-                                </button>
+                                </Button>
                             </form>
 
                             {/* The way past, and it lands on what this route did
                                 before the door existed: the greeting, and the
                                 welcome turn. */}
-                            <button
+                            <Button
                                 type="button"
+                                variant="link"
+                                className="pod-welcome-skip"
                                 onClick={onSkip}
-                                className="w-fit text-xs text-[var(--text-soft)] underline decoration-[color:var(--border-default)] underline-offset-[3px] transition-gentle hover:text-[var(--text-secondary)] focus-ring"
                             >
                                 Not now
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </div>
