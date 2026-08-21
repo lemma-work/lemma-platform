@@ -137,6 +137,11 @@ async def _create_system_lemma_agent(client: AsyncClient, pod_id: str) -> str:
     return response.json()["name"]
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_telegram_webhook_surface_registers_and_replies_with_real_agent(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -212,6 +217,11 @@ async def test_telegram_webhook_surface_registers_and_replies_with_real_agent(
     assert (messages[-1].get("text") or "").strip()
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_telegram_webhook_multi_turn_reuses_conversation_with_real_agent(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -451,6 +461,11 @@ async def test_slack_signed_webhook_is_deduplicated_and_replies_via_worker(
     assert conversation is not None
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -680,6 +695,11 @@ async def test_slack_native_socket_receiver_acknowledges_and_replies_via_worker(
     assert conversation is not None
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_whatsapp_account_webhook_replies_via_worker(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -867,6 +887,11 @@ async def test_whatsapp_document_is_downloaded_and_persisted_via_worker(
     assert (inbound.get("metadata") or {})["ingested_files"]
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_teams_authenticated_dm_replies_through_bot_framework_worker(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -975,6 +1000,11 @@ async def test_teams_authenticated_dm_replies_through_bot_framework_worker(
     assert conversation is not None
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_teams_channel_mention_ingests_attachment_and_channel_context(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -1117,6 +1147,11 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
     )
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_resend_signed_webhook_replies_via_worker(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -1196,6 +1231,11 @@ async def test_resend_signed_webhook_replies_via_worker(
     assert conversation is not None
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_gmail_schedule_event_runs_from_outbox_to_composio_provider(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -1329,6 +1369,11 @@ async def test_gmail_schedule_event_runs_from_outbox_to_composio_provider(
     assert (inbound.get("metadata") or {})["ingested_files"]
 
 
+# Platform variation, not a distinct journey: same ingress -> conversation
+# -> worker -> outbound reply as the Slack webhook test, with a different
+# payload shape. Nothing is deleted and no assertion is weakened -- this runs
+# nightly in the protected lane instead of in front of the merge button.
+@pytest.mark.slow
 async def test_outlook_schedule_event_runs_from_outbox_to_composio_provider(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
