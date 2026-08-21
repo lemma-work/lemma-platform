@@ -249,7 +249,9 @@ async def test_conversation_detail_reports_persisted_retryability(
     conversation.last_run_status = AgentRunStatus.FAILED
     repository.get_conversation.return_value = conversation
     repository.run_has_only_user_messages.return_value = not has_non_user_activity
-    monkeypatch.setattr(queries, "resolve_expected_agent_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        queries, "resolve_expected_agent_id", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(queries, "require_agent_action", AsyncMock())
 
     result = await service.get_conversation(

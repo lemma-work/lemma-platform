@@ -41,7 +41,6 @@ from app.modules.agent.services.conversation_resume_return import (
 )
 from app.modules.agent.services.run_event_pump import RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.final_answer.final_answer_toolset import (

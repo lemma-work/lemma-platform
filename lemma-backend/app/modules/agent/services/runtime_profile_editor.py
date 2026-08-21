@@ -32,9 +32,13 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
-    _agent_host_model_catalog,
+)
+from app.modules.agent.services.runtime_profile_creation import (
     _normalize_profile_name,
     _normalized_headers,
+)
+from app.modules.agent.services.runtime_system_profiles import (
+    _agent_host_model_catalog,
 )
 
 # Imported as a module so a patched discovery function is the one that runs.
