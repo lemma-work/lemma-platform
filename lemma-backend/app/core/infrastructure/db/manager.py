@@ -26,8 +26,22 @@ class DatabaseManager:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-    async def truncate_all(self):
+    async def truncate_all(
+        self,
+        preserve: frozenset[str] = frozenset(),
+        keep_rows: dict[str, str] | None = None,
+    ):
         """Fast data reset for e2e: empty every table without dropping the schema.
+
+        ``preserve`` names tables to leave alone entirely — for a global catalog
+        that is not per-test data at all.
+
+        ``keep_rows`` maps a table to a SQL predicate identifying the rows that
+        survive; everything else in that table is deleted as usual. This is how
+        a session-scoped fixture outlives the test that created it without its
+        table accumulating: preserving `users` wholesale looked equivalent and
+        was not — leftover users from earlier tests changed the answer for a
+        later one that looked a phone number up by owner.
 
         Used between tests so the schema (and any shared worker connections) stay
         alive while data is isolated. CASCADE handles FK order in one statement.
@@ -39,7 +53,11 @@ class DatabaseManager:
         empty relation), and CASCADE still empties anything referencing a dirty
         table, so isolation is unchanged.
         """
-        table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
+        table_names = [
+            table.name
+            for table in reversed(Base.metadata.sorted_tables)
+            if table.name not in preserve
+        ]
         if not table_names:
             return
         async with self.engine.begin() as conn:
@@ -64,8 +82,14 @@ class DatabaseManager:
             # pod-scoped data lives in per-pod schemas and shared tables use UUID
             # keys, so no test depends on identity columns restarting at 1.
             await conn.execute(text("SET LOCAL session_replication_role = 'replica'"))
+            keep_rows = keep_rows or {}
             for ord_ in dirty_ords:
-                await conn.execute(text(f'DELETE FROM "{table_names[ord_]}"'))
+                name = table_names[ord_]
+                kept = keep_rows.get(name)
+                statement = f'DELETE FROM "{name}"'
+                if kept:
+                    statement += f" WHERE NOT ({kept})"
+                await conn.execute(text(statement))
 
     async def drop_tables(self):
         async with self.engine.begin() as conn:

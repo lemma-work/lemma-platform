@@ -627,6 +627,17 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # the prod default (5) so extraction rides that out instead of failing.
     # Set on os.environ so the worker subprocess (which indexes) inherits it.
     os.environ.setdefault("KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", "8")
+    # ...but raising the attempt count without shrinking the base delay turned a
+    # blip into a stall. The total wait is base * (2^(attempts-1) - 1), which the
+    # datastore config docstring says is "the dominant wait": at the production
+    # 1.0s base, eight attempts is 127 seconds, against a 240s test timeout. The
+    # per-test document_worker fixture already gets this right for its own fake
+    # processor (attempts=2, base=0.01); this is the session-wide equivalent.
+    os.environ.setdefault("KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS", "0.05")
+    # Once five consecutive connection failures open the circuit it stays open
+    # for a real 30 seconds before a half-open trial, and any test that follows
+    # a wobble in the same process pays it.
+    os.environ.setdefault("KREUZBERG_CIRCUIT_RESET_SECONDS", "0.5")
 
     # e2e indexes datastore files explicitly in-process (the index_file helper).
     # Disable the worker's auto-index-on-upload so it doesn't ALSO index every
@@ -646,6 +657,42 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # env={**os.environ, ...} already inherits it, no extra Popen key needed.
     settings.schedule_poll_interval_seconds = 0.5
     os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
+
+    # The same argument as the schedule poller, for the other production
+    # cadences the suite sits through. Each is a background loop the tests wait
+    # on rather than drive, so the production interval is pure latency here.
+    # Attribute + os.environ for the same reason as above: the worker subprocess
+    # re-reads its own config from its own environment.
+    #
+    #   agent_run_stop_poll_interval_seconds  1.0s -- every stop/cancel journey
+    #   function_run_poll_interval_seconds    0.5s -- every agent-dispatches-a-
+    #                                                 function wait
+    #   outbox_*                              5.0s -> 0.5s (their declared
+    #                                                 floor) -- normally masked by the
+    #       pg_notify wake, but it degrades *silently* to the full interval
+    #       whenever the listen path is not attached, which reads as "this test
+    #       is sometimes five seconds slower" rather than as a fault.
+    os.environ["AGENT_RUN_STOP_POLL_INTERVAL_SECONDS"] = "0.1"
+    os.environ["FUNCTION_RUN_POLL_INTERVAL_SECONDS"] = "0.1"
+    # 0.5 is the floor these two declare (ge=0.5); anything lower fails
+    # validation at import and takes the whole app down, not just the setting.
+    os.environ["OUTBOX_IDLE_POLL_MAX_SECONDS"] = "0.5"
+    os.environ["OUTBOX_LISTEN_FALLBACK_POLL_SECONDS"] = "0.5"
+
+    # Pool connections instead of opening a fresh one per unit of work.
+    #
+    # `db_pool_in_testing` defaults to False, and its docstring justifies that
+    # with "the pytest process runs many event loops and a pooled connection
+    # must not outlive the loop that opened it". That has not been true since
+    # pytest.ini pinned asyncio_default_fixture_loop_scope and
+    # asyncio_default_test_loop_scope to `session`: there is exactly one loop.
+    #
+    # The cost it left behind is measured in that same docstring -- "JOB queue
+    # latency was 0.3s under NullPool against 0.06s pooled" -- and this suite is
+    # IO-bound, so a full TCP connect per unit of work is close to pure latency.
+    # It also means two xdist workers churn connections against one shared
+    # Postgres for the whole run.
+    settings.db_pool_in_testing = True
 
     from app.core.infrastructure.db import session as db_session_module
 
@@ -1015,7 +1062,11 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
             # Once per database, not once per test — see _ensure_schema_once.
             await _ensure_schema_once(e2e_settings.database_url)
             # Start each test from a clean slate without dropping the schema.
-            await manager.truncate_all()
+            await manager.truncate_all(
+                preserve=_PRESERVED_TABLES,
+                keep_rows=_session_user_keep_rows(),
+            )
+            await _clear_session_user_redis_state(e2e_settings.redis_url)
             break
         except (DBAPIError, OSError) as exc:
             if not _is_transient_db_error(exc):
@@ -1074,8 +1125,88 @@ async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
             await _close_e2e_process_clients()
 
 
+# What survives the per-test wipe, so the session identity outlives the test
+# that created it.
+#
+# Measured: signing a user up costs 0.238s per test (SuperTokens signup, email
+# verification and signin, three round trips to the auth container) -- the
+# single largest per-test fixture in the suite, paid by every test to reach a
+# starting state identical to the last test's. Reusing one user drops that to
+# 0.020s.
+#
+# `auth_permissions` is a global catalog seeded on first org creation, not
+# per-test data, so it is preserved wholesale. Preserving it also sidesteps the
+# check-then-insert race documented in
+# test_org_creation_permission_seed_race_e2e.
+#
+# `users` is preserved by *row*, not wholesale, and the difference is not
+# theoretical: keeping every user made
+# test_whatsapp_transaction_sender_match_single_use_and_cache_invalidation fail
+# whenever it ran alongside another test that had used the same phone number --
+# green on its own, red in a suite. Tests that sign up their own users still get
+# a clean slate; only the shared session user stays.
+#
+# Organizations, pods and roles are not preserved at all: they are per-test data
+# in most suites, and keeping them would let rows accumulate until any test that
+# lists or counts them fails. Widening this means proving that first.
+_PRESERVED_TABLES = frozenset({"auth_permissions"})
+
+# The session's user, created once per process. One process runs one xdist
+# worker against one database, so a plain dict is the right scope.
+_SESSION_USER: dict[str, dict] = {}
+
+
+async def _clear_session_user_redis_state(redis_url: str) -> None:
+    """Drop Redis state keyed by the session user, between tests.
+
+    Deleting the user used to clear this implicitly: a fresh user each test
+    meant a fresh key space, so per-user counters, caches and dedup markers
+    started empty without anyone arranging it. Reusing one user removes that
+    accident, and the state it was hiding is real -- pod_bundle counts imports
+    per user per UTC day in Redis, so ten of its tests started failing with
+    "Daily import limit reached (5 per day)" once the sixth test in the module
+    inherited the fifth's tally.
+
+    A pattern sweep rather than a list of key shapes: the keys that embed a user
+    id are spread across modules and put it in different positions
+    (``pod-bundle:ratelimit:import:{user}:{day}``, ``{org}:{user}``,
+    ``{user}:{client_key}``), and a list would rot the first time someone added
+    one. The per-worker Redis database holds a few dozen keys, so SCAN is cheap.
+    """
+    user = _SESSION_USER.get("user")
+    if not user:
+        return
+
+    import redis.asyncio as redis
+
+    client = redis.from_url(redis_url, decode_responses=True)
+    try:
+        keys = [key async for key in client.scan_iter(match=f"*{user['id']}*")]
+        if keys:
+            await client.delete(*keys)
+    finally:
+        await client.aclose()
+
+
+def _session_user_keep_rows() -> dict[str, str]:
+    """Rows the per-test wipe must not delete: the session user, if there is one."""
+    user = _SESSION_USER.get("user")
+    if not user:
+        return {}
+    # The id is a SuperTokens-issued UUID this process just created, not test
+    # input, but quote it anyway so this can never become a way to smuggle SQL.
+    user_id = str(user["id"]).replace("'", "''")
+    return {"users": f"id = '{user_id}'"}
+
+
 @pytest_asyncio.fixture(scope="function")
 async def fixed_test_user(async_client: "AsyncClient"):
+    # Created once per process and reused. The row survives the per-test wipe
+    # (see _PRESERVED_TABLES) and the SuperTokens session lives in the auth
+    # container, which nothing here resets -- so the token stays valid.
+    if "user" in _SESSION_USER:
+        return _SESSION_USER["user"]
+
     email = f"test+module-e2e-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
 
@@ -1099,7 +1230,9 @@ async def fixed_test_user(async_client: "AsyncClient"):
     )
     assert access_token
 
-    return {"email": email, "token": access_token, "id": data["user"]["id"]}
+    user = {"email": email, "token": access_token, "id": data["user"]["id"]}
+    _SESSION_USER["user"] = user
+    return user
 
 
 @pytest_asyncio.fixture(scope="function")
