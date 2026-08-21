@@ -250,7 +250,7 @@ async def test_the_sweep_ignores_containers_that_are_not_ours() -> None:
     from app.modules.workspace.testing.fake_docker_engine import FakeContainer
 
     engine.containers["postgres"] = FakeContainer(
-        container_id="pg", name="postgres", image="postgres:16", labels={}
+        container_id="pg", name="postgres", image="postgres:18", labels={}
     )
 
     assert await _provider(engine).list_objects(deadline_at=_deadline()) == ()

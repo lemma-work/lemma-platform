@@ -89,7 +89,10 @@ def test_run_args_snapshot_db(config, paths, manifest):
     assert f"{paths.postgres_init_dir}:/docker-entrypoint-initdb.d:ro" in joined
     assert "--health-cmd pg_isready -U postgres -h localhost" in joined
     assert "-p" not in args  # no host ports for infra
-    assert args[-1] == "docker.io/pgvector/pgvector:0.8.3-pg16"
+    # Read from the manifest defaults rather than restated here: a literal
+    # meant this test had to be edited by hand every time the image moved, and
+    # it silently pinned an old major when nobody remembered.
+    assert args[-1] == m.DEFAULT_INFRA_IMAGES["postgres"]
 
 
 def test_run_args_loopback_only_ports(config, paths, manifest):

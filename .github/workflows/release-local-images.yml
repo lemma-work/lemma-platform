@@ -274,7 +274,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: protected-e2e-gate
     env:
-      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
+      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg18
       REDIS_IMAGE: docker.io/redis:7.4-alpine
       SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
     steps:
