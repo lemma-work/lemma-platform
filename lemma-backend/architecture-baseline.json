@@ -92,7 +92,6 @@
     "app/modules/agent_surfaces/api/controllers/surface_controller.py": 627,
     "app/modules/agent_surfaces/api/schemas.py": 610,
     "app/modules/agent_surfaces/platforms/whatsapp/service.py": 623,
-    "app/modules/agent_surfaces/services/surface_service.py": 1025,
     "app/modules/apps/services/app_service.py": 628,
     "app/modules/connectors/services/connector_operation_service.py": 665,
     "app/modules/connectors/services/connector_service.py": 1423,

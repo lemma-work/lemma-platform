@@ -1,32 +1,18 @@
 from __future__ import annotations
 
-import secrets
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-import httpx
 
-from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.platforms.common import (
     public_https_api_url_available,
-)
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
-from app.modules.agent_surfaces.platforms.telegram.client import (
-    ALLOWED_UPDATES,
-    TelegramApiError,
-    TelegramClient,
-    classify_telegram_error,
-    telegram_retry_after,
 )
 from app.modules.agent_surfaces.platforms.telegram.mode import (
     telegram_requires_webhook_setup,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
-    AgentSurfaceStatus,
     SurfaceConfig,
     SurfaceCredentialMode,
     SurfaceEventMode,
@@ -35,7 +21,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
-    AgentSurfacePlatformError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
@@ -46,27 +31,16 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAuthConfigPort,
     SurfaceInstallationRepositoryPort,
 )
-from app.modules.connectors.contracts import AuthConfigSource, ConnectorKind
-from app.modules.agent_surfaces.domain.setup_guides import (
-    SurfacePlatformSetupGuide,
-    build_surface_setup_guide,
-)
 from app.composition.surface_connectors import (
     ConnectorTriggerRepository,
 )
 from app.composition.surface_schedule import ScheduleService
-from app.modules.schedule.contracts import (
-    ScheduleCreateEntity,
-    ScheduleType,
-    ScheduleUpdateEntity,
-)
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
-    ensure_unique_telegram_account,
 )
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
@@ -76,6 +50,16 @@ from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
 )
 from app.modules.agent_surfaces.services.surface_setup_read import (
     SurfaceSetupReadMixin,
+)
+from app.modules.agent_surfaces.services.surface_email_schedule import (
+    SurfaceEmailScheduleMixin,
+)
+from app.modules.agent_surfaces.services.surface_telegram_webhook import (
+    SurfaceTelegramWebhookMixin,
+    _telegram_transition,
+)
+from app.modules.agent_surfaces.services.surface_consent import (
+    SurfaceConsentMixin,
 )
 from app.core.log.log import get_logger
 
@@ -95,59 +79,13 @@ _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _consent_check_cache: RedisJsonCache | None = None
 
 
-def _get_consent_cache() -> RedisJsonCache:
-    global _consent_check_cache
-    if (
-        _consent_check_cache is None
-        or _consent_check_cache._redis_url != settings.redis_url
-    ):
-        _consent_check_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-consent",
-            ttl_seconds=60,
-        )
-    return _consent_check_cache
-
-
-_EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
-    "GMAIL": "GMAIL_NEW_GMAIL_MESSAGE",
-    "OUTLOOK": "OUTLOOK_MESSAGE_TRIGGER",
-}
-# Bounded retry for the in-process Telegram webhook registration calls.
-_WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
-
-
-@dataclass(frozen=True, slots=True)
-class _TelegramWebhookTransition:
-    """What has to happen to Telegram's webhook because of an update.
-
-    Telegram allows one webhook per bot token, so a surface that changes its
-    account or its event mode has to give the old registration up before the new
-    one is made. That is why both halves are decided together rather than each
-    looking at the surface on its own.
-    """
-
-    register: bool
-    disable: bool
-
-
-def _telegram_transition(
-    previous: AgentSurfaceEntity, current: AgentSurfaceEntity
-) -> _TelegramWebhookTransition:
-    was_enabled = previous.is_active and telegram_requires_webhook_setup(previous)
-    is_enabled = current.is_active and telegram_requires_webhook_setup(current)
-    binding_changed = (
-        previous.account_id != current.account_id
-        or previous.event_mode != current.event_mode
-    )
-    return _TelegramWebhookTransition(
-        register=is_enabled
-        and (not was_enabled or binding_changed or not current.webhook_secret),
-        disable=was_enabled and (not is_enabled or binding_changed),
-    )
-
-
-class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
+class AgentSurfaceService(
+    SurfaceConsentMixin,
+    SurfaceTelegramWebhookMixin,
+    SurfaceEmailScheduleMixin,
+    SurfaceSetupReadMixin,
+    TelegramMiniAppSyncMixin,
+):
     def __init__(
         self,
         *,
@@ -477,365 +415,6 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
             )
         return deleted
 
-    def get_platform_setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
-        resolved_platform = SurfacePlatform.from_source(platform)
-        if resolved_platform is None:
-            normalized = str(platform).upper()
-            try:
-                resolved_platform = SurfacePlatform[normalized]
-            except KeyError as exc:
-                raise AgentSurfaceValidationError(
-                    f"Unsupported surface platform '{platform}'"
-                ) from exc
-        return build_surface_setup_guide(resolved_platform)
-
-    async def _surface_uses_org_custom_app(self, surface: AgentSurfaceEntity) -> bool:
-        """True when the org must manually point a platform app's webhook at Lemma.
-
-        For OAuth platforms this means the account was set up with the org's
-        own app (auth config ``ORG_CUSTOM``) — Lemma's system app is already
-        wired up centrally. WhatsApp is credential-managed (API_KEY, no OAuth
-        app registration) so there is no Lemma-shared "system app" to fall
-        back to: any connected account is the org's own WhatsApp Business app
-        and always needs its webhook configured.
-        """
-        if surface.account_id is None:
-            return False
-        if surface.surface_type is SurfacePlatform.WHATSAPP:
-            return True
-
-        if self._account_port is None or self._auth_config_port is None:
-            return False
-        account = await self._account_port.get_account(surface.account_id)
-        if account is None or account.auth_config_id is None:
-            return False
-        auth_config = await self._auth_config_port.get_auth_config(
-            account.auth_config_id
-        )
-        return bool(
-            auth_config
-            and auth_config.config_source == AuthConfigSource.ORG_CUSTOM.value
-        )
-
-    async def _whatsapp_verify_token_for_setup(
-        self, surface: AgentSurfaceEntity
-    ) -> str | None:
-        """The verify token to show the user for pasting into Meta's console.
-
-        A connected account's own ``verify_token`` (from its stored
-        credentials) — the value the backend actually checks incoming
-        ``hub.verify_token`` requests against for that surface. Falls back to
-        the system-wide token for account-less (Lemma-managed) surfaces.
-        """
-        if (
-            surface.surface_type is SurfacePlatform.WHATSAPP
-            and surface.account_id is not None
-            and self._credential_resolver is not None
-        ):
-            try:
-                credentials = await self._credential_resolver.for_account(
-                    surface.account_id
-                )
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic",
-                    account_id=surface.account_id,
-                    exc_info=True,
-                )
-                return None
-            return credentials.get("verify_token")
-        return surface_settings.whatsapp_verify_token
-
-    async def _surface_admin_consent(
-        self, surface: AgentSurfaceEntity
-    ) -> dict[str, Any] | None:
-        """Teams admin-consent state, or None for platforms that never need it."""
-        if surface.surface_type is not SurfacePlatform.TEAMS:
-            return None
-        info = await self.get_admin_consent_info(surface)
-        return {
-            "required": True,
-            "granted": info.get("status") is AgentSurfaceStatus.ACTIVE,
-            "consent_url": info.get("consent_url"),
-        }
-
-    async def activate_after_consent(
-        self,
-        *,
-        surface_id: UUID,
-        tenant_id: str,
-    ) -> AgentSurfaceEntity | None:
-        surface = await self.surface_repository.get(surface_id)
-        if surface is None:
-            return None
-
-        # `external_tenant_id` is the inbound-message tenant gate, and this
-        # write is first-wins, so a wrong value here would both reject the real
-        # tenant's messages and let the writer's own tenant through -- and then
-        # persist, because later legitimate activations skip the overwrite.
-        if not surface.external_tenant_id:
-            surface.external_tenant_id = tenant_id
-
-        surface.activate()
-        return await self.surface_repository.update(surface)
-
-    async def get_admin_consent_info(
-        self, surface: AgentSurfaceEntity
-    ) -> dict[str, Any]:
-        if surface.surface_type != SurfacePlatform.TEAMS:
-            return {"status": surface.status}
-
-        tenant_id = surface.external_tenant_id
-        if not tenant_id:
-            return {"status": surface.status, "consent_url": None}
-
-        if surface.status is AgentSurfaceStatus.ACTIVE:
-            return {"status": AgentSurfaceStatus.ACTIVE}
-
-        already_granted = await self._check_admin_consent_granted(tenant_id)
-        if already_granted:
-            surface.activate()
-            await self.surface_repository.update(surface)
-            return {"status": AgentSurfaceStatus.ACTIVE}
-
-        consent_url = await teams_consent.build_consent_url(surface.id, tenant_id)
-        return {
-            "status": AgentSurfaceStatus.PENDING_ADMIN_CONSENT,
-            "consent_url": consent_url,
-        }
-
-    async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
-        app_id = surface_settings.microsoft_bot_app_id
-        app_password = surface_settings.microsoft_bot_app_password
-        if not app_id or not app_password:
-            return False
-
-        cache_key = f"consent_check:{tenant_id}"
-        cache = _get_consent_cache()
-        try:
-            cached = await cache.get_json(cache_key)
-        except Exception:
-            cached = None
-        if cached is not None:
-            return bool(cached)
-
-        token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                token_response = await client.post(
-                    token_url,
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": app_id,
-                        "client_secret": app_password,
-                        "scope": _GRAPH_SCOPE,
-                    },
-                )
-                if token_response.status_code != 200:
-                    try:
-                        await cache.set_json(cache_key, False, ttl_seconds=10)
-                    except Exception:
-                        pass
-                    return False
-                token = token_response.json().get("access_token")
-        except Exception:
-            return False
-
-        if not token:
-            return False
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                probe = await client.get(
-                    "https://graph.microsoft.com/v1.0/users?$top=1&$select=id",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                granted = probe.status_code == 200
-        except Exception:
-            granted = False
-
-        try:
-            await cache.set_json(cache_key, granted, ttl_seconds=60 if granted else 10)
-        except Exception:
-            pass
-        return granted
-
-    async def _sync_email_schedule(
-        self,
-        surface: AgentSurfaceEntity,
-        *,
-        previous_surface: AgentSurfaceEntity | None,
-        ctx: Context | None = None,
-    ) -> AgentSurfaceEntity:
-        # Only Composio-trigger email surfaces (Gmail/Outlook) get a polling
-        # schedule. Resend is an email surface but receives over a native webhook,
-        # so it has no schedule.
-        if (
-            not self._is_email_surface(surface)
-            or surface.event_mode is not SurfaceEventMode.COMPOSIO_TRIGGER
-        ):
-            if previous_surface is not None:
-                await self._delete_email_schedule_if_needed(previous_surface)
-            return surface
-
-        schedule_service = self.schedule_service
-        if schedule_service is None or self.connector_trigger_repository is None:
-            raise AgentSurfaceValidationError(
-                "Email surfaces require schedule service dependencies"
-            )
-
-        account = await self._email_schedule_account(surface)
-        reuse_id, stale_id = self._schedule_plan(surface, previous_surface)
-        if stale_id is not None:
-            await schedule_service.delete_schedule(stale_id)
-
-        if reuse_id is None:
-            surface.schedule_id = await self._create_email_schedule(
-                surface, account, schedule_service=schedule_service, ctx=ctx
-            )
-        else:
-            await schedule_service.update_schedule(
-                reuse_id,
-                ScheduleUpdateEntity(is_active=surface.is_active),
-                ctx=ctx,
-            )
-        surface.surface_identity_email = account.email
-        return await self.surface_repository.update(surface)
-
-    async def _email_schedule_account(
-        self, surface: AgentSurfaceEntity
-    ) -> SurfaceAccountInfo:
-        """The Composio account this surface polls, once it is fit to poll with."""
-        if surface.account_id is None:
-            raise AgentSurfaceValidationError("Email surfaces require account_id")
-        account = await self._get_connected_account(surface.account_id)
-        if surface.surface_type is SurfacePlatform.GMAIL and not account.email:
-            # Gmail polling filters out the surface's own messages by email
-            # (the query below); Outlook routes by account_id and works without it.
-            raise AgentSurfaceValidationError(
-                "Connected account must expose an email address for Gmail surfaces"
-            )
-        await self._ensure_composio_email_account(account)
-        return account
-
-    def _schedule_plan(
-        self,
-        surface: AgentSurfaceEntity,
-        previous_surface: AgentSurfaceEntity | None,
-    ) -> tuple[UUID | None, UUID | None]:
-        """Which schedule to keep, and which to delete first.
-
-        A surface that changed connected account cannot keep its schedule: the
-        schedule carries the account it polls, so the old one goes and a new one
-        takes its place.
-        """
-        if previous_surface is None or not self._is_email_surface(previous_surface):
-            return surface.schedule_id, None
-        if (
-            previous_surface.schedule_id
-            and previous_surface.account_id != surface.account_id
-        ):
-            return None, previous_surface.schedule_id
-        return surface.schedule_id, None
-
-    async def _create_email_schedule(
-        self,
-        surface: AgentSurfaceEntity,
-        account: SurfaceAccountInfo,
-        *,
-        schedule_service: "ScheduleService",
-        ctx: Context | None,
-    ) -> UUID:
-        """Create the polling schedule that feeds this email surface."""
-        connector_trigger_id = await self._resolve_email_connector_trigger_id(
-            surface.surface_type
-        )
-        schedule_config: dict[str, Any] = {
-            "source": "agent_surfaces_email",
-            "surface_id": str(surface.id),
-            "platform": surface.surface_type.value.lower(),
-        }
-        if surface.surface_type is SurfacePlatform.GMAIL:
-            schedule_config.update(
-                {
-                    "userId": "me",
-                    "interval": 2,
-                    "labelIds": "INBOX",
-                    "query": f"label:inbox -from:{account.email}",
-                }
-            )
-        created_schedule = await schedule_service.create_schedule(
-            ScheduleCreateEntity(
-                user_id=account.user_id,
-                pod_id=surface.pod_id,
-                name=(
-                    f"agent_surface_{surface.surface_type.value.lower()}_"
-                    f"{str(surface.id).replace('-', '')[:8]}"
-                ),
-                schedule_type=ScheduleType.WEBHOOK,
-                account_id=account.id,
-                connector_trigger_id=connector_trigger_id,
-                config=schedule_config,
-            ),
-            ctx=ctx,
-        )
-        return created_schedule.id
-
-    async def _delete_email_schedule_if_needed(
-        self,
-        surface: AgentSurfaceEntity,
-    ) -> None:
-        if not self._is_email_surface(surface):
-            return
-        if self.schedule_service is None:
-            return
-        schedule_id = surface.schedule_id
-        if schedule_id is None:
-            return
-        await self.schedule_service.delete_schedule(schedule_id)
-
-    async def _ensure_composio_email_account(
-        self,
-        account: SurfaceAccountInfo,
-    ) -> None:
-        if self._auth_config_port is None:
-            raise AgentSurfaceValidationError(
-                "Email surfaces require Composio auth config validation"
-            )
-        if account.auth_config_id is None:
-            raise AgentSurfaceValidationError(
-                "Email surfaces require a Composio-backed connected account"
-            )
-        auth_config = await self._auth_config_port.get_auth_config(
-            account.auth_config_id
-        )
-        if auth_config is None or auth_config.kind != ConnectorKind.COMPOSIO.value:
-            raise AgentSurfaceValidationError(
-                "Email surfaces require a Composio-backed connected account"
-            )
-
-    async def _resolve_email_connector_trigger_id(
-        self, surface_type: SurfacePlatform
-    ) -> str:
-        if self.connector_trigger_repository is None:
-            raise AgentSurfaceValidationError(
-                "Connector trigger repository is not configured"
-            )
-        trigger_event_name = _EMAIL_TRIGGER_EVENT_TYPES.get(
-            surface_type.value.upper(), ()
-        )
-        triggers = (
-            await self.connector_trigger_repository.get_by_app_name_and_event_type(
-                surface_type.value.lower(),
-                trigger_event_name,
-            )
-        )
-        if triggers:
-            return triggers[0].id
-        raise AgentSurfaceValidationError(
-            f"Could not find a connector trigger for {surface_type.value.lower()} email surfaces"
-        )
-
     async def _get_connected_account(self, account_id: UUID) -> SurfaceAccountInfo:
         if self._account_port is None:
             raise AgentSurfaceValidationError(
@@ -884,141 +463,6 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
     ) -> None:
         await ensure_unique_org_credential_binding(
             surface, surface_repository=self.surface_repository
-        )
-
-    async def _ensure_unique_telegram_account(
-        self,
-        surface: AgentSurfaceEntity,
-    ) -> None:
-        await ensure_unique_telegram_account(
-            surface, surface_repository=self.surface_repository
-        )
-
-    async def _prepare_telegram_webhook(
-        self,
-        surface: AgentSurfaceEntity,
-    ) -> dict[str, Any]:
-        """Validate the Telegram account and mint a webhook secret.
-
-        Returns the bot credentials so the caller can register the webhook after
-        the surface (and its secret) are persisted.
-        """
-        credentials = await self._telegram_credentials(surface)
-        self._assert_public_webhook_url_or_raise()
-        surface.configure_webhook_secret(secret=secrets.token_urlsafe(32))
-        return credentials
-
-    async def _telegram_credentials(
-        self, surface: AgentSurfaceEntity
-    ) -> dict[str, Any]:
-        if surface.account_id is None:
-            raise AgentSurfaceValidationError(
-                "Telegram WEBHOOK surfaces require account_id"
-            )
-        account = await self._get_connected_account(surface.account_id)
-        if account.connector_id.lower() != "telegram":
-            raise AgentSurfaceValidationError(
-                "Telegram surfaces require a connected telegram account"
-            )
-        credentials = dict(account.credentials or {})
-        if not str(credentials.get("bot_token") or "").strip():
-            raise AgentSurfaceValidationError(
-                "Telegram account credentials missing bot_token"
-            )
-        return credentials
-
-    def _assert_public_webhook_url_or_raise(self) -> None:
-        if not public_https_api_url_available():
-            raise AgentSurfaceValidationError(
-                "Telegram WEBHOOK surfaces require a public HTTPS api_url; "
-                "localhost and http api_url values are not supported. Local native "
-                "workers poll when ENABLE_TELEGRAM_POLLING_MODE=true."
-            )
-
-    def _build_public_surface_webhook_url(self, surface_id: UUID) -> str:
-        self._assert_public_webhook_url_or_raise()
-        base_url = settings.api_url.rstrip("/")
-        return f"{base_url}/surfaces/{surface_id}/webhook"
-
-    async def _register_telegram_webhook(
-        self,
-        *,
-        credentials: dict[str, Any],
-        webhook_url: str,
-        webhook_secret: str,
-    ) -> None:
-        """Register the Telegram webhook idempotently.
-
-        Clears any prior webhook and pending updates, sets the new webhook
-        (restricted to the update types the surface handles), then verifies via
-        getWebhookInfo. Each step retries on transient failures (429/5xx/network)
-        honoring Telegram's retry_after. The surface row is already persisted by
-        the caller; a hard failure here is surfaced as an actionable
-        AgentSurfacePlatformError (with Telegram's real description) without
-        rolling back the saved secret, so a transient hiccup self-heals on retry.
-        """
-        client = TelegramClient.from_credentials(credentials)
-        try:
-            await self._telegram_webhook_call(
-                client, "deleteWebhook", {"drop_pending_updates": True}
-            )
-            await self._telegram_webhook_call(
-                client,
-                "setWebhook",
-                {
-                    "url": webhook_url,
-                    "secret_token": webhook_secret,
-                    "allowed_updates": ALLOWED_UPDATES,
-                    "drop_pending_updates": True,
-                },
-            )
-            info = await self._telegram_webhook_call(client, "getWebhookInfo", {})
-        except TelegramApiError as exc:
-            raise AgentSurfacePlatformError(
-                "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}. Telegram response: {exc.description}",
-            ) from exc
-        except Exception as exc:
-            raise AgentSurfacePlatformError(
-                "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}.",
-            ) from exc
-
-        registered_url = str((info.get("result") or {}).get("url") or "")
-        if registered_url != webhook_url:
-            raise AgentSurfacePlatformError(
-                "telegram",
-                f"Telegram did not confirm the webhook URL (got '{registered_url}'). "
-                f"Set it manually to {webhook_url}.",
-            )
-
-    async def _delete_telegram_webhook(self, surface: AgentSurfaceEntity) -> None:
-        # Best-effort teardown: a Telegram outage must not block disabling or
-        # deleting a surface.
-        try:
-            credentials = await self._telegram_credentials(surface)
-            client = TelegramClient.from_credentials(credentials)
-            await self._telegram_webhook_call(
-                client, "deleteWebhook", {"drop_pending_updates": False}
-            )
-        except Exception:
-            logger.debug(
-                "agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic"
-            )
-
-    async def _telegram_webhook_call(
-        self,
-        client: TelegramClient,
-        method: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        return await with_retry(
-            lambda: client.call(method, payload),
-            policy=_WEBHOOK_RETRY_POLICY,
-            classify=classify_telegram_error,
-            retry_after=telegram_retry_after,
         )
 
     def _is_email_surface(self, surface: AgentSurfaceEntity) -> bool:
