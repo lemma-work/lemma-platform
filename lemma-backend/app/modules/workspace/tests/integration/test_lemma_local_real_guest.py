@@ -68,11 +68,12 @@ from sandbox_runtime.protocol import (
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
-from app.modules.workspace.providers.base import ProviderCreateSpec
+from app.modules.workspace.providers.base import ProviderCreateSpec, ProviderGone
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.lemma_local import (
     LemmaLocalProviderConfig,
     LemmaLocalSandboxProvider,
+    LocalBridgeError,
 )
 
 pytestmark = [
@@ -127,6 +128,36 @@ def _requirements() -> list[str]:
             "--manifest-path desktop/Cargo.toml -p lemma-runtime"
         )
     return missing
+
+
+# What a guest that is unwell answers with. Anything else during cleanup is a
+# bug in the test, and should surface as itself rather than as a leak.
+_CLEANUP_FAILURES = (LocalBridgeError, ProviderGone)
+
+
+async def _remove(provider, sandbox_id, *names: str) -> None:
+    """Take a sandbox and its disk out of the guest, whatever state they are in.
+
+    Every step runs even when an earlier one fails. A `destroy` that raises must
+    not also strand the volume — that is guest disk keyed to an id nothing will
+    ask for again — and the first failure is re-raised afterwards so a guest
+    that cannot clean up still fails the run rather than quietly accumulating.
+    """
+    failures: list[BaseException] = []
+    for name in names:
+        try:
+            await provider.destroy(name, deadline_at=_deadline(120))
+        except _CLEANUP_FAILURES as error:
+            failures.append(error)
+    try:
+        await provider.purge_storage(
+            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
+            deadline_at=_deadline(120),
+        )
+    except _CLEANUP_FAILURES as error:
+        failures.append(error)
+    if failures:
+        raise failures[0]
 
 
 def _spec(sandbox_id, *, name: str, volume_name: str) -> ProviderCreateSpec:
@@ -231,17 +262,18 @@ async def workspace(guest_provider):
     instance = await guest_provider.create(
         _spec(sandbox_id, name=name, volume_name=volume_name)
     )
-    await guest_provider.wait_ready(
-        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
-    )
+    # `wait_ready` inside the try, not before it. It raises under guest memory
+    # pressure and on a slow container start, and the container `create` has
+    # already built holds its full 2 GiB reservation until something removes it.
+    # One leak left 325 MiB free and every later test in this file failed with
+    # `resource_capacity` — which reads like a code regression and is not one.
     try:
+        await guest_provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
         yield Workspace(guest_provider, instance, sandbox_id, name, volume_name)
     finally:
-        await guest_provider.destroy(name, deadline_at=_deadline(120))
-        await guest_provider.purge_storage(
-            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
-            deadline_at=_deadline(120),
-        )
+        await _remove(guest_provider, sandbox_id, name)
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +538,37 @@ async def test_the_sandbox_clock_agrees_with_this_mac(workspace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cleanup, which is the part that costs a live install when it is wrong
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_purges_the_disk_even_when_the_container_will_not_go() -> None:
+    """A `destroy` that fails must not also strand the volume.
+
+    The two halves used to run in sequence with nothing between them, so the
+    first failure took the second with it — leaving guest disk keyed to an id
+    nothing will ask for again, and no explanation in the next run. Needs no
+    guest: the point is the ordering, not the engine.
+    """
+    purged: list[str] = []
+
+    class RefusesToDestroy:
+        async def destroy(self, name, *, deadline_at):
+            raise LocalBridgeError(f"the engine will not remove {name}")
+
+        async def purge_storage(self, guest_id, *, deadline_at):
+            purged.append(guest_id)
+
+    sandbox_id = uuid4()
+    with pytest.raises(LocalBridgeError):
+        await _remove(RefusesToDestroy(), sandbox_id, "w-whatever")
+
+    assert purged == [
+        LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE)
+    ], "the disk was stranded because the container would not go"
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
@@ -538,11 +601,7 @@ async def test_a_released_workspace_reports_stopped_rather_than_broken(
         assert found is not None, "release keeps the container; it does not remove it"
         assert not found.running
     finally:
-        await guest_provider.destroy(name, deadline_at=_deadline(120))
-        await guest_provider.purge_storage(
-            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
-            deadline_at=_deadline(120),
-        )
+        await _remove(guest_provider, sandbox_id, name)
 
 
 async def test_files_written_to_a_workspace_outlive_its_container(
@@ -611,11 +670,7 @@ async def test_files_written_to_a_workspace_outlive_its_container(
             "here means the idle sweep destroys user work"
         )
     finally:
-        await guest_provider.destroy(name, deadline_at=_deadline(120))
-        await guest_provider.purge_storage(
-            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
-            deadline_at=_deadline(120),
-        )
+        await _remove(guest_provider, sandbox_id, name)
 
 
 async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
@@ -683,12 +738,7 @@ async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
             "leaking into the guest's storage key"
         )
     finally:
-        await guest_provider.destroy(second_name, deadline_at=_deadline(120))
-        await guest_provider.destroy(first_name, deadline_at=_deadline(120))
-        await guest_provider.purge_storage(
-            LemmaLocalSandboxProvider._guest_id(sandbox_id, SandboxKind.WORKSPACE),
-            deadline_at=_deadline(120),
-        )
+        await _remove(guest_provider, sandbox_id, second_name, first_name)
 
 
 async def test_a_workspace_volume_is_not_shared_between_sandboxes(
@@ -738,11 +788,7 @@ async def test_a_workspace_volume_is_not_shared_between_sandboxes(
 
         assert secret.encode() not in seen, "one workspace can read another's files"
     finally:
-        await guest_provider.destroy(other_name, deadline_at=_deadline(120))
-        await guest_provider.purge_storage(
-            LemmaLocalSandboxProvider._guest_id(other_id, SandboxKind.WORKSPACE),
-            deadline_at=_deadline(120),
-        )
+        await _remove(guest_provider, other_id, other_name)
 
 
 def _host_can_reach(host: str, port: int) -> bool:
