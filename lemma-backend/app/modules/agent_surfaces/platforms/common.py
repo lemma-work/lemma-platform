@@ -421,3 +421,16 @@ def provider_failure(exc: Exception) -> ProviderFailure:
         status_code=status,
         provider_error=name if isinstance(name, str) and name else None,
     )
+
+
+def text_or_none(value: Any) -> str | None:
+    """A value as trimmed text, or None when it is absent or blank.
+
+    The `or None` half of the family. `payload_text` answers "" for a missing
+    field because a parser usually wants to keep reading; a field on its way
+    into a record wants the absence kept, and spelling that out per field is
+    three branches each.
+    """
+    if value is None:
+        return None
+    return str(value).strip() or None

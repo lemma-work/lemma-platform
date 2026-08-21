@@ -171,81 +171,52 @@ class OutlookMessageParser:
     ) -> ParsedInboundSurfaceEvent:
         """A notification that carried the whole message."""
         data = envelope.data
-        headers = envelope.headers
-        thread_id = envelope.thread_id
-        provider_message_id = envelope.provider_message_id
-        internet_message_id = envelope.internet_message_id
-        external_message_id = envelope.external_message_id
-        sender_identity = envelope.sender_identity
-        mailbox_identity = envelope.mailbox_identity
-        reply_to_identity = envelope.reply_to_identity
+        sender = envelope.sender_identity
+        mailbox = envelope.mailbox_identity
         subject = payload_text(data, "subject").strip()
         # Quoted original trimmed for the same reason as every other
         # provider: a reply should be what the person just wrote.
         body = strip_quoted_reply(_body_text(data).strip(), subject)
-        message_text = f"Email subject: {subject}\n\n{body}".strip()
-        header_references = [
-            ref.strip()
-            for ref in payload_text(headers, "references").split()
-            if ref.strip()
-        ]
-        references = [
-            str(ref) for ref in list(data.get("references") or header_references) if ref
-        ]
-        in_reply_to = (
-            str(
-                data.get("in_reply_to")
-                or headers.get("in-reply-to")
-                or internet_message_id
-                or provider_message_id
-            ).strip()
-            or None
-        )
-
-        attachments = [
-            normalized
-            for item in list(data.get("attachments") or [])
-            if isinstance(item, dict)
-            for normalized in [
-                _normalize_attachment(item, message_id=provider_message_id or None)
-            ]
-            if normalized is not None
-        ]
+        references, in_reply_to = _threading(envelope)
+        internet_message_id = envelope.internet_message_id or None
+        reply_to_email = envelope.reply_to_identity.email or sender.email
 
         return ParsedInboundSurfaceEvent(
             platform="OUTLOOK",
             conversation_type=ConversationType.EXTERNAL_DM,
-            external_channel_id=mailbox_identity.email,
-            external_thread_id=thread_id,
-            external_message_id=external_message_id,
-            sender_external_user_id=sender_identity.email,
-            sender_email=sender_identity.email,
-            sender_display_name=sender_identity.display_name,
-            message_text=message_text,
+            external_channel_id=mailbox.email,
+            external_thread_id=envelope.thread_id,
+            external_message_id=envelope.external_message_id,
+            sender_external_user_id=sender.email,
+            sender_email=sender.email,
+            sender_display_name=sender.display_name,
+            message_text=f"Email subject: {subject}\n\n{body}".strip(),
             is_dm=True,
             mentioned_agent=True,
             should_start_conversation=True,
             reply_target={
-                "recipient_email": reply_to_identity.email or sender_identity.email,
+                "recipient_email": reply_to_email,
                 "subject": subject,
-                "thread_id": thread_id,
-                "message_id": provider_message_id,
-                "internet_message_id": internet_message_id or None,
+                "thread_id": envelope.thread_id,
+                "message_id": envelope.provider_message_id,
+                "internet_message_id": internet_message_id,
                 "references": references,
                 "in_reply_to": in_reply_to,
-                "mailbox_email": mailbox_identity.email,
+                "mailbox_email": mailbox.email,
             },
             metadata={
                 "channel": "email",
-                "mailbox_email": mailbox_identity.email,
+                "mailbox_email": mailbox.email,
                 "subject": subject,
-                "thread_id": thread_id,
-                "message_id": provider_message_id or None,
-                "internet_message_id": internet_message_id or None,
-                "reply_to_email": reply_to_identity.email or sender_identity.email,
+                "thread_id": envelope.thread_id,
+                "message_id": envelope.provider_message_id or None,
+                "internet_message_id": internet_message_id,
+                "reply_to_email": reply_to_email,
                 "references": references,
                 "in_reply_to": in_reply_to,
-                "attachments": attachments,
+                "attachments": _attachments(
+                    data, message_id=envelope.provider_message_id or None
+                ),
             },
             raw_payload=payload,
         )
@@ -290,3 +261,45 @@ class OutlookMessageParser:
             },
             raw_payload=payload,
         )
+
+
+def _threading(envelope: _OutlookEnvelope) -> tuple[list[str], str | None]:
+    """The References chain, and what this message replies to.
+
+    Outlook puts these on the parsed object when it has them and only in the raw
+    headers otherwise, then falls back to the message's own ids so a first
+    contact still threads with itself.
+    """
+    data = envelope.data
+    headers = envelope.headers
+    header_references = [
+        ref.strip()
+        for ref in payload_text(headers, "references").split()
+        if ref.strip()
+    ]
+    references = [
+        str(ref) for ref in list(data.get("references") or header_references) if ref
+    ]
+    in_reply_to = (
+        str(
+            data.get("in_reply_to")
+            or headers.get("in-reply-to")
+            or envelope.internet_message_id
+            or envelope.provider_message_id
+        ).strip()
+        or None
+    )
+    return references, in_reply_to
+
+
+def _attachments(
+    data: dict[str, Any], *, message_id: str | None
+) -> list[dict[str, Any]]:
+    """Every attachment on the notification, skipping what will not normalize."""
+    return [
+        normalized
+        for item in list(data.get("attachments") or [])
+        if isinstance(item, dict)
+        for normalized in [_normalize_attachment(item, message_id=message_id)]
+        if normalized is not None
+    ]

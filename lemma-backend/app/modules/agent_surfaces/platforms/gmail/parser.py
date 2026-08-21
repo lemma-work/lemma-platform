@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_first,
     payload_section,
     payload_text,
+    text_or_none,
 )
 from app.modules.agent_surfaces.platforms.email_attachments import decode_base64_bytes
 from app.modules.agent_surfaces.platforms.email_identity import (
@@ -116,8 +117,7 @@ def _normalize_attachment(
     *,
     message_id: str,
 ) -> dict[str, Any] | None:
-    body = raw.get("body")
-    body_data = body if isinstance(body, dict) else {}
+    body_data = payload_section(raw, "body")
     attachment_id = payload_any(
         raw, "attachment_id", "attachmentId", "id"
     ) or body_data.get("attachmentId")
@@ -130,19 +130,13 @@ def _normalize_attachment(
     if not any([attachment_id, name, content_bytes_base64]):
         return None
     return {
-        "id": (
-            str(attachment_id).strip() or None if attachment_id is not None else None
-        ),
-        "name": str(name).strip() or None if name is not None else None,
-        "mime_type": str(mime_type).strip() or None if mime_type is not None else None,
+        "id": text_or_none(attachment_id),
+        "name": text_or_none(name),
+        "mime_type": text_or_none(mime_type),
         "content_type": str(mime_type or "").strip(),
         "size": int(size) if isinstance(size, int) else size,
         "message_id": message_id,
-        "content_bytes_base64": (
-            str(content_bytes_base64).strip() or None
-            if content_bytes_base64 is not None
-            else None
-        ),
+        "content_bytes_base64": text_or_none(content_bytes_base64),
     }
 
 
@@ -236,94 +230,107 @@ class GmailMessageParser:
         """The message itself: its text, its attachments, what it replies to."""
         data = envelope.data
         headers = envelope.headers
-        thread_id = envelope.thread_id
-        message_id = envelope.message_id
-        sender_identity = envelope.sender_identity
-        mailbox_identity = envelope.mailbox_identity
-
+        sender = envelope.sender_identity
+        mailbox = envelope.mailbox_identity
         reply_identity = parse_email_identity(
             headers.get("reply-to"),
-            fallback_email=sender_identity.email,
-            fallback_name=sender_identity.display_name,
+            fallback_email=sender.email,
+            fallback_name=sender.display_name,
         )
-
         subject = str(data.get("subject") or headers.get("subject") or "").strip()
-        body = (
-            payload_text(data, "message_text").strip()
-            or _read_email_body(data).strip()
-            or _read_gmail_payload_body(data).strip()
-            or str(((payload_section(data, "preview")).get("body")) or "").strip()
-        )
         # Drop the quoted original. Without this every reply carries the whole
         # thread forward, so by the fourth exchange most of the prompt is the
         # agent re-reading its own earlier messages.
-        message_text = (
-            f"Email subject: {subject}\n\n{strip_quoted_reply(body, subject)}".strip()
-        )
-
-        attachment_candidates = [
-            normalized
-            for collection in (
-                list(data.get("attachments") or []),
-                list(data.get("attachment_list") or []),
-                _walk_parts(
-                    data.get("payload") if isinstance(data.get("payload"), dict) else {}
-                ),
-            )
-            for item in collection
-            if isinstance(item, dict)
-            for normalized in [_normalize_attachment(item, message_id=message_id)]
-            if normalized is not None
-        ]
-        attachments = _dedupe_attachments(attachment_candidates)
-
-        header_references = [
-            ref.strip()
-            for ref in payload_text(headers, "references").split()
-            if ref.strip()
-        ]
-        references = [
-            str(ref) for ref in list(data.get("references") or header_references) if ref
-        ]
-        internet_message_id = payload_text(headers, "message-id").strip() or None
-        in_reply_to = (
-            str(data.get("in_reply_to") or headers.get("in-reply-to") or "").strip()
-            or internet_message_id
-        )
+        body = strip_quoted_reply(_body_text(data), subject)
+        references, in_reply_to, internet_message_id = _threading(data, headers)
+        reply_to_email = reply_identity.email or sender.email
 
         return ParsedInboundSurfaceEvent(
             platform="GMAIL",
             conversation_type=ConversationType.EXTERNAL_DM,
-            external_channel_id=mailbox_identity.email,
-            external_thread_id=thread_id,
-            external_message_id=message_id,
-            sender_external_user_id=sender_identity.email,
-            sender_email=sender_identity.email,
-            sender_display_name=sender_identity.display_name,
-            message_text=message_text,
+            external_channel_id=mailbox.email,
+            external_thread_id=envelope.thread_id,
+            external_message_id=envelope.message_id,
+            sender_external_user_id=sender.email,
+            sender_email=sender.email,
+            sender_display_name=sender.display_name,
+            message_text=f"Email subject: {subject}\n\n{body}".strip(),
             is_dm=True,
             mentioned_agent=True,
             should_start_conversation=True,
             reply_target={
-                "recipient_email": reply_identity.email or sender_identity.email,
+                "recipient_email": reply_to_email,
                 "subject": subject,
-                "thread_id": thread_id,
-                "message_id": message_id,
+                "thread_id": envelope.thread_id,
+                "message_id": envelope.message_id,
                 "references": references,
                 "in_reply_to": in_reply_to,
-                "mailbox_email": mailbox_identity.email,
+                "mailbox_email": mailbox.email,
             },
             metadata={
                 "channel": "email",
-                "mailbox_email": mailbox_identity.email,
+                "mailbox_email": mailbox.email,
                 "subject": subject,
-                "thread_id": thread_id,
-                "message_id": message_id,
+                "thread_id": envelope.thread_id,
+                "message_id": envelope.message_id,
                 "internet_message_id": internet_message_id,
-                "reply_to_email": reply_identity.email or sender_identity.email,
+                "reply_to_email": reply_to_email,
                 "references": references,
                 "in_reply_to": in_reply_to,
-                "attachments": attachments,
+                "attachments": _attachments(data, message_id=envelope.message_id),
             },
             raw_payload=payload,
         )
+
+
+def _body_text(data: dict[str, Any]) -> str:
+    """The body, from whichever of Gmail's four shapes carries it."""
+    return (
+        payload_text(data, "message_text").strip()
+        or _read_email_body(data).strip()
+        or _read_gmail_payload_body(data).strip()
+        or payload_text(payload_section(data, "preview"), "body").strip()
+    )
+
+
+def _attachments(data: dict[str, Any], *, message_id: str) -> list[dict[str, Any]]:
+    """Every attachment Gmail describes, from all three places it lists them."""
+    part = data.get("payload")
+    candidates = [
+        normalized
+        for collection in (
+            list(data.get("attachments") or []),
+            list(data.get("attachment_list") or []),
+            _walk_parts(part if isinstance(part, dict) else {}),
+        )
+        for item in collection
+        if isinstance(item, dict)
+        for normalized in [_normalize_attachment(item, message_id=message_id)]
+        if normalized is not None
+    ]
+    return _dedupe_attachments(candidates)
+
+
+def _threading(
+    data: dict[str, Any], headers: dict[str, Any]
+) -> tuple[list[str], str | None, str | None]:
+    """The References chain, what this replies to, and its own Message-ID.
+
+    Gmail puts these on the parsed object when it has them and only in the raw
+    headers otherwise. A first contact replies to itself, which is what makes a
+    seeded outbound recognisable when the answer comes back.
+    """
+    header_references = [
+        ref.strip()
+        for ref in payload_text(headers, "references").split()
+        if ref.strip()
+    ]
+    internet_message_id = payload_text(headers, "message-id").strip() or None
+    references = [
+        str(ref) for ref in list(data.get("references") or header_references) if ref
+    ]
+    in_reply_to = (
+        str(data.get("in_reply_to") or headers.get("in-reply-to") or "").strip()
+        or internet_message_id
+    )
+    return references, in_reply_to, internet_message_id
