@@ -32,8 +32,12 @@ def test_file_write_and_ls(backend_server, test_user, pod_id):
 
 def test_file_cat(backend_server, test_user, pod_id):
     content = "Test content for cat."
-    cli(["files", "write", "/cat-test.txt", content],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    cli(
+        ["files", "write", "/cat-test.txt", content],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     cat = cli(
         ["files", "cat", "/cat-test.txt"],
@@ -46,10 +50,18 @@ def test_file_cat(backend_server, test_user, pod_id):
 
 
 def test_file_append(backend_server, test_user, pod_id):
-    cli(["files", "write", "/append-test.txt", "Line 1"],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
-    cli(["files", "append", "/append-test.txt", "\nLine 2"],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    cli(
+        ["files", "write", "/append-test.txt", "Line 1"],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
+    cli(
+        ["files", "append", "/append-test.txt", "\nLine 2"],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     cat = cli(
         ["files", "cat", "/append-test.txt"],
@@ -63,8 +75,12 @@ def test_file_append(backend_server, test_user, pod_id):
 
 
 def test_file_rm(backend_server, test_user, pod_id):
-    cli(["files", "write", "/to-delete.txt", "Will be deleted"],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    cli(
+        ["files", "write", "/to-delete.txt", "Will be deleted"],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     rm = cli(
         ["files", "rm", "/to-delete.txt", "--yes"],

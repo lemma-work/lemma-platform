@@ -55,9 +55,10 @@ def _context(artifact: bytes) -> FunctionRunRuntimeContext:
 
 
 def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
-    assert _runtime_failure_message(
-        RuntimeFailure(name="TimeoutError", message="")
-    ) == "Function execution timed out (deadline exceeded)"
+    assert (
+        _runtime_failure_message(RuntimeFailure(name="TimeoutError", message=""))
+        == "Function execution timed out (deadline exceeded)"
+    )
 
 
 @pytest.mark.asyncio

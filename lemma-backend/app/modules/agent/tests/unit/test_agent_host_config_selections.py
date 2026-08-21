@@ -21,7 +21,12 @@ from app.modules.agent.domain.agent_host_selections import (
 
 
 def _option(**overrides: object) -> dict[str, object]:
-    return {"id": "permission_mode", "category": "permission", "name": "Mode", **overrides}
+    return {
+        "id": "permission_mode",
+        "category": "permission",
+        "name": "Mode",
+        **overrides,
+    }
 
 
 def test_an_enumerated_option_still_enforces_membership():
@@ -47,7 +52,9 @@ def test_the_deny_list_beats_the_harness_own_option_list():
     common case save and then fail at session setup.
     """
     options = [
-        _option(options=[{"id": "default"}, {"id": "plan"}, {"id": "bypassPermissions"}])
+        _option(
+            options=[{"id": "default"}, {"id": "plan"}, {"id": "bypassPermissions"}]
+        )
     ]
 
     with pytest.raises(ValueError, match="not allowed"):
@@ -169,9 +176,7 @@ class TestValidateAgentHostModel:
             )
 
     def test_an_offered_name_is_returned_stripped(self):
-        options = [
-            {"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}
-        ]
+        options = [{"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}]
         assert (
             validate_agent_host_model(config_options=options, model_name="  gpt-5.1  ")
             == "gpt-5.1"
@@ -221,11 +226,7 @@ class TestCarryAgentHostSelections:
         """Unlike an unknown/retired value, a policy-bearing escalation is not
         news about the harness changing -- it still must not silently ride
         along into a dispatched run, so this raises instead of dropping."""
-        options = [
-            _option(
-                options=[{"id": "default"}, {"id": "bypassPermissions"}]
-            )
-        ]
+        options = [_option(options=[{"id": "default"}, {"id": "bypassPermissions"}])]
 
         with pytest.raises(AgentHostSelectionRefused):
             carry_agent_host_selections(
@@ -243,18 +244,14 @@ class TestCarryAgentHostModel:
         assert carry_agent_host_model(config_options=[], model_name=None) is None
 
     def test_a_still_offered_model_is_kept(self):
-        options = [
-            {"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}
-        ]
+        options = [{"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}]
         assert (
             carry_agent_host_model(config_options=options, model_name="gpt-5.1")
             == "gpt-5.1"
         )
 
     def test_a_model_the_harness_dropped_falls_back_to_none_instead_of_raising(self):
-        options = [
-            {"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}
-        ]
+        options = [{"id": "model", "category": "model", "options": [{"id": "gpt-5.1"}]}]
         assert (
             carry_agent_host_model(config_options=options, model_name="retired-model")
             is None

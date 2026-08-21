@@ -20,8 +20,12 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _step(kind: StepKind, name: str, *, action=StepAction.CREATE, destructive=False) -> PlanStep:
-    return PlanStep(index=0, kind=kind, name=name, action=action, destructive=destructive)
+def _step(
+    kind: StepKind, name: str, *, action=StepAction.CREATE, destructive=False
+) -> PlanStep:
+    return PlanStep(
+        index=0, kind=kind, name=name, action=action, destructive=destructive
+    )
 
 
 def _applier(root: Path, **kw) -> BundleApplier:
@@ -80,7 +84,18 @@ class FakeTableService:
     async def get_table(self, pod_id, name, ctx):
         return self._existing.get(name)
 
-    async def create_table(self, pod_id, name, pk, columns, config, enable_rls, *, visibility=None, ctx=None):
+    async def create_table(
+        self,
+        pod_id,
+        name,
+        pk,
+        columns,
+        config,
+        enable_rls,
+        *,
+        visibility=None,
+        ctx=None,
+    ):
         self.created.append((name, [c.name for c in columns]))
 
 
@@ -99,8 +114,16 @@ class _FakeFileService:
         self.created_folders.append((path, description, visibility))
 
     async def create_file(
-        self, pod_id, name, content, ctx, description=None, metadata=None,
-        directory_path="/", search_enabled=True, visibility=None,
+        self,
+        pod_id,
+        name,
+        content,
+        ctx,
+        description=None,
+        metadata=None,
+        directory_path="/",
+        search_enabled=True,
+        visibility=None,
     ):
         self.created_files.append(
             (name, content, directory_path, visibility, search_enabled)
@@ -119,11 +142,23 @@ def _file_step(name, *, is_folder):
 
 async def test_file_apply_creates_folder_and_file(tmp_path, monkeypatch):
     root = tmp_path / "bundle"
-    _write(root / "files" / "docs" / ".folder.json", {"visibility": "POD", "description": "d"})
+    _write(
+        root / "files" / "docs" / ".folder.json",
+        {"visibility": "POD", "description": "d"},
+    )
     (root / "files" / "docs" / "guide.md").write_text("hi", encoding="utf-8")
     _write(
         root / "files" / ".files.json",
-        {"files": [{"path": "/docs/guide.md", "description": "g", "visibility": "POD", "search_enabled": True}]},
+        {
+            "files": [
+                {
+                    "path": "/docs/guide.md",
+                    "description": "g",
+                    "visibility": "POD",
+                    "search_enabled": True,
+                }
+            ]
+        },
     )
     fake = _FakeFileService()
     monkeypatch.setattr(
@@ -415,7 +450,9 @@ async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
     calls = _patch_grant_layer(monkeypatch)
 
     await _grant_applier(root).apply_step(
-        _step(StepKind.FUNCTION_GRANTS, "maybe_rewrite_lesson", action=StepAction.UPDATE)
+        _step(
+            StepKind.FUNCTION_GRANTS, "maybe_rewrite_lesson", action=StepAction.UPDATE
+        )
     )
 
     assert calls["replace"]["grantee_type"] == "FUNCTION"
@@ -432,7 +469,9 @@ class FakeWorkflowService:
     def __init__(self):
         self.created = []
 
-    async def get_workflow_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
+    async def get_workflow_by_name(
+        self, pod_id, name, requester_user_id=None, ctx=None
+    ):
         # A missing flow returns None (does NOT raise) — the applier must treat
         # that as "create", not "already exists".
         return None
@@ -692,8 +731,12 @@ async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkey
         },
     )
     surface_fake = FakeSurfaceService()
-    connector_account = SimpleNamespace(connector_id="microsoft_teams", auth_config_id=uuid4())
-    _patch_surface_deps(monkeypatch, surface_fake, _FakeConnectorService(connector_account))
+    connector_account = SimpleNamespace(
+        connector_id="microsoft_teams", auth_config_id=uuid4()
+    )
+    _patch_surface_deps(
+        monkeypatch, surface_fake, _FakeConnectorService(connector_account)
+    )
 
     applier = _applier(root, replacements={"teams_account": str(account)})
     await applier.apply_step(_step(StepKind.SURFACE, "teams"))
@@ -747,16 +790,16 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
             "is_enabled": True,
         },
     )
-    _patch_surface_deps(
-        monkeypatch, FakeSurfaceService(), _FakeConnectorService(None)
-    )
+    _patch_surface_deps(monkeypatch, FakeSurfaceService(), _FakeConnectorService(None))
 
     applier = _applier(root, replacements={"teams_account": str(uuid4())})
     with pytest.raises(PodBundleDomainError, match="does not exist"):
         await applier.apply_step(_step(StepKind.SURFACE, "teams"))
 
 
-async def test_surface_apply_rejects_an_account_of_the_wrong_kind(tmp_path, monkeypatch):
+async def test_surface_apply_rejects_an_account_of_the_wrong_kind(
+    tmp_path, monkeypatch
+):
     """One connector id can be installed more than one way.
 
     A bundle exported against a vendored Slack package does not work against a
@@ -816,7 +859,9 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
         },
     )
     surface_fake = FakeSurfaceService()
-    connector_account = SimpleNamespace(connector_id="microsoft_teams", auth_config_id=uuid4())
+    connector_account = SimpleNamespace(
+        connector_id="microsoft_teams", auth_config_id=uuid4()
+    )
     _patch_surface_deps(
         monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="mcp")
     )

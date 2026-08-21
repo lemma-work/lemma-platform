@@ -176,15 +176,10 @@ async def ensure_record_index(
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    f"SET LOCAL lock_timeout = '{_INDEX_LOCK_TIMEOUT_MS}ms'"
-                )
+                text(f"SET LOCAL lock_timeout = '{_INDEX_LOCK_TIMEOUT_MS}ms'")
             )
             await conn.execute(
-                text(
-                    "SET LOCAL statement_timeout = "
-                    f"'{_INDEX_BUILD_TIMEOUT_MS}ms'"
-                )
+                text(f"SET LOCAL statement_timeout = '{_INDEX_BUILD_TIMEOUT_MS}ms'")
             )
             await lock(conn, schema_name)
             await conn.execute(text(index_sql))

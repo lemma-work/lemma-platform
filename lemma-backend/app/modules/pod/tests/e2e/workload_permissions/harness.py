@@ -268,7 +268,9 @@ async def seed_account(
         AccountRepository,
     )
 
-    repo = AccountRepository(SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher())
+    repo = AccountRepository(
+        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
+    )
     entity = AccountEntity(
         user_id=UUID(user_id),
         organization_id=UUID(organization_id),

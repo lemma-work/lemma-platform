@@ -214,8 +214,7 @@ class NotificationEntity(AggregateRoot):
             )
         if not self.expects_response:
             raise NotificationTransitionError(
-                "This notification did not ask for a response; acknowledge it "
-                "instead.",
+                "This notification did not ask for a response; acknowledge it instead.",
                 notification_id=self.id,
                 status=self.status.value,
             )

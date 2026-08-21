@@ -73,8 +73,7 @@ def resolve_schema_template(schema: Any, reader: "ContextReader") -> Any:
         return _resolve_binding(binding, reader)
     if isinstance(schema, dict):
         return {
-            key: resolve_schema_template(value, reader)
-            for key, value in schema.items()
+            key: resolve_schema_template(value, reader) for key, value in schema.items()
         }
     if isinstance(schema, list):
         return [resolve_schema_template(item, reader) for item in schema]

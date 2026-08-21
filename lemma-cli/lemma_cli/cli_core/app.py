@@ -19,8 +19,18 @@ from .state import build_state, run_with_client, state_from_ctx
 _CMD = "lemma_cli.cli_core.commands"
 LAZY_GROUPS: dict[str, LazyEntry] = {
     "auth": (f"{_CMD}.system", "auth_app", "Authentication commands.", False),
-    "config": (f"{_CMD}.system", "config_app", "CLI context and per-server defaults (pod/org).", False),
-    "servers": (f"{_CMD}.system", "server_app", "Show and manage Lemma CLI servers.", False),
+    "config": (
+        f"{_CMD}.system",
+        "config_app",
+        "CLI context and per-server defaults (pod/org).",
+        False,
+    ),
+    "servers": (
+        f"{_CMD}.system",
+        "server_app",
+        "Show and manage Lemma CLI servers.",
+        False,
+    ),
     "telemetry": (
         f"{_CMD}.system",
         "telemetry_app",
@@ -38,30 +48,95 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "agents": (f"{_CMD}.agents", "app", "Agent commands.", False),
     "function": (f"{_CMD}.functions", "app", "Function commands.", False),
     "functions": (f"{_CMD}.functions", "app", "Function commands.", False),
-    "conversation": (f"{_CMD}.conversations", "app", "Agent conversation commands.", False),
-    "conversations": (f"{_CMD}.conversations", "app", "Agent conversation commands.", False),
+    "conversation": (
+        f"{_CMD}.conversations",
+        "app",
+        "Agent conversation commands.",
+        False,
+    ),
+    "conversations": (
+        f"{_CMD}.conversations",
+        "app",
+        "Agent conversation commands.",
+        False,
+    ),
     "app": (f"{_CMD}.apps", "app", "App commands.", False),
     "apps": (f"{_CMD}.apps", "app", "App commands.", False),
     "schedule": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
     "schedules": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
-    "file": (f"{_CMD}.files", "app", "Work with pod files like a normal filesystem: ls, cat, write, append, mkdir, upload, download, mv, rm, search.", False),
-    "files": (f"{_CMD}.files", "app", "Work with pod files like a normal filesystem: ls, cat, write, append, mkdir, upload, download, mv, rm, search.", False),
+    "file": (
+        f"{_CMD}.files",
+        "app",
+        "Work with pod files like a normal filesystem: ls, cat, write, append, mkdir, upload, download, mv, rm, search.",
+        False,
+    ),
+    "files": (
+        f"{_CMD}.files",
+        "app",
+        "Work with pod files like a normal filesystem: ls, cat, write, append, mkdir, upload, download, mv, rm, search.",
+        False,
+    ),
     "table": (f"{_CMD}.data", "tables_app", "Table commands.", False),
     "tables": (f"{_CMD}.data", "tables_app", "Table commands.", False),
     "record": (f"{_CMD}.data", "records_app", "Record commands.", False),
     "records": (f"{_CMD}.data", "records_app", "Record commands.", False),
     "query": (f"{_CMD}.data", "query_app", "Query commands.", False),
-    "datastore": (f"{_CMD}.data", "datastore_app", "Stream live datastore record changes.", False),
-    "connector": (f"{_CMD}.connectors", "app", "Connector, account, and operation commands.", False),
-    "connectors": (f"{_CMD}.connectors", "app", "Connector, account, and operation commands.", False),
-    "surface": (f"{_CMD}.surfaces", "app", "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.", False),
-    "surfaces": (f"{_CMD}.surfaces", "app", "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.", False),
-    "profile": (f"{_CMD}.profile", "app", "View and edit the current user's Lemma profile.", False),
-    "me": (f"{_CMD}.profile", "app", "View and edit the current user's Lemma profile.", False),
+    "datastore": (
+        f"{_CMD}.data",
+        "datastore_app",
+        "Stream live datastore record changes.",
+        False,
+    ),
+    "connector": (
+        f"{_CMD}.connectors",
+        "app",
+        "Connector, account, and operation commands.",
+        False,
+    ),
+    "connectors": (
+        f"{_CMD}.connectors",
+        "app",
+        "Connector, account, and operation commands.",
+        False,
+    ),
+    "surface": (
+        f"{_CMD}.surfaces",
+        "app",
+        "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.",
+        False,
+    ),
+    "surfaces": (
+        f"{_CMD}.surfaces",
+        "app",
+        "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.",
+        False,
+    ),
+    "profile": (
+        f"{_CMD}.profile",
+        "app",
+        "View and edit the current user's Lemma profile.",
+        False,
+    ),
+    "me": (
+        f"{_CMD}.profile",
+        "app",
+        "View and edit the current user's Lemma profile.",
+        False,
+    ),
     "workflow": (f"{_CMD}.workflows", "app", "Workflow commands.", False),
     "workflows": (f"{_CMD}.workflows", "app", "Workflow commands.", False),
-    "skill": (f"{_CMD}.skills", "app", "Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor).", False),
-    "skills": (f"{_CMD}.skills", "app", "Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor).", False),
+    "skill": (
+        f"{_CMD}.skills",
+        "app",
+        "Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor).",
+        False,
+    ),
+    "skills": (
+        f"{_CMD}.skills",
+        "app",
+        "Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor).",
+        False,
+    ),
 }
 LazyRootGroup.registry = LAZY_GROUPS
 
@@ -316,7 +391,9 @@ def get_resource(
     def run(client, s):  # type: ignore[no-untyped-def]
         pod_id = selected_pod(s, required=False)
         if normalized in {"org", "orgs", "organization", "organizations"}:
-            return client.orgs.list(limit=limit) if name is None else client.orgs.get(name)
+            return (
+                client.orgs.list(limit=limit) if name is None else client.orgs.get(name)
+            )
         if normalized in {"pod", "pods"}:
             if name is not None:
                 return client.pods.get(name)
@@ -324,9 +401,7 @@ def get_resource(
         pod_sdk = pod_client(client, s, pod_id)
         if normalized in {"agent", "agents"}:
             return (
-                pod_sdk.agents.get(name)
-                if name
-                else pod_sdk.agents.list(limit=limit)
+                pod_sdk.agents.get(name) if name else pod_sdk.agents.list(limit=limit)
             )
         if normalized in {"function", "functions"}:
             return (
@@ -341,11 +416,7 @@ def get_resource(
                 else pod_sdk.schedules.list(limit=limit)
             )
         if normalized in {"app", "apps"}:
-            return (
-                pod_sdk.apps.get(name)
-                if name
-                else pod_sdk.apps.list(limit=limit)
-            )
+            return pod_sdk.apps.get(name) if name else pod_sdk.apps.list(limit=limit)
         if normalized in {"workflow", "workflows"}:
             return (
                 pod_sdk.workflows.get(name)
@@ -360,9 +431,7 @@ def get_resource(
             )
         if normalized in {"table", "tables"}:
             return (
-                pod_sdk.tables.get(name)
-                if name
-                else pod_sdk.tables.list(limit=limit)
+                pod_sdk.tables.get(name) if name else pod_sdk.tables.list(limit=limit)
             )
         if normalized in {"file", "files"}:
             path = name or "/me"

@@ -269,9 +269,7 @@ def _render_config(payload: dict[str, Any]) -> None:
             "[dim]env vars[/dim] "
             + ", ".join(f"{key}={value}" for key, value in sorted(overrides.items()))
         )
-    console.print(
-        f"[dim]servers[/dim]  {', '.join(payload.get('servers') or [])}"
-    )
+    console.print(f"[dim]servers[/dim]  {', '.join(payload.get('servers') or [])}")
     console.print(f"[dim]config[/dim]   {payload.get('path')}")
 
 
@@ -319,7 +317,9 @@ def show(ctx: typer.Context) -> None:
 @config_app.command("set-default-pod")
 def set_default_pod_cmd(
     ctx: typer.Context,
-    pod_id: str = typer.Argument(..., help="Pod id to persist as this server's default."),
+    pod_id: str = typer.Argument(
+        ..., help="Pod id to persist as this server's default."
+    ),
 ) -> None:
     """Persist the default pod for the active server (seeds new shells).
 
@@ -334,7 +334,9 @@ def set_default_pod_cmd(
 @config_app.command("set-default-org")
 def set_default_org_cmd(
     ctx: typer.Context,
-    org_id: str = typer.Argument(..., help="Organization id to persist as this server's default."),
+    org_id: str = typer.Argument(
+        ..., help="Organization id to persist as this server's default."
+    ),
     clear_pod: bool = typer.Option(
         True, "--clear-pod/--keep-pod", help="Clear the saved default pod too."
     ),
@@ -518,7 +520,9 @@ def list_servers(ctx: typer.Context) -> None:
 def create_server(
     ctx: typer.Context,
     name: str = typer.Argument(...),
-    base_url: str | None = typer.Option(None, "--base-url", help="Backend API base URL."),
+    base_url: str | None = typer.Option(
+        None, "--base-url", help="Backend API base URL."
+    ),
     auth_url: str | None = typer.Option(None, "--auth-url", help="Frontend/auth URL."),
     token: str | None = typer.Option(None, "--token"),
     copy_current: bool = typer.Option(
@@ -625,7 +629,9 @@ def _fetch_server_api_version(state) -> tuple[str | None, str | None]:  # type: 
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(url, timeout=state.timeout, context=context) as resp:
+        with urllib.request.urlopen(
+            url, timeout=state.timeout, context=context
+        ) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return str(data.get("info", {}).get("version") or "") or None, None
     except Exception as exc:  # network/parse errors are diagnostics, not fatal
@@ -720,14 +726,18 @@ def run_doctor(ctx: typer.Context) -> None:
         _emit(state, payload)
         return
 
-    console.print(f"[bold]lemma[/bold] {payload['lemma_cli']}    "
-                  f"[bold]lemma-sdk[/bold] {payload['lemma_sdk']}")
+    console.print(
+        f"[bold]lemma[/bold] {payload['lemma_cli']}    "
+        f"[bold]lemma-sdk[/bold] {payload['lemma_sdk']}"
+    )
     console.print(f"[dim]bundled API schema[/dim] {payload['bundled_api_schema']}")
     console.print(f"[dim]server[/dim] {base_url}")
 
     if skew == "in_sync":
-        console.print(f"[green]✓ in sync[/green] — server API schema "
-                      f"{server_version} matches the SDK")
+        console.print(
+            f"[green]✓ in sync[/green] — server API schema "
+            f"{server_version} matches the SDK"
+        )
     elif skew == "version_mismatch":
         console.print(
             f"[yellow]⚠ skew[/yellow] — SDK built against {bundled} but server "
@@ -745,11 +755,14 @@ def run_doctor(ctx: typer.Context) -> None:
     if len(installs) > 1:
         console.print(
             "[yellow]⚠ multiple lemma installs on PATH[/yellow] — commands may "
-            "resolve to different versions:")
+            "resolve to different versions:"
+        )
         for path in installs:
             console.print(f"    {path}")
-        console.print("  Keep one global install: "
-                      "[bold]uv tool install --force --editable lemma-cli[/bold]")
+        console.print(
+            "  Keep one global install: "
+            "[bold]uv tool install --force --editable lemma-cli[/bold]"
+        )
     elif installs:
         console.print(f"[green]✓ single install[/green] {installs[0]}")
 
@@ -766,7 +779,10 @@ def _ensure_root_config(state) -> dict[str, Any]:  # type: ignore[no-untyped-def
 
 
 def _switch_state_server(
-    state, server: str, *, create: bool = False  # type: ignore[no-untyped-def]
+    state,
+    server: str,
+    *,
+    create: bool = False,  # type: ignore[no-untyped-def]
 ) -> None:
     root = _ensure_root_config(state)
     server_name = normalize_server_name(server)
@@ -813,7 +829,9 @@ def _setting_with_source(
 
 
 def _default_with_source(
-    state, key: str, explicit_source: str  # type: ignore[no-untyped-def]
+    state,
+    key: str,
+    explicit_source: str,  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     runtime = (
         state.config.get("_runtime")

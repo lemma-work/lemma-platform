@@ -97,9 +97,7 @@ async def _surface_event_receiver(context):
     )
 
     receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
-    manager_receiver = TelegramManagerPollingReceiver(
-        uow_factory=context.uow_factory
-    )
+    manager_receiver = TelegramManagerPollingReceiver(uow_factory=context.uow_factory)
     task = (
         create_background_task(receiver.run(), name="surface-event-receiver")
         if receiver.should_start()

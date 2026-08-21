@@ -185,7 +185,9 @@ class _Hold:
 
     def close_gap(self, now: float) -> None:
         """Bank the stretch that just ended and start a new one."""
-        self.longest_gap_seconds = max(self.longest_gap_seconds, now - self.last_activity_at)
+        self.longest_gap_seconds = max(
+            self.longest_gap_seconds, now - self.last_activity_at
+        )
         self.last_activity_at = now
 
 
@@ -201,7 +203,9 @@ class ConnectionHold:
     stack: str
 
     def render(self) -> str:
-        lock_note = ", in an open transaction (so row locks too)" if self.in_transaction else ""
+        lock_note = (
+            ", in an open transaction (so row locks too)" if self.in_transaction else ""
+        )
         return (
             f"held {self.held_seconds * 1000:.0f}ms across {self.statements} "
             f"statement(s) totalling {self.querying_seconds * 1000:.0f}ms, with a "
@@ -281,7 +285,9 @@ class ConnectionScopeMonitor:
 
     # ---------------------------------------------------------------- events
 
-    def _on_checkout(self, dbapi_connection, connection_record, connection_proxy) -> None:
+    def _on_checkout(
+        self, dbapi_connection, connection_record, connection_proxy
+    ) -> None:
         del dbapi_connection, connection_proxy
         now = time.monotonic()
         hold = _Hold(checked_out_at=now, last_activity_at=now)

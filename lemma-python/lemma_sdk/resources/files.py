@@ -224,7 +224,9 @@ class PodFiles(BoundResource):
             body_model=FileSearchRequest,
         )
 
-    def tree(self, path: str = "/", *, files_per_directory: int = 3) -> DirectoryTreeResponse:
+    def tree(
+        self, path: str = "/", *, files_per_directory: int = 3
+    ) -> DirectoryTreeResponse:
         return self._call(
             file_tree,
             self._pod_uuid(),
@@ -411,5 +413,7 @@ class PodFiles(BoundResource):
             files={"data": (filename, file)},
         )
         if response.status_code >= 400:
-            raise self._transport._error_from_response(response.status_code, None, response.content)
+            raise self._transport._error_from_response(
+                response.status_code, None, response.content
+            )
         return FileDetailResponse.from_dict(response.json())

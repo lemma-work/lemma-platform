@@ -55,10 +55,10 @@ def test_generated_sdk_spec_includes_connector_lifecycle_operations() -> None:
 
     assert {
         "connector.list",
-            "connector.operation.execute",
-            "connector.connect_request.create",
-            "connector.account.list",
-        }.issubset(operation_ids)
+        "connector.operation.execute",
+        "connector.connect_request.create",
+        "connector.account.list",
+    }.issubset(operation_ids)
     assert "connector.account.credentials.get" not in operation_ids
 
 

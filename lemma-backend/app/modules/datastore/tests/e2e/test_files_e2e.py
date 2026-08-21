@@ -258,13 +258,8 @@ async def test_folder_move_copies_descendant_originals(pod_api: DatastoreApi):
         directory_path="/me/move-source/nested",
     )
 
-    moved = await pod_api.update_file(
-        "/me/move-source", new_path="/me/move-target"
-    )
+    moved = await pod_api.update_file("/me/move-source", new_path="/me/move-target")
 
     assert moved["path"] == "/me/move-target"
-    assert (
-        await pod_api.download_file("/me/move-target/nested/inside.md")
-        == b"move me"
-    )
+    assert await pod_api.download_file("/me/move-target/nested/inside.md") == b"move me"
     await pod_api.get_file(uploaded["path"], expected_status=status.HTTP_404_NOT_FOUND)

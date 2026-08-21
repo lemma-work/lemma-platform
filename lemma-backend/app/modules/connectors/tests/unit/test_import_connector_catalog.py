@@ -26,7 +26,9 @@ from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 
-_MODULE_PATH = Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
+)
 _SPEC = importlib.util.spec_from_file_location("import_connector_catalog", _MODULE_PATH)
 assert _SPEC and _SPEC.loader
 importer = importlib.util.module_from_spec(_SPEC)
@@ -303,7 +305,9 @@ async def test_sync_native_catalog_honors_declared_kind():
         )
 
     assert totals == (2, 0, 0)
-    entities = {call.args[1].id: call.args[1] for call in upsert_connector.await_args_list}
+    entities = {
+        call.args[1].id: call.args[1] for call in upsert_connector.await_args_list
+    }
 
     sql_spec = entities["sql"].spec_for(ConnectorKind.SQL)
     assert isinstance(sql_spec, SqlKindSpec)
@@ -455,7 +459,9 @@ async def test_sync_composio_catalog_uses_googlecalendar_toolkit_with_google_cal
         patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
         patch.object(importer, "Composio", return_value=composio),
         patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
-        patch.object(importer, "_paginate_tools", return_value=iter([_tool("list_events")])),
+        patch.object(
+            importer, "_paginate_tools", return_value=iter([_tool("list_events")])
+        ),
         patch.object(importer, "_paginate_triggers", return_value=iter([trigger])),
         patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
         patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
@@ -717,13 +723,14 @@ async def test_sync_composio_catalog_preserves_exact_composio_app_and_operation_
 
     entity = upsert_connector.await_args.args[1]
     assert entity.id == "Exact_Composio_App"
-    assert _capability(entity, AuthProvider.COMPOSIO).toolkit_slug == "Exact_Composio_App"
+    assert (
+        _capability(entity, AuthProvider.COMPOSIO).toolkit_slug == "Exact_Composio_App"
+    )
 
     upsert_operation.assert_awaited_once()
     assert upsert_operation.await_args.args[1] == "Exact_Composio_App"
     assert (
-        upsert_operation.await_args.kwargs["public_name"]
-        == "Exact_Composio_Operation"
+        upsert_operation.await_args.kwargs["public_name"] == "Exact_Composio_Operation"
     )
     assert (
         upsert_operation.await_args.kwargs["provider_operation_name"]
@@ -741,8 +748,7 @@ def test_composio_provider_operation_name_is_exact_tool_slug():
     )
 
     assert (
-        importer._resolve_composio_provider_operation_name(tool)
-        == "outlook_send_email"
+        importer._resolve_composio_provider_operation_name(tool) == "outlook_send_email"
     )
 
 
@@ -789,7 +795,9 @@ async def test_sync_composio_catalog_uses_lemma_auth_provider_for_native_auth_ap
                 id=app_slug,
                 title=app_slug.title(),
                 description=f"{app_slug.title()} connector",
-                provider_capabilities=[ComposioProviderCapability(toolkit_slug=app_slug)],
+                provider_capabilities=[
+                    ComposioProviderCapability(toolkit_slug=app_slug)
+                ],
                 is_active=True,
             )
         )
@@ -1050,31 +1058,31 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
     )
 
     with (
-            patch.object(
-                importer,
-                "_load_lemma_apps_config",
-                return_value=[
-                    {
-                        "name": "slack",
-                        "title": "Slack",
-                        "description": "Slack connector",
-                        "auth_method": "OAUTH2",
-                        "auth_provider": "LEMMA",
-                        "operation_executor": "LEMMA",
-                        "config": {
-                            "access_token_path": "authed_user.access_token",
-                            "refresh_token_path": "refresh_token",
-                        },
-                        "triggers": [],
-                    }
-                ],
-            ),
-            patch.object(
-                importer, "get_native_info_client", AsyncMock(return_value=info_client)
-            ) as get_native_info_client,
-            patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
-            patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
-        ):
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "slack",
+                    "title": "Slack",
+                    "description": "Slack connector",
+                    "auth_method": "OAUTH2",
+                    "auth_provider": "LEMMA",
+                    "operation_executor": "LEMMA",
+                    "config": {
+                        "access_token_path": "authed_user.access_token",
+                        "refresh_token_path": "refresh_token",
+                    },
+                    "triggers": [],
+                }
+            ],
+        ),
+        patch.object(
+            importer, "get_native_info_client", AsyncMock(return_value=info_client)
+        ) as get_native_info_client,
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
+    ):
         totals = await importer._sync_native_catalog(
             connector_repository,
             operation_repository,
@@ -1087,7 +1095,9 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
     assert connector_repository.get.await_args_list[0].args == ("slack",)
     assert connector_repository.get.await_args_list[1].args == ("slack",)
     assert upsert_connector.await_args_list[1].args[1].id == "slack"
-    assert _providers(upsert_connector.await_args_list[1].args[1]) == [AuthProvider.LEMMA]
+    assert _providers(upsert_connector.await_args_list[1].args[1]) == [
+        AuthProvider.LEMMA
+    ]
     get_info_client_call = get_native_info_client.await_args
     assert get_info_client_call.args == ("slack",)
     assert upsert_operation.await_count == 2
@@ -1216,9 +1226,9 @@ async def test_deactivate_excluded_composio_connectors_deactivates_microsoft_tea
     connector_repository = SimpleNamespace(
         # Only microsoft_teams exists in the DB; other excluded ids resolve to None.
         get=AsyncMock(
-            side_effect=lambda connector_id: existing
-            if connector_id == "microsoft_teams"
-            else None
+            side_effect=lambda connector_id: (
+                existing if connector_id == "microsoft_teams" else None
+            )
         ),
         update=AsyncMock(),
     )
@@ -1276,7 +1286,9 @@ async def test_retiring_composio_drops_only_its_half_of_the_connector():
         get=AsyncMock(return_value=github),
         update=AsyncMock(),
     )
-    session = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=2)))
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(rowcount=2))
+    )
 
     retired = await importer._retire_composio_capabilities(
         connector_repository, session
@@ -1318,8 +1330,7 @@ async def test_retiring_composio_is_a_no_op_once_applied():
     session = SimpleNamespace(execute=AsyncMock())
 
     assert (
-        await importer._retire_composio_capabilities(connector_repository, session)
-        == 0
+        await importer._retire_composio_capabilities(connector_repository, session) == 0
     )
     session.execute.assert_not_awaited()
     connector_repository.update.assert_not_awaited()
@@ -1327,7 +1338,10 @@ async def test_retiring_composio_is_a_no_op_once_applied():
 
 @pytest.mark.asyncio
 async def test_sync_composio_catalog_batched_commits_per_toolkit_batch():
-    toolkit_items = [_toolkit("outlook", name="Outlook"), _toolkit("trello", name="Trello")]
+    toolkit_items = [
+        _toolkit("outlook", name="Outlook"),
+        _toolkit("trello", name="Trello"),
+    ]
 
     with (
         patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
@@ -1361,9 +1375,7 @@ def test_trigger_id_includes_provider():
         importer._trigger_id("gmail", AuthProvider.COMPOSIO, "New_Message")
         == "gmail:composio:new_message"
     )
-    assert (
-        importer._trigger_id("slack", AuthProvider.LEMMA, "msg") == "slack:lemma:msg"
-    )
+    assert importer._trigger_id("slack", AuthProvider.LEMMA, "msg") == "slack:lemma:msg"
 
 
 @pytest.mark.asyncio
@@ -1619,7 +1631,11 @@ async def test_apply_connector_renames_repoints_then_deletes():
     assert renamed == 1
     # Accounts + auth_configs are re-pointed BEFORE the old connector is deleted;
     # deleting first would cascade-delete every connected account.
-    assert _rename_ops(session) == ["UPDATE accounts", "UPDATE auth_configs", "DELETE FROM"]
+    assert _rename_ops(session) == [
+        "UPDATE accounts",
+        "UPDATE auth_configs",
+        "DELETE FROM",
+    ]
     for _, params in session.executed:
         assert params["old"] == "teams"
         assert params.get("new", "microsoft_teams") == "microsoft_teams"

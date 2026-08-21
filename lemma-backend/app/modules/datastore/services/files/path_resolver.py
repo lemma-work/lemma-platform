@@ -11,7 +11,11 @@ from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreValidationError,
 )
-from app.modules.datastore.domain.file_entities import DatastoreFileEntity, FileKind, FileStatus
+from app.modules.datastore.domain.file_entities import (
+    DatastoreFileEntity,
+    FileKind,
+    FileStatus,
+)
 from app.modules.datastore.services.files.paths import (
     normalize_datastore_name,
     normalize_datastore_path,
@@ -123,7 +127,9 @@ class PathResolver:
             return False
         return True
 
-    def _is_requester_personal_path(self, path: str | None, requester_user_id: UUID) -> bool:
+    def _is_requester_personal_path(
+        self, path: str | None, requester_user_id: UUID
+    ) -> bool:
         normalized = self._normalize_path(path)
         personal_root = self._personal_root_path(requester_user_id)
         return normalized == personal_root or normalized.startswith(f"{personal_root}/")

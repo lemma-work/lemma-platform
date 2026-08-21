@@ -271,9 +271,7 @@ async def test_the_release_leaves_a_session_with_pending_writes_alone():
     from unittest.mock import AsyncMock
     from types import SimpleNamespace
 
-    session = SimpleNamespace(
-        new=(object(),), dirty=(), deleted=(), commit=AsyncMock()
-    )
+    session = SimpleNamespace(new=(object(),), dirty=(), deleted=(), commit=AsyncMock())
     authz = DatastoreAuthorization(SimpleNamespace(session=session))
 
     await authz._release_application_connection()

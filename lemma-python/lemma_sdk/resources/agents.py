@@ -62,7 +62,9 @@ class PodAgents(BoundResource):
         )
         conversation_id = str(conversation.id)
         if stream:
-            return conversations.send_stream(conversation_id, message, metadata=metadata)
+            return conversations.send_stream(
+                conversation_id, message, metadata=metadata
+            )
         conversations.send(conversation_id, message)
         return conversation
 
@@ -72,7 +74,9 @@ class PodAgents(BoundResource):
     def get(self, name_or_id: str) -> AgentDetailResponse:
         return self._call(agent_get, self._pod_uuid(), name_or_id)
 
-    def update(self, name_or_id: str, request: UpdateAgentRequest) -> AgentDetailResponse:
+    def update(
+        self, name_or_id: str, request: UpdateAgentRequest
+    ) -> AgentDetailResponse:
         return self._call(agent_update, self._pod_uuid(), name_or_id, body=request)
 
     def delete(self, name_or_id: str) -> None:
@@ -86,4 +90,6 @@ class PodAgents(BoundResource):
         name: str,
         request: AgentPermissionsReplaceRequest,
     ) -> AgentPermissionsResponse:
-        return self._call(agent_permissions_replace, self._pod_uuid(), name, body=request)
+        return self._call(
+            agent_permissions_replace, self._pod_uuid(), name, body=request
+        )

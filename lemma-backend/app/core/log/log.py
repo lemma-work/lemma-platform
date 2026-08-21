@@ -232,7 +232,7 @@ def _renderable(value: object) -> str:
         import json as _json
 
         return _json.dumps(value, default=repr, sort_keys=True)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return repr(value)
 
 

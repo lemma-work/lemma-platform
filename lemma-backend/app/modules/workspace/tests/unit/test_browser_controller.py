@@ -5,7 +5,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
 
-from sandbox_runtime.protocol import SandboxKey, PortAccessGrant, PortProtocol, WorkloadKind
+from sandbox_runtime.protocol import (
+    SandboxKey,
+    PortAccessGrant,
+    PortProtocol,
+    WorkloadKind,
+)
 from app.modules.workspace.config import workspace_settings
 from app.core.api.dependencies import get_current_user
 from app.modules.identity.domain.user_entities import UserEntity
@@ -34,9 +39,7 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
                 expires_at=expires_at,
             )
 
-    monkeypatch.setattr(
-        workspace_settings, "runtime_credential_key", "k" * 32
-    )
+    monkeypatch.setattr(workspace_settings, "runtime_credential_key", "k" * 32)
     monkeypatch.setattr(browser_controller, "WorkspaceSandboxService", FakeService)
     app = FastAPI()
     app.include_router(router)

@@ -47,7 +47,9 @@ def init_agent(
         result = init_resource("agent", name, root=root, force=force, runtime=runtime)
     except ScaffoldError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    report(result, next_hint="write instruction.md + grants, then `lemma pods import .`")
+    report(
+        result, next_hint="write instruction.md + grants, then `lemma pods import .`"
+    )
 
 
 @app.command("list")
@@ -84,7 +86,9 @@ def get_agent(
 @app.command("create")
 def create_agent(
     ctx: typer.Context,
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -124,7 +128,9 @@ def create_agent(
 def update_agent(
     ctx: typer.Context,
     agent: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -258,8 +264,12 @@ def grant_agent(
         metavar="GRANT...",
         help="name:perms or type:name:perms, e.g. tickets:read,write /knowledge:read app:gmail:use",
     ),
-    root: Path | None = typer.Option(None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."),
-    show: bool = typer.Option(False, "--print", help="Print grant JSON instead of editing the bundle file."),
+    root: Path | None = typer.Option(
+        None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."
+    ),
+    show: bool = typer.Option(
+        False, "--print", help="Print grant JSON instead of editing the bundle file."
+    ),
 ) -> None:
     """Add resource grants to an agent's bundle JSON (agents have zero access by default)."""
     from ._authoring import grant_resource

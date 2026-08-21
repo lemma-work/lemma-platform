@@ -127,9 +127,7 @@ async def test_concurrent_backend_start_executes_one_public_run_once(
     assert run.started_at is not None
 
     async with factory() as restarted_uow:
-        restarted = await FunctionExecutionRepository(
-            restarted_uow
-        ).resolve_dispatch(
+        restarted = await FunctionExecutionRepository(restarted_uow).resolve_dispatch(
             run_id,
             mode=FunctionDispatchMode.ASYNCHRONOUS,
         )
@@ -162,9 +160,7 @@ async def test_terminal_requires_exact_standard_session_and_is_idempotent(
         update={"session_id": "function-session:wrong"}
     )
     async with factory() as uow:
-        rejected = await FunctionExecutionRepository(
-            uow
-        ).authorized_runtime_context(
+        rejected = await FunctionExecutionRepository(uow).authorized_runtime_context(
             run_id,
             wrong,
             delegated_tokens_enabled=True,
@@ -172,9 +168,7 @@ async def test_terminal_requires_exact_standard_session_and_is_idempotent(
     assert rejected is None
 
     async with factory() as uow:
-        context = await FunctionExecutionRepository(
-            uow
-        ).authorized_runtime_context(
+        context = await FunctionExecutionRepository(uow).authorized_runtime_context(
             run_id,
             _principal(dispatch),
             delegated_tokens_enabled=True,
@@ -234,9 +228,7 @@ async def test_api_run_cannot_complete_through_job_callback_authorization(
     assert started is not None
 
     async with factory() as uow:
-        context = await FunctionExecutionRepository(
-            uow
-        ).authorized_runtime_context(
+        context = await FunctionExecutionRepository(uow).authorized_runtime_context(
             run_id,
             _principal(dispatch),
             delegated_tokens_enabled=True,

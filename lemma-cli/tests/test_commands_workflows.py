@@ -182,7 +182,7 @@ def test_workflows_runs_list_dispatches_api(monkeypatch):
 
 
 def test_runs_waiting_says_what_its_queue_covers(monkeypatch):
-    """"Nothing is waiting on you." was read as "nothing is waiting".
+    """ "Nothing is waiting on you." was read as "nothing is waiting".
 
     A run parked on a FORM with no assignee is submittable by any member with
     execute access but belongs to no one's queue, so it never appears here — and
@@ -201,8 +201,12 @@ def test_runs_waiting_says_what_its_queue_covers(monkeypatch):
         workflows_mod,
         "run_with_client",
         lambda ctx, fn: fn(
-            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(workflows=FakeWorkflows())),
-            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False),
+            SimpleNamespace(
+                pod=lambda pod_id: SimpleNamespace(workflows=FakeWorkflows())
+            ),
+            SimpleNamespace(
+                config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False
+            ),
         ),
     )
 

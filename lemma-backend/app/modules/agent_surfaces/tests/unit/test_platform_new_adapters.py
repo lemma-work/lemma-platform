@@ -331,7 +331,12 @@ def test_telegram_parse_group_text_mention_records_user_id():
     payload["message"]["chat"] = {"id": -1001234567890, "type": "supergroup"}
     payload["message"]["text"] = "LemmaBot help me"
     payload["message"]["entities"] = [
-        {"type": "text_mention", "offset": 0, "length": 8, "user": {"id": 99999, "is_bot": True}},
+        {
+            "type": "text_mention",
+            "offset": 0,
+            "length": 8,
+            "user": {"id": 99999, "is_bot": True},
+        },
     ]
 
     parser = TelegramMessageParser()

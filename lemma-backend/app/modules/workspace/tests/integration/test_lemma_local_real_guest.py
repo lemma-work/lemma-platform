@@ -202,7 +202,9 @@ class Workspace:
         self.name = name
         self.volume_name = volume_name
 
-    async def shell(self, command: str, *, wait_seconds: float = 30) -> tuple[bytes, int | None]:
+    async def shell(
+        self, command: str, *, wait_seconds: float = 30
+    ) -> tuple[bytes, int | None]:
         """Run a command and read what it printed, to completion."""
         process_id = await self.provider.start_process(
             self.instance,
@@ -495,7 +497,7 @@ async def test_the_sandbox_can_fetch_over_the_network(workspace) -> None:
         pytest.skip("this machine cannot reach the public internet")
 
     output, exit_code = await workspace.shell(
-        "python3 -c \"import urllib.request;"
+        'python3 -c "import urllib.request;'
         "print(urllib.request.urlopen('https://example.com', timeout=30).status)\"",
         wait_seconds=60,
     )
@@ -690,7 +692,9 @@ async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
     marker = f"rebuilt-{uuid4().hex}"
 
     instance = await guest_provider.create(
-        _spec(sandbox_id, name=first_name, volume_name=naming.volume_name(sandbox_id, 1))
+        _spec(
+            sandbox_id, name=first_name, volume_name=naming.volume_name(sandbox_id, 1)
+        )
     )
     try:
         await guest_provider.wait_ready(

@@ -88,8 +88,11 @@ class ConnectorOperationService:
         return await list_operations_for_install(
             catalog_repository=self.operation_repository,
             install_repository=self.auth_config_operation_repository,
-            connector_id=connector_id, kind=kind, auth_config_id=auth_config_id,
-            search_query=search_query, limit=limit,
+            connector_id=connector_id,
+            kind=kind,
+            auth_config_id=auth_config_id,
+            search_query=search_query,
+            limit=limit,
         )
 
     async def _resolve_auth_config_context(
@@ -194,9 +197,7 @@ class ConnectorOperationService:
         )
 
     def _is_oauth_account(self, account: Any) -> bool:
-        auth_method = getattr(
-            getattr(account, "connector", None), "auth_method", None
-        )
+        auth_method = getattr(getattr(account, "connector", None), "auth_method", None)
         if auth_method is not None and hasattr(auth_method, "value"):
             auth_method = auth_method.value
         if auth_method is not None:
@@ -398,7 +399,9 @@ class ConnectorOperationService:
             for operation in operations
         }
         operations_by_provider_name = {
-            self._normalize_operation_lookup_name(operation.provider_operation_name): operation
+            self._normalize_operation_lookup_name(
+                operation.provider_operation_name
+            ): operation
             for operation in operations
             if operation.provider_operation_name
         }
@@ -511,12 +514,14 @@ class ConnectorOperationService:
             if auth_config is None:
                 raise ConnectorNotFoundError(str(auth_config_id))
             kind = auth_config.kind.value
-            account = await self.account_resolution_service.resolve_account_for_auth_config(
-                user_id=user_id,
-                connector_id=connector_id,
-                auth_config_id=auth_config_id,
-                auth_actor=actor,
-                account_id=account_id,
+            account = (
+                await self.account_resolution_service.resolve_account_for_auth_config(
+                    user_id=user_id,
+                    connector_id=connector_id,
+                    auth_config_id=auth_config_id,
+                    auth_actor=actor,
+                    account_id=account_id,
+                )
             )
         else:
             account = await self.account_resolution_service.resolve_account(

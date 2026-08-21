@@ -204,7 +204,7 @@ class TelegramClient:
             if isinstance(params, dict) and params.get("retry_after") is not None:
                 try:
                     retry_after = float(params["retry_after"])
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     retry_after = None
             raise TelegramApiError(
                 method=method,

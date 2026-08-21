@@ -70,7 +70,9 @@ def _range_option(value: str | None, flag: str) -> tuple[int | None, int | None]
         raise typer.BadParameter(f"{flag}: {exc}") from exc
 
 
-def _char_budget(max_chars: int | None, max_tokens: int | None, full: bool) -> int | None:
+def _char_budget(
+    max_chars: int | None, max_tokens: int | None, full: bool
+) -> int | None:
     """Resolve the effective character cap.
 
     ``--max-chars 0`` and ``--full`` mean unlimited; ``--max-tokens`` is folded
@@ -118,7 +120,9 @@ def ls_files(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).files.list(api_path(path), limit=limit),
+        lambda client, s: pod_client(client, s, pod).files.list(
+            api_path(path), limit=limit
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -146,7 +150,9 @@ def tree_files(
 @app.command("cat")
 def cat_file(
     ctx: typer.Context,
-    path: str = typer.Argument(..., help="Pod file path, e.g. /me/notes.md or /docs/report.pdf."),
+    path: str = typer.Argument(
+        ..., help="Pod file path, e.g. /me/notes.md or /docs/report.pdf."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     mode: str = typer.Option(
         "auto",
@@ -154,7 +160,9 @@ def cat_file(
         help="auto, text, or markdown. auto shows raw text for text files and converted markdown for documents.",
     ),
     markdown: bool = typer.Option(
-        False, "--markdown", help="Shortcut for --mode markdown (converted document text)."
+        False,
+        "--markdown",
+        help="Shortcut for --mode markdown (converted document text).",
     ),
     text: bool = typer.Option(
         False, "--text", help="Shortcut for --mode text (raw file bytes as UTF-8)."
@@ -166,7 +174,9 @@ def cat_file(
         None, "--lines", help="1-based line range, e.g. 10-50, 10-, -50, 42."
     ),
     max_chars: int | None = typer.Option(
-        None, "--max-chars", help="Cap output characters (default 50000; 0 = unlimited)."
+        None,
+        "--max-chars",
+        help="Cap output characters (default 50000; 0 = unlimited).",
     ),
     max_lines: int | None = typer.Option(
         None, "--max-lines", help="Cap output to the first N lines."
@@ -200,7 +210,9 @@ def cat_file(
         pc = pod_client(client, s, pod)
         clean = api_path(path)
         entity = to_plain(pc.files.get(clean))
-        meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+        meta = (
+            entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+        )
         resolved = resolve_mode(
             requested_mode,
             mime=entity.get("mime_type"),
@@ -217,7 +229,9 @@ def cat_file(
 
         if resolved == "markdown":
             try:
-                full_md = pc.files.download_markdown(clean).decode("utf-8", errors="replace")
+                full_md = pc.files.download_markdown(clean).decode(
+                    "utf-8", errors="replace"
+                )
             except Exception as exc:  # noqa: BLE001 — surfaced as a usage error below
                 raise ValueError(
                     f"No converted markdown available for {clean!r} "
@@ -275,12 +289,21 @@ def stat_file(
 def write_file(
     ctx: typer.Context,
     path: str = typer.Argument(..., help="Pod file path, e.g. /me/notes.md."),
-    text: str | None = typer.Argument(None, help="Content; omit to read --from or stdin."),
+    text: str | None = typer.Argument(
+        None, help="Content; omit to read --from or stdin."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     from_file: Path | None = typer.Option(
-        None, "--from", exists=True, dir_okay=False, readable=True, help="Read content from a local file."
+        None,
+        "--from",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Read content from a local file.",
     ),
-    no_search: bool = typer.Option(False, "--no-search", help="Store without indexing for search."),
+    no_search: bool = typer.Option(
+        False, "--no-search", help="Store without indexing for search."
+    ),
 ) -> None:
     """Create or overwrite a text file with content (arg, --from, or stdin).
 
@@ -302,10 +325,17 @@ def write_file(
 def append_file(
     ctx: typer.Context,
     path: str = typer.Argument(...),
-    text: str | None = typer.Argument(None, help="Content; omit to read --from or stdin."),
+    text: str | None = typer.Argument(
+        None, help="Content; omit to read --from or stdin."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     from_file: Path | None = typer.Option(
-        None, "--from", exists=True, dir_okay=False, readable=True, help="Read content from a local file."
+        None,
+        "--from",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Read content from a local file.",
     ),
 ) -> None:
     """Append text to a file (read-modify-write); creates it if absent."""
@@ -313,7 +343,9 @@ def append_file(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).files.append_text(api_path(path), content),
+        lambda client, s: pod_client(client, s, pod).files.append_text(
+            api_path(path), content
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -329,7 +361,9 @@ def mkdir(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).files.create_folder(api_path(path)),
+        lambda client, s: pod_client(client, s, pod).files.create_folder(
+            api_path(path)
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -342,10 +376,14 @@ def mkdir(
 def upload_file(
     ctx: typer.Context,
     local_file: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
-    remote_path: str | None = typer.Argument(None, help="Remote path, usually under /me."),
+    remote_path: str | None = typer.Argument(
+        None, help="Remote path, usually under /me."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     description: str | None = typer.Option(None, "--description"),
-    no_search: bool = typer.Option(False, "--no-search", help="Store without indexing for search."),
+    no_search: bool = typer.Option(
+        False, "--no-search", help="Store without indexing for search."
+    ),
 ) -> None:
     """Upload a local file to the pod (documents are auto-indexed for search)."""
     directory, name = _split_remote_target(local_file, remote_path)
@@ -368,10 +406,14 @@ def upload_file(
 def download_file(
     ctx: typer.Context,
     remote_path: str = typer.Argument(...),
-    local_file: Path | None = typer.Argument(None, help="Local destination; defaults to the file's name."),
+    local_file: Path | None = typer.Argument(
+        None, help="Local destination; defaults to the file's name."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     markdown: bool = typer.Option(
-        False, "--markdown", help="Download the converted markdown instead of the original bytes."
+        False,
+        "--markdown",
+        help="Download the converted markdown instead of the original bytes.",
     ),
 ) -> None:
     """Download a remote file to a local path.
@@ -447,7 +489,9 @@ def list_children(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).files.list_children(api_path(path)),
+        lambda client, s: pod_client(client, s, pod).files.list_children(
+            api_path(path)
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -457,9 +501,12 @@ def list_children(
 def get_child(
     ctx: typer.Context,
     path: str = typer.Argument(
-        ..., help="Child path, e.g. /docs/report.pdf/document.md or /docs/report.pdf/pages/page_0001.jpg."
+        ...,
+        help="Child path, e.g. /docs/report.pdf/document.md or /docs/report.pdf/pages/page_0001.jpg.",
     ),
-    local_file: Path | None = typer.Argument(None, help="Save to this path instead of printing."),
+    local_file: Path | None = typer.Argument(
+        None, help="Save to this path instead of printing."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     pages: str | None = typer.Option(
         None, "--pages", help="Page range over document.md, e.g. 3, 3-7, 3-, -7."
@@ -498,9 +545,13 @@ def get_child(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(...),
-    path: str | None = typer.Option(None, "--scope", help="Scope search to this folder."),
+    path: str | None = typer.Option(
+        None, "--scope", help="Scope search to this folder."
+    ),
     direct: bool = typer.Option(
-        False, "--direct", help="Only the folder's immediate children (default: whole subtree)."
+        False,
+        "--direct",
+        help="Only the folder's immediate children (default: whole subtree).",
     ),
     method: str | None = typer.Option(
         None, "--method", help="TEXT (full-text), VECTOR (semantic), or HYBRID."
@@ -554,10 +605,15 @@ def share_file(
     path: str = typer.Argument(...),
     pod: str | None = typer.Option(None, "--pod"),
     ttl: str | None = typer.Option(
-        None, "--ttl", "--expires", help="Link lifetime, e.g. 30m, 3h, 24h (default 3h, max 24h)."
+        None,
+        "--ttl",
+        "--expires",
+        help="Link lifetime, e.g. 30m, 3h, 24h (default 3h, max 24h).",
     ),
     max_hits: int | None = typer.Option(
-        None, "--max-hits", help="Max downloads before the link is rejected (default 50, max 100)."
+        None,
+        "--max-hits",
+        help="Max downloads before the link is rejected (default 50, max 100).",
     ),
 ) -> None:
     """Mint a public, hit-capped signed URL (no login needed to open).

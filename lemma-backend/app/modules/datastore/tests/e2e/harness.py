@@ -504,9 +504,7 @@ class DatastoreApi:
         )
         assert response.status_code == expected_status, response.text
         return (
-            response.json()
-            if response.content and response.status_code < 400
-            else {}
+            response.json() if response.content and response.status_code < 400 else {}
         )
 
     async def list_records(self, table_name: str, **params) -> dict:
@@ -533,9 +531,7 @@ class DatastoreApi:
         )
         assert response.status_code == expected_status, response.text
         return (
-            response.json()
-            if response.content and response.status_code < 400
-            else {}
+            response.json() if response.content and response.status_code < 400 else {}
         )
 
     async def update_record(
@@ -554,7 +550,9 @@ class DatastoreApi:
             json={"data": data},
         )
         assert response.status_code == expected_status, response.text
-        return response.json() if response.content and response.status_code < 400 else {}
+        return (
+            response.json() if response.content and response.status_code < 400 else {}
+        )
 
     async def delete_record(
         self,

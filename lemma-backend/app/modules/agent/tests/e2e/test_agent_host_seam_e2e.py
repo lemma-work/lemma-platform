@@ -855,9 +855,7 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
 
 
 @pytest.mark.asyncio
-async def test_full_dispatch_admits_polls_and_completes_a_run(
-    db_session, scenario
-):
+async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenario):
     """The whole dispatch seam: admit -> poll START_RUN -> append -> consume.
 
     Earlier seam tests drive ``_consume`` directly and seed the lease by hand,
@@ -965,14 +963,37 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
         host_id=machine["host_id"],
         batch=AgentHostEventBatch(
             events=[
-                _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "The "}, run_id=run_id),
-                _event(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "The "}, run_id=run_id),
-                _event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "secret."}, run_id=run_id),
-                _event(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "secret."}, run_id=run_id),
+                _event(
+                    1,
+                    AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                    {"text": "The "},
+                    run_id=run_id,
+                ),
+                _event(
+                    2,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "The "},
+                    run_id=run_id,
+                ),
+                _event(
+                    3,
+                    AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                    {"text": "secret."},
+                    run_id=run_id,
+                ),
+                _event(
+                    4,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "secret."},
+                    run_id=run_id,
+                ),
                 _event(
                     5,
                     AgentHostEventType.TERMINAL,
-                    {"state": AgentHostRunState.SUCCEEDED.value, "stop_reason": "end_turn"},
+                    {
+                        "state": AgentHostRunState.SUCCEEDED.value,
+                        "stop_reason": "end_turn",
+                    },
                     run_id=run_id,
                 ),
             ]

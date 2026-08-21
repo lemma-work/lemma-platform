@@ -82,7 +82,7 @@ class TestOAuthErrorReflection:
         "error",
         [
             "<script>alert(1)</script>",
-            "\"><img src=x onerror=alert(1)>",
+            '"><img src=x onerror=alert(1)>',
             "javascript:alert(1)",
             "a" * 500,
             "error with spaces",

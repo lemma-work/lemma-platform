@@ -13,8 +13,12 @@ from app.modules.agent_surfaces.platforms.outlook.service import OutlookPlatform
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import TelegramPlatformService
-from app.modules.agent_surfaces.platforms.whatsapp.service import WhatsAppPlatformService
+from app.modules.agent_surfaces.platforms.telegram.service import (
+    TelegramPlatformService,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.service import (
+    WhatsAppPlatformService,
+)
 
 pytestmark = [
     pytest.mark.e2e,

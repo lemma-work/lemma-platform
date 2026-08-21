@@ -43,9 +43,7 @@ class RoutingOperationGateway(AppOperationGatewayPort):
             raise ConnectorNotFoundError(connector_id)
         return connector
 
-    def _get_gateway_by_provider(
-        self, provider: str
-    ) -> AppOperationGatewayPort:
+    def _get_gateway_by_provider(self, provider: str) -> AppOperationGatewayPort:
         if provider.upper() == AuthProvider.COMPOSIO.value:
             return self._composio_gateway
         if provider.upper() == AuthProvider.LEMMA.value:

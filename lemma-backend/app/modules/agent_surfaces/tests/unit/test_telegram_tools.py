@@ -40,7 +40,9 @@ def test_telegram_toolset_generates_tool_descriptions():
 
 @pytest.mark.asyncio
 async def test_telegram_get_current_chat_returns_metadata():
-    toolset = build_telegram_surface_toolset(credentials={"bot_token": "telegram-token"})
+    toolset = build_telegram_surface_toolset(
+        credentials={"bot_token": "telegram-token"}
+    )
     tool = toolset.tools["telegram_get_current_chat"]
 
     ctx = SimpleNamespace(
@@ -56,7 +58,13 @@ async def test_telegram_get_current_chat_returns_metadata():
                 chat_id="12345",
                 message_thread_id="topic-7",
                 is_topic_message=True,
-                attachments=[{"file_id": "file-123", "name": "voice-note.ogg", "content_type": "audio"}],
+                attachments=[
+                    {
+                        "file_id": "file-123",
+                        "name": "voice-note.ogg",
+                        "content_type": "audio",
+                    }
+                ],
             ),
         )
     )

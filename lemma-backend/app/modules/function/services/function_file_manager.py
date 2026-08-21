@@ -23,7 +23,9 @@ class FunctionFileManager:
 
         self.function_id = function_id
         self.prefix = f"functions/{function_id}/"
-        self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
+        self._local_base: Path | None = (
+            Path(root_path) / self.prefix if root_path else None
+        )
 
         if root_path is not None:
             self.store = LocalStore(prefix=self._local_base, mkdir=True)

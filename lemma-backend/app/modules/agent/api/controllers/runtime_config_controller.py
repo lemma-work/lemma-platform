@@ -64,9 +64,7 @@ async def _ensure_org_member(
         )
 
 
-def _profile_response(
-    profile, availability=None
-) -> AgentRuntimeProfileResponse:
+def _profile_response(profile, availability=None) -> AgentRuntimeProfileResponse:
     """Serialize one profile, merging in its derived availability.
 
     availability is not on the domain entity - it is read from the harness and

@@ -38,9 +38,7 @@ class ConnectRequest(UUIDAuditBase):
     status: Mapped[str] = mapped_column(
         String(50), default=ConnectRequestStatus.PENDING.value
     )
-    attributes: Mapped[dict | None] = mapped_column(
-        JSONB, default=None, nullable=True
-    )
+    attributes: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
 
     # Relationships
     connector: Mapped["Connector"] = relationship("Connector")

@@ -12,7 +12,7 @@ import psycopg
 
 # Use same images as docker-compose.yml for consistency. pgvector 0.8.3 is
 # required for the halfvec vector indexes the search service now builds.
-POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
+POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg18"
 REDIS_IMAGE = "redis:7.4-alpine"
 SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # Kreuzberg 4.8.0-4.9.9 shipped under the Elastic License 2.0, which forbids

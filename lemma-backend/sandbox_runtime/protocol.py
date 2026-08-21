@@ -34,14 +34,10 @@ class AdmissionClass(StrEnum):
     BATCH = "batch"
 
 
-
-
 class SandboxDesiredState(StrEnum):
     PRESENT = "present"
     RELEASED = "released"
     DELETED = "deleted"
-
-
 
 
 class AllocationState(StrEnum):
@@ -55,8 +51,6 @@ class AllocationState(StrEnum):
     DESTROYING = "destroying"
     DESTROYED = "destroyed"
     ERROR = "error"
-
-
 
 
 class ProcessState(StrEnum):
@@ -98,10 +92,6 @@ class FileKind(StrEnum):
     FILE = "file"
     DIRECTORY = "directory"
     SYMLINK = "symlink"
-
-
-
-
 
 
 class RetryDisposition(StrEnum):
@@ -188,8 +178,6 @@ ErrorContext = (
 )
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class SandboxKey:
     """Which sandbox an operation belongs to: its kind and its owner."""
@@ -214,22 +202,6 @@ class SandboxProfileRef:
             raise ValueError(
                 "profile digest must contain hexadecimal characters"
             ) from exc
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,8 +396,6 @@ class PortAccessGrant:
     protocol: PortProtocol
     url: str
     expires_at: datetime
-
-
 
 
 class SandboxRuntimeError(RuntimeError):

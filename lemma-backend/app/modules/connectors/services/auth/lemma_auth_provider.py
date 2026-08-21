@@ -153,7 +153,7 @@ class LemmaAuthProvider(AuthProviderInterface):
         )
         if not access_token:
             logger.debug(
-                'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic'
+                "connectors.lemma_auth_provider.access_token_not_found_s.diagnostic"
             )
 
         refresh_token_path = oauth_config.refresh_token_path if oauth_config else None
@@ -164,7 +164,7 @@ class LemmaAuthProvider(AuthProviderInterface):
         )
         if not refresh_token:
             logger.debug(
-                'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic'
+                "connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic"
             )
 
         expires_at = None

@@ -39,7 +39,9 @@ def test_load_resource_payload_resolves_file_refs(tmp_path):
     resource_dir = tmp_path / "functions" / "hello-world"
     resource_dir.mkdir(parents=True)
     (resource_dir / "code.py").write_text("print('hello')\n", encoding="utf-8")
-    (resource_dir / "config.json").write_text(json.dumps({"mode": "fast"}), encoding="utf-8")
+    (resource_dir / "config.json").write_text(
+        json.dumps({"mode": "fast"}), encoding="utf-8"
+    )
     (resource_dir / "hello-world.json").write_text(
         json.dumps(
             {
@@ -316,7 +318,9 @@ def test_export_pod_files_only_writes_pod_visible_folders(tmp_path: Path):
 
     assert counts == {"folders": 2, "files": 1}
     assert (tmp_path / "files" / "product_datasheets" / ".folder.json").exists()
-    assert (tmp_path / "files" / "product_datasheets" / "indoor" / ".folder.json").exists()
+    assert (
+        tmp_path / "files" / "product_datasheets" / "indoor" / ".folder.json"
+    ).exists()
     assert (
         tmp_path / "files" / "product_datasheets" / "spec-sheet.pdf"
     ).read_bytes() == b"%PDF-1.4"
@@ -334,7 +338,9 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
         apps=SimpleNamespace(
-            list=lambda pod_id, limit=1000: (_ for _ in ()).throw(AssertionError("apps.list should not be called"))
+            list=lambda pod_id, limit=1000: (_ for _ in ()).throw(
+                AssertionError("apps.list should not be called")
+            )
         ),
         files=SimpleNamespace(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
@@ -389,7 +395,9 @@ def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
 
 
 def test_export_pod_bundle_rejects_unknown_exclude_value(tmp_path: Path):
-    client = FakeClient(pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}))
+    client = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"})
+    )
 
     try:
         export_pod_bundle(
@@ -538,9 +546,14 @@ def test_import_pod_bundle_accepts_resource_collection_dir(tmp_path: Path):
         functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         agents=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
-            create=lambda pod_id, payload: created_payloads.append((pod_id, _plain(payload))) or {"name": _plain(payload)["name"]},
-            replace_permissions=lambda pod_id, agent_name, payload: permission_payloads.append((pod_id, agent_name, _plain(payload)))
-            or {"agent_name": agent_name, **_plain(payload)},
+            create=lambda pod_id, payload: (
+                created_payloads.append((pod_id, _plain(payload)))
+                or {"name": _plain(payload)["name"]}
+            ),
+            replace_permissions=lambda pod_id, agent_name, payload: (
+                permission_payloads.append((pod_id, agent_name, _plain(payload)))
+                or {"agent_name": agent_name, **_plain(payload)}
+            ),
         ),
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -615,10 +628,14 @@ def test_import_pod_bundle_agent_update_strips_name_and_clears_absent_schemas(
                 "name": agent_name,
             },
             # _FlatPodProxy routes `.update(name, request)` to `update_graph(pod_id, name, **request.to_dict())`
-            update_graph=lambda pod_id, agent_name, **payload: updated_payloads.append((pod_id, agent_name, payload))
-            or {"name": agent_name},
-            replace_permissions=lambda pod_id, agent_name, payload: permission_payloads.append((pod_id, agent_name, _plain(payload)))
-            or {"agent_name": agent_name, **_plain(payload)},
+            update_graph=lambda pod_id, agent_name, **payload: (
+                updated_payloads.append((pod_id, agent_name, payload))
+                or {"name": agent_name}
+            ),
+            replace_permissions=lambda pod_id, agent_name, payload: (
+                permission_payloads.append((pod_id, agent_name, _plain(payload)))
+                or {"agent_name": agent_name, **_plain(payload)}
+            ),
         ),
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -692,8 +709,12 @@ def test_import_pod_bundle_rejects_grants_without_resource_name(tmp_path: Path):
         agents=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
             create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
-            replace_permissions=lambda pod_id, agent_name, payload: (_ for _ in ()).throw(
-                AssertionError("replace_permissions should not be called for invalid grants")
+            replace_permissions=lambda pod_id, agent_name, payload: (
+                _ for _ in ()
+            ).throw(
+                AssertionError(
+                    "replace_permissions should not be called for invalid grants"
+                )
             ),
         ),
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -746,7 +767,9 @@ def test_fetch_files_index_uses_tree_payload_without_fetching_each_path():
             }
 
         def get(self, pod_id: str, path: str) -> dict[str, object]:
-            raise AssertionError(f"fetch_files_index should not call files.get for {pod_id}:{path}")
+            raise AssertionError(
+                f"fetch_files_index should not call files.get for {pod_id}:{path}"
+            )
 
     by_parent, all_items = fetch_files_index(FakeClient(files=_FilesApi()), "pod_123")
 
@@ -841,8 +864,16 @@ def test_import_pod_files_updates_existing_folder_metadata_on_conflict(tmp_path:
 
     update_calls: list[dict[str, object]] = []
 
-    def create_folder(pod_id: str, *, path: str, description: str | None = None, visibility: str | None = None):
-        raise LemmaAPIError(status_code=409, message="Exists", code="DATASTORE_CONFLICT")
+    def create_folder(
+        pod_id: str,
+        *,
+        path: str,
+        description: str | None = None,
+        visibility: str | None = None,
+    ):
+        raise LemmaAPIError(
+            status_code=409, message="Exists", code="DATASTORE_CONFLICT"
+        )
 
     def get_file(pod_id: str, path: str) -> dict[str, object]:
         assert pod_id == "pod_123"
@@ -950,16 +981,23 @@ def test_import_pod_bundle_function_update_strips_config(tmp_path: Path):
     permission_payloads: list[tuple[str, str, dict[str, object]]] = []
 
     client = FakeClient(
-        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        pods=SimpleNamespace(
+            update=lambda pod_id, request: {"id": pod_id, **_plain(request)}
+        ),
         tables=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": [{"name": "products_table"}]}
         ),
         functions=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": [{"name": "sync_demo_products"}]},
             # _FlatPodProxy routes `.update(name, request)` to `update_graph(pod_id, name, **request.to_dict())`
-            update_graph=lambda pod_id, function_name, **payload: update_payloads.append((pod_id, function_name, payload)) or {"name": function_name},
-            replace_permissions=lambda pod_id, function_name, payload: permission_payloads.append((pod_id, function_name, _plain(payload)))
-            or {"function_name": function_name, **_plain(payload)},
+            update_graph=lambda pod_id, function_name, **payload: (
+                update_payloads.append((pod_id, function_name, payload))
+                or {"name": function_name}
+            ),
+            replace_permissions=lambda pod_id, function_name, payload: (
+                permission_payloads.append((pod_id, function_name, _plain(payload)))
+                or {"function_name": function_name, **_plain(payload)}
+            ),
         ),
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -1037,10 +1075,15 @@ def test_import_pod_bundle_table_create_strips_system_columns(tmp_path: Path):
     create_payloads: list[dict[str, object]] = []
 
     client = FakeClient(
-        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        pods=SimpleNamespace(
+            update=lambda pod_id, request: {"id": pod_id, **_plain(request)}
+        ),
         tables=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
-            create=lambda pod_id, payload: create_payloads.append(_plain(payload)) or {"name": _plain(payload)["name"]},
+            create=lambda pod_id, payload: (
+                create_payloads.append(_plain(payload))
+                or {"name": _plain(payload)["name"]}
+            ),
         ),
         functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -1137,7 +1180,9 @@ def test_import_pod_bundle_allows_user_id_without_rls(tmp_path: Path):
 
 
 def test_import_pod_bundle_dry_run_reports_validation_errors(tmp_path: Path):
-    (tmp_path / "pod.json").write_text(json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8")
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
     function_dir = tmp_path / "functions" / "broken_function"
     function_dir.mkdir(parents=True)
     (function_dir / "code.py").write_text("def not_valid(:\n", encoding="utf-8")
@@ -1167,7 +1212,9 @@ def test_import_pod_bundle_dry_run_reports_validation_errors(tmp_path: Path):
         ),
     )
 
-    result = import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path, dry_run=True)
+    result = import_pod_bundle(
+        client, pod_id="pod_123", source_dir=tmp_path, dry_run=True
+    )
 
     assert result["ok"] is False
     assert result["dry_run"] is True
@@ -1181,7 +1228,9 @@ def test_build_app_bundle_uses_npm_ci_when_lockfile_exists(tmp_path: Path):
     source_dir = resource_dir / "source"
     source_dir.mkdir(parents=True)
     (source_dir / "package.json").write_text('{"name":"app"}\n', encoding="utf-8")
-    (source_dir / "package-lock.json").write_text('{"lockfileVersion": 3}\n', encoding="utf-8")
+    (source_dir / "package-lock.json").write_text(
+        '{"lockfileVersion": 3}\n', encoding="utf-8"
+    )
 
     from lemma_cli.cli_app import pod_bundle
 
@@ -1322,7 +1371,9 @@ def test_build_app_bundle_falls_back_to_npm_install_without_lockfile(tmp_path: P
 
 
 def test_import_pod_bundle_dry_run_validates_app_build(tmp_path: Path):
-    (tmp_path / "pod.json").write_text(json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8")
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
     app_dir = tmp_path / "apps" / "support_app"
     source_dir = app_dir / "source"
     source_dir.mkdir(parents=True)
@@ -1348,9 +1399,13 @@ def test_import_pod_bundle_dry_run_validates_app_build(tmp_path: Path):
     from lemma_cli.cli_app import pod_bundle
 
     original_build = pod_bundle._build_app_bundle
-    pod_bundle._build_app_bundle = lambda resource_dir, stream_output: "<html>built</html>"
+    pod_bundle._build_app_bundle = lambda resource_dir, stream_output: (
+        "<html>built</html>"
+    )
     try:
-        result = import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path, dry_run=True)
+        result = import_pod_bundle(
+            client, pod_id="pod_123", source_dir=tmp_path, dry_run=True
+        )
     finally:
         pod_bundle._build_app_bundle = original_build
 
@@ -1359,7 +1414,9 @@ def test_import_pod_bundle_dry_run_validates_app_build(tmp_path: Path):
 
 
 def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
-    (tmp_path / "pod.json").write_text(json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8")
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
     app_dir = tmp_path / "apps" / "support_app"
     source_dir = app_dir / "source"
     source_dir.mkdir(parents=True)
@@ -1372,7 +1429,9 @@ def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
     deploy_calls: list[dict[str, object]] = []
 
     client = FakeClient(
-        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        pods=SimpleNamespace(
+            update=lambda pod_id, request: {"id": pod_id, **_plain(request)}
+        ),
         tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -1393,7 +1452,15 @@ def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
     original_build = pod_bundle._build_app_bundle
     original_deploy = pod_bundle.deploy_app_bundle
 
-    def fake_deploy(client, *, pod_id: str, app_name: str, source_dir: Path, dist_dir=None, ensure_exists=False):
+    def fake_deploy(
+        client,
+        *,
+        pod_id: str,
+        app_name: str,
+        source_dir: Path,
+        dist_dir=None,
+        ensure_exists=False,
+    ):
         deploy_calls.append(
             {
                 "pod_id": pod_id,
@@ -1405,8 +1472,8 @@ def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
         )
         return {"ok": True}
 
-    pod_bundle._build_app_bundle = (
-        lambda resource_dir, stream_output: resource_dir / "dist.zip"
+    pod_bundle._build_app_bundle = lambda resource_dir, stream_output: (
+        resource_dir / "dist.zip"
     )
     pod_bundle.deploy_app_bundle = fake_deploy
     try:
@@ -1431,8 +1498,12 @@ def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
     ]
 
 
-def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflict(tmp_path: Path):
-    (tmp_path / "pod.json").write_text(json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8")
+def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflict(
+    tmp_path: Path,
+):
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
     app_dir = tmp_path / "apps" / "support_app"
     source_dir = app_dir / "source"
     source_dir.mkdir(parents=True)
@@ -1454,11 +1525,17 @@ def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflic
         plain = _plain(payload)
         create_payloads.append(plain)
         if len(create_payloads) == 1:
-            raise LemmaAPIError(status_code=409, message="App with public slug exists", code="APP_CONFLICT")
+            raise LemmaAPIError(
+                status_code=409,
+                message="App with public slug exists",
+                code="APP_CONFLICT",
+            )
         return {"name": plain["name"]}
 
     client = FakeClient(
-        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        pods=SimpleNamespace(
+            update=lambda pod_id, request: {"id": pod_id, **_plain(request)}
+        ),
         tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -1479,8 +1556,8 @@ def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflic
 
     original_build = pod_bundle._build_app_bundle
     original_deploy = pod_bundle.deploy_app_bundle
-    pod_bundle._build_app_bundle = (
-        lambda resource_dir, stream_output: resource_dir / "dist.zip"
+    pod_bundle._build_app_bundle = lambda resource_dir, stream_output: (
+        resource_dir / "dist.zip"
     )
     pod_bundle.deploy_app_bundle = (
         lambda client, *, pod_id, app_name, source_dir, dist_dir=None, ensure_exists=False: {}
@@ -1598,7 +1675,9 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
         },
     }
 
-    pod_data = json.loads((tmp_path / "demo-pod" / "pod.json").read_text(encoding="utf-8"))
+    pod_data = json.loads(
+        (tmp_path / "demo-pod" / "pod.json").read_text(encoding="utf-8")
+    )
     assert pod_data["variables"]["slack_account"]["connector"] == "slack"
     assert pod_data["variables"]["slack_account"]["connector_kind"] == "composio"
 
@@ -1646,10 +1725,10 @@ def test_import_pod_bundle_upserts_surfaces_by_platform(tmp_path: Path):
             list=lambda pod_id, limit=100: {
                 "items": [{"id": "surface_1", "platform": "SLACK"}]
             },
-            upsert=lambda pod_id, platform, payload: upserted.append(
-                (pod_id, platform, _plain(payload))
-            )
-            or {"id": "surface_1", "platform": platform},
+            upsert=lambda pod_id, platform, payload: (
+                upserted.append((pod_id, platform, _plain(payload)))
+                or {"id": "surface_1", "platform": platform}
+            ),
         ),
         files=SimpleNamespace(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
@@ -1712,7 +1791,9 @@ def test_import_pod_bundle_rejects_unknown_surface_platform(tmp_path: Path):
     )
 
     assert result["ok"] is False
-    assert any("Unknown surface platform" in error["message"] for error in result["errors"])
+    assert any(
+        "Unknown surface platform" in error["message"] for error in result["errors"]
+    )
 
 
 def test_import_pod_bundle_applies_workflow_graph(tmp_path: Path):
@@ -1720,7 +1801,11 @@ def test_import_pod_bundle_applies_workflow_graph(tmp_path: Path):
     workflow_dir = workflows_root / "intake"
     workflow_dir.mkdir(parents=True)
     nodes = [
-        {"id": "start_fn", "type": "FUNCTION", "config": {"function_name": "create_ticket"}},
+        {
+            "id": "start_fn",
+            "type": "FUNCTION",
+            "config": {"function_name": "create_ticket"},
+        },
         {"id": "end", "type": "END"},
     ]
     edges = [{"id": "e1", "source": "start_fn", "target": "end"}]
@@ -1746,9 +1831,12 @@ def test_import_pod_bundle_applies_workflow_graph(tmp_path: Path):
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         workflows=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
-            create=lambda pod_id, payload: created.append(_plain(payload)) or {"name": "intake"},
-            update_graph=lambda pod_id, name, payload: graphs.append((pod_id, name, _plain(payload)))
-            or {"name": name},
+            create=lambda pod_id, payload: (
+                created.append(_plain(payload)) or {"name": "intake"}
+            ),
+            update_graph=lambda pod_id, name, payload: (
+                graphs.append((pod_id, name, _plain(payload))) or {"name": name}
+            ),
         ),
         apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         files=SimpleNamespace(
@@ -1877,8 +1965,9 @@ def test_import_pod_bundle_accepts_lemma_app_json_manifest(tmp_path: Path):
     )
     client.apps = SimpleNamespace(
         list=lambda pod_id, limit=1000: {"items": []},
-        create=lambda pod_id, payload: create_payloads.append(_plain(payload))
-        or {"name": _plain(payload)["name"]},
+        create=lambda pod_id, payload: (
+            create_payloads.append(_plain(payload)) or {"name": _plain(payload)["name"]}
+        ),
     )
 
     result = import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path)
@@ -1923,8 +2012,9 @@ def _import_client(recorded, *, members, profile_id="user-1"):
         workflows=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
             create=lambda pod_id, request: {"name": _plain(request).get("name")},
-            update_graph=lambda pod_id, name, payload: recorded.append((name, payload))
-            or {"name": name},
+            update_graph=lambda pod_id, name, payload: (
+                recorded.append((name, payload)) or {"name": name}
+            ),
         ),
         members=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": members}),
         user=SimpleNamespace(profile=lambda: SimpleNamespace(id=profile_id)),
@@ -1976,7 +2066,9 @@ def test_import_fails_loudly_when_token_unresolvable(tmp_path: Path):
     recorded: list = []
     client = _import_client(
         recorded,
-        members=[{"user_id": "someone-else", "pod_member_id": "member-9", "email": "b@x.io"}],
+        members=[
+            {"user_id": "someone-else", "pod_member_id": "member-9", "email": "b@x.io"}
+        ],
         profile_id="user-1",  # importing user is not a member
     )
 
@@ -1993,7 +2085,9 @@ def test_resource_dirs_warns_on_misnamed_manifest(tmp_path: Path, monkeypatch):
     (tmp_path / "tables" / "leftover_empty").mkdir(parents=True)
 
     msgs: list[str] = []
-    monkeypatch.setattr(pod_bundle_module.console, "print", lambda *a, **k: msgs.append(str(a[0])))
+    monkeypatch.setattr(
+        pod_bundle_module.console, "print", lambda *a, **k: msgs.append(str(a[0]))
+    )
 
     dirs = _resource_dirs(tmp_path, "tables")
 
@@ -2050,10 +2144,9 @@ def test_export_then_seed_table_data_strips_audit_columns(tmp_path: Path):
     captured: list[tuple[str, list[dict]]] = []
     import_sdk = SimpleNamespace(
         records=SimpleNamespace(
-            bulk_create=lambda table, items, upsert=False: captured.append(
-                (table, items, upsert)
+            bulk_create=lambda table, items, upsert=False: (
+                captured.append((table, items, upsert)) or len(items)
             )
-            or len(items)
         )
     )
     count = _import_table_data(import_sdk, "people", resource_dir)
@@ -2148,9 +2241,7 @@ def test_with_files_export_then_import_round_trip(tmp_path: Path):
     original_list = pod_bundle._list_pod_visible_items
     pod_bundle._list_pod_visible_items = lambda _client, _pod_id: []
     try:
-        summary = _import_pod_files(
-            import_client, "pod_123", tmp_path, with_files=True
-        )
+        summary = _import_pod_files(import_client, "pod_123", tmp_path, with_files=True)
     finally:
         pod_bundle._list_pod_visible_items = original_list
 
@@ -2171,8 +2262,16 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
                 "name": "demo",
                 "variables": {
                     "approver": {"type": "pod_member"},
-                    "slack_account": {"type": "account", "connector": "slack", "connector_kind": "composio"},
-                    "ghost_account": {"type": "account", "connector": "jira", "connector_kind": "package"},
+                    "slack_account": {
+                        "type": "account",
+                        "connector": "slack",
+                        "connector_kind": "composio",
+                    },
+                    "ghost_account": {
+                        "type": "account",
+                        "connector": "jira",
+                        "connector_kind": "package",
+                    },
                 },
             }
         ),
@@ -2241,11 +2340,22 @@ def test_import_pod_bundle_does_not_rename_pod_by_default(tmp_path: Path):
         json.dumps({"name": "bundle-name", "description": "from bundle"}),
         encoding="utf-8",
     )
-    for name in ("tables", "functions", "agents", "workflows", "schedules", "surfaces", "apps", "files"):
+    for name in (
+        "tables",
+        "functions",
+        "agents",
+        "workflows",
+        "schedules",
+        "surfaces",
+        "apps",
+        "files",
+    ):
         (tmp_path / name).mkdir()
 
     pod_updates: list = []
-    import_pod_bundle(_empty_pod_client(pod_updates), pod_id="pod_123", source_dir=tmp_path)
+    import_pod_bundle(
+        _empty_pod_client(pod_updates), pod_id="pod_123", source_dir=tmp_path
+    )
     assert pod_updates == []  # target pod is never renamed by default
 
     import_pod_bundle(
@@ -2467,7 +2577,10 @@ def test_zero_grant_advisory_fires_for_a_newly_created_workload(tmp_path: Path):
 
     advisories = _collect_grant_advisories(
         tmp_path,
-        created_names={"functions": {"maybe_rewrite_lesson", "request_lesson"}, "agents": set()},
+        created_names={
+            "functions": {"maybe_rewrite_lesson", "request_lesson"},
+            "agents": set(),
+        },
     )
 
     joined = "\n".join(advisories)
@@ -2512,7 +2625,8 @@ def test_zero_grant_advisory_is_quiet_when_grants_are_declared(tmp_path: Path):
 
     assert (
         _collect_grant_advisories(
-            tmp_path, created_names={"functions": {"maybe_rewrite_lesson"}, "agents": set()}
+            tmp_path,
+            created_names={"functions": {"maybe_rewrite_lesson"}, "agents": set()},
         )
         == []
     )
@@ -2576,9 +2690,7 @@ def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
     bundle = Path(result["path"])
     payload = json.loads((bundle / "agents" / "mailer" / "mailer.json").read_text())
     grants = payload["permissions"]["grants"]
-    account_grant = next(
-        g for g in grants if g["resource_type"] == "connector_account"
-    )
+    account_grant = next(g for g in grants if g["resource_type"] == "connector_account")
     # The raw id is gone, replaced by a variable...
     assert account_grant["resource_name"].startswith("${")
     assert account_id not in json.dumps(payload)
@@ -2589,8 +2701,11 @@ def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
     assert variables[var_name]["connector"] == "gmail"
     assert variables[var_name]["connector_kind"] == "LEMMA"
     # The plain connector grant is untouched — it is portable by name.
-    assert {"resource_type": "connector", "resource_name": "gmail",
-            "permission_ids": ["connector.use"]} in grants
+    assert {
+        "resource_type": "connector",
+        "resource_name": "gmail",
+        "permission_ids": ["connector.use"],
+    } in grants
 
 
 def test_import_drops_an_unresolved_pinned_account_grant(tmp_path: Path, capsys):
@@ -2645,10 +2760,9 @@ def test_import_drops_an_unresolved_pinned_account_grant(tmp_path: Path, capsys)
         agents=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
             create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
-            replace_permissions=lambda pod_id, name, payload: permission_payloads.append(
-                _plain(payload)
-            )
-            or {"agent_name": name},
+            replace_permissions=lambda pod_id, name, payload: (
+                permission_payloads.append(_plain(payload)) or {"agent_name": name}
+            ),
         ),
         workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -2793,7 +2907,9 @@ def test_plan_flags_an_unreachable_pinned_account_grant(tmp_path: Path):
     client = _bare_pod_client()
     client.connectors = SimpleNamespace(
         accounts=SimpleNamespace(
-            get=lambda aid: (_ for _ in ()).throw(LemmaAPIError(status_code=404, message="gone"))
+            get=lambda aid: (_ for _ in ()).throw(
+                LemmaAPIError(status_code=404, message="gone")
+            )
         )
     )
 
@@ -2802,9 +2918,7 @@ def test_plan_flags_an_unreachable_pinned_account_grant(tmp_path: Path):
     )
 
     assert result["ok"] is False
-    assert any(
-        "connector_account" in error["message"] for error in result["errors"]
-    )
+    assert any("connector_account" in error["message"] for error in result["errors"])
 
 
 def test_plan_does_not_block_when_the_account_check_cannot_run(tmp_path: Path):
@@ -2930,7 +3044,9 @@ def test_dry_run_accepts_a_well_formed_datastore_schedule(tmp_path: Path):
     assert result["errors"] == []
 
 
-def test_import_warns_when_an_empty_grant_list_revokes_live_access(tmp_path: Path, capsys):
+def test_import_warns_when_an_empty_grant_list_revokes_live_access(
+    tmp_path: Path, capsys
+):
     """`<resource> init` scaffolds an empty grants list, which means "revoke
     everything". Harmless on create; on an upsert it silently disables a working
     workload."""
@@ -3010,13 +3126,12 @@ def test_import_indexes_files_when_the_manifest_says_nothing(tmp_path: Path, cap
             "path": path,
             "kind": "FOLDER",
         },
-        upload=lambda pod_id, **kwargs: uploads.append(kwargs)
-        or {"path": kwargs.get("name")},
+        upload=lambda pod_id, **kwargs: (
+            uploads.append(kwargs) or {"path": kwargs.get("name")}
+        ),
     )
 
-    import_pod_bundle(
-        client, pod_id="pod_1", source_dir=tmp_path, with_files=True
-    )
+    import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path, with_files=True)
 
     assert len(uploads) == 1
     assert uploads[0]["search_enabled"] is True
@@ -3055,8 +3170,9 @@ def test_import_honours_an_explicit_search_opt_out(tmp_path: Path):
             "path": path,
             "kind": "FOLDER",
         },
-        upload=lambda pod_id, **kwargs: uploads.append(kwargs)
-        or {"path": kwargs.get("name")},
+        upload=lambda pod_id, **kwargs: (
+            uploads.append(kwargs) or {"path": kwargs.get("name")}
+        ),
     )
 
     import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path, with_files=True)
@@ -3123,9 +3239,7 @@ def test_with_data_says_when_it_skips_an_existing_table(tmp_path: Path, capsys):
     resource_dir = tmp_path / "tables" / "tickets"
     resource_dir.mkdir(parents=True)
     (resource_dir / "tickets.json").write_text(
-        json.dumps(
-            {"name": "tickets", "columns": [{"name": "title", "type": "TEXT"}]}
-        ),
+        json.dumps({"name": "tickets", "columns": [{"name": "title", "type": "TEXT"}]}),
         encoding="utf-8",
     )
     (resource_dir / "data.csv").write_text("title\nfirst\n", encoding="utf-8")
@@ -3194,7 +3308,9 @@ def test_import_pod_bundle_uploads_a_no_build_app_as_source_and_dist(tmp_path: P
     uploads: list[dict[str, object]] = []
 
     client = FakeClient(
-        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        pods=SimpleNamespace(
+            update=lambda pod_id, request: {"id": pod_id, **_plain(request)}
+        ),
         tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
@@ -3202,10 +3318,9 @@ def test_import_pod_bundle_uploads_a_no_build_app_as_source_and_dist(tmp_path: P
         apps=SimpleNamespace(
             list=lambda pod_id, limit=1000: {"items": []},
             create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
-            upload_bundle=lambda pod_id, app_name, **kwargs: uploads.append(
-                {"app_name": app_name, **kwargs}
-            )
-            or {"ok": True},
+            upload_bundle=lambda pod_id, app_name, **kwargs: (
+                uploads.append({"app_name": app_name, **kwargs}) or {"ok": True}
+            ),
         ),
         files=SimpleNamespace(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
@@ -3217,8 +3332,8 @@ def test_import_pod_bundle_uploads_a_no_build_app_as_source_and_dist(tmp_path: P
     from lemma_cli.cli_app import pod_bundle
 
     original_build = pod_bundle._build_app_bundle
-    pod_bundle._build_app_bundle = (
-        lambda resource_dir, stream_output: resource_dir / "dist.zip"
+    pod_bundle._build_app_bundle = lambda resource_dir, stream_output: (
+        resource_dir / "dist.zip"
     )
     try:
         import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path)

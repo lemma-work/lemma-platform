@@ -87,7 +87,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     app_password = surface_settings.microsoft_bot_app_password
     if not app_id or not app_password:
         logger.debug(
-            'agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic'
+            "agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic"
         )
         return None
 
@@ -100,9 +100,9 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     if cached_token:
         return cached_token
 
-    oauth_base = (surface_settings.microsoft_bot_oauth_base_url or _OAUTH_BASE_URL).rstrip(
-        "/"
-    )
+    oauth_base = (
+        surface_settings.microsoft_bot_oauth_base_url or _OAUTH_BASE_URL
+    ).rstrip("/")
     url = f"{oauth_base}/{tenant_id}/oauth2/v2.0/token"
     data = {
         "grant_type": "client_credentials",
@@ -133,7 +133,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
                     )
                 else:
                     logger.debug(
-                        'agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic',
+                        "agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic",
                         tenant_id=tenant_id,
                         status=response.status,
                         error_code=error_code,
@@ -144,7 +144,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     token = result.get("access_token")
     if not token:
         logger.debug(
-            'agent_surfaces.client.teams_token_acquisition_no_access.diagnostic',
+            "agent_surfaces.client.teams_token_acquisition_no_access.diagnostic",
             tenant_id=tenant_id,
         )
         return None
@@ -185,7 +185,7 @@ async def resolve_graph_team_id(
     bot_token = await get_bot_token()
     if not bot_token:
         logger.debug(
-            'agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic',
+            "agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None
@@ -199,7 +199,7 @@ async def resolve_graph_team_id(
             if response.status >= 400:
                 await response.text()
                 logger.debug(
-                    'agent_surfaces.client.teams_could_not_resolve_team.diagnostic',
+                    "agent_surfaces.client.teams_could_not_resolve_team.diagnostic",
                     raw_team_id=raw_team_id,
                     status=response.status,
                 )
@@ -207,7 +207,7 @@ async def resolve_graph_team_id(
             details = await response.json()
     except Exception:
         logger.debug(
-            'agent_surfaces.client.teams_team_id_resolution_s.diagnostic',
+            "agent_surfaces.client.teams_team_id_resolution_s.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None
@@ -218,7 +218,7 @@ async def resolve_graph_team_id(
     aad_group_id = str(details.get("aadGroupId") or "") or None
     if not aad_group_id:
         logger.debug(
-            'agent_surfaces.client.teams_team_details_raw_team.diagnostic',
+            "agent_surfaces.client.teams_team_details_raw_team.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None

@@ -35,12 +35,18 @@ class PlatformCapabilities:
     display_name: str  # human label, e.g. "Slack", "Microsoft Teams"
     supports_native_choices: bool  # native tappable ask_user choices (blocks / cards / inline keyboards / interactive lists)
     supports_native_files: bool  # native file attachment via display_resource type=FILE
-    is_email: bool  # gmail/outlook — replies via a dedicated reply tool, not display_resource
+    is_email: (
+        bool  # gmail/outlook — replies via a dedicated reply tool, not display_resource
+    )
     is_channel_capable: bool  # can be @-mentioned in a multi-party channel
-    markdown_mode: str  # mrkdwn|limited_markdown|markdownv2_converted|whatsapp|html_rendered
+    markdown_mode: (
+        str  # mrkdwn|limited_markdown|markdownv2_converted|whatsapp|html_rendered
+    )
     formatting_style: str  # one-line human guidance, used verbatim in the fragment
     soft_char_limit: int  # rough per-message length budget for guidance
-    reply_tool: str | None = None  # email reply tool name (gmail/outlook); None for chat
+    reply_tool: str | None = (
+        None  # email reply tool name (gmail/outlook); None for chat
+    )
     # Can the pod address someone who has never written to us first? Data, not a
     # rule in prose that every new call site has to remember. Chat bots cannot:
     # a Slack/Telegram/WhatsApp bot needs a prior interaction before it may DM.

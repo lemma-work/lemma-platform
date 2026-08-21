@@ -41,9 +41,19 @@ def test_a_spike_that_returns_is_not_growth(tmp_path: Path) -> None:
     module = _module()
     _stats_csv(
         tmp_path / "docker_stats.csv",
-        [("lemma-load-api", m) for m in
-         ["400MiB / 2GiB", "3.5GiB / 2GiB", "410MiB / 2GiB", "3.4GiB / 2GiB",
-          "405MiB / 2GiB", "402MiB / 2GiB", "3.9GiB / 2GiB", "400MiB / 2GiB"]],
+        [
+            ("lemma-load-api", m)
+            for m in [
+                "400MiB / 2GiB",
+                "3.5GiB / 2GiB",
+                "410MiB / 2GiB",
+                "3.4GiB / 2GiB",
+                "405MiB / 2GiB",
+                "402MiB / 2GiB",
+                "3.9GiB / 2GiB",
+                "400MiB / 2GiB",
+            ]
+        ],
     )
 
     trend = module._memory_trend(tmp_path)["lemma-load-api"]
@@ -58,9 +68,19 @@ def test_a_climbing_floor_is_visible(tmp_path: Path) -> None:
     module = _module()
     _stats_csv(
         tmp_path / "docker_stats.csv",
-        [("lemma-load-api", m) for m in
-         ["400MiB / 2GiB", "420MiB / 2GiB", "900MiB / 2GiB", "950MiB / 2GiB",
-          "1.4GiB / 2GiB", "1.5GiB / 2GiB", "1.4GiB / 2GiB", "1.45GiB / 2GiB"]],
+        [
+            ("lemma-load-api", m)
+            for m in [
+                "400MiB / 2GiB",
+                "420MiB / 2GiB",
+                "900MiB / 2GiB",
+                "950MiB / 2GiB",
+                "1.4GiB / 2GiB",
+                "1.5GiB / 2GiB",
+                "1.4GiB / 2GiB",
+                "1.45GiB / 2GiB",
+            ]
+        ],
     )
 
     trend = module._memory_trend(tmp_path)["lemma-load-api"]
@@ -130,7 +150,11 @@ def test_the_summary_names_the_culprit_when_there_was_one(tmp_path: Path) -> Non
             "event": "runtime.loop_stall.degraded",
             "stack_frames": '  File "/x/app/core/object_storage.py", line 21, in _gcs_store',
         },
-        {"event": "http.request.slow", "route": "/pods/{id}/files", "duration_ms": 5200},
+        {
+            "event": "http.request.slow",
+            "route": "/pods/{id}/files",
+            "duration_ms": 5200,
+        },
     ]
 
     text = module._write_summary(tmp_path, events, 0)

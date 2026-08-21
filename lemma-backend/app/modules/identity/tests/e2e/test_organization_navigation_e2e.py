@@ -112,7 +112,9 @@ async def test_navigation_query_count_is_flat_across_organizations(
     authenticated_client, fixed_test_org
 ):
     """Two organizations or six, the sidebar costs the same — the whole point."""
-    await _create_pod(authenticated_client, fixed_test_org["id"], f"p-{uuid4().hex[:6]}")
+    await _create_pod(
+        authenticated_client, fixed_test_org["id"], f"p-{uuid4().hex[:6]}"
+    )
     with counted_queries() as small:
         first = await authenticated_client.get("/organizations/navigation")
     assert first.status_code == status.HTTP_200_OK
@@ -162,7 +164,9 @@ async def test_home_query_count_does_not_grow_with_pods(
 ):
     """The endpoint that replaces per-pod fetching must not do per-pod fetching."""
     org_id = fixed_test_org["id"]
-    first_pod = await _create_pod(authenticated_client, org_id, f"one-{uuid4().hex[:6]}")
+    first_pod = await _create_pod(
+        authenticated_client, org_id, f"one-{uuid4().hex[:6]}"
+    )
     await _create_agent(authenticated_client, first_pod, f"a{uuid4().hex[:6]}")
 
     # A cache hit would measure nothing, so both samples must miss: caching is
@@ -243,8 +247,12 @@ async def test_a_member_sees_only_the_pods_they_joined(
     see only the one they were added to, in both endpoints.
     """
     org_id = fixed_test_org["id"]
-    joined = await _create_pod(authenticated_client, org_id, f"joined-{uuid4().hex[:6]}")
-    hidden = await _create_pod(authenticated_client, org_id, f"hidden-{uuid4().hex[:6]}")
+    joined = await _create_pod(
+        authenticated_client, org_id, f"joined-{uuid4().hex[:6]}"
+    )
+    hidden = await _create_pod(
+        authenticated_client, org_id, f"hidden-{uuid4().hex[:6]}"
+    )
 
     token, org_member_id = await _join_org_as_member(
         authenticated_client, async_client, org_id
@@ -257,7 +265,9 @@ async def test_a_member_sees_only_the_pods_they_joined(
 
     member_auth = {"Authorization": f"Bearer {token}"}
 
-    navigation = await async_client.get("/organizations/navigation", headers=member_auth)
+    navigation = await async_client.get(
+        "/organizations/navigation", headers=member_auth
+    )
     assert navigation.status_code == status.HTTP_200_OK, navigation.text
     organization = next(
         item for item in navigation.json()["items"] if item["id"] == org_id
@@ -313,7 +323,9 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
     org_ids = [fixed_test_org["id"]]
     for index in range(4):
         org_ids.append(
-            await _create_org(authenticated_client, f"Scale Org {index}-{uuid4().hex[:6]}")
+            await _create_org(
+                authenticated_client, f"Scale Org {index}-{uuid4().hex[:6]}"
+            )
         )
 
     pods_by_org: dict[str, list[str]] = {}

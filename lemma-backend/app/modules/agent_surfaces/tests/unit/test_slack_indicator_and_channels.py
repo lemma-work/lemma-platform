@@ -85,7 +85,9 @@ async def test_dm_indicator_propagates_unexpected_set_status_errors(monkeypatch)
         await svc.add_processing_indicator(event=_dm_event())
 
 
-async def test_list_channels_retries_public_only_when_private_scope_missing(monkeypatch):
+async def test_list_channels_retries_public_only_when_private_scope_missing(
+    monkeypatch,
+):
     """A workspace installed before ``groups:read`` still gets a usable picker."""
     requested_types: list[str] = []
 

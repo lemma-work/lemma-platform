@@ -30,7 +30,9 @@ class ExpressionEngine:
     def compile(expression: str) -> None:
         """Validate an expression, raising ExpressionSyntaxError when invalid."""
         if not isinstance(expression, str) or not expression.strip():
-            raise ExpressionSyntaxError(str(expression), "expression must be a non-empty string")
+            raise ExpressionSyntaxError(
+                str(expression), "expression must be a non-empty string"
+            )
         try:
             _compile(expression)
         except JMESPathError as exc:

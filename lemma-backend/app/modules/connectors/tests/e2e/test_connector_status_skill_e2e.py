@@ -1,4 +1,5 @@
 """E2E tests for connector status and skill endpoints."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,6 +24,7 @@ pytestmark = pytest.mark.e2e
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_app(
     app_id: str,
     *,
@@ -32,11 +34,13 @@ def _make_app(
     caps = []
     for p in providers or ["LEMMA"]:
         if p == "COMPOSIO":
-            caps.append({
-                "kind": "composio",
-                "auth_scheme": "OAUTH2",
-                "toolkit_slug": app_id,
-            })
+            caps.append(
+                {
+                    "kind": "composio",
+                    "auth_scheme": "OAUTH2",
+                    "toolkit_slug": app_id,
+                }
+            )
         else:
             caps.append({"kind": "package", "auth_scheme": "OAUTH2"})
     return Connector(
@@ -93,6 +97,7 @@ async def _seed_account(
 # ---------------------------------------------------------------------------
 # Connector Status endpoint tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_connector_status_empty(
@@ -280,6 +285,7 @@ async def test_connector_status_multiple_apps(
 # Skill endpoint tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def tmp_skills_dir(tmp_path: Path) -> Path:
     return tmp_path / "skills"
@@ -301,9 +307,7 @@ async def test_skill_not_found_returns_404(
         "app.modules.connectors.api.connector_controller.SKILLS_DIR",
         tmp_path / "skills",
     ):
-        response = await authenticated_client.get(
-            f"/connectors/{app_id}/skill"
-        )
+        response = await authenticated_client.get(f"/connectors/{app_id}/skill")
     assert response.status_code == 404, response.text
 
 
@@ -321,15 +325,15 @@ async def test_skill_returns_generic_file(
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    (skills_dir / f"{app_id}.md").write_text("# Generic Skill\nSome instructions.", encoding="utf-8")
+    (skills_dir / f"{app_id}.md").write_text(
+        "# Generic Skill\nSome instructions.", encoding="utf-8"
+    )
 
     with patch(
         "app.modules.connectors.api.connector_controller.SKILLS_DIR",
         skills_dir,
     ):
-        response = await authenticated_client.get(
-            f"/connectors/{app_id}/skill"
-        )
+        response = await authenticated_client.get(f"/connectors/{app_id}/skill")
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["connector_id"] == app_id
@@ -351,9 +355,15 @@ async def test_skill_returns_kind_specific_file(
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    (skills_dir / f"{app_id}.package.md").write_text("# Package Skill\nPackage instructions.", encoding="utf-8")
-    (skills_dir / f"{app_id}.composio.md").write_text("# Composio Skill\nComposio instructions.", encoding="utf-8")
-    (skills_dir / f"{app_id}.md").write_text("# Generic Skill\nGeneric instructions.", encoding="utf-8")
+    (skills_dir / f"{app_id}.package.md").write_text(
+        "# Package Skill\nPackage instructions.", encoding="utf-8"
+    )
+    (skills_dir / f"{app_id}.composio.md").write_text(
+        "# Composio Skill\nComposio instructions.", encoding="utf-8"
+    )
+    (skills_dir / f"{app_id}.md").write_text(
+        "# Generic Skill\nGeneric instructions.", encoding="utf-8"
+    )
 
     with patch(
         "app.modules.connectors.api.connector_controller.SKILLS_DIR",
@@ -380,9 +390,7 @@ async def test_skill_returns_kind_specific_file(
         assert data["kind"] == "composio"
 
         # No provider → generic
-        response = await authenticated_client.get(
-            f"/connectors/{app_id}/skill"
-        )
+        response = await authenticated_client.get(f"/connectors/{app_id}/skill")
         assert response.status_code == 200, response.text
         data = response.json()
         assert "Generic" in data["markdown"]
@@ -403,7 +411,9 @@ async def test_skill_falls_back_to_generic_when_provider_specific_missing(
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
     # Only generic file, no provider-specific
-    (skills_dir / f"{app_id}.md").write_text("# Fallback Skill\nInstructions here.", encoding="utf-8")
+    (skills_dir / f"{app_id}.md").write_text(
+        "# Fallback Skill\nInstructions here.", encoding="utf-8"
+    )
 
     with patch(
         "app.modules.connectors.api.connector_controller.SKILLS_DIR",
@@ -437,6 +447,7 @@ async def test_skill_unknown_app_returns_404(
 # ---------------------------------------------------------------------------
 # Skill file resolution helper unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_skill_file_kind_specific(tmp_path: Path):
     """_resolve_skill_file returns provider-specific file when it exists."""
@@ -477,7 +488,10 @@ def test_resolve_skill_file_returns_none_when_nothing_exists(tmp_path: Path):
 # Tests the pure functions directly without importing the script module.
 # ---------------------------------------------------------------------------
 
-def _build_skill_prompt_pure(app_id: str, title: str, description: str, operations: list) -> str:
+
+def _build_skill_prompt_pure(
+    app_id: str, title: str, description: str, operations: list
+) -> str:
     """Pure re-implementation of the prompt builder for testing (mirrors the script's version)."""
     ops_info: list[str] = []
     for op in operations[:20]:
@@ -490,7 +504,9 @@ def _build_skill_prompt_pure(app_id: str, title: str, description: str, operatio
             props = input_schema.get("properties", {})
             required = set(input_schema.get("required", []))
             for fname, finfo in list(props.items())[:8]:
-                ftype = finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                ftype = (
+                    finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                )
                 fdesc = finfo.get("description", "") if isinstance(finfo, dict) else ""
                 req_mark = "*" if fname in required else ""
                 fields.append(f"  - {fname}{req_mark} ({ftype}): {fdesc[:80]}")
@@ -512,18 +528,32 @@ def _build_skill_prompt_pure(app_id: str, title: str, description: str, operatio
 def test_build_skill_prompt_includes_operations():
     """_build_skill_prompt_pure includes operation names and input schemas in the output."""
     ops = [
-        type("Op", (), {
-            "name": "GMAIL_SEND_EMAIL",
-            "display_name": "Send Email",
-            "description": "Send an email",
-            "input_schema": {"type": "object", "required": ["to"], "properties": {"to": {"type": "string", "description": "Recipient"}}},
-        })(),
-        type("Op", (), {
-            "name": "GMAIL_LIST_MESSAGES",
-            "display_name": "List Messages",
-            "description": "List emails",
-            "input_schema": None,
-        })(),
+        type(
+            "Op",
+            (),
+            {
+                "name": "GMAIL_SEND_EMAIL",
+                "display_name": "Send Email",
+                "description": "Send an email",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["to"],
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient"}
+                    },
+                },
+            },
+        )(),
+        type(
+            "Op",
+            (),
+            {
+                "name": "GMAIL_LIST_MESSAGES",
+                "display_name": "List Messages",
+                "description": "List emails",
+                "input_schema": None,
+            },
+        )(),
     ]
     prompt = _build_skill_prompt_pure("gmail", "Gmail", "Google email service.", ops)
     assert "Gmail" in prompt
@@ -551,26 +581,29 @@ def _app_kinds_pure(app) -> list[str]:
 
 def test_app_kinds_single():
     """A connector installable only as a vendored package lists just that."""
-    app = type("App", (), {
-        "kinds": [{"kind": "package", "auth_scheme": "OAUTH2"}]
-    })()
+    app = type("App", (), {"kinds": [{"kind": "package", "auth_scheme": "OAUTH2"}]})()
     assert _app_kinds_pure(app) == ["package"]
 
 
 def test_app_kinds_dual():
     """gmail really does ship both ways, so both must be listed."""
-    app = type("App", (), {
-        "kinds": [
-            {"kind": "package", "auth_scheme": "OAUTH2"},
-            {"kind": "composio", "auth_scheme": "OAUTH2", "toolkit_slug": "gmail"},
-        ]
-    })()
+    app = type(
+        "App",
+        (),
+        {
+            "kinds": [
+                {"kind": "package", "auth_scheme": "OAUTH2"},
+                {"kind": "composio", "auth_scheme": "OAUTH2", "toolkit_slug": "gmail"},
+            ]
+        },
+    )()
     assert set(_app_kinds_pure(app)) == {"package", "composio"}
 
 
 # ---------------------------------------------------------------------------
 # Operations filtered by provider via auth config
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_operations_filtered_by_lemma_provider(
@@ -585,28 +618,32 @@ async def test_operations_filtered_by_lemma_provider(
     # App supports both providers
     app = _make_app(app_id, title="Lemma Ops App", providers=["LEMMA", "COMPOSIO"])
     db_session.add(app)
-    db_session.add(ConnectorOperation(
-        id=f"{app_id}:LEMMA:lemma_op",
-        connector_id=app_id,
-        name="lemma_op",
-        kind="package",
-        provider_operation_name="LEMMA_OP",
-        display_name="Lemma Operation",
-        description="Lemma native op",
-        input_schema={"type": "object"},
-        output_schema={"type": "object"},
-    ))
-    db_session.add(ConnectorOperation(
-        id=f"{app_id}:COMPOSIO:composio_op",
-        connector_id=app_id,
-        name="composio_op",
-        kind="composio",
-        provider_operation_name="COMPOSIO_OP",
-        display_name="Composio Operation",
-        description="Composio op",
-        input_schema={"type": "object"},
-        output_schema={"type": "object"},
-    ))
+    db_session.add(
+        ConnectorOperation(
+            id=f"{app_id}:LEMMA:lemma_op",
+            connector_id=app_id,
+            name="lemma_op",
+            kind="package",
+            provider_operation_name="LEMMA_OP",
+            display_name="Lemma Operation",
+            description="Lemma native op",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
+    db_session.add(
+        ConnectorOperation(
+            id=f"{app_id}:COMPOSIO:composio_op",
+            connector_id=app_id,
+            name="composio_op",
+            kind="composio",
+            provider_operation_name="COMPOSIO_OP",
+            display_name="Composio Operation",
+            description="Composio op",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
     await db_session.flush()
 
     # One auth config per (org, app) — use LEMMA
@@ -623,7 +660,9 @@ async def test_operations_filtered_by_lemma_provider(
     )
     assert response.status_code == 200, response.text
     ops_data = response.json()
-    op_names = [op["name"] for op in ops_data.get("items", ops_data.get("operations", []))]
+    op_names = [
+        op["name"] for op in ops_data.get("items", ops_data.get("operations", []))
+    ]
     assert "lemma_op" in op_names, f"Expected lemma_op in {op_names}, got: {ops_data}"
     assert "composio_op" not in op_names
 
@@ -641,28 +680,32 @@ async def test_operations_filtered_by_composio_provider(
 
     app = _make_app(app_id, title="Composio Ops App", providers=["LEMMA", "COMPOSIO"])
     db_session.add(app)
-    db_session.add(ConnectorOperation(
-        id=f"{app_id}:LEMMA:lemma_op",
-        connector_id=app_id,
-        name="lemma_op",
-        kind="package",
-        provider_operation_name="LEMMA_OP",
-        display_name="Lemma Operation",
-        description="Lemma native op",
-        input_schema={"type": "object"},
-        output_schema={"type": "object"},
-    ))
-    db_session.add(ConnectorOperation(
-        id=f"{app_id}:COMPOSIO:composio_op",
-        connector_id=app_id,
-        name="composio_op",
-        kind="composio",
-        provider_operation_name="COMPOSIO_OP",
-        display_name="Composio Operation",
-        description="Composio op",
-        input_schema={"type": "object"},
-        output_schema={"type": "object"},
-    ))
+    db_session.add(
+        ConnectorOperation(
+            id=f"{app_id}:LEMMA:lemma_op",
+            connector_id=app_id,
+            name="lemma_op",
+            kind="package",
+            provider_operation_name="LEMMA_OP",
+            display_name="Lemma Operation",
+            description="Lemma native op",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
+    db_session.add(
+        ConnectorOperation(
+            id=f"{app_id}:COMPOSIO:composio_op",
+            connector_id=app_id,
+            name="composio_op",
+            kind="composio",
+            provider_operation_name="COMPOSIO_OP",
+            display_name="Composio Operation",
+            description="Composio op",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
     await db_session.flush()
 
     # Use COMPOSIO as the installed provider
@@ -679,6 +722,10 @@ async def test_operations_filtered_by_composio_provider(
     )
     assert response.status_code == 200, response.text
     ops_data = response.json()
-    op_names = [op["name"] for op in ops_data.get("items", ops_data.get("operations", []))]
-    assert "composio_op" in op_names, f"Expected composio_op in {op_names}, got: {ops_data}"
+    op_names = [
+        op["name"] for op in ops_data.get("items", ops_data.get("operations", []))
+    ]
+    assert "composio_op" in op_names, (
+        f"Expected composio_op in {op_names}, got: {ops_data}"
+    )
     assert "lemma_op" not in op_names

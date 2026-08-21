@@ -40,7 +40,6 @@ logger = get_logger(__name__)
 _CONFIG_MATCH_LIMIT = 50
 
 
-
 def cursor_for(entity_or_config, *, is_active: bool, schedule_type) -> datetime | None:
     """The poller's cursor for a schedule row, or ``None`` if it is not armed.
 

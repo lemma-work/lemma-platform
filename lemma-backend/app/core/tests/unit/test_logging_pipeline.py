@@ -202,8 +202,7 @@ def test_setup_reconciles_one_console_and_preserves_non_console_handler(
         assert preserved in logging.getLogger().handlers
         assert logging.getLogger("uvicorn.access").handlers == []
         assert (
-            logging.getLogger("uvicorn.access").getEffectiveLevel()
-            == logging.WARNING
+            logging.getLogger("uvicorn.access").getEffectiveLevel() == logging.WARNING
         )
         assert logging.getLogger("uvicorn.error").getEffectiveLevel() == logging.INFO
     finally:
@@ -728,7 +727,9 @@ def test_a_credential_is_withheld_even_from_an_error() -> None:
     about the error survives, and the field is named so the omission is
     visible rather than mysterious.
     """
-    record = _bound("db.connect.failed", "error", password="hunter2", dsn="postgres://h/db")
+    record = _bound(
+        "db.connect.failed", "error", password="hunter2", dsn="postgres://h/db"
+    )
     assert "password" not in record
     assert record["dropped_fields"] == "password"
     assert record["dsn"] == "postgres://h/db"

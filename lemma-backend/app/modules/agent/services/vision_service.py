@@ -127,8 +127,7 @@ async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
     )
     if model is None:
         raise VisionUnavailableError(
-            f"VISION_MODEL '{model_name}' could not be built from the runtime "
-            "profile."
+            f"VISION_MODEL '{model_name}' could not be built from the runtime profile."
         )
     return model
 

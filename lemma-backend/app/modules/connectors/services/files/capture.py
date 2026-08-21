@@ -41,11 +41,13 @@ def _decode_base64(value: Any) -> bytes | None:
         return None
     try:
         return base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error, ValueError:
         return None
 
 
-def classify_binary(value: Any, path: list[str | int] | None = None) -> BinaryCandidate | None:
+def classify_binary(
+    value: Any, path: list[str | int] | None = None
+) -> BinaryCandidate | None:
     """Recognise one value as binary content, or return None."""
     path = path or []
 

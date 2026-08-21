@@ -148,9 +148,9 @@ class SkillsOverlay:
         for item in descendants:
             if item.path == normalized_root:
                 continue
-            children_by_directory.setdefault(self.paths._parent_path(item.path), []).append(
-                item
-            )
+            children_by_directory.setdefault(
+                self.paths._parent_path(item.path), []
+            ).append(item)
         for siblings in children_by_directory.values():
             siblings.sort(
                 key=lambda item: (item.kind != FileKind.FOLDER, item.name.lower())

@@ -190,7 +190,9 @@ async def test_platform_tool_factory_adds_gmail_tools_for_surface_conversation(
         AsyncMock(return_value={"access_token": "gmail-token"}),
     )
 
-    toolsets = await factory.build_toolsets(conversation=_conversation_for_surface(surface))
+    toolsets = await factory.build_toolsets(
+        conversation=_conversation_for_surface(surface)
+    )
 
     assert len(toolsets) == 1
     assert "gmail_reply_email" in toolsets[0].tools
@@ -229,7 +231,9 @@ async def test_platform_tool_factory_adds_outlook_tools_for_surface_conversation
         AsyncMock(return_value={"access_token": "outlook-token"}),
     )
 
-    toolsets = await factory.build_toolsets(conversation=_conversation_for_surface(surface))
+    toolsets = await factory.build_toolsets(
+        conversation=_conversation_for_surface(surface)
+    )
 
     assert len(toolsets) == 1
     assert "outlook_reply_email" in toolsets[0].tools
@@ -267,9 +271,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
         surface_identity_email="ops.acme@ops.asur.work",
     )
 
-    monkeypatch.setattr(
-        "app.core.config.settings.resend_api_key", "re_test"
-    )
+    monkeypatch.setattr("app.core.config.settings.resend_api_key", "re_test")
 
     credentials = await SurfaceCredentialResolver(
         session=None, connector_service=None

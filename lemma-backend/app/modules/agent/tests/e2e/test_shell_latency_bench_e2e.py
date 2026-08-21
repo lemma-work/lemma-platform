@@ -247,9 +247,7 @@ async def test_shell_tool_call_cost_without_model(
     )
     conc_s = time.time() - conc_started
     assert all(r.success for r in results), results
-    _record(
-        {"label": "direct_concurrent", "n_expected": iterations, "wall_s": conc_s}
-    )
+    _record({"label": "direct_concurrent", "n_expected": iterations, "wall_s": conc_s})
     print(
         f"\n[bench] direct concurrent n={iterations} total={conc_s:.2f}s "
         f"(sequential was {sum(seq):.2f}s)",

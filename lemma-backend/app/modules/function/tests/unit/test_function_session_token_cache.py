@@ -39,9 +39,7 @@ async def test_concurrent_cache_miss_mints_one_function_session() -> None:
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         )
 
-    results = await asyncio.gather(
-        *(cache.get(key, minter=mint) for _ in range(20))
-    )
+    results = await asyncio.gather(*(cache.get(key, minter=mint) for _ in range(20)))
 
     assert [result.value for result in results] == ["cached-function-token"] * 20
     assert calls == 1

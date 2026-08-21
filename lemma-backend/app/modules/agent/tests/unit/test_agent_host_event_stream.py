@@ -26,7 +26,7 @@ async def _redis_available() -> bool:
         await client.ping()
         await client.aclose()
         return True
-    except (RedisError, OSError):
+    except RedisError, OSError:
         return False
 
 
@@ -44,7 +44,9 @@ async def stream():
     await close_redis_clients()
 
 
-def _event(sequence: int, *, type_: str = "agent_message_chunk", text: str = "") -> dict:
+def _event(
+    sequence: int, *, type_: str = "agent_message_chunk", text: str = ""
+) -> dict:
     return {
         "sequence": sequence,
         "type": type_,

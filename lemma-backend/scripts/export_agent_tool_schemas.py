@@ -73,9 +73,7 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
     for member in AgentToolset:
         # Capability-only toolsets (e.g. TODO) resolve to nothing here.
         for toolset in resolve_agent_toolsets([member]):
-            labelled.append(
-                (member.value, cast(AbstractToolset[Any], toolset))
-            )
+            labelled.append((member.value, cast(AbstractToolset[Any], toolset)))
 
     labelled.append(
         (

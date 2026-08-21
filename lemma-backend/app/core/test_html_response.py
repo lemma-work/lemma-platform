@@ -23,7 +23,9 @@ def test_injected_html_response_injects_config_and_no_store():
 
 
 def test_injected_html_response_custom_cache_control():
-    resp = build_injected_html_response("<html></html>", uuid4(), cache_control="public, max-age=60")
+    resp = build_injected_html_response(
+        "<html></html>", uuid4(), cache_control="public, max-age=60"
+    )
     assert resp.headers["cache-control"] == "public, max-age=60"
 
 

@@ -76,8 +76,12 @@ class LemmaTuiApp(App[None]):
 
     def get_system_commands(self, screen: Screen):  # type: ignore[no-untyped-def]
         yield from super().get_system_commands(screen)
-        yield SystemCommand("Switch server", "Change the active Lemma server", self.pick_server)
-        yield SystemCommand("Switch organization", "Change the selected org", self.pick_org)
+        yield SystemCommand(
+            "Switch server", "Change the active Lemma server", self.pick_server
+        )
+        yield SystemCommand(
+            "Switch organization", "Change the selected org", self.pick_org
+        )
         yield SystemCommand("Switch pod", "Change the selected pod", self.pick_pod)
         yield SystemCommand("Open chat", "Chat with the default agent", self.open_chat)
 
@@ -120,7 +124,9 @@ class LemmaTuiApp(App[None]):
         try:
             items = list_orgs(self.state)
         except Exception as exc:
-            self.call_from_thread(self.notify, f"Could not load orgs: {exc}", severity="error")
+            self.call_from_thread(
+                self.notify, f"Could not load orgs: {exc}", severity="error"
+            )
             return
         self.call_from_thread(self._push_org_picker, items)
 
@@ -140,7 +146,9 @@ class LemmaTuiApp(App[None]):
         try:
             org = select_org(self.state, org_id)
         except Exception as exc:
-            self.call_from_thread(self.notify, f"Org switch failed: {exc}", severity="error")
+            self.call_from_thread(
+                self.notify, f"Org switch failed: {exc}", severity="error"
+            )
             return
 
         def after() -> None:
@@ -155,7 +163,9 @@ class LemmaTuiApp(App[None]):
         try:
             items = list_pods(self.state)
         except Exception as exc:
-            self.call_from_thread(self.notify, f"Could not load pods: {exc}", severity="error")
+            self.call_from_thread(
+                self.notify, f"Could not load pods: {exc}", severity="error"
+            )
             return
         self.call_from_thread(self._push_pod_picker, items)
 
@@ -178,7 +188,9 @@ class LemmaTuiApp(App[None]):
         try:
             pod = select_pod(self.state, pod_id)
         except Exception as exc:
-            self.call_from_thread(self.notify, f"Pod switch failed: {exc}", severity="error")
+            self.call_from_thread(
+                self.notify, f"Pod switch failed: {exc}", severity="error"
+            )
             return
 
         def after() -> None:

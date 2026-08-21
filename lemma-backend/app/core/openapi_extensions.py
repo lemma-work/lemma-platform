@@ -21,7 +21,15 @@ from typing import Any
 HTTP_METHODS = {"get", "put", "post", "delete", "patch"}
 
 # Query parameters that signal cursor/offset pagination on a list endpoint.
-PAGINATION_PARAMS = {"limit", "offset", "cursor", "page_token", "page", "after", "before"}
+PAGINATION_PARAMS = {
+    "limit",
+    "offset",
+    "cursor",
+    "page_token",
+    "page",
+    "after",
+    "before",
+}
 
 # operationIds that are not resource operations and intentionally carry no x-lemma
 # (utility endpoints the SDK never generates against).
@@ -78,7 +86,10 @@ def _paginates(method: str, operation: Mapping[str, Any]) -> bool:
     if method.lower() != "get":
         return False
     for param in operation.get("parameters", []) or []:
-        if isinstance(param, Mapping) and str(param.get("name", "")).lower() in PAGINATION_PARAMS:
+        if (
+            isinstance(param, Mapping)
+            and str(param.get("name", "")).lower() in PAGINATION_PARAMS
+        ):
             return True
     return False
 
@@ -113,7 +124,9 @@ def lemma_metadata_for(
         "paginates": override.get("paginates", _paginates(method, operation)),
     }
     if meta["kind"] == "mutation":
-        meta["invalidates"] = override.get("invalidates", _default_invalidates(meta["resource"]))
+        meta["invalidates"] = override.get(
+            "invalidates", _default_invalidates(meta["resource"])
+        )
     return meta
 
 
@@ -162,7 +175,9 @@ def validate_metadata_coverage(schema: Mapping[str, Any]) -> list[str]:
             continue
         resource, _verb = split_operation_id(operation_id)
         if resource is None:
-            problems.append(f"{operation_id}: non-resource operationId is neither dotted nor in SKIP_OPERATION_IDS")
+            problems.append(
+                f"{operation_id}: non-resource operationId is neither dotted nor in SKIP_OPERATION_IDS"
+            )
             continue
         meta = operation.get("x-lemma")
         if not isinstance(meta, dict):
@@ -174,5 +189,7 @@ def validate_metadata_coverage(schema: Mapping[str, Any]) -> list[str]:
     for operation_id, meta in annotated:
         for target in meta.get("invalidates", []) or []:
             if target not in known_resources:
-                problems.append(f"{operation_id}: invalidates unknown resource '{target}'")
+                problems.append(
+                    f"{operation_id}: invalidates unknown resource '{target}'"
+                )
     return problems

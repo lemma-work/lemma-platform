@@ -36,7 +36,9 @@ class _Named:
 class _FakeTableService:
     def __init__(self, tables):
         self._tables = tables
-        self.schema_manager = SimpleNamespace(get_schema_name=lambda pod_id: "pod_schema")
+        self.schema_manager = SimpleNamespace(
+            get_schema_name=lambda pod_id: "pod_schema"
+        )
 
     async def list_tables(self, pod_id, ctx, limit=100, cursor=None):
         return list(self._tables), None
@@ -78,7 +80,9 @@ class _FakeFileService:
     """Serves a fixed file tree (by directory) + file bytes for the with_files
     export path."""
 
-    def __init__(self, by_dir: dict[str, list[_FakeFileEntity]], contents: dict[str, bytes]):
+    def __init__(
+        self, by_dir: dict[str, list[_FakeFileEntity]], contents: dict[str, bytes]
+    ):
         self._by_dir = by_dir
         self._contents = contents
 
@@ -96,7 +100,9 @@ class _FakeFunctionService:
     async def list_functions(self, pod_id, user_id, limit=100, cursor=None, ctx=None):
         return list(self._functions), None
 
-    async def get_function_by_name(self, pod_id, name, user_id, raise_not_found=False, ctx=None):
+    async def get_function_by_name(
+        self, pod_id, name, user_id, raise_not_found=False, ctx=None
+    ):
         return next(f for f in self._functions if f.name == name)
 
 
@@ -104,7 +110,9 @@ class _FakeAgentService:
     def __init__(self, agents):
         self._agents = agents
 
-    async def list_agents(self, pod_id, cursor=None, limit=100, requester_user_id=None, ctx=None):
+    async def list_agents(
+        self, pod_id, cursor=None, limit=100, requester_user_id=None, ctx=None
+    ):
         return list(self._agents), None
 
     async def get_agent_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
@@ -112,7 +120,9 @@ class _FakeAgentService:
 
 
 class _EmptyListService:
-    async def list_workflows(self, pod_id, limit=100, cursor=None, requester_user_id=None, ctx=None):
+    async def list_workflows(
+        self, pod_id, limit=100, cursor=None, requester_user_id=None, ctx=None
+    ):
         return [], None
 
     async def list_schedules(self, pod_id=None, limit=100, cursor=None, ctx=None):
@@ -134,7 +144,9 @@ class _FakeAppService:
     async def list_apps(self, pod_id, user_id, limit, cursor, ctx=None):
         return list(self._apps), None
 
-    async def get_app_by_name(self, pod_id, name, user_id, raise_not_found=False, ctx=None):
+    async def get_app_by_name(
+        self, pod_id, name, user_id, raise_not_found=False, ctx=None
+    ):
         return next(a for a in self._apps if a.name == name)
 
     async def resolve_source_archive(self, pod_id, name, user_id, ctx=None):
@@ -184,7 +196,9 @@ def patched_exporter(monkeypatch):
     tables = [_Named("leads"), _Named("accounts")]
     functions = [_Named("enrich")]
     agents = [_Named("assistant")]
-    rows_by_table = {"leads": [{"id": "1", "email": "a@x.com"}, {"id": "2", "email": "b@x.com"}]}
+    rows_by_table = {
+        "leads": [{"id": "1", "email": "a@x.com"}, {"id": "2", "email": "b@x.com"}]
+    }
 
     empty = _EmptyListService()
 
@@ -237,14 +251,19 @@ def patched_exporter(monkeypatch):
     # Response-dict adapters: bypass pydantic response schemas, return the shape
     # the normalizers consume.
     monkeypatch.setattr(
-        exporter_mod, "_pod_response_dict", lambda pod: {"name": pod.name, "description": None, "icon_url": None}
+        exporter_mod,
+        "_pod_response_dict",
+        lambda pod: {"name": pod.name, "description": None, "icon_url": None},
     )
     monkeypatch.setattr(
         exporter_mod,
         "_table_response_dict",
         lambda table: {
             "name": table.name,
-            "columns": [{"name": "id", "type": "TEXT"}, {"name": "email", "type": "TEXT"}],
+            "columns": [
+                {"name": "id", "type": "TEXT"},
+                {"name": "email", "type": "TEXT"},
+            ],
             "config": None,
             "enable_rls": True,
             "primary_key_column": "id",
@@ -300,7 +319,9 @@ async def _run_export(
 
 
 async def test_export_produces_expected_layout(patched_exporter, tmp_path):
-    filename, zip_bytes, progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
+    filename, zip_bytes, progress = await _run_export(
+        patched_exporter, data_tables=["leads", "accounts"]
+    )
 
     assert filename == "my-crm-pod.zip"
     root = extract_bundle(zip_bytes, tmp_path / "out")
@@ -319,12 +340,16 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
     # Function code extracted to a sidecar with a $file ref.
     fn = json.loads((root / "functions" / "enrich" / "enrich.json").read_text())
     assert fn["code"] == {"$file": "code.py"}
-    assert (root / "functions" / "enrich" / "code.py").read_text() == "# code\nprint('hi')\n"
+    assert (
+        root / "functions" / "enrich" / "code.py"
+    ).read_text() == "# code\nprint('hi')\n"
 
     # Agent instruction extracted.
     agent = json.loads((root / "agents" / "assistant" / "assistant.json").read_text())
     assert agent["instruction"] == {"$file": "instruction.md"}
-    assert (root / "agents" / "assistant" / "instruction.md").read_text() == "You are helpful."
+    assert (
+        root / "agents" / "assistant" / "instruction.md"
+    ).read_text() == "You are helpful."
 
     # Progress advanced to completion.
     assert progress[-1] == (progress[-1][1], progress[-1][1])
@@ -332,7 +357,9 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
 
 
 async def test_with_data_writes_data_csv(patched_exporter, tmp_path):
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, data_tables=["leads", "accounts"]
+    )
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
     data_csv = root / "tables" / "leads" / "data.csv"
@@ -395,7 +422,9 @@ async def test_table_data_byte_budget_truncates_rows(
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_file_bytes", 22
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, data_tables=["leads", "accounts"]
+    )
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -412,7 +441,11 @@ async def test_named_folder_exports_its_subtree_bytes_and_manifest(
         path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5
     )
     private = _FakeFileEntity(
-        path="/secret.txt", name="secret.txt", kind="FILE", visibility="PRIVATE", size_bytes=3
+        path="/secret.txt",
+        name="secret.txt",
+        kind="FILE",
+        visibility="PRIVATE",
+        size_bytes=3,
     )
     by_dir = {"/": [folder, private], "/docs": [doc]}
     contents = {"/docs/guide.md": b"hello", "/secret.txt": b"no!"}
@@ -441,9 +474,14 @@ async def test_a_folder_outside_the_named_ones_is_not_exported(
     point of naming them."""
     docs = _FakeFileEntity(path="/docs", name="docs", kind="FOLDER")
     other = _FakeFileEntity(path="/private-notes", name="private-notes", kind="FOLDER")
-    doc = _FakeFileEntity(path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5)
+    doc = _FakeFileEntity(
+        path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5
+    )
     note = _FakeFileEntity(
-        path="/private-notes/salaries.csv", name="salaries.csv", kind="FILE", size_bytes=4
+        path="/private-notes/salaries.csv",
+        name="salaries.csv",
+        kind="FILE",
+        size_bytes=4,
     )
     by_dir = {
         "/": [docs, other],
@@ -465,13 +503,19 @@ async def test_a_folder_outside_the_named_ones_is_not_exported(
     assert not (root / "files" / "private-notes").exists()
 
 
-async def test_naming_the_root_folder_is_refused(patched_exporter, tmp_path, monkeypatch):
+async def test_naming_the_root_folder_is_refused(
+    patched_exporter, tmp_path, monkeypatch
+):
     """`/` would be "every file" spelled differently."""
     docs = _FakeFileEntity(path="/docs", name="docs", kind="FOLDER")
-    doc = _FakeFileEntity(path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5)
+    doc = _FakeFileEntity(
+        path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5
+    )
     monkeypatch.setattr(
         "app.modules.datastore.api.dependencies.build_file_service",
-        lambda uow: _FakeFileService({"/": [docs], "/docs": [doc]}, {"/docs/guide.md": b"hello"}),
+        lambda uow: _FakeFileService(
+            {"/": [docs], "/docs": [doc]}, {"/docs/guide.md": b"hello"}
+        ),
     )
 
     _filename, zip_bytes, _progress = await _run_export(
@@ -504,12 +548,16 @@ async def test_naming_no_folder_writes_no_file_bytes(patched_exporter, tmp_path)
     assert not (root / "files" / ".files.json").exists()
 
 
-async def test_per_table_record_cap_truncates_with_warning(patched_exporter, tmp_path, monkeypatch):
+async def test_per_table_record_cap_truncates_with_warning(
+    patched_exporter, tmp_path, monkeypatch
+):
     # leads has 2 rows; cap at 1 → data.csv has 1 row + a truncation warning.
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_records_per_table", 1
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, data_tables=["leads", "accounts"]
+    )
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -526,7 +574,9 @@ async def test_overall_record_budget_makes_later_tables_schema_only(
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_records_total", 0
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, data_tables=["leads", "accounts"]
+    )
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -580,7 +630,9 @@ async def test_app_source_exported_and_slug_tokenized(
 
     # Source archive extracted into a git-friendly tree; no dist fallback written.
     assert (root / "apps" / "dashboard" / "dashboard.json").is_file()
-    assert (root / "apps" / "dashboard" / "source" / "index.html").read_text() == "<h1>hi</h1>"
+    assert (
+        root / "apps" / "dashboard" / "source" / "index.html"
+    ).read_text() == "<h1>hi</h1>"
     assert (root / "apps" / "dashboard" / "source" / "package.json").is_file()
     assert not (root / "apps" / "dashboard" / "dist.zip").exists()
 
@@ -592,7 +644,9 @@ async def test_app_source_exported_and_slug_tokenized(
     assert pod["variables"]["dashboard_slug"]["default"] == "dashboard"
 
 
-async def test_app_dist_fallback_when_no_source(patched_exporter, tmp_path, monkeypatch):
+async def test_app_dist_fallback_when_no_source(
+    patched_exporter, tmp_path, monkeypatch
+):
     app = _Named("widget")
     dist = _zip_bytes({"index.html": "<h1>widget</h1>"})
     monkeypatch.setattr(

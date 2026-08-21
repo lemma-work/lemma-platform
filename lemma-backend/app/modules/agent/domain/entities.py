@@ -23,6 +23,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 
+
 class Agent(Entity):
     """Reusable agent definition.
 
@@ -211,8 +212,10 @@ class AgentRun(Entity):
 
     @property
     def is_safely_retryable(self) -> bool:
-        return self.status == AgentRunStatus.FAILED and bool(self.messages) and all(
-            message.role == MessageRole.USER.value for message in self.messages
+        return (
+            self.status == AgentRunStatus.FAILED
+            and bool(self.messages)
+            and all(message.role == MessageRole.USER.value for message in self.messages)
         )
 
     def ordered_messages(self) -> list[Message]:

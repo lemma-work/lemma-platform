@@ -5,6 +5,7 @@ client only touches a couple of resources per command, so importing them all
 eagerly here would load the whole generated tree on every SDK use. PEP 562
 __getattr__ loads each resource module only when its class is first referenced.
 """
+
 from __future__ import annotations
 
 import importlib

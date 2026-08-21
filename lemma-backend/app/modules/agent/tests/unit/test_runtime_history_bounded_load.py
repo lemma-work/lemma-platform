@@ -152,11 +152,7 @@ def test_bounded_history_selects_what_the_full_load_selected() -> None:
     runner = _runner()
     for index, runs in enumerate(_shapes()):
         full = _fingerprint(runner._select_runtime_history(runs))
-        bounded = _fingerprint(
-            runner._select_runtime_history(
-                _as_bounded(runs)
-            )
-        )
+        bounded = _fingerprint(runner._select_runtime_history(_as_bounded(runs)))
         assert bounded == full, f"shape {index} diverged"
 
 
@@ -212,9 +208,7 @@ def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) 
 
     full = _fingerprint(runner._select_runtime_history(runs, conversation))
     bounded = _fingerprint(
-        runner._select_runtime_history(
-            _as_bounded(runs, conversation), conversation
-        )
+        runner._select_runtime_history(_as_bounded(runs, conversation), conversation)
     )
 
     assert bounded == full
@@ -227,7 +221,9 @@ def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
     would claim nothing was skipped.
     """
     conversation_id = uuid4()
-    runs = [_run(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)]
+    runs = [
+        _run(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)
+    ]
     bounded = _as_bounded(runs)
 
     selected = _runner()._select_runtime_history(bounded)

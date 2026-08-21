@@ -11,6 +11,7 @@ from lemma_sdk.errors import LemmaAPIError
 # humanize_error()
 # ---------------------------------------------------------------------------
 
+
 def test_humanize_error_with_key_error():
     result = state_mod.humanize_error(KeyError("name"))
     assert "name" in result
@@ -49,6 +50,7 @@ def test_humanize_error_key_error_no_args():
 # update_config() — read-only server guard
 # ---------------------------------------------------------------------------
 
+
 def test_update_config_fails_on_read_only_server(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}")
@@ -77,6 +79,7 @@ def test_update_config_fails_on_read_only_server(tmp_path):
 # refresh_and_retry() — skips refresh when explicit token is set
 # ---------------------------------------------------------------------------
 
+
 def test_refresh_and_retry_skips_refresh_when_explicit_token(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}")
@@ -89,7 +92,7 @@ def test_refresh_and_retry_skips_refresh_when_explicit_token(tmp_path):
         server_read_only=False,
         base_url=None,
         auth_url=None,
-        token="explicit-token",   # explicit token — no refresh should happen
+        token="explicit-token",  # explicit token — no refresh should happen
         timeout=5.0,
         no_verify_ssl=False,
         output="pretty",
@@ -115,6 +118,7 @@ def test_refresh_and_retry_skips_refresh_when_explicit_token(tmp_path):
 # ---------------------------------------------------------------------------
 # refresh_auth_session() — skips refresh when explicit token is set
 # ---------------------------------------------------------------------------
+
 
 def test_refresh_auth_session_skips_when_explicit_token(tmp_path):
     config_path = tmp_path / "config.json"

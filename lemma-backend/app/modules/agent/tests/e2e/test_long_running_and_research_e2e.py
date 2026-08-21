@@ -662,7 +662,7 @@ async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspac
         ExecCommandRequest(
             comment="create a real image on the sandbox disk",
             cmd=(
-                "python3 -c \"import base64,pathlib; "
+                'python3 -c "import base64,pathlib; '
                 "pathlib.Path('pixel.png').write_bytes(base64.b64decode("
                 "'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII='))\""
             ),

@@ -83,14 +83,11 @@ def test_supervise_can_prepare_only_private_infrastructure_for_host_packs():
     assert "backend" not in phase_keys
     assert "frontend" not in phase_keys
     assert any(
-        event["event"] == "done" and event.get("id") == "infra" and event["ok"]
-        for event in events
+        event["event"] == "done" and event.get("id") == "infra" and event["ok"] for event in events
     )
 
 
-def test_real_infra_only_start_uses_pin_and_never_runs_app_images_or_migrations(
-    paths, monkeypatch
-):
+def test_real_infra_only_start_uses_pin_and_never_runs_app_images_or_migrations(paths, monkeypatch):
     pinned = release_manifest.parse(
         {
             "schema_version": 1,
@@ -121,9 +118,7 @@ def test_real_infra_only_start_uses_pin_and_never_runs_app_images_or_migrations(
             AssertionError("pinned native release must not refresh")
         ),
     )
-    monkeypatch.setattr(
-        orchestrate, "bring_up", lambda *_args, **kwargs: captured.update(kwargs)
-    )
+    monkeypatch.setattr(orchestrate, "bring_up", lambda *_args, **kwargs: captured.update(kwargs))
     monkeypatch.setattr(
         orchestrate,
         "bring_down",

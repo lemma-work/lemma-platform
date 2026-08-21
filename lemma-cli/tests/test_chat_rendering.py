@@ -168,7 +168,9 @@ def test_verbose_shows_the_answer_channel_only():
     renderer = ChatRenderer(agent="pod agent", verbose=True)
     renderer.handle(
         StreamEvent(
-            type="TOKEN", data={"kind": "tool", "data": '{"tool_name":"x"}'}, agent_run_id=None
+            type="TOKEN",
+            data={"kind": "tool", "data": '{"tool_name":"x"}'},
+            agent_run_id=None,
         )
     )
 

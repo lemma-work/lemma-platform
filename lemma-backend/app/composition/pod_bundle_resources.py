@@ -69,7 +69,9 @@ def get_workflow_service(*args, **kwargs):
 
 
 def get_surface_service(*args, **kwargs):
-    from app.modules.agent_surfaces.api.dependencies import get_surface_service as factory
+    from app.modules.agent_surfaces.api.dependencies import (
+        get_surface_service as factory,
+    )
 
     return factory(*args, **kwargs)
 

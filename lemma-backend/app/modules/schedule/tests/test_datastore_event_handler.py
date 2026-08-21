@@ -129,9 +129,7 @@ async def test_unmatched_condition_never_reaches_the_processor():
 
     assert result == []
     processor.process_event.assert_not_called()
-    assert (
-        repo.record_fire.await_args.kwargs["status"] == ScheduleFireStatus.FILTERED
-    )
+    assert repo.record_fire.await_args.kwargs["status"] == ScheduleFireStatus.FILTERED
 
 
 @pytest.mark.asyncio

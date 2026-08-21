@@ -66,9 +66,7 @@ class FunctionRuntimeGateway:
             )
         if not authorized:
             raise RuntimeCredentialRejected
-        artifact_path = (
-            f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
-        )
+        artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
         data = await self._storage_factory(function_id).read_bytes(artifact_path)
         # Offloaded for the reason the builder already documents at its own
         # sha256 (`function_artifact_builder.py`): the artifact is the whole
@@ -89,9 +87,7 @@ class FunctionRuntimeGateway:
         request: RuntimeTerminalRequest,
     ) -> RuntimeEventResponse:
         async with self._uow_factory() as uow:
-            context = await FunctionExecutionRepository(
-                uow
-            ).authorized_runtime_context(
+            context = await FunctionExecutionRepository(uow).authorized_runtime_context(
                 run_id,
                 principal,
                 delegated_tokens_enabled=self._delegated_tokens_enabled,

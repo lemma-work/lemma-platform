@@ -70,7 +70,12 @@ async def test_widget_from_other_pod_rejected():
     )
     with pytest.raises(HTTPException) as exc:
         await ctrl.create_app_from_widget(
-            uuid4(), data, AsyncMock(), _reader(artifact), SimpleNamespace(id=uuid4()), None
+            uuid4(),
+            data,
+            AsyncMock(),
+            _reader(artifact),
+            SimpleNamespace(id=uuid4()),
+            None,
         )
     assert exc.value.status_code == 404
 

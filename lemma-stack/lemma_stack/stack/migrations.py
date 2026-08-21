@@ -70,6 +70,4 @@ def run_migrations(runtime: Runtime, manifest: ReleaseManifest) -> None:
         )
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
-            raise AdminError(
-                f"{label} database migration failed; stack left untouched.\n{detail}"
-            )
+            raise AdminError(f"{label} database migration failed; stack left untouched.\n{detail}")

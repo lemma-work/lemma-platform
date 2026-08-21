@@ -130,9 +130,7 @@ def classify_app_source(source: Path) -> str:
     if source.is_file():
         if source.suffix.lower() in {".html", ".htm"}:
             return "html"
-        raise ValueError(
-            f"App source file must be an .html file, got: {source.name}"
-        )
+        raise ValueError(f"App source file must be an .html file, got: {source.name}")
     if not source.is_dir():
         raise ValueError(f"App source does not exist: {source}")
     if (source / "package.json").exists():

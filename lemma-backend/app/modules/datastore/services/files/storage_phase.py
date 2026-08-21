@@ -130,7 +130,7 @@ class FileStoragePhase:
                         await self.storage.delete_file(move.destination_key)
                     except DatastoreDomainError:
                         logger.debug(
-                            'datastore.storage_phase.rolling_back_staged_move_s.diagnostic',
+                            "datastore.storage_phase.rolling_back_staged_move_s.diagnostic",
                             exc_info=True,
                         )
                 raise DatastoreInfrastructureError(
@@ -171,7 +171,7 @@ class FileStoragePhase:
                 await search_service.remove_file(updated_entity.id)
             except Exception:
                 logger.debug(
-                    'datastore.storage_phase.remove_indexed_chunks_unsearchable_file.diagnostic'
+                    "datastore.storage_phase.remove_indexed_chunks_unsearchable_file.diagnostic"
                 )
             await self.projection.delete_child_artifacts(
                 updated_entity.pod_id,
@@ -218,7 +218,7 @@ class FileStoragePhase:
                 return
             except Exception:
                 logger.debug(
-                    'datastore.storage_phase.clean_up_uncommitted_datastore_object.diagnostic'
+                    "datastore.storage_phase.clean_up_uncommitted_datastore_object.diagnostic"
                 )
         for move in plan.storage_moves:
             if move.destination_key == move.source_key:
@@ -229,7 +229,7 @@ class FileStoragePhase:
                 continue
             except DatastoreDomainError:
                 logger.debug(
-                    'datastore.storage_phase.clean_up_staged_moved_object.diagnostic'
+                    "datastore.storage_phase.clean_up_staged_moved_object.diagnostic"
                 )
 
     async def cleanup_deleted_paths(
@@ -258,7 +258,7 @@ class FileStoragePhase:
                     await search_service.remove_file(UUID(item["file_id"]))
                 except Exception:
                     logger.debug(
-                        'datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic',
+                        "datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic",
                         file_id=item["file_id"],
                     )
             return
@@ -270,6 +270,6 @@ class FileStoragePhase:
                 await search_service.remove_file(UUID(item["file_id"]))
             except Exception:
                 logger.debug(
-                    'datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic',
+                    "datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic",
                     file_id=item["file_id"],
                 )

@@ -50,9 +50,7 @@ class TelegramManagerPollingReceiver:
         manager_username: str | None = None,
         api_base_url: str | None = None,
     ) -> None:
-        self._uow_factory = uow_factory or SessionUnitOfWorkFactory(
-            async_session_maker
-        )
+        self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
         self._store = store or TelegramManagedBotSetupStore()
         self._manager_token = (
             manager_token
@@ -140,17 +138,13 @@ async def register_telegram_manager_webhook() -> None:
         return
     secret = str(surface_settings.telegram_manager_webhook_secret or "").strip()
     if not secret:
-        logger.warning(
-            "agent_surfaces.telegram_manager.webhook_secret_missing"
-        )
+        logger.warning("agent_surfaces.telegram_manager.webhook_secret_missing")
         return
     client = TelegramClient(
         bot_token=surface_settings.telegram_manager_bot_token,
         timeout=20,
     )
-    webhook_url = (
-        f"{settings.api_url.rstrip('/')}/surfaces/webhooks/telegram-manager"
-    )
+    webhook_url = f"{settings.api_url.rstrip('/')}/surfaces/webhooks/telegram-manager"
     await client.call(
         "setWebhook",
         {
@@ -175,10 +169,7 @@ async def run_telegram_manager_webhook_registration() -> None:
                 "agent_surfaces.telegram_manager.webhook_registration_failed",
                 exc_info=True,
             )
-            if (
-                classify_telegram_error(exc)
-                is DeliveryClassification.PERMANENT
-            ):
+            if classify_telegram_error(exc) is DeliveryClassification.PERMANENT:
                 return
             retry_after = telegram_retry_after(exc)
         except httpx.RequestError:

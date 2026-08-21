@@ -267,9 +267,7 @@ class FunctionDispatcher:
         # Off the loop: even after trimming, this is megabytes through thirteen
         # regex passes, and this runs on the API's loop when the runtime posts
         # its terminal callback.
-        logs = await run_blocking(
-            self._terminal_logs, terminal, limiter="cpu_bound"
-        )
+        logs = await run_blocking(self._terminal_logs, terminal, limiter="cpu_bound")
         error = (
             self._runtime_failure_message(terminal)
             if terminal.error is not None

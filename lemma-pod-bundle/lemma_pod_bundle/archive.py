@@ -40,7 +40,9 @@ def pack_bundle(source_dir: Path) -> bytes:
 
     buffer = io.BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-        for path in sorted(source_dir.rglob("*"), key=lambda p: p.relative_to(source_dir).as_posix()):
+        for path in sorted(
+            source_dir.rglob("*"), key=lambda p: p.relative_to(source_dir).as_posix()
+        ):
             arcname = path.relative_to(source_dir).as_posix()
             if path.is_symlink():
                 raise ValueError(f"Refusing to pack symlink: {arcname}")
@@ -130,10 +132,11 @@ def extract_bundle(
 
     manifests = sorted(
         dest_dir.rglob(POD_MANIFEST_FILE),
-        key=lambda p: (len(p.relative_to(dest_dir).parts), p.relative_to(dest_dir).as_posix()),
+        key=lambda p: (
+            len(p.relative_to(dest_dir).parts),
+            p.relative_to(dest_dir).as_posix(),
+        ),
     )
     if not manifests:
-        raise ValueError(
-            f"Bundle archive has no '{POD_MANIFEST_FILE}' manifest"
-        )
+        raise ValueError(f"Bundle archive has no '{POD_MANIFEST_FILE}' manifest")
     return manifests[0].parent

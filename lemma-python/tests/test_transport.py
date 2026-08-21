@@ -26,7 +26,14 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, *, parsed: Any = None, content: bytes = b"", headers: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        parsed: Any = None,
+        content: bytes = b"",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self.parsed = parsed
         self.content = content
@@ -51,7 +58,9 @@ class FakeEndpoint:
 
 
 def make_transport(max_retries: int = 2) -> LemmaTransport:
-    return LemmaTransport(base_url="https://api.example.test", token="t", max_retries=max_retries)
+    return LemmaTransport(
+        base_url="https://api.example.test", token="t", max_retries=max_retries
+    )
 
 
 # --- .call() (typed-resource path) ----------------------------------------
@@ -67,7 +76,10 @@ def test_call_retries_retryable_status_then_succeeds():
 def test_call_honors_retry_after_then_succeeds():
     transport = make_transport()
     endpoint = FakeEndpoint(
-        [FakeResponse(429, headers={"retry-after": "0"}), FakeResponse(200, parsed={"ok": True})]
+        [
+            FakeResponse(429, headers={"retry-after": "0"}),
+            FakeResponse(200, parsed={"ok": True}),
+        ]
     )
     assert transport.call(endpoint) == {"ok": True}
     assert endpoint.calls == 2
@@ -84,7 +96,13 @@ def test_call_does_not_retry_500():
 def test_call_maps_404_to_typed_error_with_request_id():
     transport = make_transport(max_retries=0)
     endpoint = FakeEndpoint(
-        [FakeResponse(404, parsed={"message": "missing", "code": "not_found"}, headers={"x-request-id": "req-1"})]
+        [
+            FakeResponse(
+                404,
+                parsed={"message": "missing", "code": "not_found"},
+                headers={"x-request-id": "req-1"},
+            )
+        ]
     )
     with pytest.raises(LemmaNotFoundError) as excinfo:
         transport.call(endpoint)
@@ -97,7 +115,10 @@ def test_call_maps_404_to_typed_error_with_request_id():
 def test_call_exhausts_retries_and_surfaces_retry_after():
     transport = make_transport(max_retries=1)
     endpoint = FakeEndpoint(
-        [FakeResponse(429, headers={"retry-after": "3"}), FakeResponse(429, headers={"retry-after": "3"})]
+        [
+            FakeResponse(429, headers={"retry-after": "3"}),
+            FakeResponse(429, headers={"retry-after": "3"}),
+        ]
     )
     with pytest.raises(LemmaRateLimitError) as excinfo:
         transport.call(endpoint)
@@ -117,7 +138,14 @@ def test_call_maps_timeout_and_transport_errors():
 
 
 class FakeHttpxResponse:
-    def __init__(self, status_code: int, *, json_body: Any = None, text: str = "", headers: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        json_body: Any = None,
+        text: str = "",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._json = json_body
         self.text = text
@@ -143,10 +171,14 @@ class FakeHttpxClient:
         return outcome
 
 
-def _patch_httpx(transport: LemmaTransport, client: FakeHttpxClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_httpx(
+    transport: LemmaTransport, client: FakeHttpxClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # .request() only reaches generated.get_httpx_client(); swap the whole
     # generated client for a stub exposing it (the real method is read-only).
-    monkeypatch.setattr(transport, "generated", SimpleNamespace(get_httpx_client=lambda: client))
+    monkeypatch.setattr(
+        transport, "generated", SimpleNamespace(get_httpx_client=lambda: client)
+    )
 
 
 def test_request_returns_parsed_json(monkeypatch: pytest.MonkeyPatch):
@@ -168,7 +200,9 @@ def test_request_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch):
 
 def test_request_maps_error_status(monkeypatch: pytest.MonkeyPatch):
     transport = make_transport(max_retries=0)
-    client = FakeHttpxClient([FakeHttpxResponse(404, text='{"message":"nope","code":"not_found"}')])
+    client = FakeHttpxClient(
+        [FakeHttpxResponse(404, text='{"message":"nope","code":"not_found"}')]
+    )
     _patch_httpx(transport, client, monkeypatch)
     with pytest.raises(LemmaNotFoundError) as excinfo:
         transport.request("GET", "/x")

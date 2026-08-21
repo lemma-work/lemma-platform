@@ -85,9 +85,7 @@ async def poll_due_schedules_once(
             claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
             timers: list[ClaimedTimer] = []
             for claim_timers in timer_claimers:
-                timers.extend(
-                    await claim_timers(uow.session, now=moment, limit=limit)
-                )
+                timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
 
             # Timers ride the same event as schedules: `_dispatch_wake` branches
             # on the payload keys, so rebuilding the payload the old adapters
@@ -127,9 +125,7 @@ async def run_schedule_poller(
     )
     while True:
         try:
-            await poll_due_schedules_once(
-                uow_factory, timer_claimers=timer_claimers
-            )
+            await poll_due_schedules_once(uow_factory, timer_claimers=timer_claimers)
             await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
             logger.info("schedule.poller.stopped", service=service_name)

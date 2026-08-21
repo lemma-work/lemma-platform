@@ -144,6 +144,4 @@ def downgrade() -> None:
     )
 
     for name in _DEAD_USAGE_INDEXES + _REDUNDANT_USAGE_INDEXES:
-        op.execute(
-            f"CREATE INDEX {name} ON usage_records ({_USAGE_COLUMNS[name]})"
-        )
+        op.execute(f"CREATE INDEX {name} ON usage_records ({_USAGE_COLUMNS[name]})")

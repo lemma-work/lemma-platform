@@ -54,7 +54,9 @@ async def live_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
 
     async def probe() -> None:
@@ -100,7 +102,9 @@ async def second_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
 
     async def probe() -> None:
@@ -187,7 +191,13 @@ def _service(db_session):
 
 class TestInstallingAnMcpServer:
     async def test_creating_the_install_discovers_its_operations(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         install = await service.create_auth_config(
@@ -207,9 +217,9 @@ class TestInstallingAnMcpServer:
             AuthConfigOperationRepository,
         )
 
-        operations = await AuthConfigOperationRepository(db_session).list_by_auth_config(
-            install.id
-        )
+        operations = await AuthConfigOperationRepository(
+            db_session
+        ).list_by_auth_config(install.id)
         names = {op.name for op in operations}
         # Discovered from the live server, not from any catalog.
         assert {"add", "lookup_customer"} <= names
@@ -249,7 +259,13 @@ class TestInstallingAnMcpServer:
             )
 
     async def test_two_installs_of_the_same_connector_coexist(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         first = await service.create_auth_config(
@@ -273,7 +289,13 @@ class TestInstallingAnMcpServer:
         assert first.is_default is True and second.is_default is False
 
     async def test_refresh_repopulates_operations(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         install = await service.create_auth_config(
@@ -384,8 +406,7 @@ class TestConnectingAnAccountAndExecuting:
         # authorization context is built from it. Calling it any other way
         # would be testing a path no caller uses.
         executed = await authenticated_client.post(
-            f"/organizations/{org_id}/connectors/{install.name}"
-            f"/operations/add/execute",
+            f"/organizations/{org_id}/connectors/{install.name}/operations/add/execute",
             json={"payload": {"a": 2, "b": 3}},
         )
         assert executed.status_code == 200, executed.text
@@ -431,9 +452,7 @@ class TestUpdatingAnInstallInPlace:
         )
         return service, org_id, user_id, install, account
 
-    async def test_renaming_keeps_the_account_attached(
-        self, installed_with_account
-    ):
+    async def test_renaming_keeps_the_account_attached(self, installed_with_account):
         service, org_id, user_id, install, account = installed_with_account
         renamed = f"renamed-{uuid4().hex[:8]}"
         updated, _discovered, marked = await service.update_auth_config(
@@ -524,20 +543,32 @@ class TestUpdatingAnInstallInPlace:
             )
 
     async def test_promoting_a_second_install_demotes_the_first(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         org_id = UUID(str(fixed_test_org["id"]))
         user_id = UUID(str(fixed_test_user["id"]))
         first = await service.create_auth_config(
-            user_id=user_id, organization_id=org_id, connector_id=mcp_connector.id,
+            user_id=user_id,
+            organization_id=org_id,
+            connector_id=mcp_connector.id,
             config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            config={"server_url": live_mcp_server}, name=f"mcp-d1-{uuid4().hex[:8]}",
+            config={"server_url": live_mcp_server},
+            name=f"mcp-d1-{uuid4().hex[:8]}",
         )
         second = await service.create_auth_config(
-            user_id=user_id, organization_id=org_id, connector_id=mcp_connector.id,
+            user_id=user_id,
+            organization_id=org_id,
+            connector_id=mcp_connector.id,
             config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            config={"server_url": live_mcp_server}, name=f"mcp-d2-{uuid4().hex[:8]}",
+            config={"server_url": live_mcp_server},
+            name=f"mcp-d2-{uuid4().hex[:8]}",
         )
         assert first.is_default and not second.is_default
 
@@ -568,8 +599,13 @@ class TestDiscoveredOperationsAreVisibleThroughTheApi:
 
     @pytest_asyncio.fixture
     async def install(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user,
-        live_mcp_server, allow_private_targets,
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         return await service.create_auth_config(

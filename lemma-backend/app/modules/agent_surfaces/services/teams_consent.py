@@ -38,11 +38,13 @@ async def build_consent_url(surface_id: UUID, tenant_id: str) -> str:
     nonce = secrets.token_urlsafe(32)
     await _get_cache().set_raw(str(surface_id), nonce)
     callback_base = settings.api_url.rstrip("/")
-    params = urlencode({
-        "client_id": surface_settings.microsoft_bot_app_id or "",
-        "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
-        "state": f"{surface_id}:{nonce}",
-    })
+    params = urlencode(
+        {
+            "client_id": surface_settings.microsoft_bot_app_id or "",
+            "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
+            "state": f"{surface_id}:{nonce}",
+        }
+    )
     return f"https://login.microsoftonline.com/{tenant_id}/adminconsent?{params}"
 
 

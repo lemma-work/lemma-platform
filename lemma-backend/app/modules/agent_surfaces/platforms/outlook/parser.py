@@ -56,9 +56,7 @@ def _normalize_attachment(
     attachment_id = raw.get("attachment_id") or raw.get("id")
     name = raw.get("name") or raw.get("filename") or raw.get("file_name")
     mime_type = (
-        raw.get("contentType")
-        or raw.get("mime_type")
-        or raw.get("content_type")
+        raw.get("contentType") or raw.get("mime_type") or raw.get("content_type")
     )
     content_bytes = (
         raw.get("contentBytes")
@@ -78,7 +76,8 @@ def _normalize_attachment(
             str(content_bytes).strip() or None if content_bytes is not None else None
         ),
         "is_inline": bool(raw.get("isInline") or raw.get("is_inline")),
-        "content_id": str(raw.get("contentId") or raw.get("content_id") or "").strip() or None,
+        "content_id": str(raw.get("contentId") or raw.get("content_id") or "").strip()
+        or None,
         "odata_type": str(raw.get("@odata.type") or raw.get("odata_type") or "").strip()
         or None,
     }
@@ -96,15 +95,10 @@ class OutlookMessageParser:
             or ""
         ).strip()
         provider_message_id = str(
-            data.get("message_id")
-            or data.get("messageId")
-            or data.get("id")
-            or ""
+            data.get("message_id") or data.get("messageId") or data.get("id") or ""
         ).strip()
         internet_message_id = str(
-            data.get("internet_message_id")
-            or data.get("internetMessageId")
-            or ""
+            data.get("internet_message_id") or data.get("internetMessageId") or ""
         ).strip()
         external_message_id = internet_message_id or provider_message_id
         sender_identity = parse_email_identity(
@@ -124,7 +118,8 @@ class OutlookMessageParser:
             ),
         )
         reply_to_identity = parse_email_identity(
-            _first_recipient(data.get("replyTo")) or _first_recipient(data.get("reply_to")),
+            _first_recipient(data.get("replyTo"))
+            or _first_recipient(data.get("reply_to")),
             fallback_email=sender_identity.email,
             fallback_name=sender_identity.display_name,
         )
@@ -145,12 +140,15 @@ class OutlookMessageParser:
                 for ref in list(data.get("references") or header_references)
                 if ref
             ]
-            in_reply_to = str(
-                data.get("in_reply_to")
-                or headers.get("in-reply-to")
-                or internet_message_id
-                or provider_message_id
-            ).strip() or None
+            in_reply_to = (
+                str(
+                    data.get("in_reply_to")
+                    or headers.get("in-reply-to")
+                    or internet_message_id
+                    or provider_message_id
+                ).strip()
+                or None
+            )
 
             attachments = [
                 normalized

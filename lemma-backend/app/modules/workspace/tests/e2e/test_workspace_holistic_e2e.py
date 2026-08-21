@@ -149,7 +149,9 @@ async def test_shell_python_file_and_lemma_cli_round_trip(
     )
     async with session:
         await session.write_file("artifacts/api.txt", b"written through file API")
-        assert await session.read_file("artifacts/api.txt") == b"written through file API"
+        assert (
+            await session.read_file("artifacts/api.txt") == b"written through file API"
+        )
 
         async def chunks():
             yield b"streamed-"
@@ -237,7 +239,9 @@ async def test_tty_process_input_resize_listing_and_termination(
 
     after = await list_processes_internal(ctx, ListProcessesRequest())
     assert after.success, after
-    assert not any(item.process_id == process_id and not item.completed for item in after.processes)
+    assert not any(
+        item.process_id == process_id and not item.completed for item in after.processes
+    )
 
 
 async def test_browser_process_and_signed_access_reach_the_sandbox(

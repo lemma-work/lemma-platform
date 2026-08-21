@@ -292,9 +292,7 @@ def summarize_case(
     concurrency: int,
     wall_seconds: float,
 ) -> CaseSummary:
-    successful_samples = [
-        sample for sample in samples if sample.status == "COMPLETED"
-    ]
+    successful_samples = [sample for sample in samples if sample.status == "COMPLETED"]
     completed = len(successful_samples)
     return CaseSummary(
         case=case.name,
@@ -335,9 +333,7 @@ def evaluate_latency_budgets(
     # Keyed by phase as well as case: one case contributes both a RESUMED and a
     # REBUILT sample, and collapsing them onto the case would let whichever
     # arrived last answer for both.
-    lifecycle_by_phase = {
-        (sample.phase, sample.case): sample for sample in lifecycle
-    }
+    lifecycle_by_phase = {(sample.phase, sample.case): sample for sample in lifecycle}
     failures: list[str] = []
     for budget in budgets:
         summary = summaries.get(budget.case)
@@ -365,9 +361,7 @@ def evaluate_latency_budgets(
         if budget.platform_overhead_p95_seconds is not None:
             overhead_p95 = summary.platform_overhead.p95_seconds
             if overhead_p95 is None:
-                failures.append(
-                    f"{budget.case} platform overhead p95 has no samples"
-                )
+                failures.append(f"{budget.case} platform overhead p95 has no samples")
             elif overhead_p95 > budget.platform_overhead_p95_seconds:
                 failures.append(
                     f"{budget.case} platform overhead p95 "
@@ -509,7 +503,7 @@ async def {name}(ctx: FunctionContext, data: WriteInput) -> WriteResult:
 
 
 def _noop_function_source(name: str) -> str:
-    return f'''#input_type_name: NoopInput
+    return f"""#input_type_name: NoopInput
 #output_type_name: NoopResult
 #function_name: {name}
 
@@ -530,7 +524,7 @@ async def {name}(ctx: FunctionContext, data: NoopInput) -> NoopResult:
     if data.hold_ms:
         await asyncio.sleep(data.hold_ms / 1000)
     return NoopResult(value=data.value)
-'''
+"""
 
 
 class FunctionExecutionBenchmark:
@@ -600,8 +594,7 @@ class FunctionExecutionBenchmark:
             expected_sink_rows = {
                 resources.sink_tables[0]: executions_per_case
                 * (1 + self._config.batch_rows),
-                resources.sink_tables[1]: executions_per_case
-                * self._config.batch_rows,
+                resources.sink_tables[1]: executions_per_case * self._config.batch_rows,
             }
             if verified_sink_rows != expected_sink_rows:
                 errors.append(
@@ -692,9 +685,7 @@ class FunctionExecutionBenchmark:
             suffix=suffix,
             source_tables=(f"fn_bench_src_a_{suffix}", f"fn_bench_src_b_{suffix}"),
             sink_tables=(f"fn_bench_sink_a_{suffix}", f"fn_bench_sink_b_{suffix}"),
-            functions={
-                case.name: f"fn_bench_{case.name}_{suffix}" for case in cases
-            },
+            functions={case.name: f"fn_bench_{case.name}_{suffix}" for case in cases},
         )
         self._resources = resources
         for index, table in enumerate(
@@ -823,9 +814,7 @@ class FunctionExecutionBenchmark:
         phase: BenchmarkPhase,
     ) -> InvocationSample:
         hold_ms = (
-            self._config.pool_fill_hold_ms
-            if phase == BenchmarkPhase.POOL_FILL
-            else 0
+            self._config.pool_fill_hold_ms if phase == BenchmarkPhase.POOL_FILL else 0
         )
         if case.operation == OperationKind.NOOP:
             input_data = {"value": index, "hold_ms": hold_ms}

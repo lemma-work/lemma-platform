@@ -93,9 +93,7 @@ async def datastore_outbox_dispatcher(e2e_settings, db_manager):
     await ensure_datastore_event_outbox()
     message_bus = get_message_bus()
     await message_bus.connect()
-    async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(), message_bus
-    ):
+    async with outbox_dispatcher_lifespan(get_datastore_session_maker(), message_bus):
         yield
 
 
@@ -141,9 +139,7 @@ def document_worker(
             extra_env=extra_env,
             # Module path, not `module:attribute` — the worker is started with
             # `python -m` so it runs every lane, matching production.
-            worker_entrypoint=(
-                "app.modules.datastore.tests.e2e.worker_entrypoint"
-            ),
+            worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
         ) as process:
             yield process
 

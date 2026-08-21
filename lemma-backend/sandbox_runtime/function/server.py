@@ -165,9 +165,7 @@ class FunctionRuntimeService:
                     existing.function_id != function_id
                     or existing.signature != signature
                 ):
-                    raise ValueError(
-                        "run ID was reused for a different invocation"
-                    )
+                    raise ValueError("run ID was reused for a different invocation")
                 self._runs.move_to_end(run_id)
                 return existing
 

@@ -52,7 +52,8 @@ def revoked(monkeypatch):
     monkeypatch.setattr(module, "invalidate_role_snapshot_cache", _invalidate)
     monkeypatch.setattr(module, "delete_grantee_grants", _noop)
     monkeypatch.setattr(
-        module, "create_authorization_data_service",
+        module,
+        "create_authorization_data_service",
         lambda uow: SimpleNamespace(
             session=uow.session, delete_principal_role_assignments=_noop
         ),

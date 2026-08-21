@@ -127,7 +127,9 @@ class ToolCallLedger:
             self.anonymous_seen += 1
             self.anonymous_open = f"anonymous-tool-call-{self.anonymous_seen}"
             return self.anonymous_open
-        return self.anonymous_open or f"anonymous-tool-call-{max(self.anonymous_seen, 1)}"
+        return (
+            self.anonymous_open or f"anonymous-tool-call-{max(self.anonymous_seen, 1)}"
+        )
 
     def open(
         self,

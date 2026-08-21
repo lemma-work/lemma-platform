@@ -41,8 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.modules.datastore.domain.ports import DocumentProcessorPort  # noqa: E402
 
 FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "app/modules/datastore/tests/fixtures/arxiv"
+    Path(__file__).resolve().parents[2] / "app/modules/datastore/tests/fixtures/arxiv"
 )
 
 

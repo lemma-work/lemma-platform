@@ -61,7 +61,10 @@ def test_nested_workspace_block_takes_precedence():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"workspace": {"id": "ws-7", "cwd": "/workspace/ws7"}, "cwd": "/ignored"},
+        metadata={
+            "workspace": {"id": "ws-7", "cwd": "/workspace/ws7"},
+            "cwd": "/ignored",
+        },
     )
 
     location = resolve_workspace_location(conversation)
@@ -197,7 +200,9 @@ async def test_subagent_shell_and_python_runtimes_use_the_inherited_directory():
     assert contexts[0].initial_cwd == contexts[1].initial_cwd
     # Separate conversations still get separate interpreters and shells; only
     # the directory is shared.
-    assert contexts[0].default_python_session_id != contexts[1].default_python_session_id
+    assert (
+        contexts[0].default_python_session_id != contexts[1].default_python_session_id
+    )
     assert contexts[0].default_shell_session_id != contexts[1].default_shell_session_id
 
 

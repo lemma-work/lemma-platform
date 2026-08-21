@@ -95,9 +95,7 @@ async def _snapshot_stream(
 ) -> int:
     """Report this stream's groups, returning how many were worth reporting."""
     is_streaq = stream.startswith("streaq:") and ":queues:" in stream
-    maxlen = (
-        None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
-    )
+    maxlen = None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
     # Report the delayed set belonging to THIS lane's queue, not always the
     # interactive one, or a deferred bulk backlog would be attributed to the
     # wrong lane.

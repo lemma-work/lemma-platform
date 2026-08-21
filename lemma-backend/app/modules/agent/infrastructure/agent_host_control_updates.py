@@ -119,7 +119,7 @@ async def apply_control_updates(
         try:
             changed += int(
                 await apply_rejection(
-                session,
+                    session,
                     host_id=host_id,
                     rejection=rejection,
                     now=now,
@@ -133,6 +133,7 @@ async def apply_control_updates(
                 exc=exc,
             )
     return changed
+
 
 async def _rejection_target(
     session: AsyncSession,
@@ -163,9 +164,7 @@ async def _rejection_target(
         or command.run_id != rejection.run_id
         or command.lease_epoch != rejection.lease_epoch
     ):
-        raise AgentHostProtocolViolation(
-            "rejection identity does not match command"
-        )
+        raise AgentHostProtocolViolation("rejection identity does not match command")
     lease = await session.get(
         AgentHostRunLeaseModel,
         rejection.run_id,
@@ -270,6 +269,7 @@ async def apply_rejection(
     await session.flush()
     return True
 
+
 async def acknowledge_commands(
     session: AsyncSession,
     *,
@@ -315,6 +315,7 @@ async def acknowledge_commands(
         acknowledged += 1
     return acknowledged
 
+
 async def apply_checkpoint(
     session: AsyncSession,
     *,
@@ -343,13 +344,14 @@ async def apply_checkpoint(
     stop refusing it.
     """
     lease, _ = await _apply_checkpoint(
-                session,
+        session,
         host_id=host_id,
         checkpoint=checkpoint,
         now=now,
         lease_seconds=lease_seconds,
     )
     return lease
+
 
 async def _apply_checkpoint(
     session: AsyncSession,
@@ -397,5 +399,6 @@ async def _apply_checkpoint(
     lease.updated_at = timestamp
     await session.flush()
     return lease, advanced
+
 
 # ------------------------------------------------------------------ events

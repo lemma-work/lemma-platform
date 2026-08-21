@@ -17,6 +17,7 @@ runner = CliRunner()
 # Connectors fake client helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_connectors_client_and_captured():
     captured = {}
 
@@ -40,12 +41,15 @@ def _patch_connectors(monkeypatch, client, output="pretty"):
         output=output,
         full=False,
     )
-    monkeypatch.setattr(connectors, "run_with_client", lambda ctx, fn: fn(client, state))
+    monkeypatch.setattr(
+        connectors, "run_with_client", lambda ctx, fn: fn(client, state)
+    )
 
 
 # ---------------------------------------------------------------------------
 # Surfaces fake client helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_surfaces_client_and_captured():
     captured = {}
@@ -80,6 +84,7 @@ def _patch_surfaces(monkeypatch, client, output="pretty"):
 # Connectors tests
 # ---------------------------------------------------------------------------
 
+
 def test_connectors_list_dispatches_api(monkeypatch):
     client, captured = _make_connectors_client_and_captured()
     _patch_connectors(monkeypatch, client)
@@ -106,6 +111,7 @@ def test_connectors_list_json_output(monkeypatch):
 # Surfaces tests
 # ---------------------------------------------------------------------------
 
+
 def test_surfaces_list_dispatches_api(monkeypatch):
     client, captured = _make_surfaces_client_and_captured()
     _patch_surfaces(monkeypatch, client)
@@ -131,6 +137,7 @@ def test_surfaces_list_json_output(monkeypatch):
 # ---------------------------------------------------------------------------
 # Managed Telegram bot setup
 # ---------------------------------------------------------------------------
+
 
 def _make_telegram_setup_client_and_captured():
     captured = {}

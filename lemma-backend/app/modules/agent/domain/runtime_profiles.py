@@ -258,7 +258,8 @@ class AgentRuntimeProfile(BaseModel):
         elif self.harness_id is not None:
             raise ValueError("Only a HARNESS profile may bind a harness_id")
         if (
-            self.scope in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
+            self.scope
+            in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
             and self.organization_id is None
         ):
             raise ValueError(f"{self.scope.value} profile requires organization_id")

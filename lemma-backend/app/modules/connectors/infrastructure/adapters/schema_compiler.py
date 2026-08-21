@@ -269,7 +269,7 @@ class PydanticCodeSchemaCompiler(SchemaCompilerPort):
             return _RestrictedSchemaParser(code).parse()
         except (SyntaxError, UnsafeSchemaSnippet) as exc:
             self.logger.debug(
-                'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic',
+                "connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic",
                 error_type=type(exc).__name__,
             )
             return {}

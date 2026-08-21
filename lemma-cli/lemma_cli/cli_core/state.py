@@ -165,8 +165,16 @@ def client_session(state: CliState) -> Iterator[Lemma]:
     from lemma_sdk import Lemma
 
     use_env = state.server_source == "env"
-    defaults = state.config.get("defaults") if isinstance(state.config.get("defaults"), dict) else {}
-    runtime = state.config.get("_runtime") if isinstance(state.config.get("_runtime"), dict) else {}
+    defaults = (
+        state.config.get("defaults")
+        if isinstance(state.config.get("defaults"), dict)
+        else {}
+    )
+    runtime = (
+        state.config.get("_runtime")
+        if isinstance(state.config.get("_runtime"), dict)
+        else {}
+    )
     base_url = resolve_base_url(state.base_url, state.config, use_env=use_env)
     # Remember what we dialed, so the error boundary in app.main() can name the
     # server in a connection failure. state.base_url is only the raw override.
@@ -252,9 +260,7 @@ def refresh_auth_session(state: CliState) -> bool:
     return True
 
 
-def run_with_client(
-    ctx: typer.Context, fn: Callable[[Lemma, CliState], Any]
-) -> Any:
+def run_with_client(ctx: typer.Context, fn: Callable[[Lemma, CliState], Any]) -> Any:
     state = state_from_ctx(ctx)
     # Imported here, not at module top: httpx costs ~80ms and every command
     # module imports this one, so an eager import lands on `lemma --help`.

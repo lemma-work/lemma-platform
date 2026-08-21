@@ -49,9 +49,7 @@ def _add_event_delivery_tables() -> None:
         "ix_domain_event_outbox_ready",
         "domain_event_outbox",
         ["available_at", "occurred_at", "id"],
-        postgresql_where=sa.text(
-            "published_at IS NULL AND dead_lettered_at IS NULL"
-        ),
+        postgresql_where=sa.text("published_at IS NULL AND dead_lettered_at IS NULL"),
     )
     op.create_index(
         "ix_domain_event_outbox_expired_lease",
@@ -210,13 +208,17 @@ def _add_schedule_run_ledger() -> None:
         "schedule_runs",
         sa.Column("schedule_id", sa.Uuid(), nullable=False),
         sa.Column("source_event_id", sa.String(length=255), nullable=False),
-        sa.Column("status", sa.String(length=32), server_default="RECEIVED", nullable=False),
+        sa.Column(
+            "status", sa.String(length=32), server_default="RECEIVED", nullable=False
+        ),
         sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
         sa.Column("target_kind", sa.String(length=32), nullable=False),
         sa.Column("target_run_id", sa.String(length=255), nullable=True),
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("llm_output", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "llm_output", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("error_type", sa.String(length=200), nullable=True),
         sa.Column("error_code", sa.String(length=100), nullable=True),
         sa.Column("source_occurred_at", sa.DateTime(timezone=True), nullable=True),
@@ -257,7 +259,9 @@ def _add_pod_bundle_jobs() -> None:
         sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("cancel_requested_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("current_step", sa.Integer(), nullable=True),
-        sa.Column("committed_steps", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "committed_steps", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("error_type", sa.String(length=200), nullable=True),
         sa.Column("error_code", sa.String(length=100), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
@@ -304,9 +308,7 @@ def _add_pod_bundle_jobs() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["job_id"], ["pod_bundle_jobs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["job_id"], ["pod_bundle_jobs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(

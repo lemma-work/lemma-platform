@@ -171,7 +171,9 @@ def test_a_forward_keeps_everything_below_the_marker(subject):
     this" and threw away the invoice — the one thing the agent was asked to act
     on. Trimming now needs evidence of a reply rather than assuming one.
     """
-    body = "Please process this:\n\n-----Original Message-----\nInvoice #8812, due Friday"
+    body = (
+        "Please process this:\n\n-----Original Message-----\nInvoice #8812, due Friday"
+    )
 
     assert strip_quoted_reply(body, subject) == body.strip()
 

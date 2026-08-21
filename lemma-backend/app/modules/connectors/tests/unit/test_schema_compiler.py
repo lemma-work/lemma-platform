@@ -138,7 +138,7 @@ class ForwardRefModel(BaseModel):
         assert "$ref" in props or ("anyOf" in props and "$ref" in props["anyOf"][0])
 
     def test_emits_only_allowlisted_types_containers_and_field_metadata(self, compiler):
-        code = '''
+        code = """
 from datetime import date, datetime
 from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Set, Tuple, Union
 from uuid import UUID
@@ -164,7 +164,7 @@ class InputModel(BaseModel):
     annotated: Annotated[str, "ignored metadata"]
     created_at: datetime
     birthday: date
-'''
+"""
 
         schema = compiler.to_json_schema(code)
 
@@ -223,15 +223,17 @@ class InputModel(BaseModel):
             "format": "uuid",
         }
 
-    def test_accepts_qualified_pydantic_declarations_and_literal_defaults(self, compiler):
-        code = '''
+    def test_accepts_qualified_pydantic_declarations_and_literal_defaults(
+        self, compiler
+    ):
+        code = """
 import pydantic
 
 class InputModel(pydantic.BaseModel):
     required: int = ...
     optional: bool = False
     described: str = pydantic.Field(default="value", description="description")
-'''
+"""
 
         schema = compiler.to_json_schema(code)
 

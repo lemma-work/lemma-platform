@@ -285,8 +285,6 @@ class TestInstallValidation:
         assert validate_install_config(spec, config) == config
 
 
-
-
 class TestHttpDiscoveryWithoutASpec:
     """An `http` install need not carry a spec.
 

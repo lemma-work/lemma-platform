@@ -200,7 +200,7 @@ def unwrap_mcp_content(value: object) -> object:
         return value
     try:
         decoded = json.loads(text)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return value
     return decoded if isinstance(decoded, dict) else value
 

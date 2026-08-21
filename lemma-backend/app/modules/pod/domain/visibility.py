@@ -33,7 +33,9 @@ def normalize_role_name(value: str | PodRole) -> str:
     if len(normalized) > 120:
         raise ValueError("Role name must be 120 characters or fewer")
     if not all(char.isalnum() or char in {"_", "-"} for char in normalized):
-        raise ValueError("Role names may contain only letters, numbers, underscore, and dash")
+        raise ValueError(
+            "Role names may contain only letters, numbers, underscore, and dash"
+        )
     return normalized
 
 
@@ -67,7 +69,10 @@ def roles_allow_required(
     required_role: str | PodRole,
 ) -> bool:
     required = normalize_role_name(required_role)
-    return any(role_allows_required(normalize_role_name(role), required) for role in assigned_roles)
+    return any(
+        role_allows_required(normalize_role_name(role), required)
+        for role in assigned_roles
+    )
 
 
 def highest_role(roles: Iterable[str | PodRole]) -> str:

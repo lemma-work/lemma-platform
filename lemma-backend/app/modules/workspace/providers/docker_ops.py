@@ -58,7 +58,6 @@ from app.modules.workspace.providers.runtime_client import (
 _BOOTSTRAP_DIR = "/run/lemma-bootstrap"
 
 
-
 class DockerOpsMixin:
     """The `SandboxOpsProvider` half of the Docker provider."""
 
@@ -174,9 +173,7 @@ class DockerOpsMixin:
     ) -> AsyncIterator[bytes]:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
             # open_file returns the iterator; it is not itself a generator.
-            stream = await client.open_file(
-                path, byte_range, deadline_at=deadline_at
-            )
+            stream = await client.open_file(path, byte_range, deadline_at=deadline_at)
             async for chunk in stream:
                 yield chunk
 
@@ -384,9 +381,7 @@ class DockerOpsMixin:
             request_timeout_seconds=request_timeout_seconds,
         )
 
-    def _base_url(
-        self, inspected: DockerContainerInspect, *, runtime_port: int
-    ) -> str:
+    def _base_url(self, inspected: DockerContainerInspect, *, runtime_port: int) -> str:
         if self._config.private_network:
             attachment = inspected.network_settings.networks.get(
                 self._config.private_network

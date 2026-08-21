@@ -272,9 +272,7 @@ def pydantic_ai_model_from_runtime_profile(
 
     if protocol == "ANTHROPIC_COMPATIBLE":
         base_url = config.get("base_url")
-        resolved_base_url = (
-            base_url if isinstance(base_url, str) and base_url else None
-        )
+        resolved_base_url = base_url if isinstance(base_url, str) and base_url else None
         provider = AnthropicProvider(
             api_key=api_key,
             base_url=resolved_base_url,

@@ -121,7 +121,9 @@ class TeamsPlatformService:
 
         tenant_id = _tenant_id_from_credentials(self.credentials)
         if not tenant_id:
-            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic')
+            logger.debug(
+                "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic"
+            )
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Cannot determine Teams tenant_id from account credentials.",
@@ -129,7 +131,10 @@ class TeamsPlatformService:
 
         token = await client.get_graph_token(tenant_id)
         if not token:
-            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', tenant_id=tenant_id)
+            logger.debug(
+                "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic",
+                tenant_id=tenant_id,
+            )
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Could not acquire Graph API token for channel history.",
@@ -193,7 +198,10 @@ class TeamsPlatformService:
                 ) as response:
                     if response.status >= 400:
                         await response.text()
-                        logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', status=response.status)
+                        logger.debug(
+                            "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic",
+                            status=response.status,
+                        )
                         return TeamsGetRecentMessagesResult(
                             success=False,
                             error=f"Graph API returned HTTP {response.status}.",
@@ -201,7 +209,7 @@ class TeamsPlatformService:
                     data = await response.json()
         except Exception:
             logger.debug(
-                'agent_surfaces.service.teams_get_recent_channel_messages.propagated',
+                "agent_surfaces.service.teams_get_recent_channel_messages.propagated",
                 conversation_id=ctx.deps.conversation_id,
                 exc_info=True,
             )
@@ -287,7 +295,7 @@ class TeamsPlatformService:
                     data = await response.json()
         except Exception:
             logger.debug(
-                'agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic',
+                "agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic",
                 channel_id=channel_id,
             )
             return []
@@ -345,7 +353,7 @@ class TeamsPlatformService:
             bot_token = await client.get_bot_token()
             if not bot_token:
                 logger.debug(
-                    'agent_surfaces.service.teams_download_plan_missing_bot.diagnostic'
+                    "agent_surfaces.service.teams_download_plan_missing_bot.diagnostic"
                 )
                 return None
             return {
@@ -356,14 +364,14 @@ class TeamsPlatformService:
 
         if not tenant_id:
             logger.debug(
-                'agent_surfaces.service.teams_download_plan_missing_tenant.diagnostic'
+                "agent_surfaces.service.teams_download_plan_missing_tenant.diagnostic"
             )
             return None
 
         graph_token = await client.get_graph_token(tenant_id)
         if not graph_token:
             logger.debug(
-                'agent_surfaces.service.teams_download_plan_missing_graph.diagnostic',
+                "agent_surfaces.service.teams_download_plan_missing_graph.diagnostic",
                 tenant_id=tenant_id,
             )
             return None
@@ -392,7 +400,7 @@ class TeamsPlatformService:
                     }
 
             logger.debug(
-                'agent_surfaces.service.teams_download_plan_could_not.diagnostic'
+                "agent_surfaces.service.teams_download_plan_could_not.diagnostic"
             )
             return None
 
@@ -406,7 +414,7 @@ class TeamsPlatformService:
 
         if content_type.startswith("image/"):
             logger.debug(
-                'agent_surfaces.service.teams_download_plan_could_not.diagnostic'
+                "agent_surfaces.service.teams_download_plan_could_not.diagnostic"
             )
         return None
 
@@ -441,14 +449,14 @@ class TeamsPlatformService:
                 if response.status >= 400:
                     await response.text()
                     logger.debug(
-                        'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
+                        "agent_surfaces.service.teams_download_file_s_fetch.diagnostic",
                         status=response.status,
                     )
                     return None
                 # aiohttp's chunk iterator, same cap as the httpx platforms.
                 chunks = response.content.iter_chunked(64 * 1024)
                 return await read_capped(chunks, max_bytes=INBOUND_ATTACHMENT_BYTE_CAP)
-        logger.debug('agent_surfaces.service.teams_download_file_redirects.diagnostic')
+        logger.debug("agent_surfaces.service.teams_download_file_redirects.diagnostic")
         return None
 
 
@@ -479,7 +487,7 @@ async def _resolve_shared_item_content_request(
         if response.status >= 400:
             await response.text()
             logger.debug(
-                'agent_surfaces.service.teams_download_file_could_not.diagnostic',
+                "agent_surfaces.service.teams_download_file_could_not.diagnostic",
                 status=response.status,
             )
             return None
@@ -509,7 +517,9 @@ async def _resolve_sharepoint_file_content_url(
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").strip()
     raw_path = parsed.path or ""
-    if not hostname or not raw_path or "sharepoint.com" not in hostname:
+    # A substring check accepts `sharepoint.com.example.net`, a host anyone can
+    # register. `is_sharepoint_url` asks for the domain or a real subdomain.
+    if not raw_path or not is_sharepoint_url(url):
         return None
 
     site_path, item_path = split_sharepoint_site_and_item_path(raw_path)
@@ -547,7 +557,7 @@ async def _resolve_sharepoint_site_id(
         if response.status >= 400:
             await response.text()
             logger.debug(
-                'agent_surfaces.service.teams_download_file_could_not.diagnostic',
+                "agent_surfaces.service.teams_download_file_could_not.diagnostic",
                 status=response.status,
             )
             return None

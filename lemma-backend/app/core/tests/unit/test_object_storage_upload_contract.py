@@ -116,8 +116,8 @@ def test_no_upload_uses_a_part_size_below_the_multipart_minimum():
                 "any upload needing a second part fails with EntityTooSmall."
             )
 
-    assert not offenders, "Multipart uploads below the minimum part size:\n" + "\n".join(
-        offenders
+    assert not offenders, (
+        "Multipart uploads below the minimum part size:\n" + "\n".join(offenders)
     )
 
 

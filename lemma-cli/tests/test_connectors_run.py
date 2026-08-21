@@ -88,7 +88,11 @@ def _fake_client(captured: dict):
             items = [_OPERATIONS[name] for name in operations if name in _OPERATIONS]
             if operations and not items:
                 raise KeyError(operations[0])
-            return {"connector_id": "gmail", "items": items, "returned_count": len(items)}
+            return {
+                "connector_id": "gmail",
+                "items": items,
+                "returned_count": len(items),
+            }
 
         def get(self, auth_config, operation):
             return _OPERATIONS[operation]
@@ -140,7 +144,9 @@ def _patch(monkeypatch, client):
     monkeypatch.setattr(
         connectors,
         "run_with_client",
-        lambda ctx, fn: fn(client, SimpleNamespace(config={"_runtime": {"org": "org-1"}})),
+        lambda ctx, fn: fn(
+            client, SimpleNamespace(config={"_runtime": {"org": "org-1"}})
+        ),
     )
 
 
@@ -295,7 +301,9 @@ def test_search_folds_input_schemas_into_short_result_lists(monkeypatch):
     # The schemas came from ONE extra batch call, not a get-per-hit.
     assert len(captured.get("batches", [])) == 1
     payload = json.loads(result.stdout)
-    assert payload["items"][0]["input_schema"]["properties"] == {"to": {"type": "string"}}
+    assert payload["items"][0]["input_schema"]["properties"] == {
+        "to": {"type": "string"}
+    }
 
 
 def test_operations_get_auto_discovers_like_its_siblings(monkeypatch):
@@ -320,7 +328,14 @@ def test_resolution_lists_installs_once_per_command(monkeypatch):
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(
-        app, ["connectors", "operations", "execute", "workspace-gmail", "gmail_list_messages"]
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "workspace-gmail",
+            "gmail_list_messages",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout

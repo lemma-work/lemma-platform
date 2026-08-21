@@ -62,7 +62,9 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
     async def _get_account(self, account_id: UUID, label: str) -> SurfaceAccountInfo:
         account = await self._account_port.get_account(account_id)
         if account is None:
-            raise AgentSurfaceValidationError(f"{label} account '{account_id}' not found")
+            raise AgentSurfaceValidationError(
+                f"{label} account '{account_id}' not found"
+            )
         return account
 
     async def _require_account_app(

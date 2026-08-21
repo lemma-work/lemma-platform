@@ -268,9 +268,7 @@ async def test_agent_workload_folder_grant_authorizer_decision(
         pod_id=pod_uuid,
         path=SIBLING_FILE,
     )
-    denied = await ctx.authorizer.authorize(
-        ctx, Permissions.FOLDER_READ, sibling_ref
-    )
+    denied = await ctx.authorizer.authorize(ctx, Permissions.FOLDER_READ, sibling_ref)
     assert not denied.allowed
     assert denied.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT"
 
@@ -343,9 +341,9 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
 
         # And the grant must not have leaked upward or sideways: dropping the
         # ancestor walk must not turn "no grant" into access anywhere.
-        assert tree["sibling"]["id"] not in {
-            r["file_id"] for r in results["items"]
-        }, results
+        assert tree["sibling"]["id"] not in {r["file_id"] for r in results["items"]}, (
+            results
+        )
         await agent_api.get_file(
             SIBLING_FILE, expected_status=status.HTTP_403_FORBIDDEN
         )

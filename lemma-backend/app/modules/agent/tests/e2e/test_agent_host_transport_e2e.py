@@ -52,6 +52,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
 
 pytestmark = pytest.mark.e2e
 
+
 @pytest.mark.asyncio
 async def test_a_machine_pairs_without_a_user_session(
     authenticated_client, async_client
@@ -84,7 +85,10 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
     machine = hello()
 
     first = await pair(
-        authenticated_client, async_client, display_name="e2e same machine", machine=machine
+        authenticated_client,
+        async_client,
+        display_name="e2e same machine",
+        machine=machine,
     )
     second = await pair(
         authenticated_client, async_client, display_name="e2e renamed", machine=machine
@@ -256,7 +260,7 @@ async def test_the_session_a_host_reports_comes_back_on_the_next_turn(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
 
     assert (
@@ -294,7 +298,7 @@ async def test_a_session_is_not_offered_to_a_harness_that_cannot_use_it(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
 
     assert (
@@ -337,7 +341,7 @@ async def test_a_checkpoint_without_a_session_leaves_the_stored_one_alone(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
     await remember_provider_session(
         uow,
@@ -346,7 +350,7 @@ async def test_a_checkpoint_without_a_session_leaves_the_stored_one_alone(
             lease_epoch=1,
             state=AgentHostRunState.SUCCEEDED,
             detail={"stop_reason": "end_turn"},
-        )
+        ),
     )
 
     assert (
@@ -506,9 +510,7 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     await db_session.commit()
 
-    body, _ = await _elapsed_poll(
-        scenario.async_client, machine, capacity=_capacity(0)
-    )
+    body, _ = await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(0))
 
     assert AgentHostCommandKind.CANCEL_RUN.value in {
         command["kind"] for command in body["commands"]

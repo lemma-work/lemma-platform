@@ -30,7 +30,8 @@ async def list_users_by_email(
 def has_emailpassword_login_method(users: list[User], email: str) -> bool:
     email = normalize_identity_email(email)
     return any(
-        login_method.recipe_id == "emailpassword" and login_method.has_same_email_as(email)
+        login_method.recipe_id == "emailpassword"
+        and login_method.has_same_email_as(email)
         for user in users
         for login_method in user.login_methods
     )
@@ -60,7 +61,10 @@ def get_conflicting_thirdparty_id(users: list[User], *, email: str) -> str | Non
     email = normalize_identity_email(email)
     for user in users:
         for login_method in user.login_methods:
-            if login_method.recipe_id != "thirdparty" or not login_method.has_same_email_as(email):
+            if (
+                login_method.recipe_id != "thirdparty"
+                or not login_method.has_same_email_as(email)
+            ):
                 continue
             if login_method.third_party is not None:
                 return login_method.third_party.id
@@ -72,7 +76,9 @@ def get_emailpassword_conflict_reason() -> str:
 
 
 def get_thirdparty_conflict_reason(third_party_id: str) -> str:
-    provider_name = GOOGLE_SIGN_IN_METHOD if third_party_id == "google" else third_party_id
+    provider_name = (
+        GOOGLE_SIGN_IN_METHOD if third_party_id == "google" else third_party_id
+    )
     return f"This email is already registered with {provider_name}. Please sign in using {provider_name}."
 
 
@@ -84,7 +90,9 @@ def _matches_thirdparty_login_method(
     third_party_user_id: str | None,
 ) -> bool:
     email = normalize_identity_email(email)
-    if login_method.recipe_id != "thirdparty" or not login_method.has_same_email_as(email):
+    if login_method.recipe_id != "thirdparty" or not login_method.has_same_email_as(
+        email
+    ):
         return False
 
     if third_party_id is None:

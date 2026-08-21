@@ -120,7 +120,9 @@ async def empty_data_error(
     services: PodServices, request: PodWriteRecordRequest
 ) -> str:
     columns = await writable_column_names(services, request.table_name)
-    listed = f' Columns on "{request.table_name}": {", ".join(columns)}.' if columns else ""
+    listed = (
+        f' Columns on "{request.table_name}": {", ".join(columns)}.' if columns else ""
+    )
     return (
         f"`data` must be a non-empty object of column->value for "
         f'action=\'{request.action}\', e.g. {{"title": "..."}}. The payload was '

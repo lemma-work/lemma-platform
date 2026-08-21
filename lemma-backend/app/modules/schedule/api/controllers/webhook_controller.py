@@ -92,7 +92,7 @@ async def handle_webhook(
             )
         except Exception as exc:
             logger.debug(
-                'schedule.webhook_controller.verify_composio_webhook.diagnostic',
+                "schedule.webhook_controller.verify_composio_webhook.diagnostic",
                 error_type=type(exc).__name__,
             )
             raise HTTPException(

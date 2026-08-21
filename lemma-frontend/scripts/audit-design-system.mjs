@@ -552,7 +552,12 @@ const checks = [
   {
     id: 'buttonPrimarySkinDuplication',
     label: 'Button callers repeating primary skin',
-    pattern: /<Button\b[^>\n]*className=(?:\{[^}\n]*(?:bg-\[var\(--action-primary\)\]|text-\[var\(--text-on-brand\)\]|hover:bg-\[var\(--action-primary-hover\)\])[^}\n]*\}|"[^"\n]*(?:bg-\[var\(--action-primary\)\]|text-\[var\(--text-on-brand\)\]|hover:bg-\[var\(--action-primary-hover\)\])[^"\n]*")/g,
+    // Scanned rather than matched: `[^>\n]*` stopped at the first `>` in the
+    // tag — an arrow function's, usually — and at the first newline, so a
+    // className on any line but the first was invisible to this check.
+    scanTags: ['Button'],
+    attrsPattern:
+      /className=(?:\{[^}]*(?:bg-\[var\(--action-primary\)\]|text-\[var\(--text-on-brand\)\]|hover:bg-\[var\(--action-primary-hover\)\])|"[^"]*(?:bg-\[var\(--action-primary\)\]|text-\[var\(--text-on-brand\)\]|hover:bg-\[var\(--action-primary-hover\)\]))/,
     allowed(path) {
       return path.endsWith('components/ui/button.tsx') || path.includes('/landing/');
     },
@@ -626,7 +631,7 @@ const informationalChecks = [
   {
     id: 'rawButtonElements',
     label: 'Raw button elements, review before migrating',
-    pattern: /<button\b(?:(?:"[^"]*"|'[^']*'|\{(?:[^{}]|\{[^{}]*\})*\}|[^>])*)>/g,
+    scanTags: ['button'],
     allowed(path) {
       return path.endsWith('components/ui/button.tsx') || path.includes('/landing/');
     },
@@ -765,7 +770,7 @@ const informationalChecks = [
   {
     id: 'rawSwitchButtonElements',
     label: 'Raw switch button elements, review before migrating',
-    pattern: /<button\b(?:(?:"[^"]*"|'[^']*'|\{(?:[^{}]|\{[^{}]*\})*\}|[^>])*)>/g,
+    scanTags: ['button'],
     allowed(path) {
       return path.endsWith('components/ui/button.tsx') || path.endsWith('components/ui/switch.tsx') || path.includes('/landing/');
     },
@@ -776,7 +781,7 @@ const informationalChecks = [
   {
     id: 'rawFieldElements',
     label: 'Raw input/textarea/select elements, review before migrating',
-    pattern: /<(?:input|textarea|select)\b(?:(?:"[^"]*"|'[^']*'|\{[^}]*\}|[^>])*)>/g,
+    scanTags: ['input', 'textarea', 'select'],
     allowed(path) {
       return (
         path.endsWith('components/ui/input.tsx') ||
@@ -855,7 +860,7 @@ const informationalChecks = [
   {
     id: 'inlineEditableFieldElements',
     label: 'Inline editable input/textarea elements, review before migrating',
-    pattern: /<(?:input|textarea)\b(?:(?:"[^"]*"|'[^']*'|\{[^}]*\}|[^>])*)>/g,
+    scanTags: ['input', 'textarea'],
     allowed(path) {
       return (
         path.endsWith('components/ui/input.tsx') ||
@@ -882,7 +887,10 @@ const informationalChecks = [
   {
     id: 'buttonSkinOverrides',
     label: 'Button skin overrides, review before migrating',
-    pattern: /<Button\b[^>\n]*className=(?:\{[^}\n]*(?:bg-\[|border-\[|shadow-\[)[^}\n]*\}|"[^"\n]*(?:bg-\[|border-\[|shadow-\[)[^"\n]*")/g,
+    // See `buttonPrimarySkinDuplication`: the line-scoped pattern this replaces
+    // could not see past the tag's first `>` or its first newline.
+    scanTags: ['Button'],
+    attrsPattern: /className=(?:\{[^}]*(?:bg-\[|border-\[|shadow-\[)|"[^"]*(?:bg-\[|border-\[|shadow-\[))/,
     allowed(path) {
       return path.endsWith('components/ui/button.tsx') || path.includes('/landing/');
     },
@@ -1001,22 +1009,21 @@ const informationalChecks = [
     // this reports rather than blocks — but it is where lost hierarchy shows up
     // first, and a default of `primary` once made 108 of these by accident.
     label: 'Files with more than one primary Button (design.md §8), review for same-view competition',
-    pattern: /<Button\b(?:[^>"']|"[^"]*"|'[^']*')*?variant=["']primary["'](?:[^>"']|"[^"]*"|'[^']*')*?>/g,
     // Marketing pages are a different genre — a landing page is allowed to
     // repeat its call to action.
     allowed(path) {
       return path.includes('/landing');
     },
     find(source) {
-      const tags = [...source.matchAll(/<Button\b((?:[^>"']|"[^"]*"|'[^']*')*?)>/g)].filter((match) =>
-        /variant=\{?["']primary["']/.test(match[1])
+      const tags = scanOpeningTags(source, ['Button']).filter((tag) =>
+        /variant=\{?["']primary["']/.test(tag.attrs),
       );
       if (tags.length < 2) return [];
       // The first is the view's legitimate primary; everything beyond it is
       // what needs a second look.
-      return tags.slice(1).map((match) => ({
-        value: `<Button${match[1].replace(/\s+/g, ' ').trimEnd()}>`,
-        line: lineNumberAt(source, match.index ?? 0),
+      return tags.slice(1).map((tag) => ({
+        value: `<Button${tag.attrs.replace(/\s+/g, ' ').trimEnd()}>`,
+        line: lineNumberAt(source, tag.index),
       }));
     },
   },
@@ -1040,10 +1047,15 @@ const informationalChecks = [
       const found = [];
 
       for (const slot of jsxPropRegions(source, 'actions')) {
-        const buttons = slot.value.matchAll(/<Button\b((?:[^>"']|"[^"]*"|'[^']*')*?)>([\s\S]*?)<\/Button>/g);
+        const buttons = scanOpeningTags(slot.value, ['Button']);
 
         for (const match of buttons) {
-          const [, attrs, children] = match;
+          const attrs = match.attrs;
+          // The children run to this Button's own closing tag. Nested Buttons
+          // are not a thing the design system produces, so the first close is
+          // the right one.
+          const closeAt = slot.value.indexOf('</Button>', match.end);
+          const children = closeAt === -1 ? '' : slot.value.slice(match.end, closeAt);
           if (!/variant=\{?["']primary["']/.test(attrs)) continue;
           if (!isCreateAction(attrs, children)) continue;
           found.push({
@@ -1319,18 +1331,66 @@ function lineNumberAt(source, index) {
   return line;
 }
 
+// An opening JSX tag cannot be matched by a regular expression, because the
+// brace expressions in it nest arbitrarily and a regex cannot count. The
+// patterns that tried spelled out two levels of nesting and then leaned on a
+// `[^>]` catch-all for anything deeper — which is what made them ambiguous:
+// every character inside a quoted value could be claimed either by its own
+// branch or by the catch-all, so the engine explored both and a long enough
+// attribute list took exponential time. This walks the source once instead,
+// tracking whether it is inside a quote or a brace, and stops at the first `>`
+// that belongs to the tag. Linear, and correct at any nesting depth.
+function scanOpeningTags(source, tagNames) {
+  const found = [];
+  const opener = new RegExp(`<(?:${tagNames.join('|')})\\b`, 'g');
+  for (const match of source.matchAll(opener)) {
+    const start = match.index ?? 0;
+    let depth = 0;
+    let quote = '';
+    for (let i = start + match[0].length; i < source.length; i += 1) {
+      const char = source[i];
+      if (quote) {
+        if (char === quote) quote = '';
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === '{') depth += 1;
+      else if (char === '}') depth = Math.max(0, depth - 1);
+      else if (char === '>' && depth === 0) {
+        found.push({
+          value: source.slice(start, i + 1),
+          attrs: source.slice(start + match[0].length, i),
+          index: start,
+          end: i + 1,
+        });
+        break;
+      }
+    }
+  }
+  return found;
+}
+
 function findMatches(source, check, rel) {
   // Some findings are about how many of a thing a file has, not about any one
   // match in isolation — those supply `find` instead of relying on `pattern`.
   if (check.find) return check.find(source, rel);
+  // `attrsPattern` is deliberately not global: `RegExp.test` on a global regex
+  // carries `lastIndex` between calls and would skip every other tag.
+  const found = check.scanTags
+    ? scanOpeningTags(source, check.scanTags).filter(
+        (tag) => !check.attrsPattern || check.attrsPattern.test(tag.attrs),
+      )
+    : [...source.matchAll(check.pattern)].map((match) => ({
+        value: match[0],
+        index: match.index ?? 0,
+      }));
   const matches = [];
-  for (const match of source.matchAll(check.pattern)) {
-    const value = match[0];
+  for (const { value, index } of found) {
     if (check.allowedMatch?.(value, rel)) continue;
-    matches.push({
-      value,
-      line: lineNumberAt(source, match.index ?? 0),
-    });
+    matches.push({ value, line: lineNumberAt(source, index) });
   }
   return matches;
 }

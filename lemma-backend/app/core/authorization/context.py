@@ -323,9 +323,9 @@ class Context:
     # pod allow) treat it as the user it is acting for — without widening
     # real (grant-backed) agent/function workloads, which leave it False.
     is_user_equivalent: bool = False
-    _decision_cache: dict[tuple[str, ResourceType | None, UUID | None], AuthorizationDecision] = field(
-        default_factory=dict
-    )
+    _decision_cache: dict[
+        tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
+    ] = field(default_factory=dict)
     #: permission_id -> session-approval answer, for this request only.
     #:
     #: The lookup is a Redis GET, and it runs while FastAPI holds the request's

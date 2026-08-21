@@ -43,7 +43,6 @@ _GRAPH_API_BASE = "https://graph.microsoft.com"
 _OUTLOOK_APP_ID = "outlook"
 
 
-
 def _decode_graph_attachment(raw: bytes) -> bytes:
     """Parse a Graph attachment response and decode its payload, off the loop."""
     payload = json.loads(raw)
@@ -54,6 +53,7 @@ def _decode_graph_attachment(raw: bytes) -> bytes:
             "Linked or non-file attachments are not supported by this tool."
         )
     return base64.b64decode(content_bytes.encode("ascii"))
+
 
 class OutlookPlatformService:
     def __init__(self, credentials: dict[str, Any]):

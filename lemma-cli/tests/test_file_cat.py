@@ -112,7 +112,9 @@ def test_resolve_mode_auto(mime, has_md, expected):
 
 
 def test_resolve_mode_explicit_overrides_detection():
-    assert fv.resolve_mode("markdown", mime="text/plain", has_markdown=False) == "markdown"
+    assert (
+        fv.resolve_mode("markdown", mime="text/plain", has_markdown=False) == "markdown"
+    )
     assert fv.resolve_mode("text", mime="application/pdf", has_markdown=True) == "text"
 
 
@@ -190,7 +192,8 @@ def test_cat_json_payload(monkeypatch):
     _patch(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["--json", "--pod", POD, "file", "cat", "/docs/report.pdf", "--pages", "2-3"]
+        app,
+        ["--json", "--pod", POD, "file", "cat", "/docs/report.pdf", "--pages", "2-3"],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -234,7 +237,9 @@ def test_cat_bad_range_is_usage_error(monkeypatch):
     fake = FakeFiles(meta={"mime_type": "text/plain"}, raw=b"x")
     _patch(monkeypatch, fake)
 
-    result = runner.invoke(app, ["--pod", POD, "file", "cat", "/me/f.txt", "--pages", "5-2"])
+    result = runner.invoke(
+        app, ["--pod", POD, "file", "cat", "/me/f.txt", "--pages", "5-2"]
+    )
     assert result.exit_code == 2
 
 

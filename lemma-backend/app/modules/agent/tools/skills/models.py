@@ -12,9 +12,7 @@ class ListSkillsRequest(BaseModel):
 
 
 class SkillLookupRequest(BaseModel):
-    name: str = Field(
-        description="Skill name to load, for example `skill-creator`."
-    )
+    name: str = Field(description="Skill name to load, for example `skill-creator`.")
     resource_path: Optional[str] = Field(
         default=None,
         description=(

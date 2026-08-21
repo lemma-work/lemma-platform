@@ -288,9 +288,7 @@ async def test_a_pause_does_not_carry_running_processes_across(
     await asyncio.sleep(1.0)
     # `pgrep -c` prints 0 *and* exits non-zero when nothing matches, so an `||`
     # fallback would print the count twice.
-    _, before, _, _ = await _run(
-        provider, instance, f"pgrep -c -f '{pattern}' || true"
-    )
+    _, before, _, _ = await _run(provider, instance, f"pgrep -c -f '{pattern}' || true")
     # More than one can match -- `setsid` and `nohup` both carry the script
     # path in their command line. Only "something was running" matters here.
     assert int(before.strip() or 0) >= 1, (
@@ -306,9 +304,7 @@ async def test_a_pause_does_not_carry_running_processes_across(
         resumed, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
     )
 
-    _, after, _, _ = await _run(
-        provider, resumed, f"pgrep -c -f '{pattern}' || true"
-    )
+    _, after, _, _ = await _run(provider, resumed, f"pgrep -c -f '{pattern}' || true")
     assert after.strip().startswith(b"0"), (
         "a process survived the pause, so `keep_memory` is back on its SDK "
         f"default and a leaked browser is now permanent: {after!r}"

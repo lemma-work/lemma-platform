@@ -93,7 +93,9 @@ class SlackStreamSurface:
                 chunks: list[dict[str, Any]] = []
                 if sequence:
                     chunks.append(
-                        _task_chunk(sequence, progress_handle.get("task_title"), "complete")
+                        _task_chunk(
+                            sequence, progress_handle.get("task_title"), "complete"
+                        )
                     )
                 sequence += 1
                 chunks.append(_task_chunk(sequence, title, "in_progress"))
@@ -197,7 +199,7 @@ class SlackStreamSurface:
             )
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_append_stream_text.diagnostic',
+                "agent_surfaces.service.slack_append_stream_text.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return StreamAppendResult(handle=progress_handle, appended=False)
@@ -223,7 +225,9 @@ class SlackStreamSurface:
         token = slack_access_token(self.credentials)
         # A stream that already carries the answer still needs closing, so an
         # empty message is only a refusal when nothing was streamed.
-        if not token or (not message.strip() and not progress_handle.get("streamed_text")):
+        if not token or (
+            not message.strip() and not progress_handle.get("streamed_text")
+        ):
             return False
         client = build_slack_client(self.credentials)
         channel = str(
@@ -265,7 +269,7 @@ class SlackStreamSurface:
             # Say which Slack error it was: this path silently falls back to a
             # plain message, so without the code a failure here is invisible.
             logger.debug(
-                'agent_surfaces.service.slack_finish_progress_stop_stream.diagnostic',
+                "agent_surfaces.service.slack_finish_progress_stop_stream.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -329,5 +333,5 @@ class SlackStreamSurface:
             )
         except SlackApiError:
             logger.debug(
-                'agent_surfaces.service.slack_end_progress_delete_channel.diagnostic'
+                "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic"
             )

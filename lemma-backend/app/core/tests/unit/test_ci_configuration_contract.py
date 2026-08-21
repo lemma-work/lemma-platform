@@ -11,13 +11,33 @@ def _read(path: str) -> str:
 
 
 def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
-    config = _read(".github/dependabot.yml")
+    """Every ecosystem is monthly, grouped, and has somewhere to put a fix.
 
-    assert "package-ecosystem: uv" in config
-    assert "package-ecosystem: pip" not in config
-    assert config.count("interval: monthly") == 4
-    assert "interval: weekly" not in config
-    assert config.count("applies-to: security-updates") == 4
+    Asserted per ecosystem rather than by counting occurrences. The counts said
+    "four of these strings appear" -- true of a config where one ecosystem had
+    both and another had neither, and false of a correct config the moment a
+    fifth ecosystem was added. Adding cargo coverage is what surfaced that.
+    """
+    import yaml
+
+    config = _read(".github/dependabot.yml")
+    assert "package-ecosystem: pip" not in config, "uv is the native ecosystem"
+
+    updates = yaml.safe_load(config)["updates"]
+    ecosystems = {entry["package-ecosystem"] for entry in updates}
+    # `cargo` is here because `desktop` is a cargo workspace: without an entry a
+    # Rust advisory has nothing to open a pull request against.
+    assert {"uv", "npm", "github-actions", "docker", "cargo"} <= ecosystems
+
+    for entry in updates:
+        name = entry["package-ecosystem"]
+        assert entry["schedule"]["interval"] == "monthly", name
+        applies = {group["applies-to"] for group in entry["groups"].values()}
+        assert applies == {"version-updates", "security-updates"}, name
+        # Two groups need two slots. At one, an open routine pull request holds
+        # the only one and security updates queue behind it indefinitely.
+        assert entry["open-pull-requests-limit"] >= len(entry["groups"]), name
+
     for directory in (
         "/lemma-backend/lemma-connectors",
         "/lemma-cli",
@@ -86,9 +106,7 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     assert "== 'labeled'" not in condition
     assert "workflow_run" not in condition
     assert (
-        "opened" in condition
-        and "synchronize" in condition
-        and "reopened" in condition
+        "opened" in condition and "synchronize" in condition and "reopened" in condition
     )
 
 
@@ -112,7 +130,12 @@ def _nightly_prune_step() -> dict:
 
     workflow = yaml.safe_load(_read(".github/workflows/release-local-images.yml"))
     steps = workflow["jobs"]["share-desktop-dmg"]["steps"]
-    return next(s for s in steps if s["name"] == "Prune superseded nightly prereleases")
+    # `.get`, not `[]`: a step is allowed to be a bare `uses:` with no name,
+    # and indexing made this helper raise KeyError on the first such step
+    # rather than skipping it.
+    return next(
+        s for s in steps if s.get("name") == "Prune superseded nightly prereleases"
+    )
 
 
 def _run_prune(tmp_path, releases: list[str], *, keep: str = "3") -> tuple[int, str]:

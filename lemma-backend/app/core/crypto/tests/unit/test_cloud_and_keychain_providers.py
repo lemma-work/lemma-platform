@@ -49,9 +49,7 @@ def test_gcp_secret_manager_loads_latest_version_once(monkeypatch):
     client = _SecretManagerClient(_keyset("gcp1"))
     _install_secretmanager(monkeypatch, client)
 
-    provider = GcpSecretManagerKeyProvider(
-        "projects/demo/secrets/lemma-keyset"
-    )
+    provider = GcpSecretManagerKeyProvider("projects/demo/secrets/lemma-keyset")
 
     assert provider.primary_kid == "gcp1"
     assert provider.encryption_keyring() is provider.signing_keyring()

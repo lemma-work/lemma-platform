@@ -88,7 +88,12 @@ def validate_raster_icon(
                 media_type = _FORMAT_MEDIA_TYPES.get(str(image.format).upper())
                 width, height = image.size
                 image.verify()
-    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        Image.DecompressionBombError,
+    ) as exc:
         raise ValueError("Raster image could not be decoded") from exc
     if media_type != detected_media_type:
         raise ValueError("Detected raster type does not match decoded image")

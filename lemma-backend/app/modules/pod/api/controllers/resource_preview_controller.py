@@ -84,7 +84,10 @@ async def preview_resource(
     # here. Resolving the name does both jobs: it proves the row is real and
     # supplies the display name an id-addressed caller does not have.
     canonical_name = await _resolve_name(
-        uow, pod_id=pod_id, resource_type=resource_type, resource_id=resource.resource_id
+        uow,
+        pod_id=pod_id,
+        resource_type=resource_type,
+        resource_id=resource.resource_id,
     )
     if canonical_name is None:
         raise HTTPException(status_code=404, detail=_OPAQUE_DENIAL)

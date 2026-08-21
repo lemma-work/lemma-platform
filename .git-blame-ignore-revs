@@ -1,0 +1,11 @@
+# Revisions that changed formatting only. `git blame` skips these so the line
+# it shows you is the one that last changed the code, not the one that last
+# moved it.
+#
+# Enable locally, once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub reads this file automatically.
+
+# Adopt `ruff format` across first-party Python (883 files, no behaviour change).
+80dfd1f13613c306af3e616ba021ea341dc9f5a7

@@ -64,7 +64,9 @@ class CronSchedule:
         it as "nothing more to schedule" rather than an error; it is not a
         parse failure, and the expression stays valid.
         """
-        moment = after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
+        moment = (
+            after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
+        )
         moment = moment.astimezone(timezone.utc)
         # `crontab` ships no stubs for `CronTab.next`, so basedpyright cannot
         # see it. Narrowed to this one call rather than silenced file-wide: the

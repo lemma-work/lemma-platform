@@ -134,7 +134,9 @@ def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     if set(value.keys()) == {JSON_FILE_REF_KEY}:
         json_path = base_dir / str(value[JSON_FILE_REF_KEY])
         return loads_jsonc(json_path.read_text(encoding="utf-8"))
-    return {key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()}
+    return {
+        key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()
+    }
 
 
 def _resource_manifest_path(
@@ -181,9 +183,10 @@ def load_resource_payload(
 def _looks_like_single_resource_dir(path: Path, resource_type: str) -> bool:
     if resource_type == "files":
         return False
-    return _resource_manifest_path(
-        path, path.name, resource_type=resource_type
-    ) is not None
+    return (
+        _resource_manifest_path(path, path.name, resource_type=resource_type)
+        is not None
+    )
 
 
 def _parse_function_headers(code: str) -> dict[str, str]:

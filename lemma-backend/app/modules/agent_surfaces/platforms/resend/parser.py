@@ -141,7 +141,9 @@ class ResendInboundParser:
 
         message_id = str(payload.get("message_id") or "").strip() or None
         in_reply_to = str(payload.get("in_reply_to") or "").strip() or None
-        references = [str(r).strip() for r in (payload.get("references") or []) if str(r).strip()]
+        references = [
+            str(r).strip() for r in (payload.get("references") or []) if str(r).strip()
+        ]
         thread_root = email_thread_root(
             references=references,
             in_reply_to=in_reply_to,

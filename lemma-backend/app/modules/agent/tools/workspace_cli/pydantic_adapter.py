@@ -76,9 +76,7 @@ async def manage_process(
         return ExecCommandResult(
             success=False,
             completed=False,
-            error=(
-                "process_id is required for action='input', 'kill', and 'resize'."
-            ),
+            error=("process_id is required for action='input', 'kill', and 'resize'."),
         )
     if request.action == "resize":
         return await workspace_cli.resize_terminal(

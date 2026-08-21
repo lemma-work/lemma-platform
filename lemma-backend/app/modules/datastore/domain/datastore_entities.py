@@ -92,7 +92,7 @@ def validate_computed_expression(
         if match is None:
             raise DatastoreValidationError(
                 "Computed expression contains an unsupported character near "
-                f"{expr[pos:pos + 16]!r}"
+                f"{expr[pos : pos + 16]!r}"
             )
         pos = match.end()
         kind = match.lastgroup
@@ -232,7 +232,9 @@ class ColumnSchema(BaseModel):
             DatastoreDataType.TEXT,
             DatastoreDataType.FILE_PATH,
         }:
-            raise ValueError("max_length is only supported for TEXT and FILE_PATH columns")
+            raise ValueError(
+                "max_length is only supported for TEXT and FILE_PATH columns"
+            )
 
         allowed_auto_types = {
             DatastoreDataType.INTEGER,

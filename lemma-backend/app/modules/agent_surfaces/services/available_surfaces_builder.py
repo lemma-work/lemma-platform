@@ -79,7 +79,7 @@ async def _connect_descriptor(
         capability = connector.capability_for(AuthProvider.LEMMA)
     except ValueError:
         logger.debug(
-            'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic',
+            "agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic",
             connector_id=connector_id,
         )
         return None, False, connector.title, connector.description, connector.icon

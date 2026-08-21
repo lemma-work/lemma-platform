@@ -164,9 +164,7 @@ async def test_an_existing_table_gets_its_index_on_next_read(
     )
 
     rebuilt = await _indexes_on(schema_manager.session_factory, schema_name, "invoices")
-    assert name in rebuilt, (
-        "the lazy backfill did not create the index a listing needs"
-    )
+    assert name in rebuilt, "the lazy backfill did not create the index a listing needs"
 
 
 async def test_two_long_table_names_sharing_a_prefix_get_distinct_indexes(
@@ -220,9 +218,7 @@ async def test_the_default_listing_uses_the_index_rather_than_a_seq_scan(
             "columns": [{"name": "label", "type": "TEXT", "required": True}],
         }
     )
-    await pod_api.bulk_create(
-        "events", [{"label": f"e{i}"} for i in range(200)]
-    )
+    await pod_api.bulk_create("events", [{"label": f"e{i}"} for i in range(200)])
     schema_name = schema_manager.get_schema_name(pod_api.pod_id)
 
     async with schema_manager.session_factory() as session:

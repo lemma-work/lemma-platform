@@ -24,7 +24,9 @@ JSON_COL = EncryptedColumn("t", "c", "json", "t.c")
 STR_COL = EncryptedColumn("t", "c", "str", "t.c")
 
 
-def _cipher(keyring: Keyring, legacy: list[bytes] | None = None) -> EnvelopeSecretCipher:
+def _cipher(
+    keyring: Keyring, legacy: list[bytes] | None = None
+) -> EnvelopeSecretCipher:
     return EnvelopeSecretCipher(StaticKeyProvider(keyring), legacy_secrets=legacy)
 
 
@@ -53,7 +55,10 @@ def test_json_under_retired_key_is_reencrypted():
 def test_json_legacy_v1_is_reencrypted_to_v2():
     legacy = local_fallback_secret()
     payload = json.dumps({"x": 1}, sort_keys=True, separators=(",", ":")).encode()
-    v1 = {"_encrypted": "fernet-json-v1", "ciphertext": Fernet(legacy).encrypt(payload).decode()}
+    v1 = {
+        "_encrypted": "fernet-json-v1",
+        "ciphertext": Fernet(legacy).encrypt(payload).decode(),
+    }
 
     cipher = _cipher(_ring(("A", Fernet.generate_key()), primary="A"), legacy=[legacy])
     out = _reencrypt_value(cipher, JSON_COL, json.dumps(v1), force=False)

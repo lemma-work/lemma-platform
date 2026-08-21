@@ -20,7 +20,9 @@ _DEFAULT_TTL_SECONDS = 5 * 60
 class WorkspaceEnvCachePort(Protocol):
     async def get(self, key: str) -> dict[str, str] | None: ...
 
-    async def set(self, key: str, env_vars: dict[str, str], ttl_seconds: int) -> None: ...
+    async def set(
+        self, key: str, env_vars: dict[str, str], ttl_seconds: int
+    ) -> None: ...
 
     async def delete(self, key: str) -> None: ...
 
@@ -83,7 +85,9 @@ class RedisWorkspaceEnvCache(WorkspaceEnvCachePort):
 
     async def delete_matching(self, pattern: str) -> None:
         keys: list[str] = []
-        async for key in self._redis.scan_iter(match=self._cache_key(pattern), count=100):
+        async for key in self._redis.scan_iter(
+            match=self._cache_key(pattern), count=100
+        ):
             keys.append(str(key))
             if len(keys) >= 100:
                 await self._redis.delete(*keys)

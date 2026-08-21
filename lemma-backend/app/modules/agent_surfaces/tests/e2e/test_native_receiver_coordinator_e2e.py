@@ -126,9 +126,7 @@ async def test_native_receiver_coordinator_starts_account_backed_telegram_and_sl
             str(surface_id) for surface_id in slack_candidate.surface_ids
         }
 
-        deleted = await authenticated_client.delete(
-            f"/pods/{pod_id}/surfaces/telegram"
-        )
+        deleted = await authenticated_client.delete(f"/pods/{pod_id}/surfaces/telegram")
         assert deleted.status_code == 204, deleted.text
         stopped = await _next_event(events, "stopped")
         assert stopped.platform is SurfacePlatform.TELEGRAM

@@ -204,7 +204,10 @@ async def test_github_import_plans_from_repo(
     pod_id = test_pod["id"]
     res = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/imports",
-        json={"kind": "GITHUB", "url": f"https://github.com/acme/crm-{uuid4().hex[:6]}"},
+        json={
+            "kind": "GITHUB",
+            "url": f"https://github.com/acme/crm-{uuid4().hex[:6]}",
+        },
     )
     assert res.status_code == status.HTTP_202_ACCEPTED, res.text
     body = res.json()
@@ -212,7 +215,10 @@ async def test_github_import_plans_from_repo(
     import_id = body["import_id"]
 
     final = await _wait(
-        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION", "FAILED"}
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"AWAITING_CONFIRMATION", "FAILED"},
     )
     assert final["status"] == "AWAITING_CONFIRMATION", final
     steps = {(s["kind"], s["name"]) for s in final["plan"]["steps"]}

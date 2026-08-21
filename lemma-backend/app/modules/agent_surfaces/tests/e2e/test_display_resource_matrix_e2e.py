@@ -475,9 +475,9 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     delivered = await wait_for_slack_text(
         message_store, "The incident catalog is ready."
     )
-    assert (
-        sum("The incident catalog is ready." in text for text in delivered) == 1
-    ), f"the final answer must land exactly once, got {delivered}"
+    assert sum("The incident catalog is ready." in text for text in delivered) == 1, (
+        f"the final answer must land exactly once, got {delivered}"
+    )
 
 
 async def test_display_resource_teams_file_always_falls_back_to_link(

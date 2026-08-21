@@ -38,7 +38,9 @@ class _OperationFields(BaseModel):
         default=None,
         description="Optional human-friendly operation name",
     )
-    description: Optional[str] = Field(default=None, description="Operation description")
+    description: Optional[str] = Field(
+        default=None, description="Operation description"
+    )
     search_document: Optional[str] = Field(
         default=None,
         description="Searchable text used for discovery and ranking.",

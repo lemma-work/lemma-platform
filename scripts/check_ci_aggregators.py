@@ -37,7 +37,10 @@ EXEMPT = {
 # Every workflow is checked for timeouts, not just the two with aggregators.
 # Release workflows are exempt: their jobs legitimately run for well over an
 # hour and a wrong bound there fails a release rather than a PR.
-NO_TIMEOUT_REQUIRED = {"release-desktop.yml", "release-local-images.yml"}
+# Empty on purpose. The release workflows were exempt because they had no
+# bounds; they have them now, so nothing needs an exemption and a new workflow
+# cannot quietly acquire one.
+NO_TIMEOUT_REQUIRED: set[str] = set()
 
 
 def main() -> int:

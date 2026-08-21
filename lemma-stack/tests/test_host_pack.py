@@ -69,9 +69,7 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert "--no-access-log" not in backend["command"]
     assert "FUNCTION_RUNTIME_SECRET" not in backend["env"]
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
-    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
-        "http://host.lemma.internal:8711"
-    )
+    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["WORKSPACE_IMAGE"] == "workspace:test"
     assert backend["env"]["FUNCTION_IMAGE"] == "function:test"
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
@@ -134,22 +132,14 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
     assert backend["env"]["WORKSPACE_PROVIDER"] == "lemma_local"
     assert backend["env"]["WORKSPACE_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
     assert backend["env"]["WORKSPACE_LOCAL_CALLBACK_REQUIRED"] == "true"
-    assert backend["env"]["WORKSPACE_LOCAL_CALLBACK_URL"] == (
-        "http://host.lemma.internal:8711"
-    )
-    assert backend["env"]["WORKSPACE_IMAGE"] == (
-        "workspace@sha256:sandbox"
-    )
-    assert backend["env"]["FUNCTION_IMAGE"] == (
-        "function@sha256:sandbox"
-    )
+    assert backend["env"]["WORKSPACE_LOCAL_CALLBACK_URL"] == ("http://host.lemma.internal:8711")
+    assert backend["env"]["WORKSPACE_IMAGE"] == ("workspace@sha256:sandbox")
+    assert backend["env"]["FUNCTION_IMAGE"] == ("function@sha256:sandbox")
     assert backend["env"]["WORKSPACE_ADD_HOST_GATEWAY"] == "false"
     assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)
     assert backend["env"]["REDIS_URL"].startswith("redis://:" + "b" * 64)
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
-    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
-        "http://host.lemma.internal:8711"
-    )
+    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == ("http://host.lemma.internal:8711")
 
 
 def test_missing_pack_file_is_actionable(paths, tmp_path):

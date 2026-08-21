@@ -10,7 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from lemma_sdk.config import get_server_config, normalize_server_name, save_config, server_names
+from lemma_sdk.config import (
+    get_server_config,
+    normalize_server_name,
+    save_config,
+    server_names,
+)
 
 from ..cli_core.context import resolve_org, resolve_pod, selected_org, selected_pod
 from ..cli_core.io import list_items, to_plain
@@ -109,9 +114,7 @@ def select_org(state: CliState, selector: str) -> dict[str, Any]:
 def select_pod(state: CliState, selector: str) -> dict[str, Any]:
     """Persist the pod default (and its org when known)."""
     with client_session(state) as client:
-        pod = to_plain(
-            resolve_pod(client, state, selector, org=resolve_org_id(state))
-        )
+        pod = to_plain(resolve_pod(client, state, selector, org=resolve_org_id(state)))
     pod_id = str(pod.get("id") or selector)
     org_id = pod.get("organization_id")
 

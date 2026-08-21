@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
 
+
 class WorkspaceSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=dotenv_path(),

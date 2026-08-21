@@ -55,7 +55,7 @@ def _frames(chunks: list[str]) -> list[dict]:
     for chunk in chunks:
         line = chunk.strip()
         assert line.startswith("data:")
-        out.append(json.loads(line[len("data:"):].strip()))
+        out.append(json.loads(line[len("data:") :].strip()))
     return out
 
 
@@ -68,13 +68,21 @@ async def test_first_frame_is_snapshot_then_live_frames():
     state = _state(pod_id, seq=3)
     channel = FakeChannel(
         [
-            json.dumps({"type": "status", "status": "APPLYING", "seq": 2}),  # stale, dropped
+            json.dumps(
+                {"type": "status", "status": "APPLYING", "seq": 2}
+            ),  # stale, dropped
             json.dumps({"type": "step", "seq": 4}),
             json.dumps({"type": "completed", "status": "COMPLETED", "seq": 5}),
-            json.dumps({"type": "step", "seq": 6}),  # never reached (closed on completed)
+            json.dumps(
+                {"type": "step", "seq": 6}
+            ),  # never reached (closed on completed)
         ]
     )
-    frames = _frames(await _collect(import_event_stream(FakeStore(state), channel, pod_id, state.import_id)))
+    frames = _frames(
+        await _collect(
+            import_event_stream(FakeStore(state), channel, pod_id, state.import_id)
+        )
+    )
 
     assert frames[0]["type"] == "snapshot"
     assert frames[0]["seq"] == 3
@@ -86,7 +94,9 @@ async def test_first_frame_is_snapshot_then_live_frames():
 async def test_expired_when_state_missing():
     pod_id = uuid4()
     frames = _frames(
-        await _collect(import_event_stream(FakeStore(None), FakeChannel([]), pod_id, uuid4()))
+        await _collect(
+            import_event_stream(FakeStore(None), FakeChannel([]), pod_id, uuid4())
+        )
     )
     assert frames == [{"type": "expired"}]
 
@@ -95,7 +105,9 @@ async def test_pod_mismatch_is_expired():
     state = _state(uuid4())
     frames = _frames(
         await _collect(
-            import_event_stream(FakeStore(state), FakeChannel([]), uuid4(), state.import_id)
+            import_event_stream(
+                FakeStore(state), FakeChannel([]), uuid4(), state.import_id
+            )
         )
     )
     assert frames == [{"type": "expired"}]
@@ -106,7 +118,9 @@ async def test_terminal_state_closes_after_snapshot():
     state = _state(pod_id, status=ImportStatus.COMPLETED)
     channel = FakeChannel([json.dumps({"type": "step", "seq": 99})])
     frames = _frames(
-        await _collect(import_event_stream(FakeStore(state), channel, pod_id, state.import_id))
+        await _collect(
+            import_event_stream(FakeStore(state), channel, pod_id, state.import_id)
+        )
     )
     # An already-terminal import emits only the snapshot; no live frames follow.
     assert len(frames) == 1 and frames[0]["type"] == "snapshot"

@@ -101,9 +101,7 @@ def test_a_client_that_refuses_attributes_still_gets_the_right_answer() -> None:
         __slots__ = ("connectors",)
 
         def __init__(self):
-            self.connectors = SimpleNamespace(
-                auth_configs=_AuthConfigs(_one_install)
-            )
+            self.connectors = SimpleNamespace(auth_configs=_AuthConfigs(_one_install))
 
     assert connectors._auth_config_items(Slotted()) == [
         {"name": "work-gmail", "id": "ac-1"}

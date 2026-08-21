@@ -85,27 +85,42 @@ async def visibility_pod(
     await owner.create_folder(granted, visibility="RESTRICTED")
     await owner.create_folder(f"{granted}/deep", visibility="RESTRICTED")
     leaf = await owner.upload_file(
-        "leaf.md", b"granted body", directory_path=f"{granted}/deep",
-        visibility="RESTRICTED", search_enabled=False,
+        "leaf.md",
+        b"granted body",
+        directory_path=f"{granted}/deep",
+        visibility="RESTRICTED",
+        search_enabled=False,
     )
     await owner.create_folder(ungranted, visibility="RESTRICTED")
     hidden = await owner.upload_file(
-        "hidden.md", b"hidden body", directory_path=ungranted,
-        visibility="RESTRICTED", search_enabled=False,
+        "hidden.md",
+        b"hidden body",
+        directory_path=ungranted,
+        visibility="RESTRICTED",
+        search_enabled=False,
     )
     # A POD-visible file under a RESTRICTED folder: readable on its own row,
     # and the ancestor walk is the only thing that hides it.
     pod_under_restricted = await owner.upload_file(
-        "open.md", b"open body", directory_path=ungranted, search_enabled=False,
+        "open.md",
+        b"open body",
+        directory_path=ungranted,
+        search_enabled=False,
     )
     await owner.create_folder(shared)
     plain = await owner.upload_file(
-        "plain.md", b"plain body", directory_path=shared, search_enabled=False,
+        "plain.md",
+        b"plain body",
+        directory_path=shared,
+        search_enabled=False,
     )
     # The owner's own personal file: PERSONAL, owned by someone else entirely
     # from the operator's point of view.
     personal = await owner.upload_file(
-        "private.md", b"private body", directory_path="/me", search_enabled=False,
+        "private.md",
+        b"private body",
+        directory_path="/me",
+        search_enabled=False,
     )
 
     grant = await authenticated_client.put(

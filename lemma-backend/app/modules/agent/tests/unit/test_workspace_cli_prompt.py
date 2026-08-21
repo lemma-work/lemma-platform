@@ -35,4 +35,7 @@ def test_prompt_frames_liteparse_as_local_file_fallback():
     assert "fallback" in prompt.lower()
     # The old steering that pushed every pod file through download + parse is gone.
     assert "Download pod files into the workspace before parsing" not in prompt
-    assert "Download a pod file with `lemma files download` before parsing it." not in prompt
+    assert (
+        "Download a pod file with `lemma files download` before parsing it."
+        not in prompt
+    )

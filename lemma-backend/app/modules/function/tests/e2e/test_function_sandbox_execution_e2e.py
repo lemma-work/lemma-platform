@@ -202,6 +202,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             kind=FunctionType.JOB,
             value=21,
         )
+
         def client_factory() -> LocalSandboxClient:
             from app.modules.workspace.services.sandbox_composition import (
                 build_local_client,

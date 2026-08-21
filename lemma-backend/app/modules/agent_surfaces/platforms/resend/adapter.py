@@ -160,7 +160,9 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await ResendPlatformService(credentials).add_processing_indicator(event, metadata)
+        await ResendPlatformService(credentials).add_processing_indicator(
+            event, metadata
+        )
 
 
 __all__ = ["ResendSurfaceAdapter", "ResendInboundParser", "ResendPlatformService"]

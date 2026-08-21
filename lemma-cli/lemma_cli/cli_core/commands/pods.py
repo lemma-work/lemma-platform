@@ -53,7 +53,7 @@ def _is_uuid(value: str) -> bool:
     try:
         uuid.UUID(str(value))
         return True
-    except (ValueError, AttributeError, TypeError):
+    except ValueError, AttributeError, TypeError:
         return False
 
 
@@ -104,7 +104,10 @@ def resolve_pod_id(client, state, explicit: str | None = None) -> str:  # type: 
         or str(item.get("name") or "").casefold() == needle
     ]
     if not matches:
-        names = ", ".join(sorted(str(i.get("name")) for i in items if i.get("name"))) or "(none)"
+        names = (
+            ", ".join(sorted(str(i.get("name")) for i in items if i.get("name")))
+            or "(none)"
+        )
         fail(f"Pod not found: '{selector}'. Available pods: {names}.")
     if len(matches) > 1:
         ids = ", ".join(f"{m.get('name')} ({m.get('id')})" for m in matches)
@@ -156,7 +159,9 @@ def select_pod(
     name: str | None = typer.Argument(
         None, help="Pod id, slug, or name. Omit for an interactive picker."
     ),
-    org: str | None = typer.Option(None, "--org", help="Organization to scope the pick."),
+    org: str | None = typer.Option(
+        None, "--org", help="Organization to scope the pick."
+    ),
     limit: int = typer.Option(100, "--limit"),
     export: bool = typer.Option(
         False,
@@ -258,7 +263,9 @@ def create_pod(
         help="Scaffold a starter bundle (./<name>) and import it into the new pod.",
     ),
     directory: Path | None = typer.Option(
-        None, "--dir", help="Starter bundle directory (default: ./<name>). Implies --with-starter."
+        None,
+        "--dir",
+        help="Starter bundle directory (default: ./<name>). Implies --with-starter.",
     ),
 ) -> None:
     """Create a pod. With --with-starter, also scaffold a starter bundle and import it."""
@@ -276,7 +283,9 @@ def create_pod(
             scaffold = init_pod(target, name)
         except ScaffoldError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        err_console.print(f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}")
+        err_console.print(
+            f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}"
+        )
 
     result = run_with_client(
         ctx,
@@ -429,7 +438,10 @@ def doctor_pod(
         from ...cli_app.pod_bundle import DESTRUCTIVE_PERMISSION_IDS
 
         pod_sdk = pod_client(client, s, target)
-        tables = {str(t.get("name")) for t in to_plain(list_items(pod_sdk.tables.list(limit=1000)))}
+        tables = {
+            str(t.get("name"))
+            for t in to_plain(list_items(pod_sdk.tables.list(limit=1000)))
+        }
         # `include=["permissions"]` attaches each row's grants, so the whole
         # check costs one request per resource type rather than one per resource.
         # This command used to make 19 requests on a two-agent pod.
@@ -562,11 +574,17 @@ def doctor_pod(
                 rtype = grant.get("resource_type")
                 rname = str(grant.get("resource_name") or "")
                 if rtype == "datastore_table" and rname not in tables:
-                    errors.append(f"{kind[:-1]} '{name}' is granted on table '{rname}' which does not exist.")
+                    errors.append(
+                        f"{kind[:-1]} '{name}' is granted on table '{rname}' which does not exist."
+                    )
                 elif rtype == "agent" and rname not in agents:
-                    errors.append(f"{kind[:-1]} '{name}' is granted on agent '{rname}' which does not exist.")
+                    errors.append(
+                        f"{kind[:-1]} '{name}' is granted on agent '{rname}' which does not exist."
+                    )
                 elif rtype == "function" and rname not in functions:
-                    errors.append(f"{kind[:-1]} '{name}' is granted on function '{rname}' which does not exist.")
+                    errors.append(
+                        f"{kind[:-1]} '{name}' is granted on function '{rname}' which does not exist."
+                    )
                 elif rtype == "connector_account" and not account_reachable(rname):
                     errors.append(
                         f"{kind[:-1]} '{name}' pins connector account '{rname}', "
@@ -577,7 +595,9 @@ def doctor_pod(
                 elif rtype in ("folder", "document"):
                     check_folder_grant(kind, name, rname)
                 destructive = sorted(
-                    p for p in (grant.get("permission_ids") or []) if p in DESTRUCTIVE_PERMISSION_IDS
+                    p
+                    for p in (grant.get("permission_ids") or [])
+                    if p in DESTRUCTIVE_PERMISSION_IDS
                 )
                 if destructive:
                     warnings.append(
@@ -616,8 +636,14 @@ def doctor_pod(
                 and "function.execute" in (g.get("permission_ids") or [])
             }
             if name and not agent_has_runtime(item, name):
-                warnings.append(f"agent '{name}' has no pinned runtime — relies on the backend default (system:lemma).")
-            toolsets = {str(t).upper() for t in (item.get("toolsets") or []) if isinstance(t, str)}
+                warnings.append(
+                    f"agent '{name}' has no pinned runtime — relies on the backend default (system:lemma)."
+                )
+            toolsets = {
+                str(t).upper()
+                for t in (item.get("toolsets") or [])
+                if isinstance(t, str)
+            }
             if "SUBAGENTS" in toolsets and not any(
                 g.get("resource_type") == "agent" for g in grants
             ):
@@ -637,9 +663,14 @@ def doctor_pod(
             if targets is None:
                 targets = [
                     f"{kind}:{cfg[key]}"
-                    for node in (to_plain(pod_sdk.workflows.get(wname)).get("nodes") or [])
+                    for node in (
+                        to_plain(pod_sdk.workflows.get(wname)).get("nodes") or []
+                    )
                     for cfg in [node.get("config") or {}]
-                    for kind, key in (("agent", "agent_name"), ("function", "function_name"))
+                    for kind, key in (
+                        ("agent", "agent_name"),
+                        ("function", "function_name"),
+                    )
                     if cfg.get(key)
                 ]
             parsed = [str(entry).partition(":") for entry in targets]
@@ -691,13 +722,25 @@ def doctor_pod(
             plat = surf.get("platform") or surf.get("name")
             agent_name = surf.get("default_agent_name") or surf.get("agent_name")
             if agent_name and agent_name not in agents:
-                errors.append(f"surface '{plat}' points at missing agent '{agent_name}'.")
-            if str(surf.get("credential_mode") or "").upper() == "CUSTOM" and not surf.get("account_id"):
+                errors.append(
+                    f"surface '{plat}' points at missing agent '{agent_name}'."
+                )
+            if str(
+                surf.get("credential_mode") or ""
+            ).upper() == "CUSTOM" and not surf.get("account_id"):
                 warnings.append(f"surface '{plat}' is CUSTOM but has no account_id.")
 
-        return {"errors": errors, "warnings": warnings, "counts": {
-            "tables": len(tables), "agents": len(agents), "functions": len(functions),
-            "workflows": len(workflows), "schedules": len(schedules)}}
+        return {
+            "errors": errors,
+            "warnings": warnings,
+            "counts": {
+                "tables": len(tables),
+                "agents": len(agents),
+                "functions": len(functions),
+                "workflows": len(workflows),
+                "schedules": len(schedules),
+            },
+        }
 
     result = run_with_client(ctx, run)
     if result is None:
@@ -753,7 +796,9 @@ def members(
 @app.command("export")
 def export_pod(
     ctx: typer.Context,
-    output_dir: Path = typer.Argument(Path("."), help="Directory to write the bundle into."),
+    output_dir: Path = typer.Argument(
+        Path("."), help="Directory to write the bundle into."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
     resource: list[str] = typer.Option(
         [],
@@ -772,7 +817,9 @@ def export_pod(
         "--exclude",
         help="Resource type to skip when exporting a full pod bundle.",
     ),
-    force: bool = typer.Option(False, "--force", "-f", help="Overwrite the output directory."),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite the output directory."
+    ),
     as_template: bool = typer.Option(
         False,
         "--as-template",
@@ -824,9 +871,7 @@ def export_pod(
         )
 
 
-def _parse_import_variables(
-    var: list[str], values: Path | None
-) -> dict[str, str]:
+def _parse_import_variables(var: list[str], values: Path | None) -> dict[str, str]:
     """Merge a --values JSON file and repeated --var NAME=VALUE flags into one
     {name: value} map (--var wins on conflict)."""
     merged: dict[str, str] = {}
@@ -1017,7 +1062,9 @@ def _count(value: Any) -> str:
     return str(len(value)) if isinstance(value, list) else ""
 
 
-def _render_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> None:
+def _render_table(
+    title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]]
+) -> None:
     view = Table(title=f"{title} ({len(rows)})", box=box.SIMPLE_HEAVY)
     for heading, _key in columns:
         view.add_column(heading, overflow="fold")
@@ -1077,7 +1124,11 @@ def _render_pod_description(
     _render_table(
         "Tables",
         tables,
-        [("Name", "name"), ("Columns", "columns"), ("Primary Key", "primary_key_column")],
+        [
+            ("Name", "name"),
+            ("Columns", "columns"),
+            ("Primary Key", "primary_key_column"),
+        ],
     )
     _render_table(
         "Agents",
@@ -1107,7 +1158,12 @@ def _render_pod_description(
     _render_table(
         "Schedules",
         schedules,
-        [("ID", "id"), ("Type", "schedule_type"), ("Target", "target"), ("Active", "is_active")],
+        [
+            ("ID", "id"),
+            ("Type", "schedule_type"),
+            ("Target", "target"),
+            ("Active", "is_active"),
+        ],
     )
     _render_table(
         "Apps",
@@ -1122,7 +1178,12 @@ def _render_pod_description(
     _render_table(
         "Surfaces",
         surfaces,
-        [("Name", "name"), ("Platform", "platform"), ("Agent", "agent"), ("Status", "status")],
+        [
+            ("Name", "name"),
+            ("Platform", "platform"),
+            ("Agent", "agent"),
+            ("Status", "status"),
+        ],
     )
     _render_file_tree(
         data.get("files"),
@@ -1137,9 +1198,13 @@ def _render_file_tree(
     max_depth: int | None = DEFAULT_DESCRIBE_TREE_DEPTH,
     include_skills: bool = False,
 ) -> None:
-    tree_payload = files_payload.get("tree") if isinstance(files_payload, dict) else None
+    tree_payload = (
+        files_payload.get("tree") if isinstance(files_payload, dict) else None
+    )
     if not isinstance(tree_payload, dict):
-        console.print(Panel("No file tree available.", title="Pod Files", box=box.ROUNDED))
+        console.print(
+            Panel("No file tree available.", title="Pod Files", box=box.ROUNDED)
+        )
         return
     root = Tree("[bold]/[/bold]")
     _add_file_tree_children(
