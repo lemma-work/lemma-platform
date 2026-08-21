@@ -41,12 +41,20 @@ DEFAULT_BUDGET_SECONDS = 45.0
 NOTABLE_SECONDS = 15.0
 
 
-def _cases(paths: list[Path]) -> list[tuple[float, str, str]]:
+def _cases(paths: list[Path], *, passing_only: bool = False) -> list[tuple[float, str, str]]:
     cases: list[tuple[float, str, str]] = []
     for path in paths:
         if not path.exists():
             continue
         for case in ET.parse(path).getroot().iter("testcase"):
+            # A failed test's duration is not a measurement of anything. A test
+            # that blows a 90-second condition wait reports 92s and would trip
+            # the budget, so one real failure became two red steps and the
+            # second one pointed at the wrong problem.
+            if passing_only and any(
+                child.tag in ("failure", "error") for child in case
+            ):
+                continue
             cases.append((
                 float(case.get("time") or 0),
                 case.get("classname", ""),
@@ -108,10 +116,13 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=15)
     args = parser.parse_args()
 
-    cases = _cases(args.junit)
+    cases = _cases(args.junit, passing_only=args.check)
     if not cases:
-        print(f"no testcases found in {[str(p) for p in args.junit]}", file=sys.stderr)
-        return 1
+        # In --check this is the correct answer for a shard whose every test
+        # failed: the run is already red for a better reason.
+        print(f"no passing testcases found in {[str(p) for p in args.junit]}",
+              file=sys.stderr)
+        return 0 if args.check else 1
     return (check(cases, args.budget_seconds) if args.check
             else summarize(cases, args.top))
 
