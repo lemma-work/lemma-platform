@@ -31,11 +31,10 @@ from app.modules.agent.tools.workspace_cli.models import (
     WriteStdinRequest,
 )
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
-    ensure_github_credentials,
     looks_like_git_command,
 )
 from app.modules.agent.tools.workspace_cli.github_project import (
-    ensure_project_checkout,
+    prepare_project_directory,
 )
 from app.modules.agent.tools.workspace_cli.helper import (
     CHARACTER_LIMIT_STDOUT,
@@ -275,28 +274,17 @@ async def exec_command_internal(
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
             )
-        project_notice: str | None = None
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
             # not just git-looking ones: the clone that puts the project on disk
             # has to happen before whatever the agent actually asked for, even
             # when that is `ls`.
-            if ctx.workspace_repo is not None or looks_like_git_command(request.cmd):
-                try:
-                    with run_phase("tool.workspace.credentials"):
-                        await ensure_github_credentials(ctx, workspace_session)
-                        project_notice = await ensure_project_checkout(
-                            ctx, workspace_session
-                        )
-                except Exception:
-                    # A broken credential bridge (DB/Redis hiccup, sandbox
-                    # write failure) should not block the command itself --
-                    # it just runs without credentials and fails with git's
-                    # own native auth error, same as with no bridge at all.
-                    logger.debug(
-                        "agent.workspace_cli.github_credential_bridge_failed.diagnostic",
-                        exc_info=True,
-                    )
+            project_notice = await prepare_project_directory(
+                ctx,
+                workspace_session,
+                wanted=ctx.workspace_repo is not None
+                or looks_like_git_command(request.cmd),
+            )
             if request.tty:
                 effective_yield_time_ms = request.yield_time_ms
                 effective_timeout = _DEFAULT_EXEC_TIMEOUT_S
@@ -484,12 +472,16 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             close_on_exit=False,
         )
         async with workspace_session:
+            project_notice = await prepare_project_directory(
+                ctx, workspace_session, wanted=ctx.workspace_repo is not None
+            )
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds
             )
         trimmed = trim_python_result(result)
         if workspace_session.workspace_recreated:
             trimmed.stdout = _with_recreation_notice(trimmed.stdout, recreated=True)
+        trimmed.stdout = _with_notice(trimmed.stdout, notice=project_notice)
         return trimmed
     except Exception as exc:
         return _python_workspace_tool_failure(exc, operation="execute_python")

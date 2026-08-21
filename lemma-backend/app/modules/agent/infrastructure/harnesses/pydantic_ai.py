@@ -494,6 +494,16 @@ class PydanticAIHarness:
                 ),
                 "deps": ctx,
                 "usage_limits": options.usage_limits,
+                # Our conversation id, not pydantic-ai's. Left unset, pydantic-ai
+                # takes the most recent conversation id off `message_history` --
+                # and we rebuild history from the database every run, so there is
+                # never one to inherit and it mints a fresh UUID7 per run instead.
+                # That id becomes `gen_ai.conversation.id`, which the
+                # OpenInference instrumentation maps onto `session.id`, which is
+                # the only thing Phoenix groups a session by. So every turn
+                # became its own single-trace session: 648 traces, 648 sessions,
+                # exactly one-to-one, on the deployment where this was found.
+                "conversation_id": str(conversation.id),
             }
             if resume_history is not None or user_prompt is None:
                 return pydantic_agent.iter(**iter_kwargs)

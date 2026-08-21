@@ -8,6 +8,7 @@ import pytest
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
+from app.modules.agent.tools.workspace_cli import github_project
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.connectors.domain.errors import (
@@ -275,7 +276,7 @@ async def test_exec_command_internal_invokes_bridge_only_for_git_like_commands(
         del ctx, workspace_session
         calls.append("called")
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _fake_ensure)
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _fake_ensure)
 
     await workspace_cli.exec_command_internal(_context(), ExecCommandRequest(cmd="pwd"))
     assert calls == []
@@ -299,7 +300,9 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises(
         del ctx, workspace_session
         raise RuntimeError("redis is down")
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _broken_bridge)
+    # Patched where it is now called from: the shared preparation step both
+    # workspace tools go through.
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _broken_bridge)
 
     result = await workspace_cli.exec_command_internal(
         _context(), ExecCommandRequest(cmd="git push")

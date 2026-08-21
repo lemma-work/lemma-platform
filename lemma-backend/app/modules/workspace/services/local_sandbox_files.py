@@ -28,9 +28,20 @@ from sandbox_runtime.protocol import (
 
 @dataclass(frozen=True, slots=True)
 class LocalPythonSessionRef:
-    """Only the session id travels; the runtime keys sessions by it."""
+    """The session id and the directory it runs in.
+
+    The id alone was enough for the runtime-backed providers, which spawn the
+    interpreter once at ``create_python_session`` and never need to be told
+    again. It is not enough for E2B, which has no resident interpreter: every
+    execution is a fresh ``python3``, so the cwd has to arrive with the
+    execution or that process starts wherever the sandbox image happens to put
+    it. It used to, and `execute_python` ran in `/workspace` while
+    `exec_command` ran in the conversation's directory -- one tool could not see
+    the other's files.
+    """
 
     session_id: UUID
+    cwd: str
 
 
 class LocalSandboxFilesMixin:
@@ -186,23 +197,27 @@ class LocalSandboxFilesMixin:
                 deadline_at=deadline_at,
             ),
         )
-        return LocalPythonSessionRef(session_id=session_id)
+        return LocalPythonSessionRef(session_id=session_id, cwd=cwd)
 
     async def execute_python(
         self,
         logical_id: UUID,
         session_id: UUID,
         *,
+        cwd: str,
         operation_id: UUID,
         code: str,
         environment: tuple[EnvironmentVariable, ...] = (),
         output_limit_bytes: int = 1024 * 1024,
         deadline_at: datetime,
     ) -> PythonResult:
+        # `cwd` is required rather than defaulted: a default here is a silent
+        # answer to the one question this call must not guess at, and the
+        # caller -- the session -- already holds the conversation's directory.
         _, instance = await self._instance(logical_id)
         return await self._provider.execute_python(
             instance,
-            LocalPythonSessionRef(session_id=session_id),
+            LocalPythonSessionRef(session_id=session_id, cwd=cwd),
             ExecutePythonRequest(
                 operation_id=operation_id,
                 code=code,
@@ -230,7 +245,7 @@ class LocalSandboxFilesMixin:
             return
 
     async def restart_python_session(
-        self, logical_id: UUID, session_id: UUID, *, deadline_at: datetime
+        self, logical_id: UUID, session_id: UUID, *, cwd: str, deadline_at: datetime
     ) -> LocalPythonSessionRef:
         # Deleting is enough: the next execute recreates the session lazily
         # from its deterministic id, so there is no separate restart path to
@@ -238,4 +253,4 @@ class LocalSandboxFilesMixin:
         await self.delete_python_session(
             logical_id, session_id, deadline_at=deadline_at
         )
-        return LocalPythonSessionRef(session_id=session_id)
+        return LocalPythonSessionRef(session_id=session_id, cwd=cwd)

@@ -432,12 +432,92 @@ async def test_real_python_keeps_state_across_executions(
     assert "42" in second.stdout, (second.stdout, second.stderr)
 
 
-def _session_ref(session_id):
-    """Build the SDK-neutral session reference the provider only reads an id from."""
-    from dataclasses import dataclass
+def _session_ref(session_id, *, cwd: str = "/workspace"):
+    """The reference production hands the provider, not a stand-in for it.
 
-    @dataclass(frozen=True)
-    class _Ref:
-        session_id: object
+    It used to be a local dataclass carrying only `session_id` -- which is
+    exactly what the provider read, and exactly why nobody noticed the cwd it
+    also carries was going nowhere.
+    """
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
 
-    return _Ref(session_id=session_id)
+    return LocalPythonSessionRef(session_id=session_id, cwd=cwd)
+
+
+async def test_real_python_runs_where_the_shell_runs(
+    provider: E2BSandboxProvider,
+) -> None:
+    """The interpreter and the shell must be in the same directory, for real.
+
+    E2B starts a fresh `python3` per execution, so it can only be in the
+    session's directory if that directory is passed on the execution itself.
+    It was not, and `execute_python` reported `/workspace` while the shell
+    reported the conversation's own directory -- so a relative path meant two
+    different files. The cross-read below is the assertion that matters: it
+    fails for the reason an agent actually experiences.
+    """
+    from sandbox_runtime.protocol import ExecutePythonRequest
+
+    instance = await _create(provider, uuid4())
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+    cwd = f"/workspace/c/conformance-{uuid4().hex[:8]}"
+    await provider.create_directory(instance, path=cwd, deadline_at=_deadline())
+    session = _session_ref(uuid4(), cwd=cwd)
+
+    reported = await provider.execute_python(
+        instance,
+        session,
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code="import os\nprint(os.getcwd())",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+    assert cwd in reported.stdout, (reported.stdout, reported.stderr)
+
+    wrote = await provider.execute_python(
+        instance,
+        session,
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code=(
+                "from pathlib import Path\n"
+                "Path('python-wrote.txt').write_text('python-was-here')"
+            ),
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+    assert wrote.state is not None, wrote
+
+    process_id = await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="cat python-wrote.txt",
+            argv=None,
+            cwd=cwd,
+            environment=(),
+            tty=None,
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+    snapshot = await provider.read_process_output(
+        instance,
+        process_id=process_id,
+        after_sequence=0,
+        wait_seconds=10,
+        deadline_at=_deadline(),
+    )
+    output = b"".join(chunk.data for chunk in snapshot.chunks)
+    assert b"python-was-here" in output, output

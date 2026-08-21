@@ -69,14 +69,99 @@ async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
     return next(row for row in rows if row.payload.get("file_id") == file_id)
 
 
-@pytest.mark.timeout(240)
 @pytest.mark.asyncio
-async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
+async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
     fake_document_processor_server: FakeDocumentProcessorServer,
 ):
+    """One document, end to end: upload, extract, project, search, dedup.
+
+    The PR-lane half of what used to be a single 130-second test — the slowest
+    in the entire e2e suite, 5.6% of its wall-clock on its own. It uploaded
+    five PDFs to exercise five different extractor behaviours and searched
+    three ways, which is a matrix, not a journey.
+
+    What every pull request needs to know is that the pipeline is connected:
+    an uploaded PDF reaches the extractor, its children get written, the
+    projection lands, search finds it, and a redelivered event does not
+    duplicate the work. That is this test, on one document.
+
+    The extractor-behaviour matrix — config fallback, connection retry, chunk
+    fallback, pages-only, and all three search methods — is
+    test_kreuzberg_extractor_behaviour_matrix below, marked `slow` so it runs
+    in the scheduled protected lane instead of in front of the merge button.
+    """
+    async with document_worker("kreuzberg"):
+        uploaded = await pod_api.upload_file(
+            "success.pdf",
+            build_pdf_bytes("Original source for success.pdf"),
+            content_type="application/pdf",
+        )
+
+        await _dispatch_outbox(db_manager)
+        completed = await _wait_for_status(pod_api, uploaded["path"], {"COMPLETED"})
+        assert completed["metadata"]["page_count"] == 1
+
+        children = await pod_api.list_children(uploaded["path"])
+        child_by_name = {item["name"]: item for item in children["items"]}
+        assert {"document.md", "figure.png"} <= set(child_by_name)
+        markdown = await pod_api.child_content(child_by_name["document.md"]["path"])
+        assert b"Deterministic extracted content for success.pdf" in markdown
+        assert b"<!-- PAGE 1 -->" in markdown
+        assert await pod_api.child_content(child_by_name["figure.png"]["path"])
+        page = next(item for item in children["items"] if item["kind"] == "page")
+        rendered_page = await pod_api.child_content(page["path"])
+        assert rendered_page.startswith(b"\xff\xd8")
+        page_markdown = await pod_api.child_content(
+            child_by_name["document.md"]["path"],
+            page_start=1,
+            page_end=1,
+        )
+        assert page_markdown.startswith(b"<!-- PAGE 1 -->")
+
+        # HYBRID rather than all three: it is the only method that exercises
+        # both the text index and the vector index, so one call covers the
+        # projection paths a broken pipeline would take down. TEXT and VECTOR
+        # in isolation are in the matrix test.
+        search = await pod_api.search_files(
+            "Deterministic extracted content for success.pdf",
+            search_method="HYBRID",
+        )
+        assert uploaded["id"] in {item["file_id"] for item in search["items"]}
+        hit = next(
+            item for item in search["items"] if item["file_id"] == uploaded["id"]
+        )
+        assert hit["page_number"] == 1
+
+        assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
+
+        # Redis redelivery carries the same durable event id. The inbox must
+        # acknowledge it without creating another extraction/job side effect.
+        event = await _outbox_event_for_file(db_manager, uploaded["id"])
+        bus = get_message_bus()
+        await bus.publish(event.stream, event.payload)
+        await bus.publish(event.stream, event.payload)
+        await asyncio.sleep(0.5)
+        assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
+
+
+# `slow` keeps this out of the fast lane every PR runs and puts it in the
+# scheduled protected run (backend-protected-e2e.yml selects `slow`). The
+# behaviours below are extractor-adapter variations, not pipeline wiring:
+# nothing here can break without the wiring test above also failing, so a
+# nightly signal is the right cadence for them.
+@pytest.mark.slow
+@pytest.mark.timeout(240)
+@pytest.mark.asyncio
+async def test_kreuzberg_extractor_behaviour_matrix(
+    pod_api: DatastoreApi,
+    db_manager,
+    document_worker,
+    fake_document_processor_server: FakeDocumentProcessorServer,
+):
+    """Every extractor behaviour the Kreuzberg adapter has to absorb."""
     async with document_worker("kreuzberg"):
         files = []
         for name in (
@@ -102,23 +187,6 @@ async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
         assert all(item["metadata"]["page_count"] == 1 for item in completed)
 
         primary = files[0]
-        children = await pod_api.list_children(primary["path"])
-        child_by_name = {item["name"]: item for item in children["items"]}
-        assert {"document.md", "figure.png"} <= set(child_by_name)
-        markdown = await pod_api.child_content(child_by_name["document.md"]["path"])
-        assert b"Deterministic extracted content for success.pdf" in markdown
-        assert b"<!-- PAGE 1 -->" in markdown
-        assert await pod_api.child_content(child_by_name["figure.png"]["path"])
-        page = next(item for item in children["items"] if item["kind"] == "page")
-        rendered_page = await pod_api.child_content(page["path"])
-        assert rendered_page.startswith(b"\xff\xd8")
-        page_markdown = await pod_api.child_content(
-            child_by_name["document.md"]["path"],
-            page_start=1,
-            page_end=1,
-        )
-        assert page_markdown.startswith(b"<!-- PAGE 1 -->")
-
         for search_method in ("TEXT", "VECTOR", "HYBRID"):
             search = await pod_api.search_files(
                 "Deterministic extracted content for success.pdf",
@@ -132,6 +200,9 @@ async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
             )
             assert primary_hit["page_number"] == 1
 
+        # A 400/422 makes the adapter retry once with the compatibility config;
+        # a dropped connection makes it retry once on a fresh one. Both must
+        # still land exactly one successful extraction.
         assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
         assert (
             fake_document_processor_server.requests["kreuzberg:config-fallback.pdf"]
@@ -142,15 +213,6 @@ async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
             == 2
         )
         assert fake_document_processor_server.requests["kreuzberg:chunk"] == 1
-
-        # Redis redelivery carries the same durable event id. The inbox must
-        # acknowledge it without creating another extraction/job side effect.
-        event = await _outbox_event_for_file(db_manager, primary["id"])
-        bus = get_message_bus()
-        await bus.publish(event.stream, event.payload)
-        await bus.publish(event.stream, event.payload)
-        await asyncio.sleep(0.5)
-        assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
 
 
 @pytest.mark.asyncio

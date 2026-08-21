@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   build:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,6 +55,7 @@ jobs:
           path: lemma-typescript/public
 
   deploy:
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

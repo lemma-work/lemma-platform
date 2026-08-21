@@ -125,6 +125,8 @@ class SandboxWorkspaceSession:
                 lambda: self.client.execute_python(
                     self.logical_id,
                     self.python_session_id,
+                    # Every call: E2B has no interpreter to hold this.
+                    cwd=self._cwd,
                     operation_id=operation_id,
                     code=code,
                     environment=self._environment,
