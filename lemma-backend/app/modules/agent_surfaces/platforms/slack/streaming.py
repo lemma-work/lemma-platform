@@ -19,6 +19,10 @@ from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     truncate_slack_text as _truncate_slack_text,
 )
+from app.modules.agent_surfaces.platforms.slack.message_blocks import (
+    _markdown_chunk,
+    _task_chunk,
+)
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
     slack_access_token,
@@ -26,31 +30,6 @@ from app.modules.agent_surfaces.platforms.slack.client import (
 )
 
 logger = get_logger(__name__)
-
-
-def _markdown_chunk(text: str) -> dict[str, Any]:
-    """Model text as a stream chunk.
-
-    A stream is either chunk-based or plain-text for its whole life. Because the
-    step timeline uses chunks, the answer must be a chunk too — appending
-    top-level ``markdown_text`` to a chunk stream is rejected with
-    ``streaming_mode_mismatch``.
-    """
-    return {"type": "markdown_text", "text": text}
-
-
-def _task_chunk(sequence: int, title: str | None, status: str) -> dict[str, Any]:
-    """One step of the agent's work, as a Slack ``task_update`` chunk.
-
-    The id is stable per step so appending the same id with ``complete`` closes
-    the step already on screen rather than adding a second one.
-    """
-    return {
-        "type": "task_update",
-        "id": f"step-{sequence}",
-        "title": _truncate_slack_text(str(title or "Working…"), 200) or "Working…",
-        "status": status,
-    }
 
 
 class SlackStreamSurface:
@@ -163,29 +142,12 @@ class SlackStreamSurface:
         client = build_slack_client(self.credentials)
         try:
             if not (progress_handle and progress_handle.get("ts")):
-                start_payload: dict[str, Any] = {
-                    "channel": str(channel),
-                    "thread_ts": str(thread_ts),
-                    # Same mode the step stream uses. A stream is either
-                    # chunk-based or plain-text for its whole life; mixing the
-                    # two is what Slack rejects as streaming_mode_mismatch.
-                    "task_display_mode": "timeline",
-                }
-                start_payload.update(
-                    slack_customized_message_kwargs(
-                        self.credentials,
-                        (metadata or {}).get("agent_display_name"),
-                        (metadata or {}).get("agent_icon_url"),
-                    )
+                progress_handle = await self._open_stream(
+                    client,
+                    channel=str(channel),
+                    thread_ts=str(thread_ts),
+                    metadata=metadata,
                 )
-                response = await client.chat_startStream(**start_payload)
-                progress_handle = {
-                    "ts": str(response["ts"]),
-                    "channel": str(response.get("channel") or channel),
-                    "stream": True,
-                    "task_seq": 0,
-                    "streamed_text": True,
-                }
             if not text:
                 return StreamAppendResult(handle=progress_handle, appended=False)
             await client.chat_appendStream(
@@ -204,6 +166,39 @@ class SlackStreamSurface:
             )
             return StreamAppendResult(handle=progress_handle, appended=False)
 
+    async def _open_stream(
+        self,
+        client: Any,
+        *,
+        channel: str,
+        thread_ts: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Start a live stream on the thread, and describe it as a handle."""
+        start_payload: dict[str, Any] = {
+            "channel": channel,
+            "thread_ts": thread_ts,
+            # Same mode the step stream uses. A stream is either chunk-based or
+            # plain-text for its whole life; mixing the two is what Slack
+            # rejects as streaming_mode_mismatch.
+            "task_display_mode": "timeline",
+        }
+        start_payload.update(
+            slack_customized_message_kwargs(
+                self.credentials,
+                (metadata or {}).get("agent_display_name"),
+                (metadata or {}).get("agent_icon_url"),
+            )
+        )
+        response = await client.chat_startStream(**start_payload)
+        return {
+            "ts": str(response["ts"]),
+            "channel": str(response.get("channel") or channel),
+            "stream": True,
+            "task_seq": 0,
+            "streamed_text": True,
+        }
+
     async def finish_progress(
         self,
         event: ParsedInboundSurfaceEvent,
@@ -220,51 +215,54 @@ class SlackStreamSurface:
         Returns False when there is no live stream to close, so the caller can
         deliver the answer as an ordinary message instead.
         """
-        if not progress_handle or not progress_handle.get("ts"):
-            return False
-        token = slack_access_token(self.credentials)
-        # A stream that already carries the answer still needs closing, so an
-        # empty message is only a refusal when nothing was streamed.
-        if not token or (
-            not message.strip() and not progress_handle.get("streamed_text")
-        ):
-            return False
-        client = build_slack_client(self.credentials)
-        channel = str(
-            progress_handle.get("channel") or event.reply_target.get("channel") or ""
-        )
+        handle = progress_handle or {}
+        channel = self._closable_stream_channel(event, handle, message)
         if not channel:
             return False
         # The answer must fit the 12k markdown budget; anything beyond it closes
         # the stream and continues as follow-up messages.
-        chunks_of_answer = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or (
+        chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or (
             [message] if message.strip() else []
         )
-        sequence = int(progress_handle.get("task_seq") or 0)
-        closing_chunks: list[dict[str, Any]] = []
+        if not await self._close_stream(handle, channel=channel, chunks=chunks):
+            return False
+        await self._send_overflow(event, chunks[1:], metadata=metadata)
+        return True
+
+    def _closable_stream_channel(
+        self, event: ParsedInboundSurfaceEvent, handle: dict[str, Any], message: str
+    ) -> str:
+        """The channel whose stream can be closed, or "" when none can be.
+
+        A stream that already carries the answer still needs closing, so an
+        empty message is only a refusal when nothing was streamed.
+        """
+        if not handle.get("ts") or not slack_access_token(self.credentials):
+            return ""
+        if not message.strip() and not handle.get("streamed_text"):
+            return ""
+        return str(handle.get("channel") or event.reply_target.get("channel") or "")
+
+    async def _close_stream(
+        self, handle: dict[str, Any], *, channel: str, chunks: list[str]
+    ) -> bool:
+        """Append the answer to the live stream, then stop it.
+
+        Slack rejects a stopStream that tries to introduce the body itself, so
+        append is the call that carries text and stop only finalises.
+        """
+        client = build_slack_client(self.credentials)
+        ts = str(handle["ts"])
+        sequence = int(handle.get("task_seq") or 0)
+        combined: list[dict[str, Any]] = []
         if sequence:
-            closing_chunks.append(
-                _task_chunk(sequence, progress_handle.get("task_title"), "complete")
-            )
+            combined.append(_task_chunk(sequence, handle.get("task_title"), "complete"))
+        if chunks:
+            combined.append(_markdown_chunk(chunks[0]))
         try:
-            # The answer is *appended* and the stream then closed. Slack rejects
-            # a stopStream that tries to introduce the body itself, so append is
-            # the call that carries text and stop only finalises.
-            if chunks_of_answer or closing_chunks:
-                append_kwargs: dict[str, Any] = {
-                    "channel": channel,
-                    "ts": str(progress_handle["ts"]),
-                }
-                combined = list(closing_chunks)
-                if chunks_of_answer:
-                    combined.append(_markdown_chunk(chunks_of_answer[0]))
-                if combined:
-                    append_kwargs["chunks"] = combined
-                    await client.chat_appendStream(**append_kwargs)
-            await client.chat_stopStream(
-                channel=channel,
-                ts=str(progress_handle["ts"]),
-            )
+            if combined:
+                await client.chat_appendStream(channel=channel, ts=ts, chunks=combined)
+            await client.chat_stopStream(channel=channel, ts=ts)
         except SlackApiError as exc:
             # Say which Slack error it was: this path silently falls back to a
             # plain message, so without the code a failure here is invisible.
@@ -273,21 +271,27 @@ class SlackStreamSurface:
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
-        overflow = chunks_of_answer[1:] if chunks_of_answer else []
-        if overflow:
-            # Anything past the stream's markdown budget continues as ordinary
-            # messages. Imported here rather than at module scope so the two
-            # surfaces stay independent.
-            from app.modules.agent_surfaces.platforms.slack.service import (
-                SlackPlatformService,
-            )
-
-            sender = SlackPlatformService(credentials=self.credentials)
-            for remainder in overflow:
-                await sender.send_message(
-                    event=event, message=remainder, metadata=metadata
-                )
         return True
+
+    async def _send_overflow(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        overflow: list[str],
+        *,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        """Anything past the stream's markdown budget, as ordinary messages."""
+        if not overflow:
+            return
+        # Imported here rather than at module scope so the two surfaces stay
+        # independent.
+        from app.modules.agent_surfaces.platforms.slack.service import (
+            SlackPlatformService,
+        )
+
+        sender = SlackPlatformService(credentials=self.credentials)
+        for remainder in overflow:
+            await sender.send_message(event=event, message=remainder, metadata=metadata)
 
     async def end_progress(
         self,

@@ -314,76 +314,62 @@ AGENT_DM_ACTION_ID = "lemma_agent_dm"
 SURFACE_SELECT_ACTION_ID = "lemma_surface_select"
 
 
-def app_home_view(
-    *,
-    pod_name: str | None,
-    dm_agent_name: str | None,
-    channel_routes: list,
-    agents: list | None = None,
-    apps: list | None = None,
-    workspace_url: str | None = None,
-    logo_url: str | None = None,
-    surface_choices: list[tuple[str, str]] | None = None,
-    access_message: str | None = None,
-) -> dict[str, Any]:
-    """The App Home — the one screen that has to explain and sell Lemma.
+def _home(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"type": "home", "blocks": blocks}
 
-    Ordered by what a first-time viewer needs: what this is, one thing to try,
-    then what exists, and only then how it is wired up. Configuration is real
-    but it is not the pitch, so it sits at the bottom.
 
-    Slack gives no CSS and no layout control, so the craft here is entirely in
-    ordering, copy, and using ``card`` blocks (Apr 2026) instead of stacked
-    sections — cards are the only native thing that reads as an object rather
-    than as a paragraph.
-    """
-    agents = list(agents or [])
-    apps = list(apps or [])
-    choices = list(surface_choices or [])
-    if access_message:
-        return {
-            "type": "home",
-            "blocks": [
-                {"type": "header", "text": {"type": "plain_text", "text": "Lemma"}},
-                {"type": "section", "text": {"type": "mrkdwn", "text": access_message}},
+def _section_break(title: str) -> list[dict[str, Any]]:
+    """A divider and a bold label: how every section on this page opens."""
+    return [
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}},
+    ]
+
+
+def _notice_blocks(heading: str, message: str) -> list[dict[str, Any]]:
+    """A heading and one line, for when there is nothing else to show."""
+    return [
+        {"type": "header", "text": {"type": "plain_text", "text": heading}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": message}},
+    ]
+
+
+def _pod_choice_blocks(choices: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Which pod this workspace should show, when it is connected to several."""
+    return [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Choose a Lemma pod"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "This Slack workspace is connected to more than one pod. Pick the one this app should show you.",
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": SURFACE_SELECT_ACTION_ID,
+                    "text": {"type": "plain_text", "text": _truncate(label, 74)},
+                    "value": surface_id,
+                }
+                for label, surface_id in choices[:5]
             ],
-        }
-    if choices:
-        return {
-            "type": "home",
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "Choose a Lemma pod"},
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "This Slack workspace is connected to more than one pod. Pick the one this app should show you.",
-                    },
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "action_id": SURFACE_SELECT_ACTION_ID,
-                            "text": {
-                                "type": "plain_text",
-                                "text": _truncate(label, 74),
-                            },
-                            "value": surface_id,
-                        }
-                        for label, surface_id in choices[:5]
-                    ],
-                },
-            ],
-        }
+        },
+    ]
+
+
+def _masthead_blocks(
+    *, pod_name: str | None, logo_url: str | None
+) -> list[dict[str, Any]]:
+    """What this is, before anything asks the reader to configure it."""
     blocks: list[dict[str, Any]] = []
-
-    # Masthead. The logo is skipped unless it is publicly fetchable: Slack
-    # loads it from its own servers, so a localhost URL renders an empty box.
+    # The logo is skipped unless it is publicly fetchable: Slack loads it from
+    # its own servers, so a localhost URL renders an empty box.
     if logo_url and str(logo_url).startswith("https://"):
         blocks.append(
             {
@@ -427,17 +413,17 @@ def app_home_view(
             ],
         }
     )
+    return blocks
 
-    # One thing to try, before any configuration. A new person should be able
-    # to get a real answer without reading anything else on this page.
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "*Try one*"},
-        }
-    )
-    blocks.append(
+
+def _try_one_blocks() -> list[dict[str, Any]]:
+    """One thing to try, before any configuration.
+
+    A new person should be able to get a real answer without reading anything
+    else on this page.
+    """
+    return [
+        *_section_break("Try one"),
         {
             "type": "actions",
             "elements": [
@@ -460,50 +446,79 @@ def app_home_view(
                     "value": "Summarise what changed in this workspace recently.",
                 },
             ],
+        },
+    ]
+
+
+def _agent_blocks(agents: list) -> list[dict[str, Any]]:
+    """One card per agent, capped -- the Home is a summary, not a directory."""
+    if not agents:
+        return []
+    return _section_break("Agents") + [
+        {
+            "type": "card",
+            "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
+            "body": {
+                "type": "mrkdwn",
+                "text": _truncate(str(description or "").strip(), 160)
+                or "_No description yet._",
+            },
         }
+        for name, description in agents[:8]
+    ]
+
+
+def _app_blocks(apps: list) -> list[dict[str, Any]]:
+    """One card per app, each a way out to the browser."""
+    if not apps:
+        return []
+    return _section_break("Apps") + [
+        {
+            "type": "card",
+            "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
+            "body": {"type": "mrkdwn", "text": "Opens in your browser."},
+            "actions": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Open"},
+                    "url": url,
+                    "style": "primary",
+                }
+            ],
+        }
+        for name, url in apps[:6]
+    ]
+
+
+def _channel_routes_block(channel_routes: list) -> dict[str, Any]:
+    """Who answers in which channel, or how to get the first one wired up."""
+    if not channel_routes:
+        return {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    "*Channels*\nInvite me to a channel and I'll ask who "
+                    "should answer there."
+                ),
+            },
+        }
+    routes = "\n".join(
+        f"<#{channel_id}> \u2192 `{agent or DEFAULT_RESPONDER_NAME}`"
+        for channel_id, agent in list(channel_routes)[:20]
     )
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"*Channels*\n{routes}"},
+    }
 
-    if agents:
-        blocks.append({"type": "divider"})
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "*Agents*"}}
-        )
-        for name, description in agents[:8]:
-            summary = _truncate(str(description or "").strip(), 160)
-            blocks.append(
-                {
-                    "type": "card",
-                    "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
-                    "body": {
-                        "type": "mrkdwn",
-                        "text": summary or "_No description yet._",
-                    },
-                }
-            )
 
-    if apps:
-        blocks.append({"type": "divider"})
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Apps*"}})
-        for name, url in apps[:6]:
-            blocks.append(
-                {
-                    "type": "card",
-                    "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
-                    "body": {"type": "mrkdwn", "text": "Opens in your browser."},
-                    "actions": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Open"},
-                            "url": url,
-                            "style": "primary",
-                        }
-                    ],
-                }
-            )
-
-    # Settings last: real, but not the pitch.
-    blocks.append({"type": "divider"})
-    blocks.append(
+def _settings_blocks(
+    dm_agent_name: str | None, channel_routes: list
+) -> list[dict[str, Any]]:
+    """Settings last: real, but not the pitch."""
+    return [
+        {"type": "divider"},
         {
             "type": "section",
             "text": {
@@ -519,43 +534,66 @@ def app_home_view(
                 "action_id": DM_AGENT_SETUP_ACTION_ID,
                 "text": {"type": "plain_text", "text": "Change"},
             },
-        }
-    )
-    if channel_routes:
-        lines = "\n".join(
-            f"<#{channel_id}> \u2192 `{agent or DEFAULT_RESPONDER_NAME}`"
-            for channel_id, agent in list(channel_routes)[:20]
-        )
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Channels*\n{lines}"},
-            }
-        )
-    else:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        "*Channels*\nInvite me to a channel and I'll ask who "
-                        "should answer there."
-                    ),
-                },
-            }
-        )
+        },
+        _channel_routes_block(channel_routes),
+    ]
 
-    footer: list[dict[str, Any]] = []
-    if workspace_url:
-        footer.append(
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Open Lemma"},
-                "url": workspace_url,
-            }
-        )
-    if footer:
-        blocks.append({"type": "divider"})
-        blocks.append({"type": "actions", "elements": footer})
-    return {"type": "home", "blocks": blocks}
+
+def _footer_blocks(workspace_url: str | None) -> list[dict[str, Any]]:
+    """The way out to Lemma itself, when there is somewhere to go."""
+    if not workspace_url:
+        return []
+    return [
+        {"type": "divider"},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Open Lemma"},
+                    "url": workspace_url,
+                }
+            ],
+        },
+    ]
+
+
+def app_home_view(
+    *,
+    pod_name: str | None,
+    dm_agent_name: str | None,
+    channel_routes: list,
+    agents: list | None = None,
+    apps: list | None = None,
+    workspace_url: str | None = None,
+    logo_url: str | None = None,
+    surface_choices: list[tuple[str, str]] | None = None,
+    access_message: str | None = None,
+) -> dict[str, Any]:
+    """The App Home — the one screen that has to explain and sell Lemma.
+
+    Ordered by what a first-time viewer needs: what this is, one thing to try,
+    then what exists, and only then how it is wired up. Configuration is real
+    but it is not the pitch, so it sits at the bottom.
+
+    Slack gives no CSS and no layout control, so the craft here is entirely in
+    ordering, copy, and using ``card`` blocks (Apr 2026) instead of stacked
+    sections — cards are the only native thing that reads as an object rather
+    than as a paragraph. Each section below builds its own blocks, so that
+    order is the only thing this function states.
+    """
+    if access_message:
+        return _home(_notice_blocks("Lemma", access_message))
+    choices = list(surface_choices or [])
+    if choices:
+        return _home(_pod_choice_blocks(choices))
+    return _home(
+        [
+            *_masthead_blocks(pod_name=pod_name, logo_url=logo_url),
+            *_try_one_blocks(),
+            *_agent_blocks(list(agents or [])),
+            *_app_blocks(list(apps or [])),
+            *_settings_blocks(dm_agent_name, channel_routes),
+            *_footer_blocks(workspace_url),
+        ]
+    )
