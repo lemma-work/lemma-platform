@@ -438,27 +438,7 @@ impl ManagedRuntimeController {
         self: &Arc<Self>,
         report: impl Fn(&SandboxImageStatus) + Send + 'static,
     ) {
-        // Claimed under the lock, before anything is spawned. Both the ready
-        // path and the recovery path call this, and two runs would interleave
-        // their downloading/ready events into one stream the app reads as a
-        // single download finishing twice.
-        let claimed = {
-            let mut current = self
-                .sandbox_images
-                .lock()
-                .expect("sandbox image status poisoned");
-            if current.state == SANDBOX_IMAGES_DOWNLOADING {
-                None
-            } else {
-                let started = SandboxImageStatus::new(
-                    SANDBOX_IMAGES_DOWNLOADING,
-                    "Downloading the image pods run their work in",
-                );
-                *current = started.clone();
-                Some(started)
-            }
-        };
-        let Some(started) = claimed else {
+        let Some(started) = self.claim_sandbox_image_warmup() else {
             return;
         };
         report(&started);
@@ -486,6 +466,28 @@ impl ManagedRuntimeController {
             };
             controller.publish_sandbox_images(status, &report);
         });
+    }
+
+    /// Take the warm-up, or decline because one is already running.
+    ///
+    /// A compare-and-set under the status lock. Both the ready path and the
+    /// recovery path call `warm_sandbox_images`, and two runs would interleave
+    /// their downloading/ready events into one stream the app reads as a single
+    /// download finishing twice.
+    fn claim_sandbox_image_warmup(&self) -> Option<SandboxImageStatus> {
+        let mut current = self
+            .sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned");
+        if current.state == SANDBOX_IMAGES_DOWNLOADING {
+            return None;
+        }
+        let started = SandboxImageStatus::new(
+            SANDBOX_IMAGES_DOWNLOADING,
+            "Downloading the image pods run their work in",
+        );
+        *current = started.clone();
+        Some(started)
     }
 
     fn publish_sandbox_images(
@@ -1209,6 +1211,92 @@ mod tests {
             ),
             Some(ClockSyncReason::Interval),
         );
+    }
+
+    /// A controller with no VM behind it. Enough for anything that only reads
+    /// or writes the controller's own state.
+    fn test_controller() -> (tempfile::TempDir, ManagedRuntimeController) {
+        let root = tempdir().unwrap();
+        let controller = ManagedRuntimeController {
+            runtime: ManagedRuntime::new(ManagedRuntimeConfig {
+                wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+                local_root: root.path().join("local"),
+                artifact_root: root.path().join("artifacts"),
+                bridge_executable: root.path().join("lemma-runtime"),
+                #[cfg(target_os = "macos")]
+                vz_executable: root.path().join("lemma-vz"),
+                #[cfg(windows)]
+                wsl_executable: PathBuf::from("wsl.exe"),
+            })
+            .unwrap(),
+            spec: ManagedRuntimeSpec {
+                images: crate::host_process::ManagedRuntimeImages {
+                    postgres: "postgres@sha256:test".into(),
+                    redis: "redis@sha256:test".into(),
+                    supertokens: "supertokens@sha256:test".into(),
+                    workspace: Some("workspace@sha256:test".into()),
+                    function: Some("function@sha256:test".into()),
+                },
+                credentials: crate::host_process::ManagedRuntimeCredentials {
+                    postgres_password: "a".repeat(64),
+                    redis_password: "b".repeat(64),
+                },
+                ports: crate::host_process::ManagedRuntimePorts {
+                    postgres: 55432,
+                    redis: 56379,
+                    supertokens: 53567,
+                    backend: 8711,
+                    frontend: 3711,
+                },
+            },
+            forwarders: Mutex::new(Vec::new()),
+            clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            status: Mutex::new(Some(ManagedRuntimeStatus {
+                endpoint_host: "192.168.64.10".into(),
+                host_gateway: "192.168.64.1".into(),
+                engine: "containerd".into(),
+                active_sandboxes: 0,
+                balloon_state: None,
+                balloon_target_bytes: None,
+            })),
+        };
+
+        (root, controller)
+    }
+
+    /// Both the ready path and the recovery path warm the images. Two runs
+    /// would interleave their downloading/ready events into one stream the app
+    /// reads as a single download finishing twice.
+    #[test]
+    fn only_one_sandbox_image_warmup_is_claimed_at_a_time() {
+        let (_root, controller) = test_controller();
+
+        let first = controller.claim_sandbox_image_warmup();
+        let second = controller.claim_sandbox_image_warmup();
+
+        assert!(first.is_some());
+        assert!(second.is_none(), "a second warm-up ran alongside the first");
+        assert_eq!(
+            controller.sandbox_image_status().state,
+            SANDBOX_IMAGES_DOWNLOADING
+        );
+    }
+
+    /// Once one has ended, the next start is free to warm again -- a recovered
+    /// stack may be looking at a different guest.
+    #[test]
+    fn a_finished_warmup_does_not_block_the_next_one() {
+        let (_root, controller) = test_controller();
+
+        controller.claim_sandbox_image_warmup();
+        controller.publish_sandbox_images(
+            SandboxImageStatus::new(SANDBOX_IMAGES_READY, "ready"),
+            &|_: &SandboxImageStatus| {},
+        );
+
+        assert!(controller.claim_sandbox_image_warmup().is_some());
     }
 
     #[test]
