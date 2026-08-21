@@ -720,6 +720,12 @@ async def full_stack(
         "REDIS_URL": redis_url,
         "SUPERTOKENS_CORE_URL": settings.supertokens_core_url,
         "ENVIRONMENT": "testing",
+        # E2E workers have no production drain to protect, and the default
+        # 10s grace period equalled the teardown's patience -- so the worker
+        # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
+        # cannot be trapped, so coverage's `sigterm = true` handler never
+        # flushed and the subprocess's coverage was lost.
+        "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
         "DEBUG": "true",
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": settings.email_output_dir,
@@ -780,7 +786,9 @@ async def full_stack(
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                # Comfortably longer than the 1s grace period set at spawn, so
+                # SIGKILL becomes unreachable in practice.
+                proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 proc.kill()
             redis_client = redis.from_url(redis_url, decode_responses=False)

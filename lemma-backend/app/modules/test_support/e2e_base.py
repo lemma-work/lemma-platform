@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
     SHARED_E2E_NETWORK_NAME,
@@ -793,11 +794,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     # session-scoped production worker; per-test db_manager still truncates it.
     _ensure_repo_root_on_path()
     _import_e2e_models()
-    schema_manager = DatabaseManager(e2e_settings.database_url)
-    async with schema_manager.engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    await schema_manager.create_tables()
-    await schema_manager.close()
+    await _ensure_schema_once(e2e_settings.database_url)
 
     redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
     await redis_client.flushdb()
@@ -850,6 +847,12 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 # worker pointed at it so worker-driven function jobs reach it.
                 "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
                 "ENVIRONMENT": "testing",
+                # E2E workers have no production drain to protect, and the default
+                # 10s grace period equalled the teardown's patience -- so the worker
+                # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
+                # cannot be trapped, so coverage's `sigterm = true` handler never
+                # flushed and the subprocess's coverage was lost.
+                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
                 "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
@@ -905,7 +908,9 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                # Comfortably longer than the 1s grace period set at spawn, so
+                # SIGKILL becomes unreachable in practice.
+                proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 proc.kill()
             redis_client = redis.from_url(
@@ -915,12 +920,62 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             await redis_client.aclose()
 
 
+# Table names this process has already created, per database.
+#
+# The per-test `create_all(checkfirst=True)` this replaces read as cheap -- the
+# comment on db_manager used to call it exactly that -- but SQLAlchemy's
+# PostgreSQL dialect issues one `has_table` round trip per table on this path
+# and does not cache them, so it was 55 statements per test to discover that
+# almost nothing had changed. Measured on test_records_e2e.py: 54.7 reflection
+# statements per test, a quarter of all setup SQL.
+#
+# "Almost" is the important word, and it is why this tracks table *names* rather
+# than just "have we run yet". Models register with Base.metadata lazily as the
+# app imports them, so metadata genuinely grows between tests -- the first naive
+# version of this hoisted create_all to run once and 20 of 21 tests then failed
+# on `relation "agent_host_run_leases" does not exist`. Creating only the tables
+# that appeared since last time keeps that correctness and still costs zero
+# round trips on the common path, where nothing appeared.
+#
+# Keyed by URL because each xdist worker gets its own logical database, and each
+# xdist worker is its own process with its own copy of this dict.
+_CREATED_TABLES: dict[str, set[str]] = {}
+
+
+async def _ensure_schema_once(database_url: str) -> None:
+    """Create the extension once, and any tables not yet created."""
+    known = _CREATED_TABLES.setdefault(database_url, set())
+    pending = [table for name, table in Base.metadata.tables.items() if name not in known]
+    if not pending:
+        return
+
+    manager = DatabaseManager(database_url)
+    try:
+        if not known:
+            async with manager.engine.begin() as conn:
+                # Serialize with PostgresSearchService.ensure_schema(), which
+                # also runs CREATE EXTENSION under this advisory key (concurrent
+                # CREATE EXTENSION on pg_extension otherwise deadlocks). Key must
+                # match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
+                )
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        async with manager.engine.begin() as conn:
+            await conn.run_sync(
+                Base.metadata.create_all, tables=pending, checkfirst=True
+            )
+    finally:
+        await manager.close()
+    known.update(table.name for table in pending)
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
-    # Per-test, but cheap: the schema is created once (create_all is idempotent
-    # via checkfirst) and persists for the whole run, so each test only pays a
-    # fast TRUNCATE for data isolation instead of a full drop/create. Keeping the
-    # schema stable also lets the shared streaq worker hold its connections.
+    # Per-test data isolation only. The schema itself is prepared once per
+    # database (_ensure_schema_once) and persists for the whole run, so each test
+    # pays a filtered DELETE sweep rather than a drop/create. Keeping the schema
+    # stable also lets the shared streaq worker hold its connections.
     _ensure_repo_root_on_path()
     manager = DatabaseManager(e2e_settings.database_url)
 
@@ -957,17 +1012,8 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     last_exc: BaseException | None = None
     for _attempt in range(6):
         try:
-            async with manager.engine.begin() as conn:
-                # Serialize with PostgresSearchService.ensure_schema(), which also
-                # runs CREATE EXTENSION under this advisory key (concurrent
-                # CREATE EXTENSION on pg_extension otherwise deadlocks). Key must
-                # match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
-                await conn.execute(
-                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
-                )
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            # Idempotent (checkfirst) — creates schema on the first test, no-ops after.
-            await manager.create_tables()
+            # Once per database, not once per test — see _ensure_schema_once.
+            await _ensure_schema_once(e2e_settings.database_url)
             # Start each test from a clean slate without dropping the schema.
             await manager.truncate_all()
             break
