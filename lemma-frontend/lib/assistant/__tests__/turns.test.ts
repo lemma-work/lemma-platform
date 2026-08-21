@@ -345,6 +345,14 @@ describe("optimistic turn id continuity", () => {
   // (`optimistic-user-…`); the server echo then replaces it, changing the
   // message id. If the turn id changed with it, the live turn would remount
   // and its bubble and status pill would replay their entrance animations.
+  //
+  // The echo carries `optimistic_id`, which the SDK's runtime store sets as it
+  // swaps one for the other — so the lineage is stated rather than guessed at
+  // from matching text and timestamps.
+  const echoOf = (
+    provisionalId: string,
+    message: AssistantRenderableMessage,
+  ): AssistantRenderableMessage => ({ ...message, optimistic_id: provisionalId });
 
   it("keeps the turn id when the server echo replaces the provisional message", () => {
     const provisional: AssistantRenderableMessage = {
@@ -353,7 +361,7 @@ describe("optimistic turn id continuity", () => {
     };
     expect(turnsFor([provisional], true)[0].id).toBe("turn-optimistic-user-abc");
 
-    const echoed: AssistantRenderableMessage = { ...userMessage("hello there"), id: "srv-1" };
+    const echoed = echoOf("optimistic-user-abc", { ...userMessage("hello there"), id: "srv-1" });
     expect(turnsFor([echoed], true)[0].id).toBe("turn-optimistic-user-abc");
   });
 
@@ -364,7 +372,7 @@ describe("optimistic turn id continuity", () => {
     };
     const provisionalId = turnsFor([provisional], true)[0].id;
 
-    const echoed: AssistantRenderableMessage = { ...userMessage("hello again"), id: "srv-1" };
+    const echoed = echoOf("optimistic-user-x", { ...userMessage("hello again"), id: "srv-1" });
     const first = turnsFor([echoed], true);
     const second = turnsFor([echoed, assistantText("Working on it", 5, { is_intermediate_assistant_message: true })], true);
     expect(first[0].id).toBe(provisionalId);
@@ -376,7 +384,7 @@ describe("optimistic turn id continuity", () => {
       ...userMessage("same question"),
       id: "optimistic-user-first",
     };
-    const echoed: AssistantRenderableMessage = { ...userMessage("same question"), id: "srv-first" };
+    const echoed = echoOf("optimistic-user-first", { ...userMessage("same question"), id: "srv-first" });
     const firstTurnId = turnsFor([provisional], true)[0].id;
     expect(turnsFor([echoed, assistantText("Answer.", 5)], false)[0].id).toBe(firstTurnId);
 
@@ -384,12 +392,43 @@ describe("optimistic turn id continuity", () => {
       ...userMessage("same question", 300),
       id: "optimistic-user-second",
     };
-    const secondEchoed: AssistantRenderableMessage = { ...userMessage("same question", 300), id: "srv-second" };
+    const secondEchoed = echoOf("optimistic-user-second", { ...userMessage("same question", 300), id: "srv-second" });
     const both = turnsFor([echoed, assistantText("Answer.", 5), secondProvisional], true);
     expect(both[1].id).toBe("turn-optimistic-user-second");
 
     const afterSecondEcho = turnsFor([echoed, assistantText("Answer.", 5), secondEchoed], true);
     expect(afterSecondEcho[1].id).toBe("turn-optimistic-user-second");
+  });
+
+  // The turn goes up before the conversation exists, so nothing about the
+  // conversation can be part of how the echo finds its way back to it. The
+  // guess this replaced was keyed by conversation id and had none to use here,
+  // which is what made the first message of every new conversation flicker: the
+  // echo opened a second turn and React remounted the bubble into it.
+  it("keeps the turn id when the turn predates its conversation", () => {
+    const provisional: AssistantRenderableMessage = {
+      ...userMessage("hey"),
+      id: "optimistic-user-pre",
+    };
+    const beforeCreate = buildChatTurns({
+      rows: buildDisplayMessageRows([provisional]),
+      messages: [provisional],
+      isRunActive: true,
+      podId: "pod-1",
+      conversationId: null,
+    });
+
+    const echoed = echoOf("optimistic-user-pre", { ...userMessage("hey"), id: "srv-pre" });
+    const afterCreate = buildChatTurns({
+      rows: buildDisplayMessageRows([echoed]),
+      messages: [echoed],
+      isRunActive: true,
+      podId: "pod-1",
+      conversationId: "conv-created-by-this-send",
+    });
+
+    expect(beforeCreate[0].id).toBe("turn-optimistic-user-pre");
+    expect(afterCreate[0].id).toBe(beforeCreate[0].id);
   });
 
   it("keeps two identical provisional messages on distinct turns", () => {
@@ -398,7 +437,7 @@ describe("optimistic turn id continuity", () => {
     expect(turnsFor([optA, optB], true).map((turn) => turn.id))
       .toEqual(["turn-optimistic-user-a", "turn-optimistic-user-b"]);
 
-    const realA: AssistantRenderableMessage = { ...userMessage("yes"), id: "srv-a" };
+    const realA = echoOf("optimistic-user-a", { ...userMessage("yes"), id: "srv-a" });
     expect(turnsFor([realA, optB], true).map((turn) => turn.id))
       .toEqual(["turn-optimistic-user-a", "turn-optimistic-user-b"]);
   });
@@ -469,4 +508,54 @@ describe("chatTurnFingerprint", () => {
     expect(chatTurnFingerprint(turnsFor(first)[0]))
       .toBe(chatTurnFingerprint(turnsFor(both)[0]));
   });
+});
+
+describe("turn keys", () => {
+    // The transcript keys turns by id, so a collision costs a whole turn: React
+    // drops one of the two. A provisional turn and its server echo both being on
+    // screen is the case that produces one — the echo inherits the provisional
+    // turn's id so the swap does not remount, and if the swap never happened the
+    // two want the same key.
+    it("stays unique when a provisional turn and its echo are both present", () => {
+        const conversationId = "conv-key";
+        const sentAt = new Date("2026-07-30T16:40:10Z");
+        const provisional: AssistantRenderableMessage = {
+            id: "optimistic-user-abc",
+            role: "user",
+            kind: "TEXT",
+            content: "hey",
+            createdAt: sentAt,
+        };
+        // Ahead of the provisional turn by the server's clock, so it sorts first
+        // and the guard that only looks backwards cannot see the collision.
+        const echo: AssistantRenderableMessage = {
+            id: "server-user-abc",
+            role: "user",
+            kind: "TEXT",
+            content: "hey",
+            createdAt: new Date(sentAt.getTime() - 1000),
+        };
+
+        // The provisional turn is rendered first, which is what records the id
+        // its echo will inherit.
+        buildChatTurns({
+            rows: buildDisplayMessageRows([provisional]),
+            messages: [provisional],
+            isRunActive: true,
+            podId: "pod-1",
+            conversationId,
+        });
+
+        const messages = [echo, provisional];
+        const turns = buildChatTurns({
+            rows: buildDisplayMessageRows(messages),
+            messages,
+            isRunActive: true,
+            podId: "pod-1",
+            conversationId,
+        });
+
+        expect(turns).toHaveLength(2);
+        expect(new Set(turns.map((turn) => turn.id)).size).toBe(2);
+    });
 });
