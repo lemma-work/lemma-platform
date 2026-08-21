@@ -189,6 +189,20 @@ class SandboxProvider(Protocol):
     # Decides whether the service manages a separate disk for this provider or
     # leaves storage to the provider's own adoption. See ProviderStorageKind.
     storage_kind: ProviderStorageKind
+    # Can a stopped instance be brought back where it is, or does it have to be
+    # rebuilt?
+    #
+    # Docker starts a stopped container; E2B resumes a paused sandbox; both do
+    # it inside `wait_ready`, so the service only has to wait. A provider that
+    # cannot -- the desktop guest has no start, only create-or-replace -- says
+    # so here, and the service rebuilds instead of waiting for something that
+    # is never coming back on its own. Getting this wrong is not a slow path:
+    # it is an ensure that fails identically until its deadline, because every
+    # retry takes the same branch and nothing in it starts anything.
+    #
+    # Rebuilding keeps the sandbox's files. The volume is resolved from the
+    # sandbox, not the instance, so a new epoch mounts the same disk.
+    resumes_stopped_instances: bool = True
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
         """Materialise the sandbox this spec names, or adopt the existing one."""
@@ -226,6 +240,16 @@ class SandboxProvider(Protocol):
 
     async def close(self) -> None:
         """Release any transport this provider holds."""
+
+
+def resumes_stopped_instances(provider: object) -> bool:
+    """Can this provider bring a stopped instance back where it is?
+
+    Read structurally rather than off the Protocol: a provider that does not
+    declare it resumes, which is what every provider did before the capability
+    existed.
+    """
+    return bool(getattr(provider, "resumes_stopped_instances", True))
 
 
 class SandboxOpsProvider(Protocol):

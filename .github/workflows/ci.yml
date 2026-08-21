@@ -628,7 +628,7 @@ jobs:
         with:
           python-version: "3.14"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -804,7 +804,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
 
@@ -856,7 +856,7 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
           targets: x86_64-pc-windows-msvc

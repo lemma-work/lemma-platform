@@ -85,6 +85,11 @@ struct UiState {
     api_url: String,
     log_source: String,
     component: String,
+    /// The sandbox image warm-up, which runs behind a ready workspace rather
+    /// than as a phase of starting one. `pending`, `downloading`, `ready`, or
+    /// `failed`.
+    sandbox_images: String,
+    sandbox_images_detail: String,
     #[serde(skip)]
     active_operation_id: String,
     #[serde(skip)]
@@ -2106,6 +2111,14 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     }
                 }
             }
+            "sandbox-images" => {
+                // Deliberately touches nothing else. This runs after the
+                // workspace is up, so writing `phase`/`ready` here would send
+                // an app the user is already working in back to the splash to
+                // report a download they never asked about.
+                ui.sandbox_images = event["state"].as_str().unwrap_or_default().into();
+                ui.sandbox_images_detail = event["detail"].as_str().unwrap_or_default().into();
+            }
             "runtime.prepared" => {
                 let ready = event["ready"].as_bool().unwrap_or(false);
                 let reboot_required = event["reboot_required"].as_bool().unwrap_or(!ready);
@@ -3058,6 +3071,30 @@ fn ensure_agent_host_daemon(app: &AppHandle) -> Result<(), String> {
     } else {
         ensure_locald_without_host_pack(app)
     }
+}
+
+#[tauri::command]
+/// What the workspace should say about the sandbox image download.
+///
+/// Read straight out of the shell's own state, which locald has already
+/// pushed to: no daemon round trip, so the workspace can poll it while the
+/// download is running without paying for a socket each time.
+fn sandbox_image_status(_window: Webview, app: AppHandle) -> Value {
+    let shell: State<Shell> = app.state();
+    let ui = shell.ui.lock().unwrap();
+    json!({
+        // `pending`, not the empty default, when locald has not said anything
+        // yet. The workspace stops asking once the answer can no longer change,
+        // and it reads a state it does not recognise as one of those -- so an
+        // empty string here meant a page that opened before the first report
+        // never saw the download at all.
+        "state": if ui.sandbox_images.is_empty() {
+            "pending"
+        } else {
+            ui.sandbox_images.as_str()
+        },
+        "detail": ui.sandbox_images_detail,
+    })
 }
 
 #[tauri::command]
@@ -5383,6 +5420,7 @@ fn main() {
             control_snapshot,
             agent_host_action,
             agent_host_status,
+            sandbox_image_status,
             agent_host_start,
             agent_host_pair,
             agent_host_refresh,
@@ -5831,6 +5869,12 @@ mod tests {
             "close_local_settings",
             "open_control_center",
             "get_state",
+            // One mutex read of state locald has already pushed into the
+            // shell. It talks to nothing, so dispatching it on the main
+            // thread costs the lock and nothing else -- and it is polled
+            // while a download runs, which is exactly when a command that
+            // waited on the daemon would be felt.
+            "sandbox_image_status",
         ];
 
         // Normalised, because the Windows runner checks out CRLF and the
@@ -6323,12 +6367,18 @@ mod tests {
         // capability its Local settings button is silently rejected by the ACL.
         //
         // What it may reach is deliberately short: Local settings, this
-        // computer's Agent Host, and the AI provider. The last one was added
-        // because onboarding cannot honestly ask "which model?" and then send
-        // the user to a different window for the answer — and it is safe to add
-        // precisely because `configure_ai_provider` reaches `config.set-ai`,
-        // which merges that one section. `allow-apply-operator-config`, which
-        // would let the same page rewrite sharing and surfaces, stays out.
+        // computer's Agent Host, the AI provider, and how the sandbox image
+        // download is going. The provider one was added because onboarding
+        // cannot honestly ask "which model?" and then send the user to a
+        // different window for the answer — and it is safe to add precisely
+        // because `configure_ai_provider` reaches `config.set-ai`, which merges
+        // that one section. `allow-apply-operator-config`, which would let the
+        // same page rewrite sharing and surfaces, stays out.
+        //
+        // `allow-sandbox-image-status` is the mildest of the four: it reads two
+        // strings the shell already holds and changes nothing at all. It is
+        // here because the download runs behind a workspace the user is already
+        // in, so the workspace is the only surface that can say it is happening.
         let workspace = granted("workspace");
         assert!(workspace.contains(&"allow-open-control-center".to_string()));
         assert!(workspace.iter().all(|permission| {
@@ -6337,6 +6387,7 @@ mod tests {
                 "allow-open-control-center"
                     | "allow-discover-provider-models"
                     | "allow-configure-ai-provider"
+                    | "allow-sandbox-image-status"
             ) || permission.starts_with("allow-agent-host-")
         }));
         for forbidden in [

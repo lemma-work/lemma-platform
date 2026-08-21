@@ -23,6 +23,18 @@ const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
 const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// How far the guest clock may sit from the host's before it is stepped.
+///
+/// A step is not free -- it moves wall time under every process in the guest --
+/// so a second of ordinary jitter is left alone. Anything the host would
+/// actually notice is not jitter.
+const CLOCK_STEP_THRESHOLD_SECONDS: i64 = 2;
+/// The window a host wall clock has to fall in to be believed, matching
+/// `/usr/local/bin/lemma-set-host-time` exactly. The two set the same clock
+/// from the same source and must agree on what is plausible.
+const MIN_TRUSTED_EPOCH: u64 = 1_700_000_000;
+const MAX_TRUSTED_EPOCH: u64 = 4_102_444_800;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuestRequest {
@@ -469,6 +481,7 @@ impl<E: Engine> GuestService<E> {
             "diagnostics.network" => Ok(network_diagnostics()),
             "diagnostics.sandbox" => self.sandbox_diagnostics(request.parameters),
             "system.shutdown" => self.shutdown(),
+            "system.clock" => self.set_clock(request.parameters),
             "core.ensure" => self.ensure_core(request.parameters),
             "core.images" => self.ensure_core_stage(request.parameters, CoreStage::Images),
             "core.sandbox_images" => {
@@ -753,6 +766,13 @@ impl<E: Engine> GuestService<E> {
             "endpoint_host": endpoint_host,
             "host_gateway": self.host_gateway,
             "active_sandboxes": active_sandboxes,
+            // Reported on every health call so a drifting guest clock is
+            // visible to whoever is already asking whether the guest is well,
+            // rather than only to whoever thinks to ask about time.
+            "clock_epoch": now
+                .duration_since(UNIX_EPOCH)
+                .map(|since| since.as_secs())
+                .unwrap_or_default(),
         }))
     }
 
@@ -879,6 +899,62 @@ impl<E: Engine> GuestService<E> {
         let mut result = schedule_shutdown()?;
         result["stopped_containers"] = json!(stopped_containers);
         Ok(result)
+    }
+
+    /// Put the guest's wall clock back onto the host's.
+    ///
+    /// The guest takes its time from the host exactly once, at boot, out of the
+    /// trusted control share (`lemma-host-clock.service`). Nothing moves it
+    /// afterwards -- and a Virtualization.framework VM does not run while the
+    /// Mac sleeps. A laptop closed for eleven hours wakes a guest eleven hours
+    /// in the past, and it stays there for as long as the VM lives.
+    ///
+    /// That is not cosmetic. Everything the guest issues that the host then
+    /// validates against its own clock is born invalid. The one that is felt:
+    /// the auth service runs in here, so an access token it mints carries
+    /// `exp = guest_now + 1h`; the backend on the Mac reads that as expired and
+    /// answers 401; the browser refreshes; the refresh succeeds, because the
+    /// refresh token is checked against the same wrong clock that minted it,
+    /// and hands back another token that is also already expired. The app sits
+    /// signed in and unable to do anything, indefinitely, and even signing out
+    /// fails -- sign-out is an authorized call too.
+    fn set_clock(&self, value: Value) -> Result<Value, GuestError> {
+        self.set_clock_with(value, SystemTime::now(), set_realtime_clock)
+    }
+
+    /// The half worth testing: reading the host epoch, deciding whether the gap
+    /// is worth a step, and reporting it. `apply` is the syscall, which only
+    /// works inside the guest.
+    fn set_clock_with(
+        &self,
+        value: Value,
+        now: SystemTime,
+        apply: impl FnOnce(u64) -> Result<(), GuestError>,
+    ) -> Result<Value, GuestError> {
+        let host_epoch = value
+            .get("epoch")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| GuestError::invalid("`epoch` must be whole seconds since the epoch"))?;
+        if !(MIN_TRUSTED_EPOCH..=MAX_TRUSTED_EPOCH).contains(&host_epoch) {
+            return Err(GuestError::invalid(format!(
+                "host epoch {host_epoch} is outside the supported range"
+            )));
+        }
+        let guest_epoch = now
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| GuestError::engine(format!("guest clock is invalid: {error}")))?
+            .as_secs();
+        let skew_seconds = host_epoch as i64 - guest_epoch as i64;
+        let stepped = skew_seconds.abs() >= CLOCK_STEP_THRESHOLD_SECONDS;
+        if stepped {
+            apply(host_epoch)?;
+        }
+        Ok(json!({
+            "host_epoch": host_epoch,
+            "guest_epoch": guest_epoch,
+            "skew_seconds": skew_seconds,
+            "stepped": stepped,
+        }))
     }
 
     fn stop_all_containers(&self) -> Result<usize, GuestError> {
@@ -1930,6 +2006,18 @@ fn guest_platform() -> &'static str {
     "linux/amd64"
 }
 
+/// Did this container run and stop, as opposed to never having started?
+///
+/// Read from the fields nerdctl does fill when `State.Status` is absent: an
+/// exit code, or a finish timestamp.
+fn container_has_exited(state: &serde_json::Map<String, Value>) -> bool {
+    state.get("ExitCode").and_then(Value::as_i64).is_some()
+        || state
+            .get("FinishedAt")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn snapshot_from_inspect(
     sandbox_id: &str,
     inspect: &serde_json::Map<String, Value>,
@@ -1953,7 +2041,18 @@ fn snapshot_from_inspect(
         "RUNNING"
     } else if matches!(state_text, "created" | "restarting") {
         "CREATING"
-    } else if matches!(state_text, "exited" | "stopped" | "removing") {
+    } else if matches!(state_text, "exited" | "stopped" | "removing" | "paused") {
+        // `paused` is here defensively: nothing in Lemma pauses a sandbox, and
+        // if something did it is suspended rather than faulted. `dead` is
+        // deliberately *not* here -- a container the engine could not clean up
+        // is a fault, and calling it the ordinary resting state of an idle
+        // workspace would hide exactly the case worth seeing.
+        "STOPPED"
+    } else if state_text.is_empty() && state.is_some_and(container_has_exited) {
+        // nerdctl does not always fill `State.Status`. A container that is not
+        // running and carries an exit code has stopped -- which is the ordinary
+        // end of an idle release, not a fault. Reporting it as ERROR made the
+        // most common resting state of a workspace look like a broken one.
         "STOPPED"
     } else {
         "ERROR"
@@ -2644,6 +2743,38 @@ fn network_diagnostics() -> Value {
     })
 }
 
+/// Step CLOCK_REALTIME to `epoch`.
+///
+/// `settimeofday(2)` rather than a `date -s` subprocess: guestd already runs as
+/// root inside the appliance, and a clock correction that has to fork is one
+/// more thing that can fail on a guest whose clock is already wrong.
+#[cfg(target_os = "linux")]
+fn set_realtime_clock(epoch: u64) -> Result<(), GuestError> {
+    let spec = libc::timespec {
+        tv_sec: epoch as libc::time_t,
+        tv_nsec: 0,
+    };
+    // SAFETY: `spec` is fully initialised and outlives the call, and
+    // CLOCK_REALTIME is settable by root, which is what guestd runs as.
+    if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &spec) } != 0 {
+        return Err(GuestError::engine(format!(
+            "could not set the guest clock: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
+/// Everywhere else this crate compiles -- the host, for its tests -- there is
+/// no guest clock to set, and silently succeeding would let a test pass that
+/// proves nothing.
+#[cfg(not(target_os = "linux"))]
+fn set_realtime_clock(_epoch: u64) -> Result<(), GuestError> {
+    Err(GuestError::engine(
+        "the guest clock can only be set inside the managed guest",
+    ))
+}
+
 fn schedule_shutdown() -> Result<Value, GuestError> {
     let output = Command::new("/usr/bin/systemctl")
         .args(["--no-block", "poweroff"])
@@ -2664,9 +2795,10 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::os::unix::process::ExitStatusExt;
     use std::sync::Mutex;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     struct FakeEngine {
         commands: Mutex<Vec<Vec<String>>>,
@@ -2883,6 +3015,99 @@ mod tests {
             "http://192.168.64.2:49152"
         );
         assert_eq!(snapshot["status"]["ready"], true);
+    }
+
+    /// The resting state of every idle workspace, read off a real guest that
+    /// had one: `Running: false`, a clean exit code, and no `Status` at all.
+    /// Calling that ERROR made the ordinary end of an idle release look like a
+    /// fault, in `sandbox.list` and in everything that reads it.
+    #[test]
+    fn a_cleanly_exited_container_without_a_status_field_reads_as_stopped() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false, "ExitCode": 0},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "STOPPED");
+        assert_eq!(snapshot["status"]["ready"], false);
+    }
+
+    /// The two places that set this guest's clock have to agree on what a
+    /// believable host epoch is, and until now only a comment said so.
+    ///
+    /// `lemma-set-host-time` runs at boot from the trusted control share;
+    /// `system.clock` runs for the rest of the VM's life. A range that drifted
+    /// apart would mean a clock the daemon refuses and the boot script accepts,
+    /// or the reverse -- and the symptom would be a guest silently running in
+    /// the wrong year.
+    #[test]
+    fn the_boot_script_and_the_daemon_trust_the_same_epoch_range() {
+        let script = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../guest-image/rootfs-overlay/usr/local/bin/lemma-set-host-time"
+        ))
+        .expect("the boot-time clock script ships with the guest image");
+
+        assert!(
+            script.contains(&MIN_TRUSTED_EPOCH.to_string()),
+            "lemma-set-host-time does not mention {MIN_TRUSTED_EPOCH}"
+        );
+        assert!(
+            script.contains(&MAX_TRUSTED_EPOCH.to_string()),
+            "lemma-set-host-time does not mention {MAX_TRUSTED_EPOCH}"
+        );
+    }
+
+    /// `dead` is a container the engine could not clean up. Reporting it as the
+    /// ordinary end of an idle release would hide the one state here worth
+    /// looking at.
+    #[test]
+    fn a_dead_container_is_a_fault_not_a_resting_state() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false, "Status": "dead", "ExitCode": 137},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "ERROR");
+    }
+
+    /// A container that never ran and reports nothing is still a fault. The
+    /// fallback reads "has exited", not "is not running".
+    #[test]
+    fn a_container_that_never_started_still_reads_as_an_error() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "ERROR");
     }
 
     #[test]
@@ -3203,6 +3428,110 @@ mod tests {
             service.health_at(repair_due).unwrap_err().code,
             "guest_cache_repair_required"
         );
+    }
+
+    /// The gap that put an install into a permanent 401 loop: the guest was
+    /// eleven hours behind the Mac, so every access token the auth service
+    /// minted in it was already expired when the backend read it.
+    #[test]
+    fn a_guest_clock_behind_the_host_is_stepped_forward() {
+        let (_root, service) = clock_test_service();
+        let applied = Cell::new(None);
+
+        let report = service
+            .set_clock_with(
+                json!({"epoch": 1_787_290_731_u64}),
+                UNIX_EPOCH + Duration::from_secs(1_787_249_481),
+                |epoch| {
+                    applied.set(Some(epoch));
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(applied.get(), Some(1_787_290_731));
+        assert_eq!(report["skew_seconds"], 41_250);
+        assert_eq!(report["stepped"], true);
+        assert_eq!(report["guest_epoch"], 1_787_249_481_u64);
+    }
+
+    /// A step moves wall time under every process in the guest. Ordinary
+    /// jitter is not worth that, so it is reported and left alone.
+    #[test]
+    fn a_clock_within_the_threshold_is_reported_and_left_alone() {
+        let (_root, service) = clock_test_service();
+        let applied = Cell::new(false);
+
+        let report = service
+            .set_clock_with(
+                json!({"epoch": 1_787_290_732_u64}),
+                UNIX_EPOCH + Duration::from_secs(1_787_290_731),
+                |_| {
+                    applied.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert!(!applied.get());
+        assert_eq!(report["skew_seconds"], 1);
+        assert_eq!(report["stepped"], false);
+    }
+
+    /// The control channel is trusted, but a clock is the one thing a wrong
+    /// value breaks silently and everywhere, so the guest still checks the
+    /// range -- the same range `lemma-set-host-time` checks.
+    #[test]
+    fn an_implausible_host_epoch_is_refused_without_touching_the_clock() {
+        let (_root, service) = clock_test_service();
+        let applied = Cell::new(false);
+
+        for epoch in [json!(1_u64), json!(9_999_999_999_u64)] {
+            let error = service
+                .set_clock_with(json!({"epoch": epoch}), SystemTime::now(), |_| {
+                    applied.set(true);
+                    Ok(())
+                })
+                .unwrap_err();
+            assert_eq!(error.code, "invalid_request");
+        }
+
+        let missing = service
+            .set_clock_with(json!({}), SystemTime::now(), |_| {
+                applied.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(missing.code, "invalid_request");
+        assert!(!applied.get());
+    }
+
+    /// Whoever is already asking whether the guest is well should not have to
+    /// think to ask about time separately.
+    #[test]
+    fn health_reports_the_guest_clock() {
+        let (_root, service) = clock_test_service();
+
+        let health = service
+            .health_at(UNIX_EPOCH + Duration::from_secs(1_787_249_481))
+            .unwrap();
+
+        assert_eq!(health["clock_epoch"], 1_787_249_481_u64);
+    }
+
+    /// Returns the temporary root with the service: dropping it early would
+    /// take the guest state directory out from under the service.
+    fn clock_test_service() -> (TempDir, GuestService<FakeEngine>) {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(true, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+        (root, service)
     }
 
     #[test]

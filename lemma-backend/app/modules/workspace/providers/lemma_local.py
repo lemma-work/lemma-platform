@@ -106,6 +106,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     # The guest binds a workspace's disk to its sandbox id, so the sandbox is
     # the storage and a replacement would destroy the user's files.
     storage_kind = ProviderStorageKind.SANDBOX_NATIVE
+    # The guest has no start: `sandbox.ensure` is create-or-replace, so a
+    # stopped workspace comes back by being rebuilt against the same volume.
+    # Waiting for one to resume waits forever -- and idle release stops the
+    # container by design, so every desktop workspace broke three minutes after
+    # its last use and stayed broken until something deleted the container.
+    resumes_stopped_instances = False
 
     def __init__(
         self,
@@ -246,11 +252,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """The bridge's ensure does not return until the sandbox is serving.
+        """Confirm a just-created sandbox is serving.
 
-        Health is confirmed once here rather than looped, because a guest that
-        reports ready and is not reachable is a guest fault the caller should
-        see, not something to wait out.
+        The bridge's ensure does not return until the sandbox is up, so this
+        confirms once rather than looping: a guest that reports ready and is
+        not reachable is a guest fault the caller should see, not something to
+        wait out. Only ever reached for a *running* instance -- a stopped one
+        is rebuilt by the service, because nothing here could start it.
         """
         if kind is not SandboxKind.WORKSPACE:
             return

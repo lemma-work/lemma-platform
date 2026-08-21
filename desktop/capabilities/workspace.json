@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "workspace-capability",
-  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, connecting this computer's Agent Host, and pointing this installation at an AI provider, because those are the surfaces a user meets during onboarding and cannot be sent to another window to complete. Note what is deliberately absent: nothing here can stop the Agent Host or drop a pairing. The workspace can ask this computer to be running, to pair, and to look for agents again - never the reverse, because an automatic connection and a remote off switch would spend their lives undoing each other. Provider configuration is deliberately the only operator setting here: it reaches config.set-ai, which merges that one section and cannot touch sharing, tunnels, runtime, or diagnostics. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
+  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, connecting this computer's Agent Host, and pointing this installation at an AI provider, because those are the surfaces a user meets during onboarding and cannot be sent to another window to complete. Note what is deliberately absent: nothing here can stop the Agent Host or drop a pairing. The workspace can ask this computer to be running, to pair, and to look for agents again - never the reverse, because an automatic connection and a remote off switch would spend their lives undoing each other. It can also read how the sandbox image download is going, which is a read of state the shell already holds and changes nothing. Provider configuration is deliberately the only operator setting here: it reaches config.set-ai, which merges that one section and cannot touch sharing, tunnels, runtime, or diagnostics. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
   "local": false,
   "webviews": [
     "main"
@@ -14,6 +14,7 @@
   },
   "permissions": [
     "allow-open-control-center",
+    "allow-sandbox-image-status",
     "allow-agent-host-status",
     "allow-agent-host-start",
     "allow-agent-host-pair",
