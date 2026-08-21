@@ -127,6 +127,7 @@ impl ManagedRuntimeBootstrap {
             forwarders: Mutex::new(Vec::new()),
             status: Mutex::new(None),
             clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
         }))
     }
@@ -219,6 +220,9 @@ pub struct ManagedRuntimeController {
     forwarders: Mutex<Vec<TcpForwarder>>,
     status: Mutex<Option<ManagedRuntimeStatus>>,
     clock_keeper: Mutex<Option<ClockKeeper>>,
+    /// The last clock-sync failure written to the log, so a standing one is
+    /// said once rather than twice a minute for as long as the stack runs.
+    last_clock_error: Mutex<Option<String>>,
     sandbox_images: Mutex<SandboxImageStatus>,
 }
 
@@ -541,9 +545,27 @@ impl ManagedRuntimeController {
                     Some(ClockSyncReason::Interval) | None => "",
                 };
                 eprintln!("locald: the guest clock was {skew}s behind this Mac{cause}; corrected");
+                self.last_clock_error
+                    .lock()
+                    .expect("clock error lock poisoned")
+                    .take();
             }
             Err(error) => {
-                eprintln!("locald: could not put the guest clock back on this Mac's: {error}");
+                // Once per distinct failure. A guest too old to know
+                // `system.clock` refuses every attempt, and at this cadence
+                // saying so each time is a line twice a minute for as long as
+                // the stack runs -- which is the shape of log flood this
+                // codebase has already paid for once.
+                let message = error.to_string();
+                let mut last = self
+                    .last_clock_error
+                    .lock()
+                    .expect("clock error lock poisoned");
+                if last.as_deref() == Some(message.as_str()) {
+                    return;
+                }
+                eprintln!("locald: could not put the guest clock back on this Mac's: {message}");
+                *last = Some(message);
             }
         }
     }
@@ -1189,6 +1211,7 @@ mod tests {
             },
             forwarders: Mutex::new(Vec::new()),
             clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),

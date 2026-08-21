@@ -1173,12 +1173,10 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
 #[cfg(any(windows, test))]
 fn decode_wsl_output(value: &[u8]) -> String {
     let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
-        let words: Vec<u16> = value
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .collect();
+        // `as_chunks`, not `chunks_exact(2)`: clippy 1.98 rejects a constant
+        // chunk size, and the typed pair drops the indexing this used to do.
+        let (pairs, _odd_trailing_byte) = value.as_chunks::<2>();
+        let words: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
         String::from_utf16_lossy(&words).replace('\0', "")
     } else {
         String::from_utf8_lossy(value).into_owned()
