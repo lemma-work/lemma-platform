@@ -7,6 +7,12 @@ coordinator — which imports the runners, so the reverse would be a cycle.
 
 from __future__ import annotations
 
+import json
+
+from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+
 import hashlib
 import hmac
 from collections.abc import Callable
@@ -48,3 +54,35 @@ def receiver_key(platform: str, label: str, secret: str) -> str:
         hashlib.sha256,
     ).hexdigest()[:24]
     return f"{platform}:{label}:{digest}"
+
+
+async def _publish_native_receiver_event(
+    *,
+    source: str,
+    payload: dict[str, Any],
+    receiver_key: str | None,
+    surface_ids: "tuple[UUID, ...] | None" = None,
+) -> None:
+    headers = {"x-lemma-surface-event-mode": "native_receiver"}
+    if receiver_key:
+        headers["x-lemma-surface-receiver-key"] = receiver_key
+    provider_id = (
+        payload.get("event_id")
+        or payload.get("update_id")
+        or payload.get("id")
+        or hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+        ).hexdigest()
+    )
+    source_event_id = f"{source}:native:{provider_id}"
+    event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
+        source=source,
+        payload=payload,
+        headers=headers,
+        source_event_id=source_event_id,
+        # Scope downstream ingress to the surfaces this bot actually serves, so a
+        # custom bot's update can't be mis-attributed to another bot's surface.
+        receiver_surface_ids=list(surface_ids) if surface_ids else None,
+    )
+    await EventPublisher.publish(event.stream_name(), event)

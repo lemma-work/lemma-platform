@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-    _normalize_resend_inbound,
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    normalize_resend_inbound as _normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,

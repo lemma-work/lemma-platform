@@ -37,6 +37,66 @@ logger = get_logger(__name__)
 _CHANNEL_CONTEXT_LIMIT = 15
 
 
+def _speech_provider() -> Any:
+    """The speech provider, or None when it cannot be reached."""
+    try:
+        from app.composition.surface_agent import get_speech_provider
+
+        return get_speech_provider()
+    except Exception as exc:
+        # Voice notes arrive untranscribed from here on, which is a user-visible
+        # degradation — so it stays a warning, but it has to name the failure.
+        # The line this replaced carried no fields at all, so it could only
+        # report that something was wrong.
+        logger.warning(
+            "agent_surfaces.ingress_service.speech_provider_unavailable",
+            error_type=type(exc).__name__,
+        )
+        return None
+
+
+def _record_transcripts(
+    results: list[tuple[IngestedAttachment, Any]], metadata: dict[str, Any]
+) -> list[str]:
+    """The transcripts that came back, with provenance stamped into metadata."""
+    transcripts: list[str] = []
+    provenance: list[dict[str, Any]] = []
+    for item, result in results:
+        text = (getattr(result, "text", "") or "").strip()
+        if not text:
+            provenance.append({"path": item.path, "text": "", "failed": True})
+            continue
+        transcripts.append(text)
+        provenance.append(
+            {
+                "path": item.path,
+                "text": text,
+                "detected_language": getattr(result, "detected_language", None),
+                "duration_seconds": getattr(result, "duration_seconds", None),
+            }
+        )
+    if provenance:
+        metadata["voice_transcripts"] = provenance
+    if not transcripts:
+        metadata["voice_transcription_failed"] = True
+    return transcripts
+
+
+def _combined_voice_text(transcripts: list[str]) -> str:
+    """One block of text from however many voice notes arrived.
+
+    A voice-only message must never become an empty prompt, so a failed or
+    empty transcription still says that something was said.
+    """
+    if not transcripts:
+        return "[voice message]"
+    if len(transcripts) == 1:
+        return transcripts[0]
+    return "\n\n".join(
+        f"[Voice {index}]\n{text}" for index, text in enumerate(transcripts, start=1)
+    )
+
+
 class SurfaceInboundMessageMixin:
     async def _commit_inbound_message(
         self,
@@ -146,74 +206,37 @@ class SurfaceInboundMessageMixin:
         (path + transcript + language) is recorded in ``metadata``.
         """
         original = (original_text or "").strip()
-        audio_present = [item for item in ingested if item.is_audio]
-        if not audio_present:
+        if not any(item.is_audio for item in ingested):
             return original
 
-        to_transcribe = [item for item in audio_present if item.audio_bytes is not None]
-        provider = None
-        if to_transcribe:
-            try:
-                from app.composition.surface_agent import get_speech_provider
-
-                provider = get_speech_provider()
-            except Exception as exc:
-                # Voice notes arrive untranscribed from here on, which is a
-                # user-visible degradation — so it stays a warning, but it has
-                # to name the failure. The previous line carried no fields at
-                # all, so it could only report that something was wrong.
-                logger.warning(
-                    "agent_surfaces.ingress_service.speech_provider_unavailable",
-                    error_type=type(exc).__name__,
-                )
-                provider = None
-
-        async def _one(item: IngestedAttachment) -> tuple[IngestedAttachment, Any]:
-            try:
-                result = await provider.transcribe(
-                    item.audio_bytes, mime=item.mime or "audio/ogg"
-                )
-                return item, result
-            except Exception:
-                return item, None
-
-        results: list[tuple[IngestedAttachment, Any]] = []
-        if provider is not None and to_transcribe:
-            results = list(
-                await asyncio.gather(*[_one(item) for item in to_transcribe])
-            )
-
-        transcripts: list[str] = []
-        provenance: list[dict[str, Any]] = []
-        for item, result in results:
-            text = (getattr(result, "text", "") or "").strip()
-            if text:
-                transcripts.append(text)
-                provenance.append(
-                    {
-                        "path": item.path,
-                        "text": text,
-                        "detected_language": getattr(result, "detected_language", None),
-                        "duration_seconds": getattr(result, "duration_seconds", None),
-                    }
-                )
-            else:
-                provenance.append({"path": item.path, "text": "", "failed": True})
-        if provenance:
-            metadata["voice_transcripts"] = provenance
-        if not transcripts:
-            metadata["voice_transcription_failed"] = True
-
-        if not transcripts:
-            combined = "[voice message]"
-        elif len(transcripts) == 1:
-            combined = transcripts[0]
-        else:
-            combined = "\n\n".join(
-                f"[Voice {index}]\n{text}"
-                for index, text in enumerate(transcripts, start=1)
-            )
-
+        results = await self._transcribe_all(
+            [
+                item
+                for item in ingested
+                if item.is_audio and item.audio_bytes is not None
+            ]
+        )
+        combined = _combined_voice_text(_record_transcripts(results, metadata))
         if original:
             return f"{original}\n\n{combined}"
         return combined
+
+    async def _transcribe_all(
+        self, items: list[IngestedAttachment]
+    ) -> list[tuple[IngestedAttachment, Any]]:
+        """Transcribe every voice note at once; a failure yields None for that one."""
+        if not items:
+            return []
+        provider = _speech_provider()
+        if provider is None:
+            return []
+
+        async def _one(item: IngestedAttachment) -> tuple[IngestedAttachment, Any]:
+            try:
+                return item, await provider.transcribe(
+                    item.audio_bytes, mime=item.mime or "audio/ogg"
+                )
+            except Exception:
+                return item, None
+
+        return list(await asyncio.gather(*[_one(item) for item in items]))

@@ -59,6 +59,25 @@ logger = get_logger(__name__)
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def _approval_plan(
+    pending: dict[str, Any], conversation_id: UUID, tool_call_id: str | None
+) -> Any:
+    """The approval card for a paused ``request_approval`` call."""
+    tool_args = pending.get("tool_args") or {}
+    # An approve-for-session button only makes sense when the paused call
+    # carries a real permission gate (it lets the exact action skip future
+    # prompts); otherwise it is noise.
+    permission_ids = tool_args.get("permission_ids")
+    return build_approval_render_plan(
+        conversation_id=conversation_id,
+        tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
+        title=str(tool_args.get("title") or "Action requires your approval"),
+        reason=str(tool_args.get("reason") or "") or None,
+        tool_name=str(tool_args.get("tool_name") or "") or None,
+        allow_session=bool(isinstance(permission_ids, list) and permission_ids),
+    )
+
+
 class SurfaceEgressMixin(SurfaceEgressTargetMixin):
     async def send_to_member(
         self,
@@ -353,6 +372,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 conversation_id=conversation_id,
             )
             return False
+
         pending = await self.conversation_service.get_pending_user_interaction(
             conversation_id=conversation_id
         )
@@ -362,21 +382,27 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 conversation_id=conversation_id,
             )
             return False
-        tool_args = pending.get("tool_args") or {}
-        # An approve-for-session button only makes sense when the paused call
-        # carries a real permission gate (it lets the exact action skip future
-        # prompts); otherwise it is noise.
-        permission_ids = tool_args.get("permission_ids")
-        allow_session = bool(isinstance(permission_ids, list) and permission_ids)
-        plan = build_approval_render_plan(
+
+        return await self._deliver_approval(
+            target,
+            plan=_approval_plan(pending, conversation_id, tool_call_id),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
             conversation_id=conversation_id,
-            tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
-            title=str(tool_args.get("title") or "Action requires your approval"),
-            reason=str(tool_args.get("reason") or "") or None,
-            tool_name=str(tool_args.get("tool_name") or "") or None,
-            allow_session=allow_session,
         )
-        metadata = await self._egress_metadata_with_agent_name(target, None)
+
+    async def _deliver_approval(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        plan: Any,
+        metadata: dict[str, Any],
+        conversation_id: UUID,
+    ) -> bool:
+        """Native buttons, then a text prompt, then admit it reached nobody.
+
+        If both fail the run is stuck waiting on an approval nobody saw, so that
+        is reported rather than swallowed.
+        """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
@@ -393,8 +419,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     conversation_id=conversation_id,
                 )
             # Fallback: a text prompt; the user replies "approve"/"deny" and the
-            # typed-reply path resumes the run with their decision. If this ALSO
-            # fails the approval reached nobody and the run is stuck — surface it.
+            # typed-reply path resumes the run with their decision.
             try:
                 await target.adapter.send_message(
                     credentials=target.credentials,

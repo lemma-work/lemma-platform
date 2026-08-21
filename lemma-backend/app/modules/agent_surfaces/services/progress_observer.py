@@ -9,6 +9,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent_surfaces.services.progress_waiting import (
+    ProgressWaitingMixin,
+)
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.agent.contracts import Conversation
@@ -84,7 +87,7 @@ _EMAIL_REPLY_TOOL_NAMES = {
 }
 
 
-class SurfaceAgentRunProgressObserver(TokenStreamMixin):
+class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
     """Reflect agent run progress through platform-native surface indicators.
 
     A surface conversation should receive exactly one content message per run:
@@ -234,87 +237,6 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                 self._email_reply_tool_called = True
 
         await self._maybe_send_text_progress(event, platform, conversation.id)
-
-    async def _handle_waiting_event(
-        self,
-        event: AgentEvent,
-        conversation: Conversation,
-        *,
-        ends_run: bool = True,
-    ) -> None:
-        """Render a paused ``ask_user`` or ``request_approval`` on the surface.
-
-        The run pauses with a WAITING event before terminating. We deliver any
-        buffered narration first (so the lead-in to the question still reaches the
-        user), mark the final answer delivered so ``on_run_finished`` doesn't
-        re-send it, then render the questions / approval prompt.
-
-        ``ends_run`` is False for an Agent Host permission pause, which happens
-        inside a run that keeps going; see the reset at the end.
-        """
-        data = event.data if isinstance(event.data, dict) else {}
-        kind = data.get("kind")
-        if kind not in ("ask_user", "request_approval"):
-            return
-        tool_call_id = str(data.get("tool_call_id") or "")
-        rendered_key: tuple[str, str] | None = None
-        if tool_call_id:
-            rendered_key = (str(kind), tool_call_id)
-            if rendered_key in self._rendered_waiting_tool_calls:
-                return
-            self._rendered_waiting_tool_calls.add(rendered_key)
-        await self._clear_progress(conversation.id)
-        # Deliver buffered narration (the lead-in to the question) exactly once.
-        if not self._final_delivered:
-            self._final_delivered = True
-            if not self._run_errored:
-                message = (self._final_answer_text or self._buffered_text or "").strip()
-                if message:
-                    try:
-                        await self._send_agent_message(
-                            conversation_id=conversation.id,
-                            message=message,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic"
-                        )
-        async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            try:
-                if kind == "ask_user":
-                    delivered = await service.send_questions_for_conversation(
-                        conversation_id=conversation.id,
-                        tool_call_id=tool_call_id or None,
-                    )
-                else:
-                    delivered = await service.send_approval_prompt_for_conversation(
-                        conversation_id=conversation.id,
-                        tool_call_id=tool_call_id or None,
-                    )
-                if not delivered:
-                    # Nothing reached the user (the send method logs the precise
-                    # reason). Drop the rendered-key so a later WAITING event for
-                    # this same tool call can retry instead of being deduped away,
-                    # and surface it loudly — a stuck WAITING run must never be
-                    # silent (this is the swallow class that hid the ask_user bug).
-                    if rendered_key is not None:
-                        self._rendered_waiting_tool_calls.discard(rendered_key)
-                    logger.debug(
-                        "agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic",
-                        tool_call_id=tool_call_id,
-                    )
-            except Exception:
-                if rendered_key is not None:
-                    self._rendered_waiting_tool_calls.discard(rendered_key)
-        if not ends_run:
-            # Nothing about this run's final answer is settled yet: the narration
-            # above was the lead-in to the prompt, and the real answer only comes
-            # after the decision. Unlatch delivery so on_run_finished still sends
-            # it, and drop what was already delivered so it is not repeated.
-            self._final_delivered = False
-            self._final_answer_text = None
-            self._buffered_text = None
 
     async def _maybe_send_text_progress(
         self,
