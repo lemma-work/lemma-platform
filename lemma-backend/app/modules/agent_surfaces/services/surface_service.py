@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -114,6 +115,36 @@ _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
 }
 # Bounded retry for the in-process Telegram webhook registration calls.
 _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
+
+
+@dataclass(frozen=True, slots=True)
+class _TelegramWebhookTransition:
+    """What has to happen to Telegram's webhook because of an update.
+
+    Telegram allows one webhook per bot token, so a surface that changes its
+    account or its event mode has to give the old registration up before the new
+    one is made. That is why both halves are decided together rather than each
+    looking at the surface on its own.
+    """
+
+    register: bool
+    disable: bool
+
+
+def _telegram_transition(
+    previous: AgentSurfaceEntity, current: AgentSurfaceEntity
+) -> _TelegramWebhookTransition:
+    was_enabled = previous.is_active and telegram_requires_webhook_setup(previous)
+    is_enabled = current.is_active and telegram_requires_webhook_setup(current)
+    binding_changed = (
+        previous.account_id != current.account_id
+        or previous.event_mode != current.event_mode
+    )
+    return _TelegramWebhookTransition(
+        register=is_enabled
+        and (not was_enabled or binding_changed or not current.webhook_secret),
+        disable=was_enabled and (not is_enabled or binding_changed),
+    )
 
 
 class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
@@ -302,68 +333,43 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
     ) -> AgentSurfaceEntity:
         surface = await self.get_surface(surface_id)
         previous_surface = surface.model_copy(deep=True)
-        telegram_credentials: dict[str, Any] | None = None
 
         if update_agent_id:
             surface.update_agent(agent_id)
 
-        if (
-            config is not None
-            or account_id is not None
-            or mode is not None
-            or event_mode is not None
-            or credential_mode is not None
-            or external_workspace_id is not None
-            or external_tenant_id is not None
-            or external_channel_id is not None
-        ):
-            (
-                resolved_tenant_id,
-                resolved_workspace_id,
-                surface_identity_id,
-            ) = await self.account_binding_resolver.resolve_binding(
-                surface.surface_type,
-                account_id=account_id if account_id is not None else surface.account_id,
-            )
-            surface.update_config(
-                config if config is not None else surface.config,
+        # Any one of these touches the account binding, and the binding has to be
+        # re-resolved as a whole rather than field by field.
+        binding_changes = (
+            config,
+            account_id,
+            mode,
+            event_mode,
+            credential_mode,
+            external_workspace_id,
+            external_tenant_id,
+            external_channel_id,
+        )
+        if any(value is not None for value in binding_changes):
+            await self._apply_binding_update(
+                surface,
+                config=config,
                 account_id=account_id,
                 mode=mode,
                 event_mode=event_mode,
                 credential_mode=credential_mode,
-                external_workspace_id=external_workspace_id or resolved_workspace_id,
-                external_tenant_id=external_tenant_id or resolved_tenant_id,
+                external_workspace_id=external_workspace_id,
+                external_tenant_id=external_tenant_id,
                 external_channel_id=external_channel_id,
-                surface_identity_id=surface_identity_id,
             )
-            self._validate_runtime_supported(surface)
-            await self._ensure_unique_org_credential_binding(surface)
         if is_active is not None:
             surface.toggle_active(is_active)
 
-        previous_telegram_webhook_enabled = (
-            previous_surface.is_active
-            and telegram_requires_webhook_setup(previous_surface)
-        )
-        current_telegram_webhook_enabled = (
-            surface.is_active and telegram_requires_webhook_setup(surface)
-        )
-        telegram_binding_changed = (
-            previous_surface.account_id != surface.account_id
-            or previous_surface.event_mode != surface.event_mode
-        )
-        should_disable_telegram_webhook = previous_telegram_webhook_enabled and (
-            not current_telegram_webhook_enabled or telegram_binding_changed
-        )
-        should_register_telegram_webhook = current_telegram_webhook_enabled and (
-            not previous_telegram_webhook_enabled
-            or telegram_binding_changed
-            or not surface.webhook_secret
-        )
-        if should_register_telegram_webhook and telegram_credentials is None:
+        telegram = _telegram_transition(previous_surface, surface)
+        telegram_credentials: dict[str, Any] | None = None
+        if telegram.register:
             await self._ensure_unique_telegram_account(surface)
             telegram_credentials = await self._prepare_telegram_webhook(surface)
-        if should_disable_telegram_webhook:
+        if telegram.disable:
             await self._delete_telegram_webhook(previous_surface)
 
         updated = await self.surface_repository.update(surface)
@@ -380,6 +386,42 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
         )
         await notify_surface_receiver_config_changed(synced.id)
         return synced
+
+    async def _apply_binding_update(
+        self,
+        surface: AgentSurfaceEntity,
+        *,
+        config: SurfaceConfig | None,
+        account_id: UUID | None,
+        mode: SurfaceMode | None,
+        event_mode: SurfaceEventMode | None,
+        credential_mode: SurfaceCredentialMode | None,
+        external_workspace_id: str | None,
+        external_tenant_id: str | None,
+        external_channel_id: str | None,
+    ) -> None:
+        """Re-resolve the account binding, then write the changed fields onto it."""
+        (
+            resolved_tenant_id,
+            resolved_workspace_id,
+            surface_identity_id,
+        ) = await self.account_binding_resolver.resolve_binding(
+            surface.surface_type,
+            account_id=account_id if account_id is not None else surface.account_id,
+        )
+        surface.update_config(
+            config if config is not None else surface.config,
+            account_id=account_id,
+            mode=mode,
+            event_mode=event_mode,
+            credential_mode=credential_mode,
+            external_workspace_id=external_workspace_id or resolved_workspace_id,
+            external_tenant_id=external_tenant_id or resolved_tenant_id,
+            external_channel_id=external_channel_id,
+            surface_identity_id=surface_identity_id,
+        )
+        self._validate_runtime_supported(surface)
+        await self._ensure_unique_org_credential_binding(surface)
 
     async def list_surfaces_by_pod(
         self,
@@ -636,79 +678,108 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
                 await self._delete_email_schedule_if_needed(previous_surface)
             return surface
 
-        if self.schedule_service is None or self.connector_trigger_repository is None:
+        schedule_service = self.schedule_service
+        if schedule_service is None or self.connector_trigger_repository is None:
             raise AgentSurfaceValidationError(
                 "Email surfaces require schedule service dependencies"
             )
 
+        account = await self._email_schedule_account(surface)
+        reuse_id, stale_id = self._schedule_plan(surface, previous_surface)
+        if stale_id is not None:
+            await schedule_service.delete_schedule(stale_id)
+
+        if reuse_id is None:
+            surface.schedule_id = await self._create_email_schedule(
+                surface, account, schedule_service=schedule_service, ctx=ctx
+            )
+        else:
+            await schedule_service.update_schedule(
+                reuse_id,
+                ScheduleUpdateEntity(is_active=surface.is_active),
+                ctx=ctx,
+            )
+        surface.surface_identity_email = account.email
+        return await self.surface_repository.update(surface)
+
+    async def _email_schedule_account(
+        self, surface: AgentSurfaceEntity
+    ) -> SurfaceAccountInfo:
+        """The Composio account this surface polls, once it is fit to poll with."""
         if surface.account_id is None:
             raise AgentSurfaceValidationError("Email surfaces require account_id")
         account = await self._get_connected_account(surface.account_id)
         if surface.surface_type is SurfacePlatform.GMAIL and not account.email:
             # Gmail polling filters out the surface's own messages by email
-            # (query below); Outlook routes by account_id and works without it.
+            # (the query below); Outlook routes by account_id and works without it.
             raise AgentSurfaceValidationError(
                 "Connected account must expose an email address for Gmail surfaces"
             )
         await self._ensure_composio_email_account(account)
+        return account
+
+    def _schedule_plan(
+        self,
+        surface: AgentSurfaceEntity,
+        previous_surface: AgentSurfaceEntity | None,
+    ) -> tuple[UUID | None, UUID | None]:
+        """Which schedule to keep, and which to delete first.
+
+        A surface that changed connected account cannot keep its schedule: the
+        schedule carries the account it polls, so the old one goes and a new one
+        takes its place.
+        """
+        if previous_surface is None or not self._is_email_surface(previous_surface):
+            return surface.schedule_id, None
+        if (
+            previous_surface.schedule_id
+            and previous_surface.account_id != surface.account_id
+        ):
+            return None, previous_surface.schedule_id
+        return surface.schedule_id, None
+
+    async def _create_email_schedule(
+        self,
+        surface: AgentSurfaceEntity,
+        account: SurfaceAccountInfo,
+        *,
+        schedule_service: "ScheduleService",
+        ctx: Context | None,
+    ) -> UUID:
+        """Create the polling schedule that feeds this email surface."""
         connector_trigger_id = await self._resolve_email_connector_trigger_id(
             surface.surface_type
         )
-
-        existing_schedule_id = surface.schedule_id
-        previous_schedule_id = None
-        if previous_surface is not None and self._is_email_surface(previous_surface):
-            previous_schedule_id = previous_surface.schedule_id
-
-        # Recreate the schedule when the connected account changes.
-        previous_account_id = None
-        if previous_surface is not None and self._is_email_surface(previous_surface):
-            previous_account_id = previous_surface.account_id
-        if previous_schedule_id and previous_account_id != surface.account_id:
-            await self.schedule_service.delete_schedule(previous_schedule_id)
-            existing_schedule_id = None
-
-        if existing_schedule_id is None:
-            schedule_config: dict[str, Any] = {
-                "source": "agent_surfaces_email",
-                "surface_id": str(surface.id),
-                "platform": surface.surface_type.value.lower(),
-            }
-            if surface.surface_type is SurfacePlatform.GMAIL:
-                schedule_config.update(
-                    {
-                        "userId": "me",
-                        "interval": 2,
-                        "labelIds": "INBOX",
-                        "query": f"label:inbox -from:{account.email}",
-                    }
-                )
-            created_schedule = await self.schedule_service.create_schedule(
-                ScheduleCreateEntity(
-                    user_id=account.user_id,
-                    pod_id=surface.pod_id,
-                    name=(
-                        f"agent_surface_{surface.surface_type.value.lower()}_"
-                        f"{str(surface.id).replace('-', '')[:8]}"
-                    ),
-                    schedule_type=ScheduleType.WEBHOOK,
-                    account_id=account.id,
-                    connector_trigger_id=connector_trigger_id,
-                    config=schedule_config,
-                ),
-                ctx=ctx,
+        schedule_config: dict[str, Any] = {
+            "source": "agent_surfaces_email",
+            "surface_id": str(surface.id),
+            "platform": surface.surface_type.value.lower(),
+        }
+        if surface.surface_type is SurfacePlatform.GMAIL:
+            schedule_config.update(
+                {
+                    "userId": "me",
+                    "interval": 2,
+                    "labelIds": "INBOX",
+                    "query": f"label:inbox -from:{account.email}",
+                }
             )
-            surface.schedule_id = created_schedule.id
-            surface.surface_identity_email = account.email
-            return await self.surface_repository.update(surface)
-
-        await self.schedule_service.update_schedule(
-            existing_schedule_id,
-            ScheduleUpdateEntity(is_active=surface.is_active),
+        created_schedule = await schedule_service.create_schedule(
+            ScheduleCreateEntity(
+                user_id=account.user_id,
+                pod_id=surface.pod_id,
+                name=(
+                    f"agent_surface_{surface.surface_type.value.lower()}_"
+                    f"{str(surface.id).replace('-', '')[:8]}"
+                ),
+                schedule_type=ScheduleType.WEBHOOK,
+                account_id=account.id,
+                connector_trigger_id=connector_trigger_id,
+                config=schedule_config,
+            ),
             ctx=ctx,
         )
-        surface.surface_identity_email = account.email
-        return await self.surface_repository.update(surface)
+        return created_schedule.id
 
     async def _delete_email_schedule_if_needed(
         self,

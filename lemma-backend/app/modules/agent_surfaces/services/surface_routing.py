@@ -38,6 +38,11 @@ logger = get_logger(__name__)
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """Whether a group message is for the bot: an @mention, or a reply in its thread."""
+    return bool(parsed.mentioned_agent or parsed.metadata.get("is_thread_reply"))
+
+
 class SurfaceRoutingMixin:
     async def _match_surface_for_user(
         self,
@@ -129,44 +134,67 @@ class SurfaceRoutingMixin:
         member_by_id = {s.id: s for s in member_candidates}
 
         # 2. A valid saved default is authoritative — it wins over continuity.
-        get_default = getattr(
-            self.pod_membership_port, "get_user_default_surface_id", None
+        chosen = await self._default_surface(
+            user_id=user_id, platform=platform, member_by_id=member_by_id
         )
-        if get_default is not None:
-            default_id = await get_default(user_id, platform)
-            if default_id is not None:
-                if default_id in member_by_id:
-                    return member_by_id[default_id]
-                # Stale default: it points at a surface the user is no longer a
-                # member of. Clear it so routing stops silently honoring it.
-                logger.debug(
-                    "agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic",
-                    user_id=user_id,
-                    default_id=default_id,
-                )
-                clear_default = getattr(
-                    self.pod_membership_port, "clear_user_default_surface_id", None
-                )
-                if clear_default is not None:
-                    try:
-                        await clear_default(user_id, platform)
-                    except Exception:
-                        logger.debug(
-                            "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic",
-                            user_id=user_id,
-                        )
+        if chosen is not None:
+            return chosen
 
         # 3. Continuity — reuse the surface this chat already lives on (only when
         # it is a pod the user still belongs to).
         if continuity_surface is not None and continuity_surface.id in member_by_id:
             return continuity_surface
 
-        if len(member_candidates) == 1:
-            return member_candidates[0]
-
         # 4. Deterministic tiebreak (candidates are ordered by created_at, id).
         # The user can pick a default via GET/PUT /surfaces/me when this happens.
         return member_candidates[0]
+
+    async def _default_surface(
+        self,
+        *,
+        user_id: UUID,
+        platform: str,
+        member_by_id: dict[UUID, AgentSurfaceEntity],
+    ) -> AgentSurfaceEntity | None:
+        """The surface this user chose as their default, if it is still valid.
+
+        A stale default -- one pointing at a pod the user has since left -- is
+        cleared rather than honoured, so routing stops silently sending them
+        somewhere they can no longer reach.
+        """
+        get_default = getattr(
+            self.pod_membership_port, "get_user_default_surface_id", None
+        )
+        if get_default is None:
+            return None
+        default_id = await get_default(user_id, platform)
+        if default_id is None:
+            return None
+        if default_id in member_by_id:
+            return member_by_id[default_id]
+
+        logger.debug(
+            "agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic",
+            user_id=user_id,
+            default_id=default_id,
+        )
+        await self._clear_stale_default(user_id, platform)
+        return None
+
+    async def _clear_stale_default(self, user_id: UUID, platform: str) -> None:
+        """Forget a default that no longer resolves, best-effort."""
+        clear_default = getattr(
+            self.pod_membership_port, "clear_user_default_surface_id", None
+        )
+        if clear_default is None:
+            return
+        try:
+            await clear_default(user_id, platform)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic",
+                user_id=user_id,
+            )
 
     async def _telegram_text_mention_enrich(
         self,
@@ -223,73 +251,103 @@ class SurfaceRoutingMixin:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceRoute | None:
+        """Which agent answers this event, and under what conversation key."""
         if parsed.is_dm or surface.mode is SurfaceMode.EMAIL:
-            agent_id = surface.agent_id
-            agent_name = await self._agent_name_for_agent_id(agent_id)
-            # On Slack a person can choose which agent answers their own DMs.
-            # Their choice wins over the workspace default; everyone who has
-            # not chosen keeps it, so this is purely additive.
-            if surface.surface_type is SurfacePlatform.SLACK:
-                # An explicit pod-assistant pick means *no* agent, which is not
-                # the same as falling back to the surface default.
-                if surface.config.slack.chose_pod_assistant(
-                    parsed.sender_external_user_id
-                ):
-                    return ResolvedSurfaceRoute(
-                        agent_id=None,
-                        agent_name=None,
-                        agent_display_name="Lemma",
-                        conversation_kind="DM",
-                        route_key="dm",
-                    )
-                chosen = surface.config.slack.agent_for_user(
-                    parsed.sender_external_user_id
-                )
-                if chosen:
-                    agent = await self.conversation_service.agent_repository.get_by_pod_and_name(
-                        pod_id=surface.pod_id,
-                        name=chosen,
-                    )
-                    if agent is not None:
-                        agent_id, agent_name = agent.id, agent.name
-                    else:
-                        # A renamed or deleted agent must not strand the person
-                        # with a dead DM — fall back to the surface default.
-                        logger.debug(
-                            "agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic",
-                            pod_id=surface.pod_id,
-                        )
-            return ResolvedSurfaceRoute(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                agent_display_name=agent_name or "Lemma",
-                conversation_kind="EMAIL"
-                if surface.mode is SurfaceMode.EMAIL
-                else "DM",
-                route_key="email" if surface.mode is SurfaceMode.EMAIL else "dm",
-            )
-
-        # Telegram groups: the bot replies when @mentioned (or in a reply within
-        # its own thread). Being added to the group by an admin is the
-        # authorization, so there is no per-group route config — route to the
-        # surface's default agent. The sender is still resolved + pod-membership
-        # checked upstream, so only pod members can invoke it.
+            return await self._direct_route(surface=surface, parsed=parsed)
         if surface.surface_type is SurfacePlatform.TELEGRAM:
-            if not (parsed.mentioned_agent or parsed.metadata.get("is_thread_reply")):
-                return None
-            agent_id = surface.agent_id
-            agent_name = await self._agent_name_for_agent_id(agent_id)
-            return ResolvedSurfaceRoute(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                agent_display_name=agent_name or "Lemma",
-                conversation_kind="CHANNEL",
-                route_key=f"channel:{parsed.external_channel_id}",
-            )
+            return await self._telegram_group_route(surface=surface, parsed=parsed)
+        if surface.surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}:
+            return await self._channel_route(surface=surface, parsed=parsed)
+        return None
 
-        if surface.surface_type not in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}:
+    async def _direct_route(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+    ) -> ResolvedSurfaceRoute:
+        """A DM or an email: one agent, no per-channel configuration."""
+        agent_id = surface.agent_id
+        agent_name = await self._agent_name_for_agent_id(agent_id)
+        # On Slack a person can choose which agent answers their own DMs.
+        # Their choice wins over the workspace default; everyone who has
+        # not chosen keeps it, so this is purely additive.
+        if surface.surface_type is SurfacePlatform.SLACK:
+            # An explicit pod-assistant pick means *no* agent, which is not
+            # the same as falling back to the surface default.
+            if surface.config.slack.chose_pod_assistant(parsed.sender_external_user_id):
+                return ResolvedSurfaceRoute(
+                    agent_id=None,
+                    agent_name=None,
+                    agent_display_name="Lemma",
+                    conversation_kind="DM",
+                    route_key="dm",
+                )
+            chosen = await self._slack_chosen_agent(surface, parsed)
+            if chosen is not None:
+                agent_id, agent_name = chosen
+
+        is_email = surface.mode is SurfaceMode.EMAIL
+        return ResolvedSurfaceRoute(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            agent_display_name=agent_name or "Lemma",
+            conversation_kind="EMAIL" if is_email else "DM",
+            route_key="email" if is_email else "dm",
+        )
+
+    async def _slack_chosen_agent(
+        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+    ) -> tuple[UUID, str] | None:
+        """The agent this person picked for their Slack DMs, if it still exists."""
+        chosen = surface.config.slack.agent_for_user(parsed.sender_external_user_id)
+        if not chosen:
             return None
+        agent = await self.conversation_service.agent_repository.get_by_pod_and_name(
+            pod_id=surface.pod_id,
+            name=chosen,
+        )
+        if agent is not None:
+            return agent.id, agent.name
+        # A renamed or deleted agent must not strand the person with a dead DM —
+        # fall back to the surface default.
+        logger.debug(
+            "agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic",
+            pod_id=surface.pod_id,
+        )
+        return None
 
+    async def _telegram_group_route(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+    ) -> ResolvedSurfaceRoute | None:
+        """A Telegram group: the bot answers when addressed, on the surface default.
+
+        Being added to the group by an admin is the authorization, so there is no
+        per-group route config. The sender is still resolved and pod-membership
+        checked upstream, so only pod members can invoke it.
+        """
+        if not _addressed(parsed):
+            return None
+        agent_id = surface.agent_id
+        agent_name = await self._agent_name_for_agent_id(agent_id)
+        return ResolvedSurfaceRoute(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            agent_display_name=agent_name or "Lemma",
+            conversation_kind="CHANNEL",
+            route_key=f"channel:{parsed.external_channel_id}",
+        )
+
+    async def _channel_route(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+    ) -> ResolvedSurfaceRoute | None:
+        """A Slack or Teams channel, routed to whichever agent it is wired to."""
         route = surface.channel_route_for(
             channel_id=parsed.external_channel_id,
             channel_name=parsed.metadata.get("channel_name"),
@@ -306,23 +364,22 @@ class SurfaceRoutingMixin:
 
         # Channels always require an @mention (or a reply within a bot thread);
         # there is no per-route opt-out.
-        if not (parsed.mentioned_agent or parsed.metadata.get("is_thread_reply")):
+        if not _addressed(parsed):
             return None
 
         agent_id, agent_name = await self._resolve_route_agent(
             surface=surface, route=route
-        )
-        route_key = (
-            f"channel:{parsed.external_channel_id}"
-            if parsed.external_channel_id
-            else f"channel-name:{route.channel_name}"
         )
         return ResolvedSurfaceRoute(
             agent_id=agent_id,
             agent_name=agent_name,
             agent_display_name=agent_name or "Lemma",
             conversation_kind="CHANNEL",
-            route_key=route_key,
+            route_key=(
+                f"channel:{parsed.external_channel_id}"
+                if parsed.external_channel_id
+                else f"channel-name:{route.channel_name}"
+            ),
         )
 
     async def _resolve_route_agent(

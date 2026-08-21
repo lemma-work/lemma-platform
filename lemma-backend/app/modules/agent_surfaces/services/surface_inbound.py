@@ -52,6 +52,56 @@ logger = get_logger(__name__)
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def _system_bot_surfaces(
+    surfaces: list[AgentSurfaceEntity], platform: str
+) -> list[AgentSurfaceEntity]:
+    """Narrow a shared platform webhook to the surfaces it can legitimately be.
+
+    A platform-wide webhook arrives on shared system credentials. Custom or
+    bound bots have to come with `receiver_surface_ids` (a native receiver) or
+    over a direct surface webhook; without this narrowing, continuity for the
+    same external user or thread can pull a system-bot message into a custom-bot
+    conversation.
+    """
+    if platform not in {
+        SurfacePlatform.TELEGRAM.value,
+        SurfacePlatform.WHATSAPP.value,
+    }:
+        return surfaces
+    return [
+        surface
+        for surface in surfaces
+        if surface.account_id is None
+        and surface.credential_mode is SurfaceCredentialMode.SYSTEM
+    ]
+
+
+def _needs_mention_verification(
+    platform: str,
+    parsed: ParsedInboundSurfaceEvent,
+    surfaces: list[AgentSurfaceEntity],
+) -> bool:
+    """Whether a group message might be an @mention of this bot.
+
+    The parser records any @username / text_mention entities but does not set
+    `mentioned_agent` for a generic mention -- a `mention` entity is a plain
+    @username and does not say *which* user was meant. Settling that costs a
+    getMe call, so it is only worth making when the message could plausibly be
+    for us, and it has to happen before `allows_inbound_event` filters the event
+    out.
+    """
+    if platform != SurfacePlatform.TELEGRAM.value:
+        return False
+    if parsed.is_dm or parsed.mentioned_agent or not surfaces:
+        return False
+    metadata = parsed.metadata or {}
+    return bool(
+        metadata.get("mentioned_usernames")
+        or metadata.get("text_mention_user_ids")
+        or "@" in (parsed.message_text or "")
+    )
+
+
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
@@ -75,52 +125,21 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         surfaces = await self.surface_repository.list_active_by_type(platform)
-
-        # Scope to the bot that actually delivered this event when a native
-        # receiver told us which surfaces it serves (Telegram polling / Slack
-        # socket). This prevents a custom bot's update from being attributed to a
-        # different bot's surface. A shared system-bot platform webhook leaves
-        # this unset → platform-wide fan-in (disambiguated per-sender below).
         if request.receiver_surface_ids is not None:
+            # Scope to the bot that actually delivered this event, when a native
+            # receiver told us which surfaces it serves (Telegram polling / Slack
+            # socket). Without it a custom bot's update can be attributed to a
+            # different bot's surface.
             allowed_ids = set(request.receiver_surface_ids)
             surfaces = [surface for surface in surfaces if surface.id in allowed_ids]
             if not surfaces:
                 return None
-        elif platform in {
-            SurfacePlatform.TELEGRAM.value,
-            SurfacePlatform.WHATSAPP.value,
-        }:
-            # Platform-wide webhooks are shared system credentials. Custom/bound
-            # bots must arrive with receiver_surface_ids (native receiver) or via
-            # a direct surface webhook; otherwise continuity for the same external
-            # user/thread can accidentally pull a system-bot message into a
-            # custom-bot conversation.
-            surfaces = [
-                surface
-                for surface in surfaces
-                if surface.account_id is None
-                and surface.credential_mode is SurfaceCredentialMode.SYSTEM
-            ]
+        else:
+            # A shared system-bot platform webhook: platform-wide fan-in,
+            # disambiguated per-sender below.
+            surfaces = _system_bot_surfaces(surfaces, platform)
 
-        # Mention verification for Telegram groups: the parser records any
-        # @username / text_mention entities but does NOT set mentioned_agent for
-        # generic mentions (a `mention` entity is just a plain @username and
-        # doesn't indicate *which* user was mentioned). Here we verify whether
-        # the mention actually targets this bot by resolving the bot's
-        # @username / user id via getMe and comparing. Must run before
-        # allows_inbound_event so the event isn't filtered out before we get a
-        # chance to check.
-        if (
-            platform == SurfacePlatform.TELEGRAM.value
-            and not parsed.is_dm
-            and not parsed.mentioned_agent
-            and surfaces
-            and (
-                (parsed.metadata or {}).get("mentioned_usernames")
-                or (parsed.metadata or {}).get("text_mention_user_ids")
-                or "@" in (parsed.message_text or "")
-            )
-        ):
+        if _needs_mention_verification(platform, parsed, surfaces):
             async with connection_released(self.uow.session):  # Telegram API
                 parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
 
@@ -134,11 +153,28 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 parsed=parsed,
                 adapter=adapter,
             )
+        return await self._route_to_surface(
+            platform=platform,
+            adapter=adapter,
+            parsed=parsed,
+            candidates=candidates,
+        )
 
-        # Resolve the sender once (using the first candidate's credentials) and
-        # pick the surface this event belongs to (continuity → pod membership →
-        # user default → deterministic tiebreak). An unknown sender only proceeds
-        # when the target surface is unambiguous — it gets the signup/link flow.
+    async def _route_to_surface(
+        self,
+        *,
+        platform: str,
+        adapter: SurfacePlatformAdapterPort,
+        parsed: ParsedInboundSurfaceEvent,
+        candidates: list[AgentSurfaceEntity],
+    ) -> AgentSurfaceContext | None:
+        """Pick the surface this event belongs to, and build its context.
+
+        The sender is resolved once, on the first candidate's credentials, and
+        then continuity -> pod membership -> user default -> deterministic
+        tiebreak picks the surface. An unknown sender only proceeds when the
+        target is unambiguous, which is what gets it the signup/link flow.
+        """
         identity_surface = candidates[0]
         resolved_user = await self._resolve_sender_identity(
             adapter=adapter,
