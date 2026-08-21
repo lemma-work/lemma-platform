@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import json
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan
@@ -30,7 +31,9 @@ class _Exporter(SpanExporter):
 
 def test_filtering_exporter_filters_and_flushes():
     delegate = _Exporter(flush=False)
-    exporter = telemetry.FilteringSpanExporter(delegate, lambda span: span.name == "keep")
+    exporter = telemetry.FilteringSpanExporter(
+        delegate, lambda span: span.name == "keep"
+    )
     keep = SimpleNamespace(name="keep")
     drop = SimpleNamespace(name="drop")
 
@@ -55,7 +58,10 @@ def test_filtering_exporter_without_flush_method_succeeds():
 
 
 def test_agent_run_context_enriches_spans_and_restores_previous_context():
-    span = SimpleNamespace(attributes={}, set_attribute=lambda key, value: span.attributes.update({key: value}))
+    span = SimpleNamespace(
+        attributes={},
+        set_attribute=lambda key, value: span.attributes.update({key: value}),
+    )
     enricher = telemetry.AgentRunSpanEnricher()
 
     assert telemetry._agent_run_context.get() == {}
@@ -168,3 +174,140 @@ def test_llm_span_detection_uses_openinference_kind():
     drop = SimpleNamespace(attributes={})
     assert telemetry._is_llm_span(keep)
     assert not telemetry._is_llm_span(drop)
+
+
+def test_agent_run_context_carries_openinference_session_and_user():
+    """Phoenix groups a conversation's traces on `session.id` and nothing else."""
+    with telemetry.agent_run_telemetry_context(
+        conversation_id="conversation-1",
+        agent_run_id="run-1",
+        user_id="user-1",
+        pod_id="pod-1",
+        agent_name="assistant",
+    ) as attributes:
+        assert attributes[telemetry.SpanAttributes.SESSION_ID] == "conversation-1"
+        assert attributes[telemetry.SpanAttributes.USER_ID] == "user-1"
+        metadata = json.loads(attributes[telemetry.SpanAttributes.METADATA])
+
+    # The metadata blob restates the lemma.* fields, unprefixed, and carries
+    # nothing else -- it is built from them, so the two cannot disagree.
+    assert metadata == {
+        "conversation_id": "conversation-1",
+        "agent_run_id": "run-1",
+        "pod_id": "pod-1",
+        "user_id": "user-1",
+        "agent_name": "assistant",
+    }
+
+
+def test_agent_run_context_omits_user_id_when_absent():
+    with telemetry.agent_run_telemetry_context(
+        conversation_id="conversation-1",
+        agent_run_id="run-1",
+    ) as attributes:
+        assert telemetry.SpanAttributes.USER_ID not in attributes
+        assert attributes[telemetry.SpanAttributes.SESSION_ID] == "conversation-1"
+
+
+def test_llm_fanout_processor_is_built_only_when_the_llm_backend_is_on(monkeypatch):
+    settings = SimpleNamespace(
+        llm_otel_enabled=False,
+        llm_otel_exporter_otlp_endpoint="http://phoenix:4317",
+        llm_otel_exporter_otlp_protocol="grpc",
+        llm_otel_exporter_otlp_headers=None,
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: settings)
+    assert telemetry._build_llm_fanout_processor() is None
+
+    settings.llm_otel_enabled = True
+    settings.llm_otel_exporter_otlp_endpoint = None
+    assert telemetry._build_llm_fanout_processor() is None
+
+    settings.llm_otel_exporter_otlp_endpoint = "http://phoenix:4317"
+    processor = telemetry._build_llm_fanout_processor()
+    assert processor is not None
+    processor.shutdown()
+
+
+def test_llm_fanout_forwards_only_openinference_spans(monkeypatch):
+    """The root AGENT span crosses to the LLM backend; the SQL beside it does not."""
+    delegate = _Exporter()
+    monkeypatch.setattr(
+        telemetry,
+        "_get_settings",
+        lambda: SimpleNamespace(
+            llm_otel_enabled=True,
+            llm_otel_exporter_otlp_endpoint="http://phoenix:4317",
+            llm_otel_exporter_otlp_protocol="grpc",
+            llm_otel_exporter_otlp_headers=None,
+        ),
+    )
+    monkeypatch.setattr(
+        telemetry,
+        "_build_span_exporter",
+        lambda endpoint, *, protocol, headers=None: delegate,
+    )
+    processor = telemetry._build_llm_fanout_processor()
+    assert processor is not None
+
+    agent_span = SimpleNamespace(
+        name="agent.run",
+        attributes={telemetry.SpanAttributes.OPENINFERENCE_SPAN_KIND: "AGENT"},
+    )
+    sql_span = SimpleNamespace(name="SELECT", attributes={})
+    # Straight at the exporter the processor was built around: batching is the
+    # SDK's business, the filter is ours.
+    processor.span_exporter.export([agent_span, sql_span])
+
+    assert [span.name for batch in delegate.exported for span in batch] == ["agent.run"]
+    processor.shutdown()
+
+
+def test_record_span_input_and_output_encode_and_truncate():
+    span = SimpleNamespace(
+        attributes={},
+        set_attribute=lambda key, value: span.attributes.update({key: value}),
+    )
+
+    telemetry.record_span_input(span, "what is the status of order 42?")
+    telemetry.record_span_output(span, {"status": "shipped"})
+
+    assert span.attributes[telemetry.SpanAttributes.INPUT_VALUE] == (
+        "what is the status of order 42?"
+    )
+    assert span.attributes[telemetry.SpanAttributes.INPUT_MIME_TYPE] == "text/plain"
+    assert span.attributes[telemetry.SpanAttributes.OUTPUT_VALUE] == (
+        '{"status":"shipped"}'
+    )
+    assert (
+        span.attributes[telemetry.SpanAttributes.OUTPUT_MIME_TYPE] == "application/json"
+    )
+
+    telemetry.record_span_input(span, "x" * 20_000)
+    assert (
+        len(span.attributes[telemetry.SpanAttributes.INPUT_VALUE])
+        == telemetry._MAX_SPAN_CONTENT_CHARS
+    )
+
+
+def test_record_span_content_skips_nothing_worth_recording():
+    span = SimpleNamespace(
+        attributes={},
+        set_attribute=lambda key, value: span.attributes.update({key: value}),
+    )
+    telemetry.record_span_input(span, None)
+    telemetry.record_span_output(span, "")
+    assert span.attributes == {}
+
+
+def test_record_span_output_encodes_values_json_cannot_hold_natively():
+    span = SimpleNamespace(
+        attributes={},
+        set_attribute=lambda key, value: span.attributes.update({key: value}),
+    )
+
+    telemetry.record_span_output(span, {"key": {1, 2}})
+    assert span.attributes[telemetry.SpanAttributes.OUTPUT_MIME_TYPE] == (
+        "application/json"
+    )
+    assert "1" in span.attributes[telemetry.SpanAttributes.OUTPUT_VALUE]

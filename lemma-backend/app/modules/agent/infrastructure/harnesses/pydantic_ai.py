@@ -351,7 +351,7 @@ class PydanticAIHarness:
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
             logger.debug(
-                'agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic',
+                "agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic",
                 exc_info=True,
             )
             yield AgentEvent(
@@ -390,7 +390,9 @@ class PydanticAIHarness:
             )
             return
         except Exception as exc:
-            logger.error("agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True)
+            logger.error(
+                "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
+            )
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -492,6 +494,16 @@ class PydanticAIHarness:
                 ),
                 "deps": ctx,
                 "usage_limits": options.usage_limits,
+                # Our conversation id, not pydantic-ai's. Left unset, pydantic-ai
+                # takes the most recent conversation id off `message_history` --
+                # and we rebuild history from the database every run, so there is
+                # never one to inherit and it mints a fresh UUID7 per run instead.
+                # That id becomes `gen_ai.conversation.id`, which the
+                # OpenInference instrumentation maps onto `session.id`, which is
+                # the only thing Phoenix groups a session by. So every turn
+                # became its own single-trace session: 648 traces, 648 sessions,
+                # exactly one-to-one, on the deployment where this was found.
+                "conversation_id": str(conversation.id),
             }
             if resume_history is not None or user_prompt is None:
                 return pydantic_agent.iter(**iter_kwargs)
@@ -520,153 +532,150 @@ class PydanticAIHarness:
                 # usage off the run that just failed.
                 state["run"] = run
                 async for node in run:
-                        if PydanticAIAgent.is_model_request_node(node):
-                            # Snapshot BEFORE streaming, because after a
-                            # mid-stream failure `all_messages()` has grown a
-                            # truncated ModelResponse plus an empty
-                            # ModelRequest: resuming from that makes the model
-                            # continue an answer whose first half we threw away.
-                            #
-                            # `node.request` must be appended explicitly. It is
-                            # the request about to be sent (for a post-tool node,
-                            # the one carrying the ToolReturnParts) and it does
-                            # not enter `all_messages()` until the request
-                            # actually happens. Without it the resume history
-                            # ends on a ModelResponse whose tool calls have no
-                            # results, and pydantic-ai — correctly — executes
-                            # those tools again. That is how a retry would
-                            # double-charge a card.
-                            snapshot = list(run.all_messages())
-                            pending = getattr(node, "request", None)
-                            if pending is not None and (
-                                not snapshot or snapshot[-1] is not pending
-                            ):
-                                snapshot.append(pending)
-                            state["resume_from"] = snapshot
-                            # A model response is persisted all-or-nothing. Parts
-                            # that finish before the stream dies are NOT in
-                            # `run.all_messages()` (pydantic-ai appends the
-                            # ModelResponse only once the node completes), so
-                            # writing them as they arrive would duplicate them on
-                            # resume. Tokens still stream live; only the durable
-                            # write waits for the node to finish.
-                            buffered: list[AgentEvent] = []
-                            async for event in self._stream_model_request(
-                                node,
-                                run,
-                                agent_run_id=agent_run_id,
-                                malformed_tool_call_ids=malformed_tool_call_ids,
-                                should_stop=should_stop,
-                            ):
-                                if event.type is AgentEventType.MESSAGE:
-                                    buffered.append(event)
-                                    continue
-                                if event.type in {
-                                    AgentEventType.ERROR,
-                                    AgentEventType.STOPPED,
-                                }:
-                                    # A stop is a real ending, not a lost response:
-                                    # flush what the model already produced before
-                                    # the terminal event so the user keeps it.
-                                    for held in buffered:
-                                        await queue.put(("event", held))
-                                    await queue.put(("event", event))
-                                    return
+                    if PydanticAIAgent.is_model_request_node(node):
+                        # Snapshot BEFORE streaming, because after a
+                        # mid-stream failure `all_messages()` has grown a
+                        # truncated ModelResponse plus an empty
+                        # ModelRequest: resuming from that makes the model
+                        # continue an answer whose first half we threw away.
+                        #
+                        # `node.request` must be appended explicitly. It is
+                        # the request about to be sent (for a post-tool node,
+                        # the one carrying the ToolReturnParts) and it does
+                        # not enter `all_messages()` until the request
+                        # actually happens. Without it the resume history
+                        # ends on a ModelResponse whose tool calls have no
+                        # results, and pydantic-ai — correctly — executes
+                        # those tools again. That is how a retry would
+                        # double-charge a card.
+                        snapshot = list(run.all_messages())
+                        pending = getattr(node, "request", None)
+                        if pending is not None and (
+                            not snapshot or snapshot[-1] is not pending
+                        ):
+                            snapshot.append(pending)
+                        state["resume_from"] = snapshot
+                        # A model response is persisted all-or-nothing. Parts
+                        # that finish before the stream dies are NOT in
+                        # `run.all_messages()` (pydantic-ai appends the
+                        # ModelResponse only once the node completes), so
+                        # writing them as they arrive would duplicate them on
+                        # resume. Tokens still stream live; only the durable
+                        # write waits for the node to finish.
+                        buffered: list[AgentEvent] = []
+                        async for event in self._stream_model_request(
+                            node,
+                            run,
+                            agent_run_id=agent_run_id,
+                            malformed_tool_call_ids=malformed_tool_call_ids,
+                            should_stop=should_stop,
+                        ):
+                            if event.type is AgentEventType.MESSAGE:
+                                buffered.append(event)
+                                continue
+                            if event.type in {
+                                AgentEventType.ERROR,
+                                AgentEventType.STOPPED,
+                            }:
+                                # A stop is a real ending, not a lost response:
+                                # flush what the model already produced before
+                                # the terminal event so the user keeps it.
+                                for held in buffered:
+                                    await queue.put(("event", held))
                                 await queue.put(("event", event))
-                            for held in buffered:
-                                await queue.put(("event", held))
-                        elif PydanticAIAgent.is_call_tools_node(node):
-                            async for event in self._stream_tool_calls(
-                                node,
-                                run,
-                                conversation_id=ctx.conversation_id,
-                                agent_run_id=agent_run_id,
-                                malformed_tool_call_ids=malformed_tool_call_ids,
-                                emitted_tool_response_ids=emitted_tool_response_ids,
-                                should_stop=should_stop,
-                            ):
-                                await queue.put(("event", event))
-                                if event.type in {
-                                    AgentEventType.ERROR,
-                                    AgentEventType.STOPPED,
-                                }:
-                                    return
-                        elif PydanticAIAgent.is_end_node(node):
-                            if node.data.tool_call_id:
-                                if (
-                                    node.data.tool_call_id
-                                    not in emitted_tool_response_ids
-                                ):
-                                    await queue.put(
-                                        (
-                                            "event",
-                                            AgentEvent(
-                                                type=AgentEventType.MESSAGE,
-                                                data=MessageDraft.of_tool_return(
-                                                    tool_name=node.data.tool_name
-                                                    or "unknown_tool",
-                                                    tool_call_id=node.data.tool_call_id,
-                                                    tool_result=to_json_value(
-                                                        node.data.output
-                                                    ),
-                                                    metadata={
-                                                        "tool_name": node.data.tool_name
-                                                        or "unknown_tool"
-                                                    },
+                                return
+                            await queue.put(("event", event))
+                        for held in buffered:
+                            await queue.put(("event", held))
+                    elif PydanticAIAgent.is_call_tools_node(node):
+                        async for event in self._stream_tool_calls(
+                            node,
+                            run,
+                            conversation_id=ctx.conversation_id,
+                            agent_run_id=agent_run_id,
+                            malformed_tool_call_ids=malformed_tool_call_ids,
+                            emitted_tool_response_ids=emitted_tool_response_ids,
+                            should_stop=should_stop,
+                        ):
+                            await queue.put(("event", event))
+                            if event.type in {
+                                AgentEventType.ERROR,
+                                AgentEventType.STOPPED,
+                            }:
+                                return
+                    elif PydanticAIAgent.is_end_node(node):
+                        if node.data.tool_call_id:
+                            if node.data.tool_call_id not in emitted_tool_response_ids:
+                                await queue.put(
+                                    (
+                                        "event",
+                                        AgentEvent(
+                                            type=AgentEventType.MESSAGE,
+                                            data=MessageDraft.of_tool_return(
+                                                tool_name=node.data.tool_name
+                                                or "unknown_tool",
+                                                tool_call_id=node.data.tool_call_id,
+                                                tool_result=to_json_value(
+                                                    node.data.output
                                                 ),
-                                                agent_run_id=agent_run_id,
+                                                metadata={
+                                                    "tool_name": node.data.tool_name
+                                                    or "unknown_tool"
+                                                },
                                             ),
-                                        )
+                                            agent_run_id=agent_run_id,
+                                        ),
                                     )
-                                    if await self._should_stop(should_stop):
-                                        await queue.put(
-                                            ("event", self._stopped_event(agent_run_id))
-                                        )
-                                        return
-                                final_message = self._final_output_message(
-                                    output=node.data.output,
-                                    tool_name=node.data.tool_name,
-                                    tool_call_id=node.data.tool_call_id,
                                 )
-                                if final_message is not None:
+                                if await self._should_stop(should_stop):
                                     await queue.put(
-                                        (
-                                            "event",
-                                            AgentEvent(
-                                                type=AgentEventType.MESSAGE,
-                                                data=final_message,
-                                                agent_run_id=agent_run_id,
-                                            ),
-                                        )
+                                        ("event", self._stopped_event(agent_run_id))
                                     )
-                                    if await self._should_stop(should_stop):
-                                        await queue.put(
-                                            ("event", self._stopped_event(agent_run_id))
-                                        )
-                                        return
+                                    return
+                            final_message = self._final_output_message(
+                                output=node.data.output,
+                                tool_name=node.data.tool_name,
+                                tool_call_id=node.data.tool_call_id,
+                            )
+                            if final_message is not None:
+                                await queue.put(
+                                    (
+                                        "event",
+                                        AgentEvent(
+                                            type=AgentEventType.MESSAGE,
+                                            data=final_message,
+                                            agent_run_id=agent_run_id,
+                                        ),
+                                    )
+                                )
+                                if await self._should_stop(should_stop):
+                                    await queue.put(
+                                        ("event", self._stopped_event(agent_run_id))
+                                    )
+                                    return
 
-                            elif options.output_type is not None:
-                                final_message = self._final_output_message(
-                                    output=node.data.output,
-                                    tool_name=None,
-                                    tool_call_id=None,
-                                )
-                                if final_message is not None:
-                                    await queue.put(
-                                        (
-                                            "event",
-                                            AgentEvent(
-                                                type=AgentEventType.MESSAGE,
-                                                data=final_message,
-                                                agent_run_id=agent_run_id,
-                                            ),
-                                        )
+                        elif options.output_type is not None:
+                            final_message = self._final_output_message(
+                                output=node.data.output,
+                                tool_name=None,
+                                tool_call_id=None,
+                            )
+                            if final_message is not None:
+                                await queue.put(
+                                    (
+                                        "event",
+                                        AgentEvent(
+                                            type=AgentEventType.MESSAGE,
+                                            data=final_message,
+                                            agent_run_id=agent_run_id,
+                                        ),
                                     )
-                                    if await self._should_stop(should_stop):
-                                        await queue.put(
-                                            ("event", self._stopped_event(agent_run_id))
-                                        )
-                                        return
+                                )
+                                if await self._should_stop(should_stop):
+                                    await queue.put(
+                                        ("event", self._stopped_event(agent_run_id))
+                                    )
+                                    return
 
                 # Tokens burned by abandoned attempts are still billed by the
                 # provider, so they are carried forward rather than forgotten.
@@ -827,7 +836,7 @@ class PydanticAIHarness:
                 if tool_args is None:
                     malformed_tool_call_ids.add(part.tool_call_id)
                     logger.debug(
-                        'agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic',
+                        "agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic",
                         tool_call_id=part.tool_call_id,
                     )
                     return None
@@ -1094,7 +1103,7 @@ class PydanticAIHarness:
                     result_part = event.part
                     if result_part.tool_call_id in malformed_tool_call_ids:
                         logger.debug(
-                            'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic',
+                            "agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic",
                             tool_call_id=result_part.tool_call_id,
                         )
                         continue

@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
+from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    ConversationStatus,
+    MessageKind,
+    MessageRole,
+)
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.services import agent_runner_service as runner_module
 from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
     _finalize_safely,
     _rejected_run_error_message,
+    _run_input_text,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
 
@@ -30,7 +38,9 @@ def test_rejected_run_error_message_uses_the_harness_supplied_detail():
 
 def test_rejected_run_error_message_falls_back_for_malformed_data():
     assert _rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
-    assert _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+    assert (
+        _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+    )
     assert _rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
 
 
@@ -197,4 +207,48 @@ async def test_execute_does_not_re_raise_cancelled_error(monkeypatch) -> None:
         user_id=UUID("00000000-0000-0000-0000-000000000021"),
         pod_id=UUID("00000000-0000-0000-0000-000000000022"),
         agent_name="test-agent",
+    )
+
+
+def _message(role: str, kind: MessageKind, text: str | None) -> Message:
+    return Message(
+        id=uuid4(),
+        created_at=datetime.now(UTC),
+        conversation_id=uuid4(),
+        sequence=0,
+        agent_run_id=None,
+        role=role,
+        kind=kind,
+        text=text,
+    )
+
+
+def test_run_input_text_is_the_turn_that_started_the_run():
+    """The span's input is this turn, not the transcript it was handed."""
+    messages = [
+        _message(MessageRole.USER.value, MessageKind.TEXT, "the previous turn"),
+        _message(MessageRole.ASSISTANT.value, MessageKind.TEXT, "an earlier answer"),
+        _message(MessageRole.USER.value, MessageKind.TEXT, "what changed?"),
+        _message(MessageRole.TOOL.value, MessageKind.TOOL_RETURN, "tool output"),
+    ]
+    assert _run_input_text(messages) == "what changed?"
+
+
+def test_run_input_text_skips_non_textual_and_blank_user_messages():
+    assert _run_input_text([]) is None
+    assert (
+        _run_input_text(
+            [_message(MessageRole.ASSISTANT.value, MessageKind.TEXT, "only the agent")]
+        )
+        is None
+    )
+    assert (
+        _run_input_text(
+            [
+                _message(MessageRole.USER.value, MessageKind.TEXT, "the real prompt"),
+                _message(MessageRole.USER.value, MessageKind.TEXT, "   "),
+                _message(MessageRole.USER.value, MessageKind.THINKING, "not a prompt"),
+            ]
+        )
+        == "the real prompt"
     )
