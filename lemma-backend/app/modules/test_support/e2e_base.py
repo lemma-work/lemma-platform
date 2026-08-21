@@ -730,9 +730,24 @@ async def cleanup_workspace_containers_function():
 
 
 def _import_e2e_models() -> None:
-    """Populate shared SQLAlchemy metadata before schema creation."""
+    """Populate shared SQLAlchemy metadata before schema creation.
+
+    Every module that declares a ``__tablename__`` has to appear here, or its
+    tables exist in ``Base.metadata`` only once some *test* happens to import
+    them -- after the schema was created. ``runtime_models`` was missing, and it
+    declares six: agent_hosts, agent_host_pairings, agent_host_harnesses,
+    agent_host_commands, agent_host_run_leases and agent_runtime_profiles.
+
+    That made schema creation order-dependent.
+    ``test_dynamic_agent_function_tools_e2e`` fails on `relation
+    "agent_runtime_profiles" does not exist` when its file runs on its own, and
+    passes in CI only because an earlier test in the same shard imports the
+    module first. The other modules listed below re-export their submodels
+    through a package ``__init__``, so importing the package is enough.
+    """
     from app.core.infrastructure.events import models as event_models
     from app.modules.agent.infrastructure import models as agent_models
+    from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
@@ -752,6 +767,7 @@ def _import_e2e_models() -> None:
 
     _ = (
         workspace_models,
+        agent_runtime_models,
         event_models,
         user_models,
         organization_models,
