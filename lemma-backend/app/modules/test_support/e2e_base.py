@@ -1188,6 +1188,14 @@ async def _clear_session_user_redis_state(redis_url: str) -> None:
         await client.aclose()
 
 
+#: Markers whose tests provision a real sandbox, and so cannot share a user.
+_SANDBOX_MARKERS = frozenset({"workspace", "fast_workspace", "real_sandbox"})
+
+
+def _needs_own_sandbox(request) -> bool:
+    return any(request.node.get_closest_marker(name) for name in _SANDBOX_MARKERS)
+
+
 def _session_user_keep_rows() -> dict[str, str]:
     """Rows the per-test wipe must not delete: the session user, if there is one."""
     user = _SESSION_USER.get("user")
@@ -1200,11 +1208,24 @@ def _session_user_keep_rows() -> dict[str, str]:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def fixed_test_user(async_client: "AsyncClient"):
+async def fixed_test_user(request, async_client: "AsyncClient"):
     # Created once per process and reused. The row survives the per-test wipe
     # (see _PRESERVED_TABLES) and the SuperTokens session lives in the auth
     # container, which nothing here resets -- so the token stays valid.
-    if "user" in _SESSION_USER:
+    #
+    # Except for tests that provision a real sandbox, which get a fresh user.
+    # A WORKSPACE sandbox is owned by the USER (sandbox_composition.py) and
+    # `sandbox_id` *defaults to the owner id* (sandbox_service.resolve), so the
+    # sandbox identity is the user id. Sharing a user therefore points every
+    # test at the same sandbox, while the per-test wipe deletes the `sandboxes`
+    # row out from under a container that is then reaped -- which surfaced as
+    # `ProviderGone: sandbox container ... no longer exists` in CI and a missing
+    # workspace notice locally. A fresh user is what kept those tests isolated,
+    # by accident rather than by design; this makes it deliberate.
+    #
+    # It costs little: this is the `sandbox` shard plus three fast_workspace
+    # journeys, against ~750 tests that never touch a container.
+    if not _needs_own_sandbox(request) and "user" in _SESSION_USER:
         return _SESSION_USER["user"]
 
     email = f"test+module-e2e-{uuid4().hex[:10]}@example.com"
@@ -1231,7 +1252,8 @@ async def fixed_test_user(async_client: "AsyncClient"):
     assert access_token
 
     user = {"email": email, "token": access_token, "id": data["user"]["id"]}
-    _SESSION_USER["user"] = user
+    if not _needs_own_sandbox(request):
+        _SESSION_USER["user"] = user
     return user
 
 
