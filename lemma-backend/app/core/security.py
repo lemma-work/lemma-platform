@@ -1,3 +1,7 @@
+import base64
+import binascii
+import json
+import time
 from uuid import UUID
 from fastapi import HTTPException
 from fastapi.security import HTTPBearer
@@ -28,6 +32,59 @@ from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
 
 logger = get_logger(__name__)
+
+
+# How far past its expiry an access token has to be before the expiry itself is
+# the suspicious part.
+#
+# Minutes are ordinary: a token expires, the client refreshes, and a request in
+# flight over the boundary answers 401 once. Hours are not. A token that was
+# minted seconds ago and is already hours expired means the clock that signed it
+# and the clock reading it disagree — which no amount of refreshing fixes,
+# because every replacement token comes from the same wrong clock. That state
+# used to be completely silent: the loop it produces logs a wall of 401s and not
+# one line saying why.
+CLOCK_SKEW_SUSPECT_SECONDS = 300
+
+
+def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
+    """The `exp` the presented access token claims, without verifying it.
+
+    Only ever read after verification has already failed, and only to describe
+    the failure. Nothing is authorized on the strength of it.
+    """
+    token = connection.cookies.get("sAccessToken")
+    if not token:
+        header = connection.headers.get("authorization", "")
+        if header.lower().startswith("bearer "):
+            token = header[7:].strip()
+    if not token:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    return float(expiry) if isinstance(expiry, (int, float)) else None
+
+
+def _report_expired_access_token(connection: HTTPConnection) -> None:
+    """Say so when a token is expired by more than an expiry explains."""
+    expiry = _unverified_token_expiry(connection)
+    if expiry is None:
+        return
+    expired_by_seconds = int(time.time() - expiry)
+    if expired_by_seconds < CLOCK_SKEW_SUSPECT_SECONDS:
+        return
+    logger.warning(
+        "identity.session.access_token_expiry_implausible.degraded",
+        expired_by_seconds=expired_by_seconds,
+    )
 
 
 async def _get_local_auth_state(user_id: UUID) -> AccountStanding | None:
@@ -292,6 +349,7 @@ async def verify_auth(connection: HTTPConnection):
         # This exception is raised when the access token has expired.
         # SuperTokens frontend SDKs handle the refresh flow, but for an API client,
         # we return 401 so they know to refresh.
+        _report_expired_access_token(connection)
         raise HTTPException(
             status_code=401,
             detail="Access token has expired. Please refresh your session.",

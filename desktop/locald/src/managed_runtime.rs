@@ -126,8 +126,60 @@ impl ManagedRuntimeBootstrap {
             spec,
             forwarders: Mutex::new(Vec::new()),
             status: Mutex::new(None),
+            clock_keeper: Mutex::new(None),
         }))
     }
+}
+
+/// How often the guest's wall clock is put back on this machine's.
+///
+/// The guest sets its time once, at boot, and nothing moves it afterwards. A
+/// Virtualization.framework VM does not run while the Mac sleeps, so the guest
+/// clock falls behind by however long the lid was closed and stays there. That
+/// broke sign-in outright: the auth service runs inside the guest, so every
+/// access token it minted carried an `exp` computed from the wrong clock, the
+/// backend on the Mac read it as already expired, and the browser refreshed --
+/// getting another already-expired token from the same wrong clock, forever.
+///
+/// Thirty seconds is a bound on drift, not a poll for it: the request is one
+/// small round trip over the control socket, and the sleep case is caught
+/// within a tick anyway.
+const CLOCK_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+/// The slice the keeper sleeps in, so stopping does not wait out an interval.
+const CLOCK_KEEPER_TICK: Duration = Duration::from_secs(1);
+/// Wall time that ran further than the monotonic clock across one tick means
+/// the Mac was asleep in between -- `Instant` does not advance while it is.
+/// The guest was not running for that stretch, so it is now exactly that far
+/// behind and should not wait for the interval to find out.
+const HOST_SLEEP_MARGIN: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClockSyncReason {
+    HostSlept,
+    Interval,
+}
+
+/// Should this tick put the guest clock back on the host's, and why?
+///
+/// Split out from the loop because the loop is a thread and this is the part
+/// worth asserting on.
+fn clock_sync_due(
+    since_last_sync: Duration,
+    monotonic: Duration,
+    wall: Duration,
+) -> Option<ClockSyncReason> {
+    if wall > monotonic + HOST_SLEEP_MARGIN {
+        return Some(ClockSyncReason::HostSlept);
+    }
+    if since_last_sync >= CLOCK_SYNC_INTERVAL {
+        return Some(ClockSyncReason::Interval);
+    }
+    None
+}
+
+struct ClockKeeper {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 
 pub struct ManagedRuntimeController {
@@ -135,6 +187,7 @@ pub struct ManagedRuntimeController {
     spec: ManagedRuntimeSpec,
     forwarders: Mutex<Vec<TcpForwarder>>,
     status: Mutex<Option<ManagedRuntimeStatus>>,
+    clock_keeper: Mutex<Option<ClockKeeper>>,
 }
 
 impl ManagedRuntimeController {
@@ -142,12 +195,12 @@ impl ManagedRuntimeController {
         self.runtime.prepare_host()
     }
 
-    pub fn start(&self) -> io::Result<()> {
+    pub fn start(self: &Arc<Self>) -> io::Result<()> {
         self.start_with_progress(|_, _, _, _| {})
     }
 
     pub fn start_with_progress(
-        &self,
+        self: &Arc<Self>,
         mut progress: impl FnMut(&str, &str, u64, &str),
     ) -> io::Result<()> {
         validate_spec(&self.spec)?;
@@ -160,6 +213,11 @@ impl ManagedRuntimeController {
         let status = self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
         })?;
+        // Before PostgreSQL, Redis or the auth service exist in there. `start`
+        // only boots a guest that is not already running, and a reused guest
+        // keeps whatever clock it drifted to while the Mac was asleep -- so the
+        // one place the clock is guaranteed correct cannot be boot alone.
+        self.sync_guest_clock(None);
         let parameters = json!({
             "images": self.spec.images,
             "credentials": self.spec.credentials,
@@ -246,10 +304,12 @@ impl ManagedRuntimeController {
             );
         }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
+        self.start_clock_keeper();
         Ok(())
     }
 
     pub fn stop_infrastructure(&self) -> io::Result<()> {
+        self.stop_clock_keeper();
         if self.status().is_none() {
             self.clear_forwarders();
             return self.runtime.stop();
@@ -327,6 +387,95 @@ impl ManagedRuntimeController {
             ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
             ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
         ]))
+    }
+
+    /// Hold the guest clock on this machine's for as long as the stack runs.
+    ///
+    /// Idempotent: a second call while one is running is a no-op, so a recovery
+    /// path that starts an already-started stack does not leave two threads
+    /// stepping the same clock.
+    fn start_clock_keeper(self: &Arc<Self>) {
+        let mut slot = self
+            .clock_keeper
+            .lock()
+            .expect("clock keeper lock poisoned");
+        if slot.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let controller = Arc::clone(self);
+        let flag = Arc::clone(&stop);
+        let handle = thread::spawn(move || controller.keep_clock(&flag));
+        *slot = Some(ClockKeeper { stop, handle });
+    }
+
+    fn stop_clock_keeper(&self) {
+        let keeper = self
+            .clock_keeper
+            .lock()
+            .expect("clock keeper lock poisoned")
+            .take();
+        if let Some(keeper) = keeper {
+            keeper.stop.store(true, Ordering::Release);
+            let _ = keeper.handle.join();
+        }
+    }
+
+    fn keep_clock(&self, stop: &AtomicBool) {
+        let mut last_sync = Instant::now();
+        let mut last_tick = Instant::now();
+        let mut last_wall = SystemTime::now();
+        while !stop.load(Ordering::Acquire) {
+            thread::sleep(CLOCK_KEEPER_TICK);
+            if stop.load(Ordering::Acquire) {
+                return;
+            }
+            let tick = Instant::now();
+            let wall = SystemTime::now();
+            let reason = clock_sync_due(
+                tick.duration_since(last_sync),
+                tick.duration_since(last_tick),
+                wall.duration_since(last_wall).unwrap_or_default(),
+            );
+            last_tick = tick;
+            last_wall = wall;
+            let Some(reason) = reason else {
+                continue;
+            };
+            last_sync = tick;
+            self.sync_guest_clock(Some(reason));
+        }
+    }
+
+    /// One correction, reported only when there was something to correct.
+    ///
+    /// Never fatal. A guest that will not take a clock is a guest with a
+    /// problem this cannot fix, and tearing the stack down over it would turn a
+    /// recoverable drift into an outage.
+    fn sync_guest_clock(&self, reason: Option<ClockSyncReason>) {
+        match self.runtime.sync_clock() {
+            Ok(report) => {
+                if !report
+                    .get("stepped")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                let skew = report
+                    .get("skew_seconds")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_default();
+                let cause = match reason {
+                    Some(ClockSyncReason::HostSlept) => " after this Mac slept",
+                    Some(ClockSyncReason::Interval) | None => "",
+                };
+                eprintln!("locald: the guest clock was {skew}s behind this Mac{cause}; corrected");
+            }
+            Err(error) => {
+                eprintln!("locald: could not put the guest clock back on this Mac's: {error}");
+            }
+        }
     }
 
     fn ensure_forwarders(&self, status: &ManagedRuntimeStatus) -> io::Result<()> {
@@ -892,6 +1041,47 @@ mod tests {
         wait_for_tcp_services(Ipv4Addr::LOCALHOST, &services, Duration::from_millis(250)).unwrap();
     }
 
+    /// The case that shipped broken: the Mac slept for eleven hours, so wall
+    /// time ran eleven hours while the monotonic clock ran a tick. The guest
+    /// was not running for any of it and is now exactly that far behind.
+    #[test]
+    fn a_wall_clock_jump_past_the_monotonic_clock_is_read_as_host_sleep() {
+        assert_eq!(
+            clock_sync_due(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(41_250),
+            ),
+            Some(ClockSyncReason::HostSlept),
+        );
+    }
+
+    #[test]
+    fn an_ordinary_tick_inside_the_interval_does_not_sync() {
+        assert_eq!(
+            clock_sync_due(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            None,
+        );
+    }
+
+    /// Drift that is not a sleep still accumulates, so the interval is a
+    /// ceiling on how far the guest may be off before it is put back.
+    #[test]
+    fn the_interval_bounds_drift_that_was_not_a_sleep() {
+        assert_eq!(
+            clock_sync_due(
+                CLOCK_SYNC_INTERVAL,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            Some(ClockSyncReason::Interval),
+        );
+    }
+
     #[test]
     fn host_processes_use_private_guest_services_without_published_infra_ports() {
         let root = tempdir().unwrap();
@@ -928,6 +1118,7 @@ mod tests {
                 },
             },
             forwarders: Mutex::new(Vec::new()),
+            clock_keeper: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

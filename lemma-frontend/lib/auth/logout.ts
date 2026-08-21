@@ -1,6 +1,7 @@
 'use client';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { forgetBrowserSession } from '@/components/auth/portal/auth/session-recovery';
 import { clearLastOpenedPodId } from '@/lib/pods/last-opened-pod';
 import { resetAnalyticsIdentity } from '@/lib/analytics/client';
 
@@ -14,6 +15,13 @@ export async function logoutToHome() {
         // Best effort: even if the network sign-out fails, fall through and
         // send the user to the landing page rather than stranding them.
     }
+
+    // Falling through is not enough on its own. A sign-out that failed leaves
+    // the front token in place, the landing page reads it as a live session,
+    // and the user is bounced straight back into the workspace they were trying
+    // to leave. Clearing what this browser reads is what makes the navigation
+    // below mean something.
+    forgetBrowserSession();
 
     // Drop the "last opened pod" marker so the root route doesn't immediately
     // redirect a just-logged-out user back into their previous pod.
