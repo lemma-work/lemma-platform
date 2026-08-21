@@ -29,7 +29,7 @@
     {
       "name": "datastore",
       "args": "app/modules app/core --ignore=app/modules/agent/tests/e2e --ignore=app/modules/agent_surfaces/tests/e2e --ignore=app/modules/connectors/tests/e2e --ignore=app/modules/function/tests/e2e --ignore=app/modules/identity/tests/e2e --ignore=app/modules/pod/tests/e2e --ignore=app/modules/pod_bundle/tests/e2e --ignore=app/modules/workspace/tests/e2e",
-      "workers": 3,
+      "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "catch_all": true,
@@ -39,7 +39,7 @@
     {
       "name": "pod",
       "args": "app/modules/connectors/tests/e2e app/modules/pod/tests/e2e app/modules/pod_bundle/tests/e2e",
-      "workers": 3,
+      "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "catch_all": false,
@@ -49,7 +49,7 @@
     {
       "name": "surfaces",
       "args": "app/modules/agent_surfaces/tests/e2e app/modules/identity/tests/e2e",
-      "workers": 3,
+      "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "catch_all": false,
