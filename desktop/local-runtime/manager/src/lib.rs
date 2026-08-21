@@ -1153,9 +1153,15 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
 #[cfg(any(windows, test))]
 fn decode_wsl_output(value: &[u8]) -> String {
     let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
+        // `as_chunks::<2>()` rather than `chunks_exact(2)`: it yields `[u8; 2]`
+        // directly, so the pair goes straight into `from_le_bytes` with no
+        // indexing that could panic. `.0` is the whole pairs; a trailing odd
+        // byte lands in `.1` and is dropped, exactly as `chunks_exact` did.
         let words: Vec<u16> = value
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         String::from_utf16_lossy(&words).replace('\0', "")
     } else {

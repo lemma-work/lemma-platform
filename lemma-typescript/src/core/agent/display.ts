@@ -1261,22 +1261,81 @@ function repairCompactLine(line: string): string {
   if (TABLE_DELIMITER_ROW_PATTERN.test(line)) return line;
 
   // The lookahead and the run it follows used to be able to claim the same
-  // spaces, and the last pattern nested optional whitespace inside a repeated
-  // group. Both are spelled here so each stretch of whitespace has exactly one
+  // spaces. They are spelled here so each stretch of whitespace has exactly one
   // owner; the strings they match are unchanged.
-  return line
-    .replace(/[ \t]+---[ \t]+/g, "\n\n")
-    .replace(/\|\s+\|/g, "|\n|")
-    .replace(/\|[ \t]+(?=\|[ \t]*:?-{3,}|:?-{3,})/g, "|\n")
-    .replace(
-      // One delimiter cell per repetition, each ending at its own pipe, so a
-      // run of tabs belongs to exactly one cell. Spelling it as "dashes, then
-      // a pipe, repeated" instead of "dashes, then (pipe, dashes) repeated,
-      // then a pipe" matches the same rows -- two or more cells between
-      // pipes -- with no choice about where a repetition ends.
-      /(\|(?:[ \t]*:?-{3,}:?[ \t]*\|){2,})[ \t]+/g,
-      "$1\n",
-    );
+  return breakAfterDelimiterRow(
+    line
+      .replace(/[ \t]+---[ \t]+/g, "\n\n")
+      .replace(/\|\s+\|/g, "|\n|")
+      .replace(/\|[ \t]+(?=\|[ \t]*:?-{3,}|:?-{3,})/g, "|\n"),
+  );
+}
+
+/** How far a delimiter run starting at `start` reaches, or -1 if it is not one.
+ *
+ * A cell is optional whitespace, an optional `:`, three or more dashes, an
+ * optional `:`, optional whitespace, and the `|` that closes it. Two cells make
+ * a row. Returns the index just past the closing `|` of the last cell.
+ */
+function delimiterRunEnd(line: string, start: number): number {
+  const isSpace = (index: number) => line[index] === " " || line[index] === "\t";
+  let cursor = start + 1;
+  let cells = 0;
+  let end = -1;
+  for (;;) {
+    let index = cursor;
+    while (index < line.length && isSpace(index)) index += 1;
+    if (line[index] === ":") index += 1;
+    let dashes = 0;
+    while (index < line.length && line[index] === "-") {
+      index += 1;
+      dashes += 1;
+    }
+    if (dashes < 3) break;
+    if (line[index] === ":") index += 1;
+    while (index < line.length && isSpace(index)) index += 1;
+    if (line[index] !== "|") break;
+    index += 1;
+    cells += 1;
+    end = index;
+    cursor = index;
+  }
+  return cells >= 2 ? end : -1;
+}
+
+/** Put the row that was squashed onto the end of a delimiter row on its own line.
+ *
+ * Scanned rather than matched. "Two or more delimiter cells, then whitespace"
+ * has more than one reading as a regular expression -- the whitespace inside a
+ * cell and the run after the row can each be claimed by more than one part of
+ * the pattern -- so rejecting a long line of tabs costs quadratic time. This
+ * looks at each character a bounded number of times and accepts exactly the
+ * same rows.
+ */
+function breakAfterDelimiterRow(line: string): string {
+  let out = "";
+  let index = 0;
+  while (index < line.length) {
+    if (line[index] !== "|") {
+      out += line[index];
+      index += 1;
+      continue;
+    }
+    const end = delimiterRunEnd(line, index);
+    if (end === -1) {
+      out += line[index];
+      index += 1;
+      continue;
+    }
+    let after = end;
+    while (after < line.length && (line[after] === " " || line[after] === "\t")) {
+      after += 1;
+    }
+    out += line.slice(index, end);
+    if (after > end) out += "\n";
+    index = after;
+  }
+  return out;
 }
 
 /** Normalize compact/streamed assistant markdown for display (fixes table
