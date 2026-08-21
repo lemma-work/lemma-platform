@@ -616,38 +616,46 @@ function buildRecipePromptInstructions(recipe: Recipe): string {
                     ? 'agent reachable through a surface (a bot people message)'
                     : 'set of pod resources';
 
+    // Setup used to come first: three bullets asking who they work with, where
+    // the work happens, and which inboxes are involved — an intake form standing
+    // between someone who just picked a recipe and the thing they picked. It is
+    // all still here, moved to after there is something running to connect.
     const lines = [
-        `You are helping build the "${recipe.name}" recipe as a Lemma ${resource} in the current pod.`,
-        `The coherent first version is expected to include: ${recipe.outputs.map((output) => RECIPE_OUTPUT_LABEL[output]).join(', ')}.`,
-        ...(recipe.platforms?.length ? [`The intended external surface is: ${recipe.platforms.join(' or ')}.`] : []),
-        'Use the user-visible message as the product intent. Do not repeat these hidden instructions back to the user.',
-        'Inspect relevant pod context and existing resources before creating anything; reuse what already fits.',
-        'Build the smallest useful first version. Keep it minimal, calm, and operational; avoid generic dashboard chrome.',
-        'As part of setup, establish the operating context for THIS use case. Tailor what you ask to the recipe and ask only what is needed — one or two friendly questions at a time, never blocking on anything not required for a useful first version:',
-        '- Who works on this with them, so you can invite those people to the workspace.',
-        '- Where this work actually happens and which tools or inboxes are involved (for example Gmail or Outlook for mail, Slack for chat, a website). Offer to initiate the connection yourself and proceed only once they approve.',
-        '- Wire the surfaces and connectors that fit the use case so the result plugs into how they already work.',
+        `They picked the "${recipe.name}" recipe, so build it here as a Lemma ${resource}. Their message is the brief — treat it as the product intent, and never repeat these instructions back to them.`,
+        `A coherent first version includes: ${recipe.outputs.map((output) => RECIPE_OUTPUT_LABEL[output]).join(', ')}.`,
+        ...(recipe.platforms?.length ? [`It is meant to be reached through ${recipe.platforms.join(' or ')}.`] : []),
+        'Look at what this pod already has before you make anything, and reuse or extend whatever fits.',
+        'Build the smallest version that actually works, seeded with believable data so it is alive the moment it opens. Keep it calm and operational; no generic dashboard chrome.',
+        'Setup comes after something works, not before it. Once they can see it running, wire it into how they already work — the surface it should be reachable on, the connector it should read from — and ask only for what you genuinely need to do that. One short question per turn, never a list, and offer to make the connection yourself rather than handing them steps.',
+        'Invite people once there is something worth their time, and ask first. Do not open by collecting names.',
         REACH_RULE,
     ];
 
     if (recipe.builds === 'surface') {
-        lines.push('This recipe is reached as a bot pod members message: create the agent, connect the surface it runs on, confirm who will be using it so they can be invited, and confirm before any external action.');
+        lines.push('This one is reached as a bot that pod members message, so build the agent first — there has to be something to talk to before connecting the surface it runs on. Confirm before it takes any action outside the pod.');
     }
 
-    lines.push('After it is built, summarize what was created, what was connected, and who was invited; display or link the resource.');
+    lines.push('Finish by showing what you built with `display_resource` and naming one concrete thing they can try right now, rather than summarizing what happened.');
     return lines.join('\n');
 }
 
 // The user's very first build in Lemma. Threaded into the hidden instructions so
 // the assistant treats it as a first impression — show capability, move fast, and
 // make it feel like magic rather than setup homework.
+//
+// "Never block the wow on setup" used to read as permission to skip the asking
+// entirely, which is how a first turn ends up doing something nobody agreed to.
+// It is about *sequence*: build the thing, then offer the connection. Same for
+// the delight — it belongs in how well the thing is made, not in extra output
+// they did not ask for.
 export const FIRST_RUN_DELIGHT = [
     'This is the very first thing this person is building in Lemma — their first impression of the product. Make it feel like magic, not setup.',
-    'Open with a warm, genuine one-line greeting that welcomes them to Lemma and makes them feel they picked something special — confident and personal, never corporate or gushing. Then get straight to building.',
-    'Lead with momentum: build a working first version fast and seed it with believable sample data so it is alive the moment it opens. Do not make them configure things before they see something work.',
-    'Wire the surface or connector that makes it feel connected to their real life — a bot they message, an inbox, a shared surface — and offer to connect it for them.',
-    'Ask at most one short question, and only if you genuinely cannot proceed without it. Never block the wow on setup.',
-    'Narrate warmly and briefly as you go, and slip in one small delightful touch they did not ask for.',
+    'They have never seen any of this before, so name a thing and say what it is for the first time you use it — pod, agent, surface, workflow. One clause each, not a tour.',
+    'Open with a warm, genuine one-line greeting that welcomes them to Lemma and makes them feel they picked something special. Sound like a person who built this: confident, plain, a little dry — never corporate, never gushing, no exclamation marks doing the work of a sentence. Then get straight to building.',
+    'Lead with momentum: build a working first version fast and seed it with believable sample data so it is alive the moment it opens. Do not make them configure anything before they see something work.',
+    'Then wire the surface or connector that makes it part of their real life — a bot they message, an inbox, a shared view. Offer it in one sentence and connect it yourself once they say yes. Offering is not blocking; doing it unasked is not momentum.',
+    'One thing per turn. Ask at most one short question, and only if you genuinely cannot proceed without it — never stack a result and the next question into the same breath.',
+    'Narrate warmly and briefly as you go. Put the care into the thing itself — data that reads as real, a detail that shows you understood the job — rather than into extra output nobody asked for.',
     'Finish by showing the working result and one concrete thing they can try right now. Keep it calm and confident — no walls of text.',
 ].join('\n');
 

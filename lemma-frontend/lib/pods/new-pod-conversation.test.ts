@@ -25,7 +25,6 @@ const laterPod = (podName = 'GTM Pod') =>
 
 describe('every new pod', () => {
     it('forbids creating a second pod, which is what an agent does otherwise', () => {
-        // Both variants say it; only the first-run script says it mid-sentence.
         for (const instructions of [firstRun(), laterPod()]) {
             expect(instructions?.toLowerCase()).toContain('do not create another pod');
         }
@@ -74,12 +73,68 @@ describe('every new pod', () => {
     });
 });
 
-describe('the first ten minutes are paced, in order', () => {
-    it('runs Telegram, then the app, then the invite', () => {
+describe('the first turn is a welcome, not a setup wizard', () => {
+    // The regression this exists for: step ONE used to be "put this pod on
+    // their phone", and the assistant obeyed — its first act was to run
+    // `telegram-setup` and hand back a QR code to someone who had not been told
+    // what a pod is. The offer now comes first and waits for an answer.
+    it('spends the first turn saying hello and explaining where they are', () => {
         const instructions = firstRun();
-        const telegram = instructions.indexOf('ONE — put this pod on their phone');
-        const build = instructions.indexOf('TWO — build them something real');
-        const share = instructions.indexOf('THREE — make it theirs together');
+
+        expect(instructions).toContain('Your first turn is a welcome and one offer');
+        expect(instructions).toContain('what this place actually is');
+    });
+
+    it('bans setup in that turn, which is the whole point of the rewrite', () => {
+        const instructions = firstRun();
+
+        expect(instructions).toContain(
+            'Do not run a command, create a resource, or show a QR code in this turn',
+        );
+        expect(instructions).toContain('You are asking, not setting up');
+    });
+
+    it('names what a pod is for, rather than assuming they know', () => {
+        const instructions = firstRun();
+
+        expect(instructions).toContain('Nothing here is obvious to them');
+        expect(instructions).toContain('Telegram, Slack, email');
+        expect(instructions).toContain('schedule');
+    });
+
+    it('makes Telegram a question and stops there', () => {
+        const instructions = firstRun();
+        const offer = instructions.indexOf('make exactly one offer and stop');
+        const setup = instructions.indexOf('If they say yes to Telegram, set it up now');
+
+        expect(offer).toBeGreaterThan(-1);
+        expect(setup).toBeGreaterThan(offer);
+    });
+
+    it('takes no for an answer, so the offer stays an offer', () => {
+        const instructions = firstRun();
+
+        expect(instructions).toContain('Telegram is an offer, not a step');
+        expect(instructions).toContain('never ask a second time in a row');
+    });
+
+    it('keeps the reason messaging the bot once matters', () => {
+        // The handshake: a chat bot cannot open a conversation, so the pod can
+        // only reach out after it has been reached.
+        expect(firstRun()).toContain('message *them*');
+    });
+
+    it('bans a corporate greeting outright, since that is what it drifts to', () => {
+        expect(firstRun()).toContain("I'm excited to help you get started");
+    });
+});
+
+describe('the arc after the first question', () => {
+    it('runs Telegram, then the build, then the invite', () => {
+        const instructions = firstRun();
+        const telegram = instructions.indexOf('If they say yes to Telegram');
+        const build = instructions.indexOf('Build them something real');
+        const share = instructions.indexOf('Then make it theirs together');
 
         expect(telegram).toBeGreaterThan(-1);
         expect(build).toBeGreaterThan(telegram);
@@ -95,14 +150,8 @@ describe('the first ten minutes are paced, in order', () => {
         expect(instructions).toContain('lemma-widget');
     });
 
-    it('binds the bot to Lem, so no agent has to exist first', () => {
+    it('binds the bot to the pod assistant, so no agent has to exist first', () => {
         expect(firstRun()).toContain('Pass no `--agent`');
-    });
-
-    it('says why messaging the bot once matters, not just that it exists', () => {
-        // The handshake: a chat bot cannot open a conversation, so the pod can
-        // only reach out after it has been reached.
-        expect(firstRun()).toContain('message *them*');
     });
 
     it('does not send it inspecting an empty pod', () => {
@@ -118,9 +167,6 @@ describe('the first ten minutes are paced, in order', () => {
     });
 
     it('stops after the QR instead of stacking the next question onto it', () => {
-        // The failure this exists for: one turn carrying the QR, the research
-        // and four app options at once, which reads as a wall, not a
-        // conversation.
         const instructions = firstRun();
 
         expect(instructions).toContain('Never stack two things in a turn');
@@ -134,11 +180,15 @@ describe('the first ten minutes are paced, in order', () => {
     });
 
     it('asks for widgets over prose, since that is the demonstration', () => {
-        expect(firstRun()).toContain('prefer a widget over a paragraph');
+        expect(firstRun()).toContain('belongs in a widget rather than a paragraph');
+    });
+
+    it('exempts the greeting from that, so hello is not a widget', () => {
+        expect(firstRun()).toContain('Use widgets generously — but not to say hello');
     });
 });
 
-describe('a later pod gets the same conversation, minus the welcome', () => {
+describe('a later pod gets the same conversation, minus the explanation', () => {
     // The regression this exists for: the later-pod branch was three terse
     // lines ending in "start building", so a second pod got no pacing, no
     // widgets, no Telegram — just tables nobody asked for.
@@ -147,14 +197,16 @@ describe('a later pod gets the same conversation, minus the welcome', () => {
 
         expect(instructions).not.toContain('first conversation this person has ever had');
         expect(instructions).toContain('already use Lemma');
+        expect(instructions).toContain('keep the welcome to one short line');
     });
 
     it.each([
         ['the pacing rule', 'Never stack two things in a turn'],
         ['propose-before-build', 'Propose before you build'],
+        ['the Telegram offer', 'make exactly one offer and stop'],
         ['the Telegram step', 'lemma surfaces telegram-setup'],
-        ['the widget guidance', 'prefer a widget over a paragraph'],
-        ['the invite step', 'THREE — make it theirs together'],
+        ['the widget guidance', 'belongs in a widget rather than a paragraph'],
+        ['the invite step', 'Then make it theirs together'],
     ])('still carries %s', (_label, phrase) => {
         expect(laterPod()).toContain(phrase);
     });
@@ -167,7 +219,7 @@ describe('a later pod gets the same conversation, minus the welcome', () => {
     });
 });
 
-describe('a stated intent replaces the placeholder greeting', () => {
+describe('a stated intent replaces both the greeting and the welcome turn', () => {
     it('sends what the user picked instead of "Hi"', () => {
         const { message } = launchFrom(
             buildNewPodConversationHref({
@@ -181,12 +233,41 @@ describe('a stated intent replaces the placeholder greeting', () => {
         expect(message).toBe('Build a Telegram agent that');
     });
 
+    it('drops the welcome, because they asked a question and want an answer', () => {
+        // Welcoming someone who just typed a brief, then asking them about
+        // Telegram, is answering a question nobody asked.
+        const { instructions } = launchFrom(
+            buildNewPodConversationHref({
+                podId: 'pod-1',
+                podName: 'Telegram Pod',
+                isFirstPod: false,
+                openingMessage: 'Build a Telegram agent that ',
+            }),
+        );
+
+        expect(instructions).toContain('that message is the brief');
+        expect(instructions).not.toContain('Your first turn is a welcome and one offer');
+    });
+
+    it('still paces itself and still gets to the phone eventually', () => {
+        const instructions = buildNewPodInstructions({
+            podName: 'Telegram Pod',
+            isFirstPod: false,
+            statedIntent: true,
+        });
+
+        expect(instructions).toContain('Never stack two things in a turn');
+        expect(instructions).toContain('Propose before you build');
+        expect(instructions).toContain('putting this pod on their phone later');
+    });
+
     it('keeps the new-pod framing underneath the start path brief', () => {
         const { instructions } = launchFrom(
             buildNewPodConversationHref({
                 podId: 'pod-1',
                 podName: 'Telegram Pod',
                 isFirstPod: false,
+                openingMessage: 'Build a Telegram agent that ',
                 extraInstructions: 'Wire the Telegram surface.',
             }),
         );
@@ -195,8 +276,8 @@ describe('a stated intent replaces the placeholder greeting', () => {
         expect(instructions).toContain('Wire the Telegram surface.');
     });
 
-    it('falls back to the greeting when nothing was stated', () => {
-        const { message } = launchFrom(
+    it('falls back to the greeting and the welcome when nothing was stated', () => {
+        const { message, instructions } = launchFrom(
             buildNewPodConversationHref({
                 podId: 'pod-1',
                 podName: 'X Pod',
@@ -206,6 +287,7 @@ describe('a stated intent replaces the placeholder greeting', () => {
         );
 
         expect(message).toBe(NEW_POD_OPENING_MESSAGE);
+        expect(instructions).toContain('Your first turn is a welcome and one offer');
     });
 
     it('lets a caller add origin metadata without losing the defaults', () => {
