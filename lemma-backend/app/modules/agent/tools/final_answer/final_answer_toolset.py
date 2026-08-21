@@ -153,9 +153,7 @@ def build_final_answer_toolset(
                 name=FINAL_ANSWER_TOOL_NAME,
                 function=_final_answer,
                 description=_description(bool(output_schema)),
-                validator=cast(
-                    SchemaValidator, TypeAdapter(dict[str, Any]).validator
-                ),
+                validator=cast(SchemaValidator, TypeAdapter(dict[str, Any]).validator),
                 json_schema=schema,
                 takes_ctx=True,
                 is_async=True,
@@ -249,9 +247,7 @@ async def _persist(
             store_final_answer,
         )
 
-        await store_final_answer(
-            uow_factory, agent_run_id=agent_run_id, record=record
-        )
+        await store_final_answer(uow_factory, agent_run_id=agent_run_id, record=record)
     except SQLAlchemyError:
         # See docstring: losing the authoritative copy is survivable (the event
         # stream still carries the answer); turning a good final answer into a

@@ -102,9 +102,7 @@ async def test_saving_settings_keeps_an_explicit_pod_assistant_route():
         pod_id=uuid4(),
         platform=SurfacePlatform.SLACK,
         config_input=SurfaceBehaviorConfigInput(
-            channels=[
-                SurfaceChannelRouteInput(channel_id="C1", use_pod_assistant=True)
-            ]
+            channels=[SurfaceChannelRouteInput(channel_id="C1", use_pod_assistant=True)]
         ),
         agent_service=AsyncMock(),
         ctx=object(),

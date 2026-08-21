@@ -54,7 +54,10 @@ def test_from_raw_tolerates_non_mapping_and_malformed():
     assert PodConfig.from_raw(None).resolved_default_runtime() is None
     assert PodConfig.from_raw("garbage").resolved_default_runtime() is None
     # an empty default_profile_id is invalid; from_raw degrades to empty config
-    assert PodConfig.from_raw({"default_profile_id": ""}).resolved_default_runtime() is None
+    assert (
+        PodConfig.from_raw({"default_profile_id": ""}).resolved_default_runtime()
+        is None
+    )
 
 
 def test_from_raw_ignores_unknown_keys():

@@ -73,7 +73,6 @@ def forget_python_sessions(logical_id: UUID) -> None:
         _python_sessions_observed.pop(key, None)
 
 
-
 class SandboxWorkspaceSession:
     """Backend adapter over the sandbox runtime's process and Python-session protocols."""
 
@@ -319,9 +318,7 @@ class SandboxWorkspaceSession:
                     if input_accepted
                     else "the sandbox runtime process input outcome is unknown: "
                 )
-                + (
-                    f"{describe_exception(exc)}"
-                ),
+                + (f"{describe_exception(exc)}"),
                 retryable=False,
                 process_id=process_id,
                 completed=False,

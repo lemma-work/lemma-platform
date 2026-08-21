@@ -88,9 +88,7 @@ async def test_a_workspace_that_fails_its_probe_keeps_its_disk(
     logical_id = await _workspace_row(client)
     _refuse_readiness_once(provider, on_call=2)
 
-    await client.ensure_sandbox(
-        WorkloadKind.WORKSPACE, logical_id, verify_ready=True
-    )
+    await client.ensure_sandbox(WorkloadKind.WORKSPACE, logical_id, verify_ready=True)
 
     assert provider.destroyed == [], (
         "a readiness failure destroyed a workspace, and on E2B that is the disk"
@@ -107,8 +105,6 @@ async def test_a_function_that_fails_its_probe_is_still_replaced(
     """
     _refuse_readiness_once(provider, on_call=2)
 
-    await client.ensure_sandbox(
-        WorkloadKind.FUNCTION, uuid4(), verify_ready=True
-    )
+    await client.ensure_sandbox(WorkloadKind.FUNCTION, uuid4(), verify_ready=True)
 
     assert provider.destroyed != [], "a wedged function sandbox must be replaced"

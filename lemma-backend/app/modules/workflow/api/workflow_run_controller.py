@@ -343,7 +343,9 @@ async def stream_workflow_run(
                     # into it would finalize it and end the stream. Waiting on a
                     # retained task times out without disturbing the read.
                     pending = asyncio.ensure_future(anext(iterator))
-                done, _ = await asyncio.wait({pending}, timeout=STREAM_KEEPALIVE_SECONDS)
+                done, _ = await asyncio.wait(
+                    {pending}, timeout=STREAM_KEEPALIVE_SECONDS
+                )
                 if not done:
                     # A comment frame. Keeps idle proxies from dropping a run
                     # that is legitimately quiet between transitions.

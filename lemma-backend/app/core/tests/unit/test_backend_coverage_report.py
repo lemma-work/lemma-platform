@@ -138,9 +138,7 @@ def test_overall_report_is_one_module_wise_unit_e2e_and_combined_table():
                 "app/modules/agent/runtime.py": {
                     "summary": {"num_statements": 10, "missing_lines": missing}
                 },
-                "app/app.py": {
-                    "summary": {"num_statements": 2, "missing_lines": 1}
-                },
+                "app/app.py": {"summary": {"num_statements": 2, "missing_lines": 1}},
                 "app/core/message_bus.py": {
                     "summary": {"num_statements": 2, "missing_lines": 1}
                 },

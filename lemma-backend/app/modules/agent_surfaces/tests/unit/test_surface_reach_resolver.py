@@ -120,9 +120,7 @@ async def test_teams_handle_from_graph(monkeypatch):
         # Simulate a successful graph servicePrincipal lookup at the seam.
         return "Lemma Teams Bot"
 
-    monkeypatch.setattr(
-        SurfaceReachResolver, "_teams_handle", fake_teams_handle
-    )
+    monkeypatch.setattr(SurfaceReachResolver, "_teams_handle", fake_teams_handle)
     surface = _surface(
         surface_type=SurfacePlatform.TEAMS,
         surface_identity_id=None,
@@ -147,12 +145,8 @@ async def test_teams_handle_config_fallback(monkeypatch):
         return None
 
     monkeypatch.setattr(surface_reach_resolver, "get_graph_token", fake_token)
-    monkeypatch.setattr(
-        surface_settings, "microsoft_bot_app_id", "app-123"
-    )
-    monkeypatch.setattr(
-        surface_settings, "microsoft_bot_app_name", "Lemma (config)"
-    )
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "app-123")
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_name", "Lemma (config)")
     surface = _surface(
         surface_type=SurfacePlatform.TEAMS,
         surface_identity_id=None,
@@ -197,9 +191,7 @@ async def test_whatsapp_handle_resolves_display_phone_and_persists():
 
 
 async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailable():
-    surface = _surface(
-        surface_type=SurfacePlatform.WHATSAPP, surface_identity_id=None
-    )
+    surface = _surface(surface_type=SurfacePlatform.WHATSAPP, surface_identity_id=None)
     repo = FakeSurfaceRepository()
 
     reach = await SurfaceReachResolver().resolve(
@@ -234,9 +226,7 @@ async def test_gmail_falls_back_to_account_display_name():
 
 
 async def test_outlook_falls_back_to_account_display_name():
-    surface = _surface(
-        surface_type=SurfacePlatform.OUTLOOK, surface_identity_id=None
-    )
+    surface = _surface(surface_type=SurfacePlatform.OUTLOOK, surface_identity_id=None)
 
     reach = await SurfaceReachResolver().resolve(
         surface,
@@ -391,9 +381,7 @@ async def test_live_handle_timeout_falls_back(monkeypatch):
     # account fallback (and persists nothing).
     import asyncio
 
-    monkeypatch.setattr(
-        surface_reach_resolver, "_LIVE_HANDLE_TIMEOUT_SECONDS", 0.01
-    )
+    monkeypatch.setattr(surface_reach_resolver, "_LIVE_HANDLE_TIMEOUT_SECONDS", 0.01)
 
     async def slow_name(self, user_id):
         await asyncio.sleep(0.5)

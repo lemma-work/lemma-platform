@@ -70,7 +70,9 @@ def _parts(url: str) -> dict:
 async def tenant_database(test_database_url, worker_id):
     """A real database standing in for the customer's, seeded with real rows."""
     tenant_db = _tenant_db_name(worker_id)
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
         await conn.execute(text(f'CREATE DATABASE "{tenant_db}"'))
@@ -90,7 +92,9 @@ async def tenant_database(test_database_url, worker_id):
             )
         )
         await conn.execute(text("CREATE SCHEMA reporting"))
-        await conn.execute(text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)"))
+        await conn.execute(
+            text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)")
+        )
         await conn.execute(
             text(
                 "INSERT INTO invoices (id, customer, amount_cents, paid) "
@@ -102,7 +106,9 @@ async def tenant_database(test_database_url, worker_id):
 
     yield {"url": tenant_url, **_parts(test_database_url)}
 
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
     await admin.dispose()
@@ -156,7 +162,9 @@ class TestReadPath:
     async def test_list_tables_sees_both_schemas_and_hides_the_catalog(
         self, connection_config, credentials
     ):
-        result = await _run(SqlExecutor(), "list_tables", {}, connection_config, credentials)
+        result = await _run(
+            SqlExecutor(), "list_tables", {}, connection_config, credentials
+        )
         found = {(row["table_schema"], row["table_name"]) for row in result["rows"]}
         assert ("public", "invoices") in found
         assert ("reporting", "invoices") in found
@@ -166,7 +174,11 @@ class TestReadPath:
         self, connection_config, credentials
     ):
         result = await _run(
-            SqlExecutor(), "list_tables", {"schema": "reporting"}, connection_config, credentials
+            SqlExecutor(),
+            "list_tables",
+            {"schema": "reporting"},
+            connection_config,
+            credentials,
         )
         assert {row["table_schema"] for row in result["rows"]} == {"reporting"}
 
@@ -228,7 +240,9 @@ class TestTheServerEnforcesReadOnly:
     )
     async def test_writes_are_rejected(self, sql, connection_config, credentials):
         with pytest.raises(OperationExecutionValidationError):
-            await _run(SqlExecutor(), "query", {"query": sql}, connection_config, credentials)
+            await _run(
+                SqlExecutor(), "query", {"query": sql}, connection_config, credentials
+            )
 
     async def test_a_write_smuggled_past_the_parser_still_fails_on_the_server(
         self, connection_config, credentials

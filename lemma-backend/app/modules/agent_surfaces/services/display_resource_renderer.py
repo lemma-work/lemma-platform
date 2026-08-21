@@ -82,11 +82,7 @@ def build_ask_user_render_plan(
         )
         for q in request.questions
     ]
-    title = (
-        questions[0].question
-        if len(questions) == 1
-        else "A few quick questions"
-    )
+    title = questions[0].question if len(questions) == 1 else "A few quick questions"
     return SurfaceQuestionRenderPlan(
         title=title,
         questions=questions,

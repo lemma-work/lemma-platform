@@ -187,9 +187,7 @@ def downgrade() -> None:
 
     op.drop_index("ix_notifications_open_expires_at", table_name="notifications")
     op.drop_index("ix_notifications_origin", table_name="notifications")
-    op.drop_index(
-        "ix_notifications_delivery_conversation", table_name="notifications"
-    )
+    op.drop_index("ix_notifications_delivery_conversation", table_name="notifications")
     op.drop_index("ix_notifications_recipient_inbox", table_name="notifications")
     op.drop_index("ix_notifications_delivery_status", table_name="notifications")
     op.drop_index("ix_notifications_status", table_name="notifications")

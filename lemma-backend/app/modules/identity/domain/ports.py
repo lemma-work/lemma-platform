@@ -36,9 +36,7 @@ class UserRepositoryPort(Protocol):
     ) -> list[UUID]:
         raise NotImplementedError
 
-    async def get_id_by_telegram_lower(
-        self, username_lower: str
-    ) -> Optional[UUID]: ...
+    async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]: ...
 
 
 class UserCachePort(Protocol):

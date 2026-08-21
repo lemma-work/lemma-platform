@@ -92,7 +92,9 @@ async def test_starting_twice_keeps_one_sink_and_one_flusher(
     first = current_sink()
     start_analytics()
     assert current_sink() is first
-    assert len([t for t in asyncio.all_tasks() if t.get_name() == "analytics-flush"]) == 1
+    assert (
+        len([t for t in asyncio.all_tasks() if t.get_name() == "analytics-flush"]) == 1
+    )
     await stop_analytics()
 
 
@@ -152,7 +154,9 @@ async def test_a_failing_drain_does_not_kill_the_flusher() -> None:
     """One escaped exception used to end the flusher for the life of the
     process, after which every event was silently dropped."""
     sink = PostHogSink(
-        write_key="phc_test", host="https://example.invalid", flush_interval_seconds=0.01
+        write_key="phc_test",
+        host="https://example.invalid",
+        flush_interval_seconds=0.01,
     )
     calls = {"n": 0}
 
@@ -177,7 +181,9 @@ async def test_cancellation_is_never_swallowed_by_the_error_handling() -> None:
     """The broad catch in the flush loop must not eat a cancellation aimed at
     the task -- that is how a worker refuses to shut down."""
     sink = PostHogSink(
-        write_key="phc_test", host="https://example.invalid", flush_interval_seconds=0.01
+        write_key="phc_test",
+        host="https://example.invalid",
+        flush_interval_seconds=0.01,
     )
 
     async def hang() -> None:

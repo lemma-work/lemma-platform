@@ -85,9 +85,7 @@ class SurfacePlatformToolFactory:
                 # Resend's ``from_address`` lives on the surface row, and the
                 # shortcut used to drop it, so every reply tool call failed with
                 # "Resend send requires api_key, from_address and a recipient".
-                credentials = native_credentials(
-                    surface.surface_type, surface=surface
-                )
+                credentials = native_credentials(surface.surface_type, surface=surface)
             else:
                 resolver = SurfaceCredentialResolver(
                     session=uow.session,

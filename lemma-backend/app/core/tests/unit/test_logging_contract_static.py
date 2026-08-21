@@ -60,7 +60,9 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
         # longer a second catalog to hold to its contract.
     }
     failures: list[str] = []
-    seen_by_catalog: dict[int, set[str]] = {id(catalog): set() for catalog in roots.values()}
+    seen_by_catalog: dict[int, set[str]] = {
+        id(catalog): set() for catalog in roots.values()
+    }
 
     for root, catalog in roots.items():
         for path in _runtime_files(root):
@@ -75,7 +77,11 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
                 if method in {"exception", "critical"}:
                     failures.append(f"{location}: use error with bounded exc_info")
                     continue
-                if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+                if (
+                    not node.args
+                    or not isinstance(node.args[0], ast.Constant)
+                    or not isinstance(node.args[0].value, str)
+                ):
                     failures.append(f"{location}: event must be a literal string")
                     continue
                 event = node.args[0].value
@@ -83,7 +89,9 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
                 if not EVENT_RE.fullmatch(event):
                     failures.append(f"{location}: unstable event {event!r}")
                 if len(node.args) != 1:
-                    failures.append(f"{location}: positional interpolation is forbidden")
+                    failures.append(
+                        f"{location}: positional interpolation is forbidden"
+                    )
                 if any(keyword.arg is None for keyword in node.keywords):
                     failures.append(f"{location}: unrestricted **kwargs are forbidden")
                 fields = {
@@ -115,7 +123,9 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
                     )
 
     for catalog in roots.values():
-        stale = set(catalog) - seen_by_catalog[id(catalog)] - {"logging.contract.violation"}
+        stale = (
+            set(catalog) - seen_by_catalog[id(catalog)] - {"logging.contract.violation"}
+        )
         if stale:
             failures.append(f"catalog contains stale events: {sorted(stale)}")
     assert not failures, "\n" + "\n".join(failures)
@@ -135,7 +145,10 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Assign):
                     continue
-                if not any(isinstance(target, ast.Name) and target.id == "logger" for target in node.targets):
+                if not any(
+                    isinstance(target, ast.Name) and target.id == "logger"
+                    for target in node.targets
+                ):
                     continue
                 value = node.value
                 if (
@@ -146,7 +159,9 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
                     and value.func.attr == "getLogger"
                 ):
                     failures.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
-    assert not failures, "application logger bypasses owned contract:\n" + "\n".join(failures)
+    assert not failures, "application logger bypasses owned contract:\n" + "\n".join(
+        failures
+    )
 
 
 def test_runtime_async_tasks_choose_inherited_or_clean_context_explicitly() -> None:

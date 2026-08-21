@@ -191,8 +191,20 @@ def _range_bucket(
     return overflow
 
 
-_SECONDS_EDGES = ((1, "lt1s"), (5, "1-5s"), (30, "5-30s"), (120, "30-120s"), (600, "2-10m"))
-_DAYS_EDGES = ((0, "same_day"), (7, "1-7d"), (30, "7-30d"), (90, "30-90d"), (365, "90-365d"))
+_SECONDS_EDGES = (
+    (1, "lt1s"),
+    (5, "1-5s"),
+    (30, "5-30s"),
+    (120, "30-120s"),
+    (600, "2-10m"),
+)
+_DAYS_EDGES = (
+    (0, "same_day"),
+    (7, "1-7d"),
+    (30, "7-30d"),
+    (90, "30-90d"),
+    (365, "90-365d"),
+)
 _BYTES_EDGES = (
     (10_000, "lt10kb"),
     (100_000, "10-100kb"),
@@ -222,16 +234,42 @@ def _duration_seconds(start, end) -> float | None:
 #: Document kinds, as a closed set. Never the raw extension: an extension is
 #: attacker-supplied, unbounded, and a cardinality problem.
 _DOCUMENT_KINDS: dict[str, str] = {
-    "csv": "sheet", "tsv": "sheet", "xls": "sheet", "xlsx": "sheet",
-    "doc": "doc", "docx": "doc", "rtf": "doc", "odt": "doc",
-    "txt": "doc", "md": "doc",
+    "csv": "sheet",
+    "tsv": "sheet",
+    "xls": "sheet",
+    "xlsx": "sheet",
+    "doc": "doc",
+    "docx": "doc",
+    "rtf": "doc",
+    "odt": "doc",
+    "txt": "doc",
+    "md": "doc",
     "pdf": "pdf",
-    "png": "image", "jpg": "image", "jpeg": "image", "gif": "image",
-    "webp": "image", "svg": "image", "heic": "image",
-    "mp3": "audio", "wav": "audio", "m4a": "audio", "ogg": "audio",
-    "mp4": "video", "mov": "video", "webm": "video", "avi": "video",
-    "py": "code", "ts": "code", "js": "code", "tsx": "code", "jsx": "code",
-    "json": "code", "yaml": "code", "yml": "code", "sql": "code", "sh": "code",
+    "png": "image",
+    "jpg": "image",
+    "jpeg": "image",
+    "gif": "image",
+    "webp": "image",
+    "svg": "image",
+    "heic": "image",
+    "mp3": "audio",
+    "wav": "audio",
+    "m4a": "audio",
+    "ogg": "audio",
+    "mp4": "video",
+    "mov": "video",
+    "webm": "video",
+    "avi": "video",
+    "py": "code",
+    "ts": "code",
+    "js": "code",
+    "tsx": "code",
+    "jsx": "code",
+    "json": "code",
+    "yaml": "code",
+    "yml": "code",
+    "sql": "code",
+    "sh": "code",
 }
 
 

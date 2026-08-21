@@ -127,7 +127,7 @@ class IconService:
             return self._normalize_storage_path(candidate)
         except ValueError:
             logger.debug(
-                'icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic'
+                "icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic"
             )
             return None
 
@@ -189,7 +189,7 @@ class IconService:
         except FileNotFoundError:
             return
         except Exception:
-            logger.debug('icon.icon_service.delete_icon_asset.diagnostic')
+            logger.debug("icon.icon_service.delete_icon_asset.diagnostic")
 
     async def delete_by_url(self, icon_url: str | None) -> None:
         storage_path = self.get_managed_storage_path(icon_url)

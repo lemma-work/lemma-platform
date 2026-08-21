@@ -50,6 +50,7 @@ class FunctionModel(UUIDAuditBase):
     type: Mapped[FunctionType] = mapped_column(String, default=FunctionType.API)
     status: Mapped[FunctionStatus] = mapped_column(String, default=FunctionStatus.DRAFT)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+
     def __str__(self) -> str:
         return self.name or str(self.id)
 
@@ -135,8 +136,7 @@ class FunctionRunModel(UUIDAuditBase):
             "created_at",
             "id",
             postgresql_where=text(
-                "status = 'PENDING' AND job_id IS NOT NULL "
-                "AND deadline_at IS NOT NULL"
+                "status = 'PENDING' AND job_id IS NOT NULL AND deadline_at IS NOT NULL"
             ),
         ),
     )

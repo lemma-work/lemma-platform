@@ -77,7 +77,7 @@ class ApprovalExecutor:
             # An approved tool that fails should report the error back to the run,
             # not crash the approval task.
             logger.debug(
-                'agent.executor.approved_tool_r_returning_result.diagnostic',
+                "agent.executor.approved_tool_r_returning_result.diagnostic",
                 exc_info=True,
             )
             return format_tool_error(tool_name, exc)

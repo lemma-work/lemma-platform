@@ -59,9 +59,7 @@ def _record(
 async def _seed(session, *, user_id: UUID, org_id: UUID, other_org_id: UUID) -> dict:
     """Rows spanning both windows, plus every row the filters must exclude."""
     now = datetime.now(timezone.utc)
-    month_start = now.replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    )
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     # Deliberately before the month start, so the two windows genuinely differ
     # and a single shared scan boundary would be visible if it were wrong.
     week_start = month_start - timedelta(days=3)

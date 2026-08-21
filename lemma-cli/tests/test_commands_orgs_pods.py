@@ -33,9 +33,7 @@ def _make_org_run(fake_orgs_obj):
     def fake_run_with_client(ctx, fn):
         # organizations._orgs(client) does getattr(client, "orgs") or client.organizations
         client = SimpleNamespace(orgs=fake_orgs_obj)
-        state = SimpleNamespace(
-            config={"defaults": {"org_id": None}}, output="pretty"
-        )
+        state = SimpleNamespace(config={"defaults": {"org_id": None}}, output="pretty")
         return fn(client, state)
 
     return fake_run_with_client
@@ -86,7 +84,9 @@ class FakePods:
 
     def list(self, *, org_id=None, limit=100, page_token=None):
         self._calls["list"] = {"org_id": org_id, "limit": limit}
-        return {"items": [{"id": POD_UUID, "name": "my-pod", "organization_id": org_id}]}
+        return {
+            "items": [{"id": POD_UUID, "name": "my-pod", "organization_id": org_id}]
+        }
 
     def get(self, pod_id):
         self._calls["get"] = {"pod_id": pod_id}

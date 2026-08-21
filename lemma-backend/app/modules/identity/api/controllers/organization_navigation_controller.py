@@ -108,9 +108,7 @@ async def get_organization_home(
     listing to another.
     """
     user: UserEntity = request.state.user
-    cached = await get_cached_organization_home(
-        organization_id=org_id, user_id=user.id
-    )
+    cached = await get_cached_organization_home(organization_id=org_id, user_id=user.id)
     if cached is not None:
         return OrganizationHomeResponse.model_validate(cached)
 

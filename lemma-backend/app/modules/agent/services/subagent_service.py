@@ -20,7 +20,10 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID, DEFAULT_POD_AGENT_NAME
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_ID,
+    DEFAULT_POD_AGENT_NAME,
+)
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
@@ -195,12 +198,12 @@ class SubAgentService:
                 if (
                     status_filter
                     and status_filter.upper() == "ACTIVE"
-                    and (latest is None or latest.status not in ACTIVE_AGENT_RUN_STATUSES)
+                    and (
+                        latest is None or latest.status not in ACTIVE_AGENT_RUN_STATUSES
+                    )
                 ):
                     continue
-                agent = (
-                    await agent_repo.get(child.agent_id) if child.agent_id else None
-                )
+                agent = await agent_repo.get(child.agent_id) if child.agent_id else None
                 rows.append(
                     {
                         "conversation_id": str(child.id),

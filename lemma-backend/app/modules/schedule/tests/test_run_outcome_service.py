@@ -132,9 +132,7 @@ async def test_success_and_cancellation_reset_the_failure_streak(status):
     # completion, so this asserts the absence of the deactivation specifically
     # rather than the absence of every event.
     collected = [
-        event
-        for call in uow.collect_events.call_args_list
-        for event in call.args[0]
+        event for call in uow.collect_events.call_args_list for event in call.args[0]
     ]
     assert not [e for e in collected if isinstance(e, ScheduleDeactivated)]
     assert [e for e in collected if isinstance(e, ScheduleRunCompleted)]
@@ -266,7 +264,9 @@ async def test_a_repeated_source_event_does_not_inflate_the_streak():
     service.run_repository.dead_letter = AsyncMock()
 
     recorded = await service.record_pre_dispatch_failure(
-        schedule, source_event_id="webhook-42", error_type="ScheduleFilterQuotaExhausted"
+        schedule,
+        source_event_id="webhook-42",
+        error_type="ScheduleFilterQuotaExhausted",
     )
 
     assert recorded is False

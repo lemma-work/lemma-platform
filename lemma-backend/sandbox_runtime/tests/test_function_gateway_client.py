@@ -90,9 +90,7 @@ async def test_terminal_callback_retries_identical_payload_after_lost_response()
 
     assert len(requests) == 2
     assert requests[0].url == requests[1].url
-    assert requests[0].headers["Authorization"] == (
-        "Bearer delegated-function-token"
-    )
+    assert requests[0].headers["Authorization"] == ("Bearer delegated-function-token")
     assert json.loads(requests[0].content) == json.loads(requests[1].content)
 
 

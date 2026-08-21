@@ -46,7 +46,9 @@ def _resolve_skill_file(connector_id: str, kind: str | None) -> Path | None:
     candidates.append(f"{connector_id}.md")
 
     try:
-        available = {entry.name: entry for entry in SKILLS_DIR.iterdir() if entry.is_file()}
+        available = {
+            entry.name: entry for entry in SKILLS_DIR.iterdir() if entry.is_file()
+        }
     except OSError:
         return None
 
@@ -55,6 +57,7 @@ def _resolve_skill_file(connector_id: str, kind: str | None) -> Path | None:
         if found is not None:
             return found
     return None
+
 
 router = APIRouter(prefix="/connectors", tags=["Connectors"])
 
@@ -98,18 +101,24 @@ async def get_connector_skill(
     user: CurrentUser,
     connector_id: str,
     connector_service: ConnectorServiceDep,
-    kind: str | None = Query(default=None, description="Kind override, e.g. package or composio"),
+    kind: str | None = Query(
+        default=None, description="Kind override, e.g. package or composio"
+    ),
 ) -> ConnectorSkillResponse:
     skill_file = _resolve_skill_file(connector_id, kind)
     if skill_file is None:
-        raise HTTPException(status_code=404, detail=f"No skill doc found for '{connector_id}'")
+        raise HTTPException(
+            status_code=404, detail=f"No skill doc found for '{connector_id}'"
+        )
     markdown = skill_file.read_text(encoding="utf-8")
     try:
         connector = await connector_service.get_connector(connector_id)
         title = connector.title
     except Exception:
         title = None
-    effective_kind = kind or ("package" if f"{connector_id}.package.md" == skill_file.name else None)
+    effective_kind = kind or (
+        "package" if f"{connector_id}.package.md" == skill_file.name else None
+    )
     return ConnectorSkillResponse(
         connector_id=connector_id,
         title=title,

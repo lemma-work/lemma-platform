@@ -1021,9 +1021,7 @@ def test_inline_schema_resolves_a_local_ref_and_drops_the_defs_bucket():
     inlined = _inline_schema(schema)
 
     assert "$ref" not in str(inlined)
-    assert inlined["properties"]["address"]["properties"]["city"] == {
-        "type": "string"
-    }
+    assert inlined["properties"]["address"]["properties"]["city"] == {"type": "string"}
 
 
 def test_inline_schema_is_a_no_op_for_a_schema_with_no_refs():
@@ -1044,7 +1042,9 @@ def test_schema_preview_is_empty_for_absent_or_malformed_schema(schema):
 
 
 def test_schema_preview_renders_compact_normalized_json():
-    preview = _schema_preview({"type": "object", "properties": {"ok": {"type": "boolean"}}})
+    preview = _schema_preview(
+        {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    )
 
     # Compact separators (no spaces) and normalized (additionalProperties filled
     # in), so the description does not silently double the token cost of the
@@ -2152,7 +2152,12 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
     pause contract: the answer still comes back through the same resume path."""
     request = _one_question(
         options=[
-            {"label": "OAuth", "description": "Use OAuth", "recommended": True, "icon": "🔐"},
+            {
+                "label": "OAuth",
+                "description": "Use OAuth",
+                "recommended": True,
+                "icon": "🔐",
+            },
             {"label": "API key", "description": "Use an API key", "icon": "🔑"},
         ]
     )

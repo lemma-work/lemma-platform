@@ -50,6 +50,8 @@ FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
+STACK_DIR     := lemma-stack
+BUNDLE_DIR    := lemma-pod-bundle
 DESKTOP_DIR   := desktop
 SCENARIOS_DIR := tests/scenarios
 
@@ -1320,6 +1322,50 @@ lint:
 	@cd $(PYTHON_DIR) && uv run ruff check . --quiet 2>/dev/null || true
 	@echo "→ Frontend (eslint)…"
 	@cd $(FRONTEND_DIR) && npm run lint --silent 2>/dev/null || true
+
+# ── Format ────────────────────────────────────────────────────────────────────
+#
+# Every first-party Python file is `ruff format` clean. Generated trees are
+# excluded and stay excluded: `lemma-backend/lemma-connectors/` comes from
+# provider OpenAPI specs and `lemma-python/lemma_sdk/openapi_client/` from the
+# API spec, so formatting either one would be reverted by the next generation
+# and read as codegen drift.
+#
+# `format-check` is deliberately NOT part of `quality` yet. Adding it there is
+# the one-line change that makes formatting a merge requirement, once you want
+# every open branch to have rebased through the reformat.
+SDK_FORMAT_EXCLUDE = --exclude lemma_sdk/openapi_client
+
+# The CLI, SDK, stack and bundle do not carry ruff as a dependency, which is
+# why their entries in `lint` above are advisory (`|| true`). Formatting cannot
+# be advisory and cannot float: two ruff versions disagree about output, so a
+# `--check` gate has to name the version it checks against. This is the
+# backend's pinned one -- keep them in step.
+RUFF := uvx ruff@0.15.22
+
+format:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format .
+
+format-check:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format-check
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format --check .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format --check $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format --check .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format --check .
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #

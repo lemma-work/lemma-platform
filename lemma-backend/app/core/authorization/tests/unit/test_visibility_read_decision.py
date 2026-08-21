@@ -55,7 +55,9 @@ def _resource(visibility: ResourceVisibility, *, pod_id=POD_ID) -> ResourceRef:
 
 
 def _decide(ctx: Context, permission_id: str, resource: ResourceRef):
-    return Authorizer(session=None)._visibility_read_decision(ctx, permission_id, resource)
+    return Authorizer(session=None)._visibility_read_decision(
+        ctx, permission_id, resource
+    )
 
 
 class TestPublic:
@@ -63,11 +65,14 @@ class TestPublic:
         decision = _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PUBLIC))
 
         assert decision is not None and decision.allowed
-        assert decision.reason_code =="PUBLIC_RESOURCE"
+        assert decision.reason_code == "PUBLIC_RESOURCE"
 
     def test_non_member_may_not_write(self):
         # The whole point of the narrow rule: readable never implies editable.
-        assert _decide(_ctx(), "folder.write", _resource(ResourceVisibility.PUBLIC)) is None
+        assert (
+            _decide(_ctx(), "folder.write", _resource(ResourceVisibility.PUBLIC))
+            is None
+        )
 
     def test_a_total_stranger_may_still_read(self):
         # PUBLIC means every Lemma account: no org or pod relationship required.
@@ -81,10 +86,16 @@ class TestFallthrough:
         assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.POD)) is None
 
     def test_personal_visibility_is_untouched(self):
-        assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PERSONAL)) is None
+        assert (
+            _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PERSONAL))
+            is None
+        )
 
     def test_restricted_visibility_is_untouched(self):
-        assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.RESTRICTED)) is None
+        assert (
+            _decide(_ctx(), "folder.read", _resource(ResourceVisibility.RESTRICTED))
+            is None
+        )
 
     def test_missing_visibility_defaults_to_pod(self):
         resource = ResourceRef(
@@ -124,6 +135,10 @@ class TestActorScope:
         # The ctx was built for one pod; a resource from a different one must not
         # ride through on it.
         assert (
-            _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PUBLIC, pod_id=uuid4()))
+            _decide(
+                _ctx(),
+                "folder.read",
+                _resource(ResourceVisibility.PUBLIC, pod_id=uuid4()),
+            )
             is None
         )

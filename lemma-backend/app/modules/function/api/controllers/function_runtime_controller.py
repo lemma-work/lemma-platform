@@ -71,15 +71,11 @@ async def download_definition_artifact(
     except RuntimeCredentialRejected as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
     except (FileNotFoundError, RuntimeArtifactCorrupt) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE) from exc
     return Response(content=data, media_type="application/zip")
 
 
-@router.post(
-    "/runs/{run_id}:terminal", response_model=RuntimeEventResponse
-)
+@router.post("/runs/{run_id}:terminal", response_model=RuntimeEventResponse)
 async def report_terminal(
     run_id: UUID,
     request: RuntimeTerminalRequest,

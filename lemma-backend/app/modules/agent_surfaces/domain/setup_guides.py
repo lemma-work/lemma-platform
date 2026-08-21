@@ -160,7 +160,9 @@ def build_surface_setup_actions(
                 link="https://api.slack.com/apps",
                 link_label="Open your Slack apps",
                 informational=True,
-                fields=[SurfaceSetupActionField(label="Request URL", value=webhook_url)],
+                fields=[
+                    SurfaceSetupActionField(label="Request URL", value=webhook_url)
+                ],
                 steps=[
                     "Messages not arriving? Open your app on api.slack.com and "
                     "check ‘Event Subscriptions’ shows this URL as Verified.",
@@ -185,7 +187,9 @@ def build_surface_setup_actions(
                 link="https://portal.azure.com",
                 link_label="Open Azure Portal",
                 fields=[
-                    SurfaceSetupActionField(label="Messaging endpoint", value=webhook_url)
+                    SurfaceSetupActionField(
+                        label="Messaging endpoint", value=webhook_url
+                    )
                 ],
                 steps=[
                     "In the Azure Portal, open the Azure Bot resource for this tenant.",

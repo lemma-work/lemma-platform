@@ -66,21 +66,28 @@ def _start_samplers(out: Path, interval: int) -> list[subprocess.Popen]:
     procs.append(
         subprocess.Popen(
             [
-                sys.executable, str(ROOT / "docker_stats.py"),
-                "--interval", str(interval),
-                "--output", str(out / "docker_stats.csv"),
+                sys.executable,
+                str(ROOT / "docker_stats.py"),
+                "--interval",
+                str(interval),
+                "--output",
+                str(out / "docker_stats.csv"),
             ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
     )
     with (out / "db_connections.csv").open("w") as handle:
         procs.append(
             subprocess.Popen(
                 [
-                    sys.executable, str(ROOT / "db_monitor.py"),
-                    "--interval", str(interval),
+                    sys.executable,
+                    str(ROOT / "db_monitor.py"),
+                    "--interval",
+                    str(interval),
                 ],
-                stdout=handle, stderr=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.DEVNULL,
             )
         )
     return procs
@@ -102,13 +109,19 @@ def _run_k6(profile: str, out: Path, env: dict[str, str]) -> int:
     # write its summary straight into this run's directory.
     relative = (out / "k6-summary.json").relative_to(ROOT)
     args = [
-        "docker", "run", "--rm", "--network", "host",
-        "-v", f"{ROOT}:/scripts",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        f"{ROOT}:/scripts",
     ]
     for key, value in env.items():
         args += ["-e", f"{key}={value}"]
     args += [
-        "grafana/k6:latest", "run",
+        "grafana/k6:latest",
+        "run",
         f"--summary-export=/scripts/{relative}",
         f"/scripts/{script}",
     ]
@@ -122,7 +135,8 @@ def _collect_runtime_events(out: Path, since: str) -> list[dict]:
     for container in CONTAINERS:
         result = subprocess.run(
             ["docker", "logs", "--since", since, container],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         for line in (result.stdout + result.stderr).splitlines():
             line = line.strip()
@@ -187,7 +201,7 @@ def _stall_frames(events: list[dict]) -> Counter:
             if line.strip().startswith("File")
         ]
         if lines:
-            frames[re.sub(r'.*(app/|site-packages/)', "", lines[-1])] += 1
+            frames[re.sub(r".*(app/|site-packages/)", "", lines[-1])] += 1
     return frames
 
 
@@ -198,7 +212,12 @@ def _write_summary(out: Path, events: list[dict], k6_rc: int) -> str:
     if summary_path.exists():
         data = json.loads(summary_path.read_text())
         metrics = data.get("metrics", {})
-        lines += ["## Latency by API (ms)", "", "| metric | p50 | p95 | p99 | max |", "|---|---|---|---|---|"]
+        lines += [
+            "## Latency by API (ms)",
+            "",
+            "| metric | p50 | p95 | p99 | max |",
+            "|---|---|---|---|---|",
+        ]
         for name, values in sorted(metrics.items()):
             if not name.endswith("_ms") or "p(95)" not in values:
                 continue
@@ -210,7 +229,12 @@ def _write_summary(out: Path, events: list[dict], k6_rc: int) -> str:
 
     trend = _memory_trend(out)
     if trend:
-        lines += ["## Memory floor", "", "| container | start | end | peak | samples |", "|---|---|---|---|---|"]
+        lines += [
+            "## Memory floor",
+            "",
+            "| container | start | end | peak | samples |",
+            "|---|---|---|---|---|",
+        ]
         for name, values in sorted(trend.items()):
             lines.append(
                 f"| {name} | {values['start_floor_mib']} MiB | {values['end_floor_mib']} MiB "
@@ -243,7 +267,9 @@ def _write_summary(out: Path, events: list[dict], k6_rc: int) -> str:
     if slow:
         by_route: dict[str, list[float]] = defaultdict(list)
         for event in slow:
-            by_route[str(event.get("route"))].append(float(event.get("duration_ms") or 0))
+            by_route[str(event.get("route"))].append(
+                float(event.get("duration_ms") or 0)
+            )
         lines += ["## Slow requests", "", "| route | count | max ms |", "|---|---|---|"]
         for route, values in sorted(by_route.items(), key=lambda kv: -len(kv[1])):
             lines.append(f"| {route} | {len(values)} | {max(values):.0f} |")
@@ -287,7 +313,9 @@ def main() -> int:
     finally:
         _stop(samplers)
 
-    since = datetime.fromtimestamp(started, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    since = datetime.fromtimestamp(started, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
     events = _collect_runtime_events(out, since)
     print()
     print(_write_summary(out, events, k6_rc))

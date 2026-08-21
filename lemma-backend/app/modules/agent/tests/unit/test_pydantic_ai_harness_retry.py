@@ -41,9 +41,7 @@ def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
 
 
 async def _run_harness(model, *, monkeypatch, should_stop=None):
-    monkeypatch.setattr(
-        harness_module, "_runtime_profile_model", lambda options: model
-    )
+    monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
     return [
@@ -278,9 +276,9 @@ async def test_a_non_retryable_provider_error_fails_fast(monkeypatch) -> None:
         raise ModelHTTPError(status_code=402, model_name="m", body={"e": "no credit"})
 
     monkeypatch.setattr(
-        harness_module, "_runtime_profile_model", lambda options: FunctionModel(
-            stream_function=stream_fn
-        )
+        harness_module,
+        "_runtime_profile_model",
+        lambda options: FunctionModel(stream_function=stream_fn),
     )
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())

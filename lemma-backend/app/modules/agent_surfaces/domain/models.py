@@ -183,6 +183,8 @@ class SurfaceApprovalRenderPlan(BaseModel):
             lines.append(f"Action: {self.action_summary}")
         lines.append('\nReply "approve" to run it or "deny" to cancel.')
         return "\n".join(lines)
+
+
 class ColdEmailSendResult(BaseModel):
     """What a platform reports after starting an email thread from nothing.
 

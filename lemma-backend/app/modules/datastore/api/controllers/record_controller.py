@@ -128,7 +128,9 @@ async def list_records(
     user: CurrentUser,
     pod_ctx: PodContextDep,
     limit: int = Query(default=20, ge=1, description="Max number of rows to return."),
-    offset: int = Query(default=0, ge=0, description="Row offset for direct pagination."),
+    offset: int = Query(
+        default=0, ge=0, description="Row offset for direct pagination."
+    ),
     filter: list[str] | None = Query(
         default=None,
         description=(

@@ -6,7 +6,10 @@ from uuid import uuid4
 import pytest
 from streaq.task import TaskStatus
 
-from app.modules.agent.domain.events import AgentRunCompletedEvent, AgentRunStopRequestedEvent
+from app.modules.agent.domain.events import (
+    AgentRunCompletedEvent,
+    AgentRunStopRequestedEvent,
+)
 from app.modules.agent.events.handlers import conversation_title_job_id
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.events import handlers
@@ -35,7 +38,9 @@ class _JobQueue:
         self.abort_called = True
         return True
 
-    async def enqueue(self, task_name: str, *, context: dict, _job_id: str | None = None):
+    async def enqueue(
+        self, task_name: str, *, context: dict, _job_id: str | None = None
+    ):
         self.enqueued.append((task_name, context, _job_id))
         return object()
 

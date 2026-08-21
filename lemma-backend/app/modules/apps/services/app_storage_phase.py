@@ -166,9 +166,7 @@ class AppStoragePhase:
                 source_path = f"source/{source_version}/archive.zip"
                 await storage.write_file(source_path, source_archive_bytes)
             if plan.needs_dist_write and dist_archive_bytes is not None:
-                bundle = await run_blocking(
-                    load_app_dist_bundle, dist_archive_bytes
-                )
+                bundle = await run_blocking(load_app_dist_bundle, dist_archive_bytes)
                 for item in bundle.files:
                     await storage.write_file(
                         f"{plan.release_root}{item.path}", item.content
@@ -218,7 +216,7 @@ class AppStoragePhase:
             await storage.delete_prefix("")
         except Exception:  # pragma: no cover - best-effort cleanup
             logger.debug(
-                'apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic',
+                "apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic",
                 app_id=cleanup.app_id,
             )
 

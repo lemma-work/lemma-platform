@@ -54,6 +54,7 @@ def history_and_prompt(
 
     return _to_pydantic_ai_messages(history_messages), user_prompt
 
+
 def _to_pydantic_ai_messages(
     messages: Iterable[object],
 ) -> list[ModelMessage]:
@@ -73,18 +74,14 @@ def _to_pydantic_ai_messages(
 
         if role == MessageRole.USER:
             converted.append(
-                ModelRequest(
-                    parts=[UserPromptPart(content=_user_prompt_text(msg))]
-                )
+                ModelRequest(parts=[UserPromptPart(content=_user_prompt_text(msg))])
             )
             index += 1
             continue
 
         if role == MessageRole.SYSTEM:
             converted.append(
-                ModelRequest(
-                    parts=[SystemPromptPart(content=_message_text(msg))]
-                )
+                ModelRequest(parts=[SystemPromptPart(content=_message_text(msg))])
             )
             index += 1
             continue
@@ -116,9 +113,7 @@ def _to_pydantic_ai_messages(
                     request_message,
                     next_index,
                     consumed_indexes,
-                ) = _build_tool_batch(
-                    items, index, consumed_tool_return_indexes
-                )
+                ) = _build_tool_batch(items, index, consumed_tool_return_indexes)
                 if response_message is not None:
                     converted.append(response_message)
                 if request_message is not None:
@@ -131,12 +126,11 @@ def _to_pydantic_ai_messages(
             index += 1
             continue
 
-        logger.debug(
-            'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic'
-        )
+        logger.debug("agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic")
         index += 1
 
     return converted
+
 
 def _build_tool_batch(
     messages: list[object],
@@ -208,7 +202,7 @@ def _build_tool_batch(
         if matched is None:
             if getattr(msg, "tool_name", None) in PAUSING_TOOL_NAMES:
                 logger.debug(
-                    'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic',
+                    "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
                     tool_call_id=msg.tool_call_id,
                 )
                 continue
@@ -257,11 +251,10 @@ def _build_tool_batch(
             parts=response_parts,
             timestamp=getattr(call_entries[0], "created_at", None),
         )
-        request_message = ModelRequest(
-            parts=request_parts, timestamp=request_timestamp
-        )
+        request_message = ModelRequest(parts=request_parts, timestamp=request_timestamp)
 
     return response_message, request_message, index, consumed_indexes
+
 
 def _normalize_role(role: object) -> MessageRole | None:
     value = role.value if hasattr(role, "value") else role
@@ -270,8 +263,10 @@ def _normalize_role(role: object) -> MessageRole | None:
     except ValueError:
         return None
 
+
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
+
 
 def _user_prompt_text(msg: object) -> str:
     body = _message_text(msg)
@@ -323,8 +318,7 @@ def _user_prompt_text(msg: object) -> str:
         # only list the saved paths to avoid duplicating that instruction.
         saved = "\n".join(f"- {path}" for path in ingested_files if path)
         pieces.append(
-            "The user shared files; they are saved in the pod datastore at:\n"
-            f"{saved}"
+            f"The user shared files; they are saved in the pod datastore at:\n{saved}"
         )
     else:
         attachments = metadata.get("attachments")
@@ -361,6 +355,7 @@ def _user_prompt_text(msg: object) -> str:
         pieces.append(_metadata_state_text(metadata["state"]))
     return "\n\n".join(piece for piece in pieces if piece)
 
+
 def _metadata_state_text(state: object) -> str:
     try:
         state_json = json.dumps(to_json_value(state), indent=2, sort_keys=True)
@@ -379,17 +374,17 @@ def parse_tool_call_args(args: object) -> dict[str, object] | None:
         return args
 
     if not isinstance(args, str):
-        logger.debug('agent.pydantic_ai.dropping_non_object_tool_args.diagnostic')
+        logger.debug("agent.pydantic_ai.dropping_non_object_tool_args.diagnostic")
         return None
 
     try:
         parsed = pydantic_core.from_json(args)
     except ValueError:
-        logger.debug('agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic')
+        logger.debug("agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic")
         return None
 
     if isinstance(parsed, dict):
         return parsed
 
-    logger.debug('agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic')
+    logger.debug("agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic")
     return None

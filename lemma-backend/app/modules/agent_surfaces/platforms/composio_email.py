@@ -77,7 +77,9 @@ async def fetch_composio_file_bytes(data: Any) -> bytes:
     inline base64, so both shapes are handled.
     """
     payload = data if isinstance(data, dict) else {}
-    file_info = payload.get("file") if isinstance(payload.get("file"), dict) else payload
+    file_info = (
+        payload.get("file") if isinstance(payload.get("file"), dict) else payload
+    )
 
     inline_b64 = (
         file_info.get("content_b64")

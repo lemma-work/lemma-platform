@@ -149,9 +149,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
 
     # The pre-creation guide works with no surface (platform-level, not
     # surface-scoped) and needs no `exists`/live-state fields.
-    teams_guide = await authenticated_client.get(
-        f"/pods/{pod_id}/surface-setup/teams"
-    )
+    teams_guide = await authenticated_client.get(f"/pods/{pod_id}/surface-setup/teams")
     assert teams_guide.status_code == 200, teams_guide.text
     assert teams_guide.json()["platform"] == "TEAMS"
     # And is a 404 on the per-surface endpoint until a Teams surface exists.
@@ -380,9 +378,7 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
         f"https://api.example.test/surfaces/{surface['id']}/webhook"
     )
 
-    deleted = await authenticated_client.delete(
-        f"/pods/{pod_id}/surfaces/telegram"
-    )
+    deleted = await authenticated_client.delete(f"/pods/{pod_id}/surfaces/telegram")
     assert deleted.status_code == 204, deleted.text
 
     fetched = await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")
@@ -679,7 +675,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     assert created.status_code == 200, created.text
 
     # Lemma's own Slack app: webhook is wired up centrally → nothing to do.
-    system_setup = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")).json()
+    system_setup = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
+    ).json()
     assert system_setup["ready"] is True
     assert system_setup["actions"] == []
 
@@ -688,7 +686,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     auth_config.config_source = "ORG_CUSTOM"
     await db_session.commit()
 
-    custom_setup = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")).json()
+    custom_setup = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
+    ).json()
     assert custom_setup["ready"] is False
     assert custom_setup["status"] == "NEEDS_SETUP"
     assert {action["key"] for action in custom_setup["actions"]} == {
@@ -703,7 +703,10 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     assert action["key"] == "slack_event_subscriptions"
     assert action["steps"]
     assert action["link"] == "https://api.slack.com/apps"
-    assert any(field["value"].endswith("/surfaces/webhooks/slack") for field in action["fields"])
+    assert any(
+        field["value"].endswith("/surfaces/webhooks/slack")
+        for field in action["fields"]
+    )
 
     auth_config.config = {
         **(auth_config.config or {}),
@@ -883,9 +886,7 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         json={"platform": "SLACK", "account_id": str(slack_account.id)},
     )
     assert slack.status_code == 200, slack.text
-    channels = await authenticated_client.get(
-        f"/pods/{pod_id}/surfaces/slack/channels"
-    )
+    channels = await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/channels")
     assert channels.status_code == 200, channels.text
     assert channels.json()["channels"] == [
         {"id": "C-SUPPORT", "name": "support", "is_member": True},

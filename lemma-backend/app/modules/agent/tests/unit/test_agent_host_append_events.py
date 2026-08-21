@@ -43,7 +43,7 @@ async def _redis_available() -> bool:
         await client.ping()
         await client.aclose()
         return True
-    except (RedisError, OSError):
+    except RedisError, OSError:
         return False
 
 
@@ -83,7 +83,9 @@ def _repo(lease: _Lease | None, stream: AgentHostEventStream):
     return repo, session
 
 
-def _batch(run_id: UUID, sequences: list[int], *, epoch: int = 1) -> AgentHostEventBatch:
+def _batch(
+    run_id: UUID, sequences: list[int], *, epoch: int = 1
+) -> AgentHostEventBatch:
     return AgentHostEventBatch(
         events=[
             AgentHostEvent(
@@ -116,7 +118,9 @@ class TestHappyPath:
             )
             assert ack.acked_through == 3
             assert ack.run_id == run_id
-            assert [e.sequence for e in await stream.read(run_id=run_id, block_ms=50)] == [
+            assert [
+                e.sequence for e in await stream.read(run_id=run_id, block_ms=50)
+            ] == [
                 1,
                 2,
                 3,
@@ -142,7 +146,9 @@ class TestHappyPath:
         repo, _ = _repo(_Lease(run_id=run_id, host_id=host_id), stream)
         try:
             await repo.append_events(host_id=host_id, batch=_batch(run_id, [1, 2]))
-            ack = await repo.append_events(host_id=host_id, batch=_batch(run_id, [3, 4]))
+            ack = await repo.append_events(
+                host_id=host_id, batch=_batch(run_id, [3, 4])
+            )
             assert ack.acked_through == 4
         finally:
             await stream.delete(run_id=run_id)
@@ -188,9 +194,7 @@ class TestFencing:
         try:
             await repo.append_events(host_id=host_id, batch=_batch(run_id, [1]))
             with pytest.raises(AgentHostProtocolViolation, match="sequence gap"):
-                await repo.append_events(
-                    host_id=host_id, batch=_batch(run_id, [3, 4])
-                )
+                await repo.append_events(host_id=host_id, batch=_batch(run_id, [3, 4]))
         finally:
             await stream.delete(run_id=run_id)
 

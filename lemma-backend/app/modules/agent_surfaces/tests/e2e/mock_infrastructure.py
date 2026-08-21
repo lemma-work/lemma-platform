@@ -905,7 +905,9 @@ class FakeTeamsServer:
             {"id": f"site-{hostname}", "displayName": site_path or hostname}
         )
 
-    async def _graph_sharepoint_root_content(self, request: web.Request) -> web.Response:
+    async def _graph_sharepoint_root_content(
+        self, request: web.Request
+    ) -> web.Response:
         site_id = request.match_info["site_id"]
         item_path = request.match_info["item_path"]
         self._store.add(
@@ -1046,9 +1048,7 @@ class FakeTelegramServer:
         app.router.add_post(
             "/bot{token}/setMyShortDescription", self._set_my_short_description
         )
-        app.router.add_post(
-            "/bot{token}/setMyProfilePhoto", self._set_my_profile_photo
-        )
+        app.router.add_post("/bot{token}/setMyProfilePhoto", self._set_my_profile_photo)
         app.router.add_post(
             "/bot{token}/getManagedBotToken", self._get_managed_bot_token
         )

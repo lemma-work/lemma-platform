@@ -549,7 +549,9 @@ async def test_delegation_scope_is_implication_expanded(monkeypatch):
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
 
-    async def matching_grants_for_principal_sets(ctx, permission_id, resource, principal_sets):
+    async def matching_grants_for_principal_sets(
+        ctx, permission_id, resource, principal_sets
+    ):
         return [uuid4()]
 
     monkeypatch.setattr(
@@ -603,7 +605,9 @@ async def test_personal_resource_owned_by_other_denied_despite_workload_grant(
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
 
-    async def matching_grants_for_principal_sets(ctx, permission_id, resource, principal_sets):
+    async def matching_grants_for_principal_sets(
+        ctx, permission_id, resource, principal_sets
+    ):
         return [uuid4()]
 
     monkeypatch.setattr(
@@ -725,7 +729,9 @@ def test_org_owner_shortcut_covers_pod_scoped_child_resources():
     )
     # Non-org-owners get nothing from this shortcut.
     non_owner = _default_pod_agent_ctx(pod_id=pod_id, permission_ids=frozenset())
-    assert not Authorizer._is_org_owner_of_pod(non_owner, Permissions.APP_UPDATE, app_ref)
+    assert not Authorizer._is_org_owner_of_pod(
+        non_owner, Permissions.APP_UPDATE, app_ref
+    )
 
 
 @pytest.mark.asyncio
@@ -791,9 +797,7 @@ async def test_default_pod_agent_is_blocked_from_another_pod():
         authorizer=authorizer,
     )
 
-    decision = await authorizer.authorize(
-        ctx, Permissions.APP_UPDATE, other_pod_app
-    )
+    decision = await authorizer.authorize(ctx, Permissions.APP_UPDATE, other_pod_app)
 
     assert not decision.allowed
     assert decision.reason_code == "DELEGATED_POD_SCOPE_ONLY"
@@ -955,9 +959,7 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
     async def grants(ctx, permission_id, resource, principal_sets):
         return [grant_id]
 
-    monkeypatch.setattr(
-        authorizer, "_matching_grant_ids_for_principal_sets", grants
-    )
+    monkeypatch.setattr(authorizer, "_matching_grant_ids_for_principal_sets", grants)
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,
         resource_id=uuid4(),
@@ -1005,9 +1007,7 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
     async def no_grants(ctx, permission_id, resource, principal_sets):
         return []
 
-    monkeypatch.setattr(
-        authorizer, "_matching_grant_ids_for_principal_sets", no_grants
-    )
+    monkeypatch.setattr(authorizer, "_matching_grant_ids_for_principal_sets", no_grants)
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,
         resource_id=uuid4(),
@@ -1041,7 +1041,9 @@ async def test_user_actor_destructive_action_is_ungated(monkeypatch):
     async def fail_if_approval_checked(**kwargs):
         raise AssertionError("USER actors must not consult session approvals")
 
-    monkeypatch.setattr(service_module, "has_session_approval", fail_if_approval_checked)
+    monkeypatch.setattr(
+        service_module, "has_session_approval", fail_if_approval_checked
+    )
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,

@@ -236,8 +236,7 @@ async def test_storage_is_the_sandbox_not_a_volume(
 
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
     with pytest.raises(ProviderRejected):
         await provider.ensure_volume(
@@ -772,9 +771,9 @@ async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
     """The E2B account may be shared with something else entirely."""
     sandbox_id = uuid4()
     await provider.create(_spec(sandbox_id))
-    world.sandboxes["someone-else"] = type(
-        next(iter(world.sandboxes.values()))
-    )(sandbox_id="someone-else", metadata={"team": "other"})
+    world.sandboxes["someone-else"] = type(next(iter(world.sandboxes.values())))(
+        sandbox_id="someone-else", metadata={"team": "other"}
+    )
 
     objects = await provider.list_objects(deadline_at=_deadline())
 
@@ -824,9 +823,7 @@ async def test_a_function_sandbox_pause_keeps_memory(
     """
     instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
 
-    await provider.release(
-        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
-    )
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
 
     assert world.pause_kept_memory == [True]
 
@@ -972,7 +969,7 @@ async def test_the_sweep_sees_every_page_of_the_account(
 async def test_the_sweep_lists_function_sandboxes_too(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """"Every sandbox carrying this platform's metadata" has to mean every kind.
+    """ "Every sandbox carrying this platform's metadata" has to mean every kind.
 
     The query was hardcoded to workspaces, so a function sandbox the control
     plane had forgotten was invisible to orphan reclamation and billed forever

@@ -85,9 +85,7 @@ class FakeOps:
         del owner, repo, branch, message
         if self.race or expected_head != self.head:
             raise GithubBranchRaceError()
-        self.commits.append(
-            {"upserts": dict(upserts), "deletes": set(deletes)}
-        )
+        self.commits.append({"upserts": dict(upserts), "deletes": set(deletes)})
         self.content.update(upserts)
         for path in deletes:
             self.content.pop(path, None)
@@ -133,7 +131,7 @@ async def _publish(
 
 def test_render_readme_has_badge_counts_and_escaped_user_content():
     rendered = render_readme(
-        pod_name='CRM <script>',
+        pod_name="CRM <script>",
         description="[Leads](javascript:alert(1))",
         resource_counts={"tables": 2, "agents": 1, "functions": 0},
         owner="acme",

@@ -1,6 +1,6 @@
-#input_type_name: TriageInput
-#output_type_name: TriageResult
-#function_name: triage_ticket
+# input_type_name: TriageInput
+# output_type_name: TriageResult
+# function_name: triage_ticket
 
 from typing import Optional
 
@@ -28,7 +28,9 @@ class TriageResult(BaseModel):
 
 async def triage_ticket(ctx: FunctionContext, data: TriageInput) -> TriageResult:
     haystack = f"{data.subject}\n{data.body}".lower()
-    priority = "HIGH" if any(marker in haystack for marker in _URGENT_MARKERS) else "LOW"
+    priority = (
+        "HIGH" if any(marker in haystack for marker in _URGENT_MARKERS) else "LOW"
+    )
     pod = Pod.from_env()
     try:
         record = pod.table("tickets").create(

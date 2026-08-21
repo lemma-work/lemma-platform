@@ -26,7 +26,10 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.observability import connection_scope
-from app.core.observability.connection_scope import ConnectionHold, ConnectionScopeMonitor
+from app.core.observability.connection_scope import (
+    ConnectionHold,
+    ConnectionScopeMonitor,
+)
 
 # Tighter than the production default: a test should not hold a connection for
 # a fifth of a second, and a tight threshold is what makes the gate useful on a
@@ -120,7 +123,9 @@ def write_sweep_report() -> str | None:
     by_site: Counter[str] = Counter()
     worst: dict[str, ConnectionHold] = {}
     for hold in monitor.violations:
-        site = hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        site = (
+            hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        )
         by_site[site] += 1
         if site not in worst or hold.gap_seconds > worst[site].gap_seconds:
             worst[site] = hold

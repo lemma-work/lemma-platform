@@ -194,9 +194,7 @@ class FunctionExecutionRepository:
             return run.to_entity(), False, False
 
         run.status = (
-            FunctionRunStatus.COMPLETED
-            if completed
-            else FunctionRunStatus.FAILED
+            FunctionRunStatus.COMPLETED if completed else FunctionRunStatus.FAILED
         )
         run.output_data = output_data if completed else None
         run.error = error

@@ -66,7 +66,11 @@ def test_resend_inbound_parser_threads_and_builds_reply_target():
 @pytest.mark.asyncio
 async def test_resend_send_email_builds_resend_api_payload():
     service = ResendPlatformService(
-        {"api_key": "re_test", "from_address": "pod-1@ops.asur.work", "from_name": "Lemma"}
+        {
+            "api_key": "re_test",
+            "from_address": "pod-1@ops.asur.work",
+            "from_name": "Lemma",
+        }
     )
     captured = {}
 
@@ -150,7 +154,10 @@ def test_normalize_resend_inbound_handles_envelope_and_shapes():
                 "text": "body",
                 "headers": [
                     {"name": "Message-ID", "value": "<m9@example.com>"},
-                    {"name": "References", "value": "<r1@example.com> <r2@example.com>"},
+                    {
+                        "name": "References",
+                        "value": "<r1@example.com> <r2@example.com>",
+                    },
                 ],
             },
         }
@@ -174,7 +181,11 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
     nobody has ever seen arriving as "Re: Standup" reads as mail you have lost.
     """
     service = ResendPlatformService(
-        {"api_key": "re_test", "from_address": "pod-1@ops.asur.work", "from_name": "Lemma"}
+        {
+            "api_key": "re_test",
+            "from_address": "pod-1@ops.asur.work",
+            "from_name": "Lemma",
+        }
     )
     captured = {}
 
@@ -470,12 +481,15 @@ def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
     refs = references_of({}, headers)
 
     assert refs[0] == seed, "the JSON array was left serialized"
-    assert email_thread_root(
-        references=refs,
-        in_reply_to=None,
-        message_id="<reply-from-outlook@outlook.com>",
-        sender="anukul@lemma.work",
-    ) == seed
+    assert (
+        email_thread_root(
+            references=refs,
+            in_reply_to=None,
+            message_id="<reply-from-outlook@outlook.com>",
+            sender="anukul@lemma.work",
+        )
+        == seed
+    )
 
 
 def test_a_header_that_merely_looks_like_json_is_left_alone():
@@ -621,7 +635,8 @@ def test_the_unique_email_index_is_declared_on_the_model_too():
 
     assert "uq_agent_surface_identity_email" in names
     index = next(
-        i for i in AgentSurface.__table__.indexes
+        i
+        for i in AgentSurface.__table__.indexes
         if i.name == "uq_agent_surface_identity_email"
     )
     assert index.unique is True
@@ -690,8 +705,12 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
         _normalize_resend_inbound(
             _real_webhook(
                 attachments=[
-                    {"id": "att-1", "filename": "invoice.pdf",
-                     "content_type": "application/pdf", "size": 10}
+                    {
+                        "id": "att-1",
+                        "filename": "invoice.pdf",
+                        "content_type": "application/pdf",
+                        "size": 10,
+                    }
                 ]
             )
         )
@@ -710,11 +729,16 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
 
     async def _fake_get(self, url, **kwargs):  # noqa: ANN001
         seen.setdefault("urls", []).append(url)
-        seen.setdefault("auth", []).append((kwargs.get("headers") or {}).get("Authorization"))
+        seen.setdefault("auth", []).append(
+            (kwargs.get("headers") or {}).get("Authorization")
+        )
         if "/attachments/" in url:
             return _Resp(
-                {"filename": "invoice.pdf", "content_type": "application/pdf",
-                 "download_url": "https://cdn.resend.test/signed"},
+                {
+                    "filename": "invoice.pdf",
+                    "content_type": "application/pdf",
+                    "download_url": "https://cdn.resend.test/signed",
+                },
                 b"{}",
             )
         return _Resp(None, b"%PDF-1.4 real bytes")
@@ -789,7 +813,9 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     )
 
     with patch.object(
-        ResendPlatformService, "fetch_received_email", new=AsyncMock(side_effect=refused)
+        ResendPlatformService,
+        "fetch_received_email",
+        new=AsyncMock(side_effect=refused),
     ):
         enriched = await ResendSurfaceAdapter().enrich_inbound_event(
             credentials={"api_key": "re_test"}, event=event

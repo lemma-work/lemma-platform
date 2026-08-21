@@ -154,7 +154,9 @@ def _file_summary(entity: Any, user_id: Any) -> JsonObject:
 
 
 async def _table_context(services: PodServices, table_name: str) -> TableContext:
-    table = await services.table.get_table(services.ctx.pod_id, table_name, services.ctx)
+    table = await services.table.get_table(
+        services.ctx.pod_id, table_name, services.ctx
+    )
     schema_name = services.table.schema_manager.get_schema_name(services.ctx.pod_id)
     return TableContext.from_table_entity(table, schema_name, events_enabled=True)
 
@@ -308,9 +310,7 @@ async def pod_query(
         )
         return {"success": True, "rows": to_json_value(rows), "total": total}
 
-    return await _run(
-        ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op
-    )
+    return await _run(ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op)
 
 
 # --- Files ------------------------------------------------------------------
@@ -403,9 +403,7 @@ async def pod_list_files(
             )
             return {
                 "success": True,
-                "tree": normalize_json_paths(
-                    to_json_value(tree), services.ctx.user_id
-                ),
+                "tree": normalize_json_paths(to_json_value(tree), services.ctx.user_id),
             }
         files, cursor = await services.file.list_files(
             services.ctx.pod_id,
@@ -534,14 +532,17 @@ async def pod_get_file_url(
 
     async def op(services: PodServices) -> JsonObject:
         if request.url_type == "public":
-            entity, signed_url, expires_at, max_hits = (
-                await services.file.create_signed_url(
-                    services.ctx.pod_id,
-                    request.path,
-                    services.ctx,
-                    expires_seconds=request.expires_seconds,
-                    max_hits=request.max_hits,
-                )
+            (
+                entity,
+                signed_url,
+                expires_at,
+                max_hits,
+            ) = await services.file.create_signed_url(
+                services.ctx.pod_id,
+                request.path,
+                services.ctx,
+                expires_seconds=request.expires_seconds,
+                max_hits=request.max_hits,
             )
             return {
                 "success": True,

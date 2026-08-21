@@ -150,7 +150,9 @@ async def create_function(
     function = await use_cases.create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
-    await _apply_function_grants(uow, pod_id=pod_id, function=function, data=data, user=user)
+    await _apply_function_grants(
+        uow, pod_id=pod_id, function=function, data=data, user=user
+    )
     return await _function_action_response(function)
 
 
@@ -388,7 +390,9 @@ async def update_function(
         user_id=user.id,
         request=request,
     )
-    await _apply_function_grants(uow, pod_id=pod_id, function=function, data=data, user=user)
+    await _apply_function_grants(
+        uow, pod_id=pod_id, function=function, data=data, user=user
+    )
     return await _function_action_response(function)
 
 
@@ -543,6 +547,8 @@ async def get_run(
     user: UserEntity = request.state.user
     user_id = user.id
 
-    run = await function_service.get_run(pod_id, function_name, run_id, user_id, ctx=ctx)
+    run = await function_service.get_run(
+        pod_id, function_name, run_id, user_id, ctx=ctx
+    )
 
     return FunctionRunResponse.model_validate(run)

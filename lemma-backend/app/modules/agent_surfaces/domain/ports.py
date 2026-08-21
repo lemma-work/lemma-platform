@@ -455,9 +455,7 @@ class SurfacePodMembershipPort(Protocol):
         shared system bot across pods in multiple orgs. None if unset."""
         ...
 
-    async def clear_user_default_surface_id(
-        self, user_id: UUID, platform: str
-    ) -> None:
+    async def clear_user_default_surface_id(self, user_id: UUID, platform: str) -> None:
         """Clear the user's stored default surface for ``platform``.
 
         Called when a stored default points at a surface the user is no longer a

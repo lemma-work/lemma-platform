@@ -76,6 +76,7 @@ meter = metrics.get_meter(__name__)
 job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
 
+
 class Lane(StrEnum):
     """Which queue a task runs on.
 
@@ -168,7 +169,7 @@ def _install_task_dump_handler() -> None:
 
     try:
         asyncio.get_running_loop().add_signal_handler(sigquit, _dump)
-    except (NotImplementedError, RuntimeError):  # pragma: no cover - platform
+    except NotImplementedError, RuntimeError:  # pragma: no cover - platform
         pass
 
 
@@ -658,9 +659,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # way the drain terminates. Before the HTTP client, which the sink posts
         # through.
         await _safe_shutdown_step("stop_analytics", stop_analytics)
-        await _safe_shutdown_step(
-            "close_shared_http_client", close_shared_http_client
-        )
+        await _safe_shutdown_step("close_shared_http_client", close_shared_http_client)
         # `web_fetch` runs in the worker, so this is the session that would
         # otherwise leak a libcurl handle per worker process.
         await _safe_shutdown_step(
@@ -886,9 +885,7 @@ def _register_observability_middleware(
 
         async def run(*args, **kwargs):
             task = registered.context
-            inherited = await load_job_observability_context(
-                worker.redis, task.task_id
-            )
+            inherited = await load_job_observability_context(worker.redis, task.task_id)
             token = otel_context.attach(extract(inherited))
             started_at = time.perf_counter()
             outcome = "succeeded"
@@ -902,12 +899,15 @@ def _register_observability_middleware(
                         "lemma.attempt": task.tries,
                     },
                 ) as span:
-                    with bind_job_context(
-                        job_id=task.task_id,
-                        task_name=task.fn_name,
-                        attempt=task.tries,
-                        inherited=inherited,
-                    ), origin_scope(origin_from_payload(inherited)):
+                    with (
+                        bind_job_context(
+                            job_id=task.task_id,
+                            task_name=task.fn_name,
+                            attempt=task.tries,
+                            inherited=inherited,
+                        ),
+                        origin_scope(origin_from_payload(inherited)),
+                    ):
                         try:
                             result = await call_next(*args, **kwargs)
                             span.set_attribute("lemma.outcome", outcome)

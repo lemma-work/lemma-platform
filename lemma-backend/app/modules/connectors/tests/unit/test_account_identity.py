@@ -172,7 +172,10 @@ async def test_telegram_identity_calls_getme(monkeypatch):
             return None
 
         def json(self):
-            return {"ok": True, "result": {"id": 123, "username": "lemmabot", "first_name": "Lemma"}}
+            return {
+                "ok": True,
+                "result": {"id": 123, "username": "lemmabot", "first_name": "Lemma"},
+            }
 
     class _FakeClient:
         def __init__(self, *a, **k):
@@ -199,7 +202,9 @@ async def test_telegram_identity_calls_getme(monkeypatch):
     assert _FakeClient.posted_url == "http://fake/bot111:AAA/getMe"
 
 
-async def test_telegram_identity_falls_back_to_bot_id_without_username_or_name(monkeypatch):
+async def test_telegram_identity_falls_back_to_bot_id_without_username_or_name(
+    monkeypatch,
+):
     class _FakeResp:
         def raise_for_status(self):  # noqa: D401
             return None

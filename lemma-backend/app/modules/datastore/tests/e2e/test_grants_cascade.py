@@ -153,7 +153,9 @@ class TestFolderGrantCascade:
             search_enabled=False,
         )
 
-        await operator.get_file(child["path"], expected_status=status.HTTP_403_FORBIDDEN)
+        await operator.get_file(
+            child["path"], expected_status=status.HTTP_403_FORBIDDEN
+        )
 
         grant = await authenticated_client.put(
             f"/pods/{pod_id}/roles/{ctx['custom_role']}/permissions",

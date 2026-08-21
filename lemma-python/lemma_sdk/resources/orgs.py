@@ -9,7 +9,9 @@ from ..openapi_client.api.organizations import (
     org_navigation,
 )
 from ..openapi_client.models.navigation_response import NavigationResponse
-from ..openapi_client.models.organization_create_request import OrganizationCreateRequest
+from ..openapi_client.models.organization_create_request import (
+    OrganizationCreateRequest,
+)
 from ..openapi_client.models.organization_home_response import OrganizationHomeResponse
 from ..openapi_client.models.organization_list_response import OrganizationListResponse
 from ..openapi_client.models.organization_member_list_response import (

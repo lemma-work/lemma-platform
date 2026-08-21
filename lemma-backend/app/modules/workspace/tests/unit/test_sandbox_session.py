@@ -408,9 +408,7 @@ async def test_a_short_yield_still_waits_long_enough_to_see_the_exit(
     client = _CanonicalClient()
     session = _session(client)
 
-    result = await session.exec_command(
-        cmd="printf done", yield_time_ms=yield_time_ms
-    )
+    result = await session.exec_command(cmd="printf done", yield_time_ms=yield_time_ms)
 
     assert result["completed"] is True, result
     assert result["exit_code"] == 0

@@ -35,7 +35,9 @@ class AppFileManager:
 
         self.app_id = app_id
         self.prefix = f"apps/{app_id}/"
-        self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
+        self._local_base: Path | None = (
+            Path(root_path) / self.prefix if root_path else None
+        )
 
         if root_path is not None:
             self.store = LocalStore(prefix=Path(root_path), mkdir=True)
@@ -93,7 +95,11 @@ class AppFileManager:
 
         # Scoped to this app. Without the app's own prefix a bare `list()` on a
         # now-shared store would walk — and delete — every app in the bucket.
-        list_prefix = self._key(normalized_prefix) if normalized_prefix else self.prefix.rstrip("/")
+        list_prefix = (
+            self._key(normalized_prefix)
+            if normalized_prefix
+            else self.prefix.rstrip("/")
+        )
         # `async for`, not `for`. The stream supports both, and driving the
         # synchronous side from a coroutine means every page of the listing is a
         # blocking round trip to object storage on the event loop — once per
@@ -103,7 +109,11 @@ class AppFileManager:
             if paths:
                 await self.store.delete_async(paths)
         if self._local_base:
-            target_dir = self._local_base if not normalized_prefix else self._local_path(normalized_prefix)
+            target_dir = (
+                self._local_base
+                if not normalized_prefix
+                else self._local_path(normalized_prefix)
+            )
             # Recursive unlink over a whole release tree: filesystem work
             # proportional to the app, so it goes off the loop like the rest.
             await run_blocking(

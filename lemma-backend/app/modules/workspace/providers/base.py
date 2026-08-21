@@ -219,7 +219,9 @@ class SandboxProvider(Protocol):
     async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None:
         """Remove a volume by name. Already-gone is success."""
 
-    async def list_objects(self, *, deadline_at: datetime) -> tuple[ProviderObject, ...]:
+    async def list_objects(
+        self, *, deadline_at: datetime
+    ) -> tuple[ProviderObject, ...]:
         """Every sandbox object this provider holds, for orphan reclamation."""
 
     async def close(self) -> None:
@@ -235,31 +237,51 @@ class SandboxOpsProvider(Protocol):
     """
 
     async def start_process(
-        self, instance: ProviderInstance, request: StartProcessRequest, *,
+        self,
+        instance: ProviderInstance,
+        request: StartProcessRequest,
+        *,
         deadline_at: datetime,
     ) -> str:
         """Begin a process and return the id its output is read by."""
 
     async def read_process_output(
-        self, instance: ProviderInstance, *, process_id: str, after_sequence: int,
-        wait_seconds: float, deadline_at: datetime,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        after_sequence: int,
+        wait_seconds: float,
+        deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
         """Output after `after_sequence`, which is exclusive and 1-based."""
 
     async def send_process_input(
-        self, instance: ProviderInstance, *, process_id: str, data: bytes,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        data: bytes,
         deadline_at: datetime,
     ) -> None:
         """Write to the process's stdin, or its PTY when it has one."""
 
     async def resize_process(
-        self, instance: ProviderInstance, *, process_id: str, size: TerminalSize,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        size: TerminalSize,
         deadline_at: datetime,
     ) -> None:
         """Tell a PTY-backed process its terminal changed size."""
 
     async def terminate_process(
-        self, instance: ProviderInstance, *, process_id: str, grace_seconds: float,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        grace_seconds: float,
         deadline_at: datetime,
     ) -> None:
         """Signal the process, escalating once the grace period lapses."""
@@ -285,25 +307,42 @@ class SandboxOpsProvider(Protocol):
         """Create a directory and any missing parents. Idempotent."""
 
     async def open_file(
-        self, instance: ProviderInstance, *, path: str, byte_range: ByteRange,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        byte_range: ByteRange,
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         """Stream a byte range of a file."""
 
     async def write_file(
-        self, instance: ProviderInstance, *, path: str, data: AsyncIterable[bytes],
-        expected_sha256: str | None, deadline_at: datetime,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        data: AsyncIterable[bytes],
+        expected_sha256: str | None,
+        deadline_at: datetime,
     ) -> FileStat:
         """Write a stream to a path, verifying the digest when one is given."""
 
     async def move_file(
-        self, instance: ProviderInstance, *, source: str, destination: str,
+        self,
+        instance: ProviderInstance,
+        *,
+        source: str,
+        destination: str,
         deadline_at: datetime,
     ) -> None:
         """Rename within the sandbox."""
 
     async def delete_file(
-        self, instance: ProviderInstance, *, path: str, recursive: bool,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        recursive: bool,
         deadline_at: datetime,
     ) -> bool:
         """Remove a path, reporting whether anything was there to remove."""
@@ -314,7 +353,9 @@ class SandboxOpsProvider(Protocol):
         """Make a persistent Python session exist, keeping its namespace."""
 
     async def execute_python(
-        self, instance: ProviderInstance, session: PythonSessionRef,
+        self,
+        instance: ProviderInstance,
+        session: PythonSessionRef,
         request: ExecutePythonRequest,
     ) -> PythonResult:
         """Run a fragment in a session and return what it produced."""

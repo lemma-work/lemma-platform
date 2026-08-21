@@ -137,7 +137,9 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
     assert "Repository not found." in notice
     # Cached, so a burst of commands doesn't re-run a slow failing clone...
     assert redis.values[_MARKER_KEY] == "failed"
-    assert await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    assert (
+        await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    )
     assert len(session.commands) == 1
 
 
@@ -150,7 +152,9 @@ async def test_a_session_without_an_id_is_left_alone(
     session = _FakeSession()
     session.session_id = None
 
-    assert await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    assert (
+        await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    )
     assert session.commands == []
 
 

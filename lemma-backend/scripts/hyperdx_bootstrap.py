@@ -50,11 +50,17 @@ def _select(agg_fn, *, alias, value_expression="", level=None, condition=""):
 
 def _quantile(level, alias, *, condition=_SERVER):
     return _select(
-        "quantile", alias=alias, value_expression="Duration", level=level, condition=condition
+        "quantile",
+        alias=alias,
+        value_expression="Duration",
+        level=level,
+        condition=condition,
     )
 
 
-def _overview_dashboard(traces_source_id: str, logs_source_id: str, connection_id: str) -> dict:
+def _overview_dashboard(
+    traces_source_id: str, logs_source_id: str, connection_id: str
+) -> dict:
     """Tile shapes are the exact structures HyperDX persisted after being
     authored and validated (via `clickstack_save_dashboard` +
     `clickstack_query_tile`, one tile at a time) through the ClickStack MCP
@@ -166,9 +172,7 @@ def _overview_dashboard(traces_source_id: str, logs_source_id: str, connection_i
                     "where": _SERVER,
                     "whereLanguage": "lucene",
                     "numberFormat": _DURATION_FORMAT,
-                    "select": [
-                        _select("count", alias="", value_expression="Duration")
-                    ],
+                    "select": [_select("count", alias="", value_expression="Duration")],
                 },
             },
             {
@@ -375,14 +379,20 @@ def main() -> int:
             personal_access_key = me.json().get("accessKey")
             _ensure_dashboard(client)
     except httpx.HTTPError as exc:
-        print(f"hyperdx_bootstrap: request to {args.base_url} failed: {exc}", file=sys.stderr)
+        print(
+            f"hyperdx_bootstrap: request to {args.base_url} failed: {exc}",
+            file=sys.stderr,
+        )
         return 1
     except RuntimeError as exc:
         print(f"hyperdx_bootstrap: {exc}", file=sys.stderr)
         return 1
 
     if not api_key:
-        print(f"hyperdx_bootstrap: team response had no apiKey: {team.text}", file=sys.stderr)
+        print(
+            f"hyperdx_bootstrap: team response had no apiKey: {team.text}",
+            file=sys.stderr,
+        )
         return 1
     if personal_access_key:
         print(

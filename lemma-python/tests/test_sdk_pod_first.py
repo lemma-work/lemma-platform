@@ -94,7 +94,11 @@ class StubTransport:
 
 def test_pod_table_create_binds_pod_and_returns_typed_record():
     transport = StubTransport()
-    lemma = Lemma(token="token", base_url="https://api.example.test", org_id="11111111-1111-4111-8111-111111111111")
+    lemma = Lemma(
+        token="token",
+        base_url="https://api.example.test",
+        org_id="11111111-1111-4111-8111-111111111111",
+    )
     lemma._transport = transport
     pod = lemma.pod("22222222-2222-4222-8222-222222222222")
 
@@ -114,7 +118,11 @@ def test_pod_table_create_binds_pod_and_returns_typed_record():
 
 
 def _bound_pod(transport: StubTransport) -> Pod:
-    lemma = Lemma(token="token", base_url="https://api.example.test", org_id="11111111-1111-4111-8111-111111111111")
+    lemma = Lemma(
+        token="token",
+        base_url="https://api.example.test",
+        org_id="11111111-1111-4111-8111-111111111111",
+    )
     lemma._transport = transport
     return lemma.pod("22222222-2222-4222-8222-222222222222")
 
@@ -352,11 +360,7 @@ def test_pod_surfaces_use_generated_models():
             "default_agent_name": "triage",
             "credential_mode": "SYSTEM",
             "account_id": "33333333-3333-4333-8333-333333333333",
-            "config": {
-                "channels": [
-                    {"channel_id": "C123", "agent_name": "triage"}
-                ]
-            },
+            "config": {"channels": [{"channel_id": "C123", "agent_name": "triage"}]},
         }
     )
     assert transport.calls[0]["endpoint"].endswith("agent_surface_create")
@@ -394,15 +398,10 @@ def test_pod_surfaces_use_generated_models():
     assert transport.calls[3]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
     )
-    assert (
-        transport.calls[3]["body_model"]
-        == "TelegramManagedBotSetupRequest"
-    )
+    assert transport.calls[3]["body_model"] == "TelegramManagedBotSetupRequest"
 
     pod.surfaces.get_telegram_bot_setup("setup-123")
-    assert transport.calls[4]["endpoint"].endswith(
-        "agent_surface_telegram_managed_get"
-    )
+    assert transport.calls[4]["endpoint"].endswith("agent_surface_telegram_managed_get")
     assert transport.calls[4]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
         "setup-123",

@@ -29,7 +29,9 @@ def test_whatsapp_toolset_generates_tool_descriptions():
 
 @pytest.mark.asyncio
 async def test_whatsapp_get_current_contact_returns_metadata():
-    toolset = build_whatsapp_surface_toolset(credentials={"phone_number_id": "phone-123"})
+    toolset = build_whatsapp_surface_toolset(
+        credentials={"phone_number_id": "phone-123"}
+    )
     tool = toolset.tools["whatsapp_get_current_contact"]
 
     ctx = SimpleNamespace(
@@ -44,7 +46,9 @@ async def test_whatsapp_get_current_contact_returns_metadata():
                 phone_number_id="phone-123",
                 waba_id="waba-123",
                 contacts=[{"wa_id": "919999999999", "profile": {"name": "Asha"}}],
-                attachments=[{"id": "media-1", "name": "photo.jpg", "content_type": "image"}],
+                attachments=[
+                    {"id": "media-1", "name": "photo.jpg", "content_type": "image"}
+                ],
             ),
         )
     )

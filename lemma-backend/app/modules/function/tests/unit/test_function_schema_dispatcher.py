@@ -110,6 +110,7 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
         "function_runtime_gateway_url",
         "http://127.0.0.1:8711",
     )
+
     async def mint_token(**kwargs) -> FunctionSessionToken:
         observed["token_claims"] = kwargs
         return FunctionSessionToken(
@@ -265,9 +266,7 @@ async def test_schema_dispatcher_retries_once_after_a_stale_or_dead_endpoint(
             del headers, timeout
             calls.append(url)
             if len(calls) == 1:
-                return httpx.Response(
-                    status_code, request=httpx.Request("POST", url)
-                )
+                return httpx.Response(status_code, request=httpx.Request("POST", url))
             return _ok_response(url)
 
     dispatcher = _dispatcher(_RuntimeClient())

@@ -213,9 +213,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
     monkeypatch.setattr(
         dispatcher,
         "_runtime_endpoint",
-        AsyncMock(
-            return_value=_endpoint("https://sandbox.test/runtime/")
-        ),
+        AsyncMock(return_value=_endpoint("https://sandbox.test/runtime/")),
     )
     monkeypatch.setattr(
         dispatcher,
@@ -369,8 +367,7 @@ def test_capacity_exhaustion_reports_pre_execution_failure() -> None:
     # The provider's own words reach the run, rather than a fixed sentence
     # keyed off an error code.
     assert FunctionDispatcher._execution_error(error) == (
-        "Function sandbox unavailable "
-        "(provider active sandbox capacity is exhausted)"
+        "Function sandbox unavailable (provider active sandbox capacity is exhausted)"
     )
 
 
@@ -386,6 +383,7 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
     from types import SimpleNamespace
 
     from app.core.redaction import REDACTED
+
     # Both the dispatcher and the runtime gateway delegate here now; they
     # each had a copy and only one of them got this fix.
     from app.modules.function.application.runtime_logs import (
@@ -434,7 +432,9 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
 # hand the endpoint out again.
 
 
-async def _invoke_and_capture_quarantine(runtime, *, mode=FunctionDispatchMode.SYNCHRONOUS):
+async def _invoke_and_capture_quarantine(
+    runtime, *, mode=FunctionDispatchMode.SYNCHRONOUS
+):
     dispatch = _dispatch(mode=mode)
     dispatcher = _dispatcher(runtime)
     quarantined = AsyncMock()
@@ -462,7 +462,9 @@ async def test_a_runtime_answering_5xx_is_quarantined() -> None:
         async def post(self, url, **kwargs):
             return httpx.Response(502, request=httpx.Request("POST", url))
 
-    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(
+        _Runtime()
+    )
 
     quarantined.assert_awaited_once_with(dispatch.pod_id, endpoint)
 
@@ -475,7 +477,9 @@ async def test_a_runtime_that_will_not_connect_is_quarantined() -> None:
         async def post(self, url, **kwargs):
             raise httpx.ConnectError("connection refused")
 
-    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(
+        _Runtime()
+    )
 
     quarantined.assert_awaited_once_with(dispatch.pod_id, endpoint)
 
@@ -584,7 +588,9 @@ async def test_a_refused_connection_is_retried_once_and_not_forever() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_broken_read_is_not_retried_even_though_it_is_a_transport_error() -> None:
+async def test_a_broken_read_is_not_retried_even_though_it_is_a_transport_error() -> (
+    None
+):
     """The half that keeps the no-replay guarantee honest.
 
     ``httpx.TransportError`` covers ReadError, WriteError and

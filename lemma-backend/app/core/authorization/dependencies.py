@@ -45,7 +45,9 @@ async def resolve_current_context(
     """
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
-        return await AuthorizationDataService(session).build_context_from_delegation_claims(
+        return await AuthorizationDataService(
+            session
+        ).build_context_from_delegation_claims(
             user_id=user_id,
             claims=claims,
             request_id=request.headers.get("x-request-id"),
@@ -101,14 +103,18 @@ async def get_org_context(
         return existing
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
-        ctx = await AuthorizationDataService(uow.session).build_context_from_delegation_claims(
+        ctx = await AuthorizationDataService(
+            uow.session
+        ).build_context_from_delegation_claims(
             user_id=user.id,
             claims=claims,
             request_id=request.headers.get("x-request-id"),
             is_default_pod_agent=_is_default_pod_agent_claims(claims),
         )
         if ctx.organization_id != org_id:
-            raise HTTPException(status_code=403, detail="Delegated organization mismatch")
+            raise HTTPException(
+                status_code=403, detail="Delegated organization mismatch"
+            )
         request.state.ctx = ctx
         set_current_context(ctx)
         await _release_after_authorization(uow)
@@ -202,6 +208,7 @@ async def _release_after_authorization(uow) -> None:
     nothing to keep.
     """
     await uow.commit()
+
 
 CurrentContextDep = Annotated[Context, Depends(get_current_context)]
 OrgContextDep = Annotated[Context, Depends(get_org_context)]
@@ -378,7 +385,9 @@ def require_resource_admin_or_creator(
             and ctx.user_id is not None
             and resource.resource_id is not None
         ):
-            creator_user_id = await AuthorizationDataService(uow.session).get_resource_creator(
+            creator_user_id = await AuthorizationDataService(
+                uow.session
+            ).get_resource_creator(
                 resource_type=resource.resource_type,
                 resource_id=resource.resource_id,
             )

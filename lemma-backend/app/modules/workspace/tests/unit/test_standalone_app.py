@@ -33,7 +33,6 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
 
     monkeypatch.setattr(standalone_app, "create_api_app", lambda: api_app)
 
-
     class FakeWorker:
         async def run_async(
             self,
@@ -95,7 +94,6 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
     @embedded_app.get("/ping")
     async def ping() -> dict[str, str]:
         return {"status": "ok"}
-
 
     class FakeWorker:
         async def run_async(

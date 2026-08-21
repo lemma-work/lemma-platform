@@ -25,7 +25,9 @@ from app.modules.identity.infrastructure.organization_repositories import (
 
 # Import models to ensure they are registered with SQLAlchemy
 from app.modules.connectors.infrastructure.models.account import Account as _Account  # noqa: F401
-from app.modules.connectors.infrastructure.models.connector import Connector as _Connector  # noqa: F401
+from app.modules.connectors.infrastructure.models.connector import (
+    Connector as _Connector,  # noqa: F401
+)
 
 
 @pytest.fixture

@@ -218,7 +218,9 @@ def _dispatch_repo(candidates):
 
 
 def _file(pod_id):
-    return SimpleNamespace(id=uuid4(), pod_id=pod_id, metadata={}, status=FileStatus.PENDING)
+    return SimpleNamespace(
+        id=uuid4(), pod_id=pod_id, metadata={}, status=FileStatus.PENDING
+    )
 
 
 @pytest.mark.asyncio

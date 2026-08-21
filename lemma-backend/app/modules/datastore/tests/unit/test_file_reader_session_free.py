@@ -86,7 +86,9 @@ async def test_read_child_artifact_touches_no_repository():
     entity = _file_entity()
     storage = _DictStorage()
     manifest = {
-        "artifacts": [{"name": CHILD_MARKDOWN_ARTIFACT, "content_type": "text/markdown"}]
+        "artifacts": [
+            {"name": CHILD_MARKDOWN_ARTIFACT, "content_type": "text/markdown"}
+        ]
     }
     storage.blobs[build_datastore_child_manifest_key(entity.pod_id, entity.path)] = (
         json.dumps(manifest).encode("utf-8")

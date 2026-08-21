@@ -83,11 +83,7 @@ class E2BOutputBuffer:
     async def record_exit(self, process_id: str, *, exit_code: int | None) -> None:
         await self._write_state(
             process_id,
-            state=(
-                ProcessState.SUCCEEDED
-                if exit_code == 0
-                else ProcessState.FAILED
-            ),
+            state=(ProcessState.SUCCEEDED if exit_code == 0 else ProcessState.FAILED),
             exit_code=exit_code,
         )
 
@@ -132,7 +128,7 @@ class E2BOutputBuffer:
                 decoded = json.loads(raw_state)
                 state = ProcessState(decoded["s"])
                 exit_code = decoded["e"]
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 # A malformed or half-written state key means the process
                 # is simply not known to have finished, which is what the
                 # RUNNING/None defaults above already say.
@@ -155,7 +151,7 @@ class E2BOutputBuffer:
                         data=decoded["d"].encode(),
                     )
                 )
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
 
         return ProcessOutputSnapshot(

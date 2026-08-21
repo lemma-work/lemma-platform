@@ -73,7 +73,10 @@ def _table_manifest(name, columns, pk="id"):
 
 def _build_bundle(tmp: Path, *, variables=None) -> Path:
     root = tmp / "bundle"
-    _write(root / "pod.json", {"name": "CRM", "format_version": 2, "variables": variables or {}})
+    _write(
+        root / "pod.json",
+        {"name": "CRM", "format_version": 2, "variables": variables or {}},
+    )
     return root
 
 
@@ -84,9 +87,14 @@ def tmp(tmp_path) -> Path:
 
 async def test_create_vs_update_classification(tmp):
     root = _build_bundle(tmp)
-    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id", "name"]))
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        _table_manifest("leads", ["id", "name"]),
+    )
     _write(root / "agents" / "bot" / "bot.json", {"name": "bot"})
-    _write(root / "functions" / "score" / "score.json", {"name": "score", "code": "x=1"})
+    _write(
+        root / "functions" / "score" / "score.json", {"name": "score", "code": "x=1"}
+    )
 
     existing = FakeExisting(
         tables={"leads"},
@@ -132,7 +140,10 @@ async def test_no_files_dir_yields_no_file_steps(tmp):
 async def test_destructive_column_drop_flagged(tmp):
     root = _build_bundle(tmp)
     # Bundle table has fewer columns than the pod's live table -> a drop.
-    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id", "name"]))
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        _table_manifest("leads", ["id", "name"]),
+    )
     existing = FakeExisting(
         tables={"leads"},
         table_manifests={"leads": _table_manifest("leads", ["id", "name", "score"])},
@@ -148,7 +159,10 @@ async def test_destructive_column_drop_flagged(tmp):
 
 async def test_non_destructive_update_when_only_adding_columns(tmp):
     root = _build_bundle(tmp)
-    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id", "name", "score"]))
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        _table_manifest("leads", ["id", "name", "score"]),
+    )
     existing = FakeExisting(
         tables={"leads"},
         table_manifests={"leads": _table_manifest("leads", ["id", "name"])},
@@ -230,7 +244,11 @@ async def test_account_variable_missing_connector_is_rejected(tmp):
     root = _build_bundle(
         tmp,
         variables={
-            "acct": {"type": "account", "source_value": "x", "connector_kind": "package"},
+            "acct": {
+                "type": "account",
+                "source_value": "x",
+                "connector_kind": "package",
+            },
         },
     )
     with pytest.raises(BundleInvalidError, match="acct"):
@@ -270,9 +288,7 @@ async def test_function_grants_step_deferred_after_resources(tmp):
         {
             "name": "rewriter",
             "permissions": {
-                "grants": [
-                    {"resource_type": "folder", "resource_name": "/knowledge"}
-                ]
+                "grants": [{"resource_type": "folder", "resource_name": "/knowledge"}]
             },
         },
     )

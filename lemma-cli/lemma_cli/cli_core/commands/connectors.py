@@ -5,7 +5,9 @@ from typing import Any, Optional
 
 import typer
 from lemma_sdk.openapi_client.models.account_create_schema import AccountCreateSchema
-from lemma_sdk.openapi_client.models.auth_config_create_schema import AuthConfigCreateSchema
+from lemma_sdk.openapi_client.models.auth_config_create_schema import (
+    AuthConfigCreateSchema,
+)
 
 from ..confirm import confirm_destructive
 from ..io import emit, list_items, to_plain
@@ -121,7 +123,8 @@ def _resolve_auth_config(client: Any, selector: str | None) -> str:
     by_connector = [
         item
         for item in items
-        if str(item.get("connector_id") or item.get("app_id") or "").casefold() == needle
+        if str(item.get("connector_id") or item.get("app_id") or "").casefold()
+        == needle
     ]
     if by_connector:
         preferred = next(
@@ -198,7 +201,9 @@ def _strip_body_fields(obj: Any) -> Any:
             if not (
                 isinstance(v, str)
                 and len(v) > 500
-                and any(tag in v.lower() for tag in ("<html", "<div", "<table", "<body"))
+                and any(
+                    tag in v.lower() for tag in ("<html", "<div", "<table", "<body")
+                )
             )
         }
     if isinstance(obj, list):
@@ -602,7 +607,9 @@ def refresh_auth_config_operations(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, _s: client.connectors.auth_configs.refresh_operations(auth_config),
+        lambda client, _s: client.connectors.auth_configs.refresh_operations(
+            auth_config
+        ),
     )
     emit(state, result if result is not None else {"ok": True})
 
@@ -638,7 +645,9 @@ def _search_operations(
     client: Any, state: Any, auth_config: str, query: str | None, limit: int
 ) -> Any:
     if hasattr(client.connectors, "operations"):
-        return client.connectors.operations.search(auth_config, query=query, limit=limit)
+        return client.connectors.operations.search(
+            auth_config, query=query, limit=limit
+        )
     return client.connectors.search_operations(
         auth_config,
         organization_id=org_for(client, state),
@@ -647,7 +656,9 @@ def _search_operations(
     )
 
 
-def _operation_batch(client: Any, state: Any, auth_config: str, names: list[str]) -> Any:
+def _operation_batch(
+    client: Any, state: Any, auth_config: str, names: list[str]
+) -> Any:
     if hasattr(client.connectors, "operations"):
         return client.connectors.operations.batch(auth_config, names)
     return client.connectors.get_operation_details_batch(
@@ -1027,7 +1038,9 @@ def get_trigger(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _get_trigger(client, s, auth_config=auth_config, trigger=trigger),
+        lambda client, s: _get_trigger(
+            client, s, auth_config=auth_config, trigger=trigger
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -1091,7 +1104,7 @@ def _render_overview(rows: list[dict]) -> None:
     console.print(view)
     console.print(
         "[dim]Pass the Auth Config name to operations/triggers, e.g. "
-        "`lemma connectors operations search <auth-config> \"<query>\"`.[/dim]"
+        '`lemma connectors operations search <auth-config> "<query>"`.[/dim]'
     )
 
 
@@ -1101,18 +1114,63 @@ def _render_overview(rows: list[dict]) -> None:
 # it. Used to bias resolution and to gate execution of an inferred write.
 _MUTATING_OP_TOKENS = frozenset(
     {
-        "add", "append", "archive", "assign", "cancel", "create", "delete",
-        "disable", "draft", "enable", "forward", "insert", "invite", "label",
-        "modify", "move", "patch", "post", "publish", "put", "remove", "rename",
-        "reply", "send", "set", "share", "star", "trash", "unarchive", "update",
-        "upload", "upsert", "write",
+        "add",
+        "append",
+        "archive",
+        "assign",
+        "cancel",
+        "create",
+        "delete",
+        "disable",
+        "draft",
+        "enable",
+        "forward",
+        "insert",
+        "invite",
+        "label",
+        "modify",
+        "move",
+        "patch",
+        "post",
+        "publish",
+        "put",
+        "remove",
+        "rename",
+        "reply",
+        "send",
+        "set",
+        "share",
+        "star",
+        "trash",
+        "unarchive",
+        "update",
+        "upload",
+        "upsert",
+        "write",
     }
 )
 _READ_INTENT_TOKENS = frozenset(
     {
-        "browse", "check", "download", "fetch", "find", "get", "inspect", "list",
-        "load", "look", "read", "recent", "retrieve", "review", "search", "see",
-        "show", "summarize", "summarise", "view",
+        "browse",
+        "check",
+        "download",
+        "fetch",
+        "find",
+        "get",
+        "inspect",
+        "list",
+        "load",
+        "look",
+        "read",
+        "recent",
+        "retrieve",
+        "review",
+        "search",
+        "see",
+        "show",
+        "summarize",
+        "summarise",
+        "view",
     }
 )
 
@@ -1160,9 +1218,12 @@ def _resolve_operation(
     except Exception:  # noqa: BLE001 — an unknown id just means "search instead"
         pass
 
-    hits = to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
-        "items"
-    ) or []
+    hits = (
+        to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
+            "items"
+        )
+        or []
+    )
     if not hits:
         raise typer.BadParameter(
             f"No operation on '{auth_config}' matches '{selector}'. Browse them "
@@ -1273,9 +1334,7 @@ def run_connector_operation(
                     err=True,
                 )
             if required and not gave_payload and not dry_run:
-                typer.echo(
-                    f"{name} needs input: {', '.join(required)}", err=True
-                )
+                typer.echo(f"{name} needs input: {', '.join(required)}", err=True)
             typer.echo(
                 f"next: lemma connectors run {connector} {name} -d '{{...}}'",
                 err=True,
@@ -1438,6 +1497,7 @@ def describe_connector(
         try:
             from rich.console import Console
             from rich.markdown import Markdown
+
             Console().print(Markdown(markdown))
         except ImportError:
             typer.echo(markdown)

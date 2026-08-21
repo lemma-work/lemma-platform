@@ -49,9 +49,9 @@ def _deferring_model(model_fn) -> FunctionModel:
     OpenAI-compatible profile via `openai_compatible_model_profile`, Anthropic
     natively — so that is what these tests assert against.
     """
-    return FunctionModel(model_fn, profile=ModelProfile(
-        tool_deferral_mode="with_tool_search"
-    ))
+    return FunctionModel(
+        model_fn, profile=ModelProfile(tool_deferral_mode="with_tool_search")
+    )
 
 
 def test_partition_core_extra_splits_pod_into_extra_for_pod_default():
@@ -210,9 +210,7 @@ async def test_caching_capability_uses_the_lever_its_protocol_understands():
     assert "openai_prompt_cache_key" in openai_settings
     assert "anthropic_cache_instructions" not in openai_settings
 
-    anthropic_settings = await settings_for(
-        RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
-    )
+    anthropic_settings = await settings_for(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
     assert anthropic_settings["anthropic_cache_instructions"] == "5m"
     assert "openai_prompt_cache_key" not in anthropic_settings
 
@@ -258,9 +256,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        ),
+        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -395,9 +391,7 @@ def test_normalize_stored_todos_recovers_observed_corrupt_history():
         {
             "done": False,
             "content": (
-                "RESEARCH DONE</item>\n"
-                "<item>DECK DONE</item>\n"
-                "<item>UPLOAD DONE"
+                "RESEARCH DONE</item>\n<item>DECK DONE</item>\n<item>UPLOAD DONE"
             ),
         },
     ]
@@ -427,9 +421,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        ),
+        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -527,8 +519,7 @@ async def test_current_time_and_deferral_in_real_run():
     assert len(note_parts) == 1
     assert str(note_parts[0].content).endswith("</notes>")
     assert not any(
-        isinstance(part, SystemPromptPart)
-        and str(part.content).startswith("<notes>")
+        isinstance(part, SystemPromptPart) and str(part.content).startswith("<notes>")
         for message in first_turn
         for part in getattr(message, "parts", [])
     )
@@ -537,9 +528,7 @@ async def test_current_time_and_deferral_in_real_run():
     # immediately before it.
     request_parts = first_turn[-1].parts
     user_texts = [
-        str(part.content)
-        for part in request_parts
-        if isinstance(part, UserPromptPart)
+        str(part.content) for part in request_parts if isinstance(part, UserPromptPart)
     ]
     assert user_texts[-1] == "hello"
     assert user_texts[-2].startswith("<notes>")
@@ -600,7 +589,9 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
         is_pod_default_agent=True,
     )
     # Assemble through the real RunToolAssembler so the pod-default toolset
@@ -626,9 +617,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         captured["visible"] = {
             t.name for t in info.function_tools if not t.defer_loading
         }
-        captured["deferred"] = {
-            t.name for t in info.function_tools if t.defer_loading
-        }
+        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
         return ModelResponse(parts=[TextPart("done")])
 
     agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
@@ -678,7 +667,9 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
         is_pod_default_agent=True,
     )
     full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
@@ -726,7 +717,9 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
         is_pod_default_agent=True,
     )
     full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
@@ -770,10 +763,9 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
     # Vision supported → view_image appended as a plain core toolset capability
     # (no bespoke instructions needed; the tool's own docstring carries guidance).
     vision_caps = await build_capabilities(supports_vision=True)
-    assert (
-        await visible_tool_names(vision_caps)
-        == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS | {"view_image"}
-    )
+    assert await visible_tool_names(
+        vision_caps
+    ) == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS | {"view_image"}
     # The workspace_cli usage instructions still ride along, unaffected by
     # whether view_image is present.
     assert any(
@@ -807,7 +799,9 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
         is_pod_default_agent=True,
     )
     full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
@@ -893,7 +887,9 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
         is_pod_default_agent=False,
     )
     agent_entity = SimpleNamespace(

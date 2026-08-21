@@ -34,8 +34,15 @@ def _free_port():
 
 
 def _docker_run(image, internal_port, env=None):
-    cmd = ["docker", "run", "-d", "--label", "lemma.cli.e2e=true",
-           "-p", f"127.0.0.1::{internal_port}"]
+    cmd = [
+        "docker",
+        "run",
+        "-d",
+        "--label",
+        "lemma.cli.e2e=true",
+        "-p",
+        f"127.0.0.1::{internal_port}",
+    ]
     for k, v in (env or {}).items():
         cmd += ["-e", f"{k}={v}"]
     cmd.append(image)
@@ -46,7 +53,9 @@ def _docker_run(image, internal_port, env=None):
 def _get_port(container_id, internal_port):
     result = subprocess.run(
         ["docker", "port", container_id, f"{internal_port}/tcp"],
-        check=True, capture_output=True, text=True
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return int(result.stdout.strip().splitlines()[0].rsplit(":", 1)[1])
 
@@ -90,13 +99,18 @@ def _wait_postgres(host, port, timeout=120):
 
 # --- Session-scoped: Docker containers --------------------------------------
 
+
 @pytest.fixture(scope="session")
 def postgres_container():
-    cid = _docker_run(POSTGRES_IMAGE, 5432, {
-        "POSTGRES_USER": POSTGRES_USER,
-        "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
-        "POSTGRES_DB": POSTGRES_DB,
-    })
+    cid = _docker_run(
+        POSTGRES_IMAGE,
+        5432,
+        {
+            "POSTGRES_USER": POSTGRES_USER,
+            "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
+            "POSTGRES_DB": POSTGRES_DB,
+        },
+    )
     port = _get_port(cid, 5432)
     _wait_postgres("127.0.0.1", port)
     # The squashed baseline migration creates tables with pgvector columns, so
@@ -109,9 +123,21 @@ def postgres_container():
 
 def _ensure_vector_extension(container_id: str) -> None:
     result = subprocess.run(
-        ["docker", "exec", container_id, "psql", "-U", POSTGRES_USER, "-d", POSTGRES_DB,
-         "-c", "CREATE EXTENSION IF NOT EXISTS vector"],
-        check=True, capture_output=True, text=True,
+        [
+            "docker",
+            "exec",
+            container_id,
+            "psql",
+            "-U",
+            POSTGRES_USER,
+            "-d",
+            POSTGRES_DB,
+            "-c",
+            "CREATE EXTENSION IF NOT EXISTS vector",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     del result
 
@@ -135,6 +161,7 @@ def supertokens_container():
 
 
 # --- Session-scoped: backend uvicorn subprocess -----------------------------
+
 
 def _run_migrations(python_bin: str, env: dict[str, str]) -> None:
     """Run `alembic upgrade head` against the test DB using the backend venv.
@@ -222,8 +249,18 @@ def backend_server(postgres_container, redis_container, supertokens_container):
     procs = []
     try:
         proc = subprocess.Popen(
-            [python_bin, "-m", "uvicorn", "app.app:app",
-             "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
+            [
+                python_bin,
+                "-m",
+                "uvicorn",
+                "app.app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "warning",
+            ],
             cwd=str(BACKEND_ROOT),
             env=env,
             stdout=server_log,
@@ -268,6 +305,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
 
 
 # --- Function-scoped: test user ---------------------------------------------
+
 
 @pytest.fixture
 def test_user(backend_server):
@@ -382,7 +420,8 @@ def truncate_tables(postgres_container):
                     "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
                 )
                 tables = [
-                    row[0] for row in cur.fetchall()
+                    row[0]
+                    for row in cur.fetchall()
                     if row[0] not in ("alembic_version",)
                 ]
                 if tables:

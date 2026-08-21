@@ -211,7 +211,9 @@ class ImportStartRequest(BaseModel):
     )
     owner: str | None = Field(default=None, description="GITHUB repo owner.")
     repo: str | None = Field(default=None, description="GITHUB repo name.")
-    ref: str | None = Field(default=None, description="GITHUB branch/tag/sha (optional).")
+    ref: str | None = Field(
+        default=None, description="GITHUB branch/tag/sha (optional)."
+    )
     account_id: UUID | None = Field(
         default=None, description="Connector account for a private GitHub repo."
     )
@@ -297,9 +299,7 @@ class PublishStartRequest(BaseModel):
         ),
     )
     private: bool = Field(default=False, description="Create the repo as private.")
-    account_id: UUID = Field(
-        ..., description="GitHub connector account to publish as."
-    )
+    account_id: UUID = Field(..., description="GitHub connector account to publish as.")
     ai_readme: bool = Field(
         default=False, description="Polish the generated README with the system model."
     )

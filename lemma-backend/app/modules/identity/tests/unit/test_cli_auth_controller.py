@@ -78,7 +78,9 @@ def wiring(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_minting_returns_the_tokens_and_the_owner_email(wiring) -> None:
-    request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=wiring.user_id)))
+    request = SimpleNamespace(
+        state=SimpleNamespace(user=SimpleNamespace(id=wiring.user_id))
+    )
 
     response = await ctrl.cli_session_tokens(request, uow_factory=wiring.uow_factory)
 
@@ -90,7 +92,9 @@ async def test_minting_returns_the_tokens_and_the_owner_email(wiring) -> None:
 @pytest.mark.asyncio
 async def test_the_mint_happens_after_the_scope_closes(wiring) -> None:
     """The connection must be back in the pool before the HTTP call starts."""
-    request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=wiring.user_id)))
+    request = SimpleNamespace(
+        state=SimpleNamespace(user=SimpleNamespace(id=wiring.user_id))
+    )
 
     await ctrl.cli_session_tokens(request, uow_factory=wiring.uow_factory)
 

@@ -119,7 +119,9 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
 
     async def _credential(ctx):
         return bridge._GithubCredential(
-            access_token="gho_faketoken123", login="octocat", email="octocat@example.com"
+            access_token="gho_faketoken123",
+            login="octocat",
+            email="octocat@example.com",
         )
 
     monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
@@ -187,7 +189,9 @@ async def test_ensure_github_credentials_skips_identity_setup_without_login(
     monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
 
     async def _credential(ctx):
-        return bridge._GithubCredential(access_token="gho_faketoken123", login=None, email=None)
+        return bridge._GithubCredential(
+            access_token="gho_faketoken123", login=None, email=None
+        )
 
     monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
 
@@ -323,7 +327,9 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises(
 def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
     ctx = _context()
     if account_id is not None:
-        ctx.workspace_repo = ProjectRepo(owner="acme", repo="widgets", account_id=account_id)
+        ctx.workspace_repo = ProjectRepo(
+            owner="acme", repo="widgets", account_id=account_id
+        )
     return ctx
 
 
@@ -333,7 +339,9 @@ async def _fake_build_delegated_context(uow, ctx):
 
 
 def _patch_account_resolution(monkeypatch: pytest.MonkeyPatch, service) -> None:
-    monkeypatch.setattr(bridge, "build_delegated_context", _fake_build_delegated_context)
+    monkeypatch.setattr(
+        bridge, "build_delegated_context", _fake_build_delegated_context
+    )
     monkeypatch.setattr(
         "app.modules.connectors.api.dependencies.get_account_resolution_service",
         lambda uow: service,

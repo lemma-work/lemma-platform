@@ -1222,9 +1222,7 @@ async def test_scripted_subagent_spawn_await_and_query_are_real_child_runs(
         script_tool_call(
             "interact_subagent",
             {
-                "conversation_id": script_tool_result_ref(
-                    "spawn-1", "conversation_id"
-                ),
+                "conversation_id": script_tool_result_ref("spawn-1", "conversation_id"),
                 "action": "await",
                 "run_id": script_tool_result_ref("spawn-1", "run_id"),
                 "timeout_seconds": 30,
@@ -1455,7 +1453,9 @@ async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_one
 
     # Reading an unknown skill surfaces the resolver's not-found branch.
     with pytest.raises(ValueError, match="Unknown skill"):
-        await read_workspace_skill(f"does-not-exist-{suffix}", pod_id=pod_id, user_id=user_id)
+        await read_workspace_skill(
+            f"does-not-exist-{suffix}", pod_id=pod_id, user_id=user_id
+        )
 
     resources = await list_workspace_skill_resources(
         custom_name, pod_id=pod_id, user_id=user_id
@@ -1731,7 +1731,6 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
     assert [item["title"] for item in records["items"]] == ["created by model"]
     file_content = await owner.download_file(f"{root}/created.md")
     assert file_content == b"replacement version"
-
 
 
 @pytest.mark.asyncio

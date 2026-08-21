@@ -49,7 +49,9 @@ def resend_receiver_credentials() -> dict[str, Any] | None:
     """System Resend credentials for the poller, or ``None`` if the key is unset."""
     api_key = resolve_resend_api_key()
     if not api_key:
-        logger.debug('agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic')
+        logger.debug(
+            "agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic"
+        )
         return None
     return {"api_key": api_key}
 
@@ -59,7 +61,9 @@ def resend_candidate_from_surface(
 ) -> NativeReceiverCandidate | None:
     api_key = str(credentials.get("api_key") or "").strip()
     if not api_key:
-        logger.debug('agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic')
+        logger.debug(
+            "agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic"
+        )
         return None
     # One system key serves every pod address, so all Resend surfaces merge into
     # a single poller keyed by the key. The poller resolves each email's surface
@@ -80,7 +84,9 @@ class ResendPollingReceiverRunner:
     async def run(self) -> None:
         api_key = str(self._candidate.credentials.get("api_key") or "").strip()
         if not api_key:
-            logger.debug('agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic')
+            logger.debug(
+                "agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic"
+            )
             return
 
         service = ResendPlatformService({"api_key": api_key})
@@ -100,7 +106,10 @@ class ResendPollingReceiverRunner:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.debug('agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic', exc_info=True)
+                logger.debug(
+                    "agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic",
+                    exc_info=True,
+                )
             await asyncio.sleep(_RESEND_POLL_INTERVAL_SECONDS)
 
     async def _collect_new_emails(
@@ -157,7 +166,9 @@ class ResendPollingReceiverRunner:
                     normalized["to"] = address
                     break
         if surface is None:
-            logger.debug('agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic')
+            logger.debug(
+                "agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic"
+            )
             return
 
         source_event_id = f"resend:native:{normalized.get('email_id')}"
@@ -184,7 +195,10 @@ async def _load_resend_cursor(key: str) -> str | None:
             return None
         return raw.decode() if isinstance(raw, bytes) else str(raw)
     except Exception:
-        logger.debug("agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.observed", exc_info=True)
+        logger.debug(
+            "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.observed",
+            exc_info=True,
+        )
         return None
 
 
@@ -193,4 +207,7 @@ async def _store_resend_cursor(key: str, cursor: str) -> None:
     try:
         await redis.set(_resend_cursor_key(key), cursor)
     except Exception:
-        logger.debug("agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.observed", exc_info=True)
+        logger.debug(
+            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.observed",
+            exc_info=True,
+        )

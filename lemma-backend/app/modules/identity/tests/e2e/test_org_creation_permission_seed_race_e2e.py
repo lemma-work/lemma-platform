@@ -44,7 +44,9 @@ async def test_two_organizations_created_at_once_do_not_race_on_permission_seedi
     # nothing else touches this table concurrently with this test -- and the
     # upsert this proves puts it straight back before the test returns.
     await db_session.execute(
-        delete(AuthPermissionModel).where(AuthPermissionModel.id == Permissions.ORG_READ)
+        delete(AuthPermissionModel).where(
+            AuthPermissionModel.id == Permissions.ORG_READ
+        )
     )
     await db_session.commit()
 

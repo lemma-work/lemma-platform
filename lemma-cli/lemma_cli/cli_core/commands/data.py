@@ -34,7 +34,9 @@ def init_table(
         None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."
     ),
     shared: bool = typer.Option(
-        False, "--shared", help="Shared team table (enable_rls=false); default is per-user RLS."
+        False,
+        "--shared",
+        help="Shared team table (enable_rls=false); default is per-user RLS.",
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing files."),
 ) -> None:
@@ -91,7 +93,9 @@ def get_table(
 def create_table(
     ctx: typer.Context,
     table: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -187,12 +191,18 @@ def add_table_column(
     ctx: typer.Context,
     table: str = typer.Argument(..., help="Table name."),
     name: str = typer.Argument(None, help="New column name (omit when using --data)."),
-    type_: str = typer.Option("TEXT", "--type", help=f"Column type. One of: {' '.join(COLUMN_TYPES)}."),
+    type_: str = typer.Option(
+        "TEXT", "--type", help=f"Column type. One of: {' '.join(COLUMN_TYPES)}."
+    ),
     required: bool = typer.Option(False, "--required"),
     unique: bool = typer.Option(False, "--unique"),
     default: str | None = typer.Option(None, "--default"),
-    option: list[str] = typer.Option([], "--option", help="ENUM option (repeat). Required for --type ENUM."),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Full column JSON (overrides the flags)."),
+    option: list[str] = typer.Option(
+        [], "--option", help="ENUM option (repeat). Required for --type ENUM."
+    ),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Full column JSON (overrides the flags)."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Add a column to a live table. (Type changes aren't in-place: drop + re-add.)"""
@@ -201,8 +211,15 @@ def add_table_column(
         column = read_json(json_payload, None, required=True)
     else:
         if not name:
-            raise typer.BadParameter("Provide a column NAME (or --data with full column JSON).")
-        column = {"name": name, "type": type_.upper(), "required": required, "unique": unique}
+            raise typer.BadParameter(
+                "Provide a column NAME (or --data with full column JSON)."
+            )
+        column = {
+            "name": name,
+            "type": type_.upper(),
+            "required": required,
+            "unique": unique,
+        }
         if default is not None:
             column["default"] = default
         if option:
@@ -274,7 +291,9 @@ def list_records(
 def create_record(
     ctx: typer.Context,
     table: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -297,8 +316,16 @@ def create_record(
 def import_records(
     ctx: typer.Context,
     table: str = typer.Argument(..., help="Target table."),
-    file: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="CSV, JSONL, or JSON array."),
-    fmt: str | None = typer.Option(None, "--format", help="csv | jsonl | json (default: from file extension)."),
+    file: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="CSV, JSONL, or JSON array.",
+    ),
+    fmt: str | None = typer.Option(
+        None, "--format", help="csv | jsonl | json (default: from file extension)."
+    ),
     limit: int = typer.Option(0, "--limit", help="Import at most N rows (0 = all)."),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
@@ -322,7 +349,9 @@ def import_records(
 def export_records(
     ctx: typer.Context,
     table: str = typer.Argument(..., help="Source table."),
-    output: Path = typer.Argument(..., help="Destination file (.csv, .jsonl, or .json)."),
+    output: Path = typer.Argument(
+        ..., help="Destination file (.csv, .jsonl, or .json)."
+    ),
     fmt: str | None = typer.Option(
         None, "--format", help="csv | jsonl | json (default: from file extension)."
     ),
@@ -372,7 +401,9 @@ def update_record(
     ctx: typer.Context,
     table: str = typer.Argument(...),
     record: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),

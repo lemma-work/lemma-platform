@@ -145,11 +145,17 @@ async def test_resume_for_function_run_trusts_event_output(monkeypatch):
     # Output came from the event, so the adapter is never consulted.
     assert engine.adapter_calls == 0
     assert engine.resumed == [
-        {"wait_type": WorkflowRunWaitType.FUNCTION, "external_ref": fr_id, "output": {"x": 1}}
+        {
+            "wait_type": WorkflowRunWaitType.FUNCTION,
+            "external_ref": fr_id,
+            "output": {"x": 1},
+        }
     ]
 
 
-async def test_resume_for_function_run_falls_back_to_adapter_when_output_none(monkeypatch):
+async def test_resume_for_function_run_falls_back_to_adapter_when_output_none(
+    monkeypatch,
+):
     fr_id = str(uuid4())
     engine = _ResumeEngine(_wait(WorkflowRunWaitType.FUNCTION, fr_id))
     service = RunResumeService(engine)

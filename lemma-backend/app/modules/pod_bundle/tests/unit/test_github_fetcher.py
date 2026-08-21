@@ -17,11 +17,16 @@ from app.modules.pod_bundle.infrastructure.github_fetcher import (
 
 
 def test_parse_repo_ref_from_url():
-    assert parse_repo_ref(repo_url="https://github.com/acme/crm", owner=None, repo=None) == (
+    assert parse_repo_ref(
+        repo_url="https://github.com/acme/crm", owner=None, repo=None
+    ) == (
         "acme",
         "crm",
     )
-    assert parse_repo_ref(repo_url="acme/crm.git", owner=None, repo=None) == ("acme", "crm")
+    assert parse_repo_ref(repo_url="acme/crm.git", owner=None, repo=None) == (
+        "acme",
+        "crm",
+    )
 
 
 def test_parse_repo_ref_from_parts():
@@ -36,7 +41,9 @@ def test_parse_repo_ref_invalid():
 
 
 def _client(handler) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    return httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    )
 
 
 async def test_fetch_zipball_success():

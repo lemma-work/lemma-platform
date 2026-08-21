@@ -32,7 +32,9 @@ _SYSTEM = SurfaceCredentialMode.SYSTEM
 _NATIVE = {SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM, SurfacePlatform.RESEND}
 
 
-def _connector(connector_id: str, *, is_active=True, capability=None) -> ConnectorEntity:
+def _connector(
+    connector_id: str, *, is_active=True, capability=None
+) -> ConnectorEntity:
     return ConnectorEntity(
         id=connector_id,
         title=connector_id.replace("_", " ").title(),
@@ -236,7 +238,10 @@ async def test_managed_setup_offered_only_where_a_manager_bot_exists(monkeypatch
         mod.surface_settings, "telegram_manager_bot_token", "123:abc", raising=False
     )
     monkeypatch.setattr(
-        mod.surface_settings, "telegram_manager_bot_username", "lemma_manager", raising=False
+        mod.surface_settings,
+        "telegram_manager_bot_username",
+        "lemma_manager",
+        raising=False,
     )
     surfaces = _by_platform(
         await build_available_surfaces(connector_service=_connector_service())
@@ -304,7 +309,9 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
 
 
-async def test_email_domain_is_published_so_the_builder_can_name_an_address(monkeypatch):
+async def test_email_domain_is_published_so_the_builder_can_name_an_address(
+    monkeypatch,
+):
     """The agent builder shows the address before the agent exists.
 
     Every other part of that address is derivable in the client — it comes from

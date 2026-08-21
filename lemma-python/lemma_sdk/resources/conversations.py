@@ -19,13 +19,17 @@ from ..openapi_client.models.conversation_list_response import ConversationListR
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
 from ..openapi_client.models.conversation_type import ConversationType
-from ..openapi_client.models.create_conversation_request import CreateConversationRequest
+from ..openapi_client.models.create_conversation_request import (
+    CreateConversationRequest,
+)
 from ..openapi_client.models.message_list_response import MessageListResponse
 from ..openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
 )
 from ..openapi_client.models.send_message_request import SendMessageRequest
-from ..openapi_client.models.update_conversation_request import UpdateConversationRequest
+from ..openapi_client.models.update_conversation_request import (
+    UpdateConversationRequest,
+)
 from ..openapi_client.models.user_approval_list_response import UserApprovalListResponse
 from ..openapi_client.types import UNSET
 from ..types import Metadata
@@ -100,9 +104,13 @@ class PodConversations(BoundResource):
         )
 
     def get(self, conversation_id: str) -> ConversationResponse:
-        return self._call(agent_conversation_get, self._pod_uuid(), as_uuid(conversation_id))
+        return self._call(
+            agent_conversation_get, self._pod_uuid(), as_uuid(conversation_id)
+        )
 
-    def update(self, conversation_id: str, request: UpdateConversationRequest) -> ConversationResponse:
+    def update(
+        self, conversation_id: str, request: UpdateConversationRequest
+    ) -> ConversationResponse:
         return self._call(
             agent_conversation_update,
             self._pod_uuid(),
@@ -110,7 +118,9 @@ class PodConversations(BoundResource):
             body=request,
         )
 
-    def messages(self, conversation_id: str, *, limit: int = 100) -> MessageListResponse:
+    def messages(
+        self, conversation_id: str, *, limit: int = 100
+    ) -> MessageListResponse:
         return self._call(
             agent_conversation_message_list,
             self._pod_uuid(),
@@ -140,7 +150,9 @@ class PodConversations(BoundResource):
         *,
         metadata: Metadata | None = None,
     ):
-        body = SendMessageRequest.from_dict(compact({"content": content, "metadata": metadata}))
+        body = SendMessageRequest.from_dict(
+            compact({"content": content, "metadata": metadata})
+        )
         kwargs = agent_conversation_message_send._get_kwargs(
             self._pod_uuid(),
             as_uuid(conversation_id),
@@ -151,7 +163,9 @@ class PodConversations(BoundResource):
         if response.status_code >= 400:
             content_bytes = response.read()
             response.close()
-            raise self._transport._error_from_response(response.status_code, None, content_bytes)
+            raise self._transport._error_from_response(
+                response.status_code, None, content_bytes
+            )
         return response
 
     def stream(self, conversation_id: str, *, agent_run_id: str | None = None):
@@ -165,7 +179,9 @@ class PodConversations(BoundResource):
         if response.status_code >= 400:
             content_bytes = response.read()
             response.close()
-            raise self._transport._error_from_response(response.status_code, None, content_bytes)
+            raise self._transport._error_from_response(
+                response.status_code, None, content_bytes
+            )
         return response
 
     def retry(self, conversation_id: str) -> AgentRunStartResponse:
@@ -180,7 +196,9 @@ class PodConversations(BoundResource):
         return self.stream(conversation_id, agent_run_id=str(result.agent_run_id))
 
     def stop(self, conversation_id: str) -> ConversationResponse:
-        return self._call(agent_conversation_stop, self._pod_uuid(), as_uuid(conversation_id))
+        return self._call(
+            agent_conversation_stop, self._pod_uuid(), as_uuid(conversation_id)
+        )
 
     def approvals(self, conversation_id: str) -> UserApprovalListResponse:
         return self._call(

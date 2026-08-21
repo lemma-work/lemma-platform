@@ -34,9 +34,7 @@ async def test_register_webhook_deletes_then_sets_then_verifies_with_retry(monke
             state["set_attempts"] += 1
             if state["set_attempts"] == 1:
                 # Transient first failure — registration must retry.
-                raise TelegramApiError(
-                    method=method, status_code=429, retry_after=0.01
-                )
+                raise TelegramApiError(method=method, status_code=429, retry_after=0.01)
             return {"ok": True, "result": True}
         if method == "getWebhookInfo":
             return {"ok": True, "result": {"url": WEBHOOK_URL}}

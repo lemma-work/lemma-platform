@@ -102,7 +102,6 @@ class AgentModel(UUIDAuditBase):
         )
 
 
-
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""
 
@@ -119,10 +118,7 @@ class ConversationModel(UUIDAuditBase):
             "ix_agent_conv_user_pod_agent_roots",
             "user_id",
             "pod_id",
-            text(
-                "COALESCE(agent_id, "
-                "'00000000-0000-0000-0000-000000000001'::uuid)"
-            ),
+            text("COALESCE(agent_id, '00000000-0000-0000-0000-000000000001'::uuid)"),
             "id",
             postgresql_where=text("parent_id IS NULL"),
         ),
@@ -549,7 +545,9 @@ class AgentConversationWaitModel(UUIDAuditBase):
 
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    wake_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    wake_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # See the workflow wait model: a timer fires once, so a row lock is not a
     # claim -- it is released at commit and the next tick reclaims the row.
     fire_lease_until: Mapped[datetime | None] = mapped_column(

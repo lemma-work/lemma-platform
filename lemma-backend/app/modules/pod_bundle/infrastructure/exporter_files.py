@@ -56,7 +56,9 @@ async def export_pod_files(
             service, pod_id, ctx, folder_paths, warnings
         )
     except Exception as exc:  # noqa: BLE001 - files are best-effort
-        logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
+        logger.debug(
+            "pod_bundle.exporter.skipping_file_export_pod_s.diagnostic", pod_id=pod_id
+        )
         # Best-effort must still be audible: silently returning an export
         # with no `files/` looks identical to a pod that has no files, and
         # the person restoring it only finds out when the files are gone.
@@ -67,9 +69,7 @@ async def export_pod_files(
         return False
 
     pod_entities = [
-        e
-        for e in entities
-        if str(getattr(e, "visibility", "") or "").upper() == "POD"
+        e for e in entities if str(getattr(e, "visibility", "") or "").upper() == "POD"
     ]
     if not pod_entities:
         return False
@@ -134,6 +134,7 @@ async def export_pod_files(
     if file_manifest:
         _write_json(files_root / FILES_MANIFEST, {"files": file_manifest})
     return wrote
+
 
 async def _collect_named_folders(
     service: Any,

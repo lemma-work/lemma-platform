@@ -46,7 +46,13 @@ class KeychainKeyProvider(KeyProvider):
                     raw = kc.get_password(self._service, self._username)
                     if not raw:
                         raw = json.dumps(
-                            [{"kid": "kc1", "key": Fernet.generate_key().decode(), "primary": True}]
+                            [
+                                {
+                                    "kid": "kc1",
+                                    "key": Fernet.generate_key().decode(),
+                                    "primary": True,
+                                }
+                            ]
                         )
                         kc.set_password(self._service, self._username, raw)
                     self._keyring = parse_keyset(raw)

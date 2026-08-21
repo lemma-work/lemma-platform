@@ -94,7 +94,9 @@ async def mcp_server():
     server = _build_server()
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
 
     url = f"http://127.0.0.1:{port}/mcp"
@@ -184,7 +186,9 @@ class TestExecution:
             "result": "hello ada"
         }
 
-    async def test_a_structured_result_is_returned_as_an_object(self, connection_config):
+    async def test_a_structured_result_is_returned_as_an_object(
+        self, connection_config
+    ):
         result = await _call(connection_config, "lookup", {"customer_id": "c-1"})
         assert result["plan"] == "pro"
         assert result["seats"] == 12
@@ -231,7 +235,9 @@ class TestDeadlines:
         from app.modules.connectors.domain.kinds import ResolvedInstall
 
         dispatcher = KindDispatcher(
-            build_kind_registry(composio_gateway=AsyncMock(), package_gateway=AsyncMock())
+            build_kind_registry(
+                composio_gateway=AsyncMock(), package_gateway=AsyncMock()
+            )
         )
         install = ResolvedInstall(
             connector_id="mcp",
@@ -262,7 +268,9 @@ class TestThroughTheDispatcher:
         from app.modules.connectors.domain.kinds import ResolvedInstall
 
         dispatcher = KindDispatcher(
-            build_kind_registry(composio_gateway=AsyncMock(), package_gateway=AsyncMock())
+            build_kind_registry(
+                composio_gateway=AsyncMock(), package_gateway=AsyncMock()
+            )
         )
         install = ResolvedInstall(
             connector_id="mcp",

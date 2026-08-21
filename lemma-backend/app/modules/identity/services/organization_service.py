@@ -64,7 +64,9 @@ class OrganizationService:
     async def _enrich_invitation_display_fields(
         self, invitation: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        organization = await self.organization_repository.get(invitation.organization_id)
+        organization = await self.organization_repository.get(
+            invitation.organization_id
+        )
         if organization:
             invitation.organization_name = organization.name
 
@@ -206,7 +208,9 @@ class OrganizationService:
                 )
             organization.name = name  # slug is a stable handle; not renamed
 
-        new_policy = join_policy if join_policy is not None else organization.join_policy
+        new_policy = (
+            join_policy if join_policy is not None else organization.join_policy
+        )
         provided_domain = (
             email_domain if email_domain is not None else organization.email_domain
         )
@@ -379,8 +383,10 @@ class OrganizationService:
                 "User is already a member of this organization"
             )
 
-        existing_invitation = await self.organization_repository.get_invitation_by_email(
-            entity.organization_id, entity.email
+        existing_invitation = (
+            await self.organization_repository.get_invitation_by_email(
+                entity.organization_id, entity.email
+            )
         )
         if existing_invitation:
             existing_invitation = await self._mark_invitation_expired_if_needed(
@@ -441,13 +447,14 @@ class OrganizationService:
             denied_message="Only owners and editors can view invitations",
         )
 
-        invitations, next_cursor = (
-            await self.organization_repository.list_organization_invitations(
-                organization_id,
-                status,
-                limit,
-                cursor,
-            )
+        (
+            invitations,
+            next_cursor,
+        ) = await self.organization_repository.list_organization_invitations(
+            organization_id,
+            status,
+            limit,
+            cursor,
         )
         return (
             await self._enrich_invitation_list_display_fields(invitations),
@@ -466,7 +473,10 @@ class OrganizationService:
         if not user:
             raise UserNotFoundError()
 
-        invitations, next_cursor = await self.organization_repository.list_user_invitations(
+        (
+            invitations,
+            next_cursor,
+        ) = await self.organization_repository.list_user_invitations(
             user_email=str(user.email), status=status, limit=limit, cursor=cursor
         )
         return (

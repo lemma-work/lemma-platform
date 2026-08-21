@@ -77,7 +77,6 @@ async def _agent_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
-
 async def _seed_agent_owned_connector(
     db_session,
     *,
@@ -583,8 +582,7 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
     assert app_execution.status_code == status.HTTP_200_OK, app_execution.text
     assert app_execution.json()["result"] == {"ok": True}
     assert (
-        create_execution_client.call_args.args[1]["api_key"]
-        == "dynamic-agent-secret"
+        create_execution_client.call_args.args[1]["api_key"] == "dynamic-agent-secret"
     )
     mock_execution_client.execute_operation.assert_awaited_once()
     assert str(account.user_id) == fixed_test_user["id"]

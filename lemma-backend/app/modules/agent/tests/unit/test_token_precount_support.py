@@ -106,7 +106,10 @@ def test_limits_that_never_asked_are_returned_unchanged() -> None:
     "module_path, attribute",
     [
         ("app.composition.schedule_filter", "FILTER_USAGE_LIMITS"),
-        ("app.modules.agent.services.conversation_title_service", "_TITLE_USAGE_LIMITS"),
+        (
+            "app.modules.agent.services.conversation_title_service",
+            "_TITLE_USAGE_LIMITS",
+        ),
     ],
 )
 def test_every_declared_precount_still_goes_through_the_helper(

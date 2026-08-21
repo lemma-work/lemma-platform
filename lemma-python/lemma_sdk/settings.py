@@ -45,7 +45,9 @@ def load_settings(
         selected_server=server,
     )
     config = get_server_config(root, selected_server)
-    defaults = config.get("defaults") if isinstance(config.get("defaults"), dict) else {}
+    defaults = (
+        config.get("defaults") if isinstance(config.get("defaults"), dict) else {}
+    )
 
     resolved_base_url = (
         base_url
@@ -53,7 +55,9 @@ def load_settings(
         or config.get("base_url")
         or DEFAULT_BASE_URL
     )
-    resolved_token = token or os.getenv("LEMMA_TOKEN") or get_access_token_from_config(config)
+    resolved_token = (
+        token or os.getenv("LEMMA_TOKEN") or get_access_token_from_config(config)
+    )
     if not resolved_token:
         raise LemmaConfigError(
             "Missing Lemma token. Pass token=..., set LEMMA_TOKEN, or run `lemma auth login`."

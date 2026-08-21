@@ -463,9 +463,7 @@ class SandboxService(SandboxVolumeMixin):
                 # later loss is distinguishable from a first provision.
                 await repository.set_provider_volume(sandbox.id, created.provider_id)
             await repository.touch(sandbox.id)
-            await repository.set_desired_state(
-                sandbox.id, SandboxDesiredState.PRESENT
-            )
+            await repository.set_desired_state(sandbox.id, SandboxDesiredState.PRESENT)
             await uow.commit()
 
         return self._handle(
@@ -474,7 +472,6 @@ class SandboxService(SandboxVolumeMixin):
             epoch=epoch,
             storage_generation=storage_generation,
         )
-
 
     async def _start(
         self, sandbox: Sandbox, instance: ProviderInstance, *, deadline_at: datetime
@@ -514,9 +511,7 @@ class SandboxService(SandboxVolumeMixin):
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             await repository.mark_instance_released(instance.id)
-            await repository.set_desired_state(
-                sandbox_id, SandboxDesiredState.RELEASED
-            )
+            await repository.set_desired_state(sandbox_id, SandboxDesiredState.RELEASED)
             await uow.commit()
 
     async def destroy(self, sandbox_id: UUID, *, delete_storage: bool = False) -> None:
@@ -530,9 +525,7 @@ class SandboxService(SandboxVolumeMixin):
             return
 
         if instance is not None and instance.provider_id:
-            await self._provider.destroy(
-                instance.provider_id, deadline_at=deadline_at
-            )
+            await self._provider.destroy(instance.provider_id, deadline_at=deadline_at)
         if delete_storage and sandbox.provider_volume_id:
             await self._provider.destroy_volume(
                 sandbox.provider_volume_id, deadline_at=deadline_at

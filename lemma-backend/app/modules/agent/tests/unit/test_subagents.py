@@ -49,7 +49,9 @@ def _patch_repo(monkeypatch, *, conversation, messages=None):
             del conversation_id, include_runs
             return conversation
 
-        async def list_messages(self, *, conversation_id, after_sequence=None, limit=50):
+        async def list_messages(
+            self, *, conversation_id, after_sequence=None, limit=50
+        ):
             del conversation_id, after_sequence, limit
             return list(messages or []), None
 

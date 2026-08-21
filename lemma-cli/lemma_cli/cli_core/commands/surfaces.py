@@ -32,10 +32,15 @@ def init_surface(
     from ...cli_app.scaffold import ScaffoldError, init_resource, report
 
     try:
-        result = init_resource("surface", platform, root=root, force=force, platform=platform)
+        result = init_resource(
+            "surface", platform, root=root, force=force, platform=platform
+        )
     except ScaffoldError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    report(result, next_hint="set default_agent_name + account_id, then `lemma pods import .`")
+    report(
+        result,
+        next_hint="set default_agent_name + account_id, then `lemma pods import .`",
+    )
 
 
 @app.command("schema")
@@ -352,9 +357,9 @@ def start_telegram_setup(
         payload["is_enabled"] = enabled
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(
-            client, s, pod
-        ).surfaces.start_telegram_bot_setup(payload),
+        lambda client, s: pod_client(client, s, pod).surfaces.start_telegram_bot_setup(
+            payload
+        ),
     )
     if result is not None:
         emit(state, result)

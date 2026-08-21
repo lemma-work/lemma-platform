@@ -7,7 +7,10 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.entities import AgentSurfaceStatus, SurfacePlatform
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceStatus,
+    SurfacePlatform,
+)
 from app.modules.agent_surfaces.domain.setup_guides import build_surface_setup_actions
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 

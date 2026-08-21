@@ -29,7 +29,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -104,9 +106,7 @@ async def test_progress_streams_via_chat_update_on_slack(
 
     starts = await wait_for_messages(message_store, "SLACK_STREAM_START", min_count=1)
     assert starts[-1]["channel"] == "D0123456"
-    chunks = await wait_for_messages(
-        message_store, "SLACK_STREAM_APPEND", min_count=1
-    )
+    chunks = await wait_for_messages(message_store, "SLACK_STREAM_APPEND", min_count=1)
     # Across appends, not within one: the token buffer flushes on a size *or*
     # time trigger, so the answer can be split at an arbitrary character.
     delivered = await wait_for_slack_text(message_store, "Here is the answer.")
@@ -138,7 +138,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
     )
     pod_id = test_pod["id"]
     sender_id = 555070809
-    await _create_agent_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
+    await _create_agent_surface(
+        authenticated_client, pod_id, config={"type": "TELEGRAM"}
+    )
     await _seed_external_user(
         db_session,
         platform="TELEGRAM",
@@ -146,7 +148,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
 
-    payload = _telegram_payload(text="do some work", message_id=941, sender_id=sender_id)
+    payload = _telegram_payload(
+        text="do some work", message_id=941, sender_id=sender_id
+    )
     await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
@@ -233,5 +237,7 @@ async def test_progress_streams_via_put_activity_on_teams(
     updates = await wait_for_messages(message_store, "TEAMS_UPDATE", min_count=1)
     assert any("Reading the results" in json.dumps(u) for u in updates)
     final = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    final_bodies = [m["body"] for m in final if m.get("body", {}).get("type") == "message"]
+    final_bodies = [
+        m["body"] for m in final if m.get("body", {}).get("type") == "message"
+    ]
     assert "Here is the answer." in final_bodies[-1].get("text", "")

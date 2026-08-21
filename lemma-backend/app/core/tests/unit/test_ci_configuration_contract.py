@@ -77,9 +77,7 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     assert "== 'labeled'" not in condition
     assert "workflow_run" not in condition
     assert (
-        "opened" in condition
-        and "synchronize" in condition
-        and "reopened" in condition
+        "opened" in condition and "synchronize" in condition and "reopened" in condition
     )
 
 

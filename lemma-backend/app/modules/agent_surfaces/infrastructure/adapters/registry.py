@@ -11,7 +11,9 @@ from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfac
 
 
 class SurfacePlatformAdapterRegistry:
-    def __init__(self, extra_adapters: dict[str, SurfacePlatformAdapterPort] | None = None):
+    def __init__(
+        self, extra_adapters: dict[str, SurfacePlatformAdapterPort] | None = None
+    ):
         self._adapters: dict[str, SurfacePlatformAdapterPort] = {
             "SLACK": SlackSurfaceAdapter(),
             "TEAMS": TeamsSurfaceAdapter(),

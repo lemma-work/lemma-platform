@@ -12,7 +12,9 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -307,14 +309,16 @@ async def test_telegram_group_injects_reply_as_channel_context(
     assert isinstance(context, SurfaceChatContext)
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
     channel_context = (user_message.get("metadata") or {}).get("channel_context")
     assert channel_context, channel_context
-    assert any(
-        "ship on Friday" in (m.get("text") or "") for m in channel_context
-    ), channel_context
+    assert any("ship on Friday" in (m.get("text") or "") for m in channel_context), (
+        channel_context
+    )
 
 
 async def test_telegram_dm_has_no_channel_context(
@@ -348,7 +352,9 @@ async def test_telegram_dm_has_no_channel_context(
     assert isinstance(context, SurfaceChatContext)
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
     assert "channel_context" not in (user_message.get("metadata") or {})
@@ -472,7 +478,9 @@ async def test_telegram_username_resolves_user_without_contact_share(
     )
 
     # _telegram_payload's sender carries username="surfaceuser".
-    payload = _telegram_payload(text="hello directly", message_id=70, sender_id=55501234)
+    payload = _telegram_payload(
+        text="hello directly", message_id=70, sender_id=55501234
+    )
     context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),

@@ -73,5 +73,5 @@ class HkdfSecretSigner:
         expected = hmac.new(subkey, payload, hashlib.sha256).digest()
         try:
             return hmac.compare_digest(expected, _b64d(sig_b64))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return False

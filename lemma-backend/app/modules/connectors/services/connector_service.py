@@ -198,10 +198,8 @@ class ConnectorService:
             return None
         kind = connector.default_kind_for_provider(provider).value
         for operation_name in capability.profile_operation_names or ():
-            operation = (
-                await self.operation_repository.get_by_connector_kind_and_name(
-                    connector_id, kind, operation_name
-                )
+            operation = await self.operation_repository.get_by_connector_kind_and_name(
+                connector_id, kind, operation_name
             )
             if operation is None:
                 continue
@@ -216,7 +214,12 @@ class ConnectorService:
                     get_dispatcher=self._profile_dispatcher,
                 )
             except Exception:
-                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id, exc_info=True)
+                logger.debug(
+                    "connectors.connector_service.profile_operation_s_s_s.diagnostic",
+                    operation_name=operation_name,
+                    connector_id=connector_id,
+                    exc_info=True,
+                )
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
@@ -767,7 +770,11 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.debug('connectors.connector_service.get_connector_authorization_url.propagated', error_type=type(exc).__name__, exc_info=True)
+            logger.debug(
+                "connectors.connector_service.get_connector_authorization_url.propagated",
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
             raise OAuthWorkflowError(
                 "Unable to initiate the OAuth flow.",
                 details=self._exception_details(exc),
@@ -956,7 +963,11 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.debug('connectors.connector_service.exchange_connector_authorization_code.propagated', error_type=type(exc).__name__, exc_info=True)
+            logger.debug(
+                "connectors.connector_service.exchange_connector_authorization_code.propagated",
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
             pending_request.status = ConnectRequestStatus.ERROR
             await self.connect_request_repository.update(pending_request)
             await self.uow.commit()
@@ -1178,7 +1189,11 @@ class ConnectorService:
                         ) from exc
                     if isinstance(exc, DomainError):
                         raise
-                    logger.debug('connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic', account_id=str(account_id), error_type=type(exc).__name__)
+                    logger.debug(
+                        "connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic",
+                        account_id=str(account_id),
+                        error_type=type(exc).__name__,
+                    )
                 else:
                     account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.
@@ -1257,7 +1272,9 @@ class ConnectorService:
                     user_id=user_id,
                 )
             except Exception:
-                logger.debug('connectors.connector_service.revoke_connection.diagnostic')
+                logger.debug(
+                    "connectors.connector_service.revoke_connection.diagnostic"
+                )
 
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the

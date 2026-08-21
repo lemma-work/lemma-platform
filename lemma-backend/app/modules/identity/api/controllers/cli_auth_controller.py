@@ -30,6 +30,7 @@ from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     refresh_cli_session_tokens,
 )
 
+
 class CliSessionResponse(BaseModel):
     access_token: str
     refresh_token: str

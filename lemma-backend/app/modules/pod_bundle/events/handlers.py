@@ -163,7 +163,7 @@ async def _finalize_import_cancellation(store, staging, state: ImportState) -> N
         await staging.delete_archive("pod-imports", current.import_id)
     except Exception:  # cleanup is backstopped by the sweep job
         logger.debug(
-            'pod_bundle.handlers.clean_staging_cancelled_import.diagnostic',
+            "pod_bundle.handlers.clean_staging_cancelled_import.diagnostic",
             import_id=str(current.import_id),
         )
 
@@ -262,7 +262,10 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         )
         state.expires_at = _now() + timedelta(seconds=ttl)
         await bundle_analytics.record_bundle_exported(
-            worker_ctx, export_id=export_id, pod_id=pod_id, user_id=user_id,
+            worker_ctx,
+            export_id=export_id,
+            pod_id=pod_id,
+            user_id=user_id,
             resource_count=len(getattr(state, "manifest", None) or ()),
         )
         state.completed_at = _now()
@@ -291,10 +294,10 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         # then re-raise so streaq retries with a fresh attempt.
         await _fail(store, state, "Export failed due to a transient error.")
         logger.debug(
-            'pod_bundle.handlers.pod_bundle_export_s_retryable.propagated',
+            "pod_bundle.handlers.pod_bundle_export_s_retryable.propagated",
             export_id=export_id,
-        exc_info=True,
-    )
+            exc_info=True,
+        )
         raise
 
 
@@ -307,7 +310,7 @@ async def _fail(store, state: ExportState, message: str) -> None:
         await publish_bundle_event(state.export_id, error_payload(message, state.seq))
     except Exception:  # noqa: BLE001 - failure bookkeeping is best-effort
         logger.debug(
-            'pod_bundle.handlers.persist_state_export_s_s.diagnostic',
+            "pod_bundle.handlers.persist_state_export_s_s.diagnostic",
             export_id=state.export_id,
         )
 
@@ -349,10 +352,10 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
     except Exception:
         await _fail_import(store, state, "Planning failed due to a transient error.")
         logger.debug(
-            'pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated',
+            "pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated",
             import_id=import_id,
-        exc_info=True,
-    )
+            exc_info=True,
+        )
         raise
 
 
@@ -475,10 +478,10 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             public_message="GitHub import failed after three transient attempts.",
         )
         logger.debug(
-            'pod_bundle.handlers.github_import_s_retryable_s.propagated',
+            "pod_bundle.handlers.github_import_s_retryable_s.propagated",
             import_id=import_id,
-        exc_info=True,
-    )
+            exc_info=True,
+        )
 
 
 @streaq_task(name="import_pod_url", lane=Lane.BULK, origin=OriginKind.IMPORT)
@@ -534,9 +537,10 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
     except Exception:
         await _fail_import(store, state, "URL import failed due to a transient error.")
         logger.debug(
-            'pod_bundle.handlers.url_import_s_retryable_s.propagated', import_id=import_id,
-        exc_info=True,
-    )
+            "pod_bundle.handlers.url_import_s_retryable_s.propagated",
+            import_id=import_id,
+            exc_info=True,
+        )
         raise
 
 
@@ -688,7 +692,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                         public_message=f"Step '{step.name}' failed: {exc}",
                     )
                     logger.debug(
-                        'pod_bundle.handlers.import_s_step_s_s.diagnostic',
+                        "pod_bundle.handlers.import_s_step_s_s.diagnostic",
                         import_id=import_id,
                     )
                     return
@@ -701,7 +705,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         state.completed_at = _now()
         await store.save_import(state)
         await bundle_analytics.record_import_completed(
-            worker_ctx, import_id=import_id, pod_id=pod_id, user_id=user_id,
+            worker_ctx,
+            import_id=import_id,
+            pod_id=pod_id,
+            user_id=user_id,
             resource_count=len(getattr(state.plan, "steps", None) or ()),
             is_remix=bool(getattr(state, "is_remix", False)),
         )
@@ -713,7 +720,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             await staging.delete_archive("pod-imports", import_id)
         except Exception:  # noqa: BLE001
             logger.debug(
-                'pod_bundle.handlers.delete_staged_import_s_s.diagnostic',
+                "pod_bundle.handlers.delete_staged_import_s_s.diagnostic",
                 import_id=import_id,
             )
     except _ImportCancellation:
@@ -731,10 +738,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
     except Exception:
         await _fail_import(store, state, "Apply failed due to a transient error.")
         logger.debug(
-            'pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated',
+            "pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated",
             import_id=import_id,
-        exc_info=True,
-    )
+            exc_info=True,
+        )
         raise
 
 
@@ -786,7 +793,7 @@ async def _resolve_importer_pod_member_id(
                 return str(member.id)
     except Exception:  # noqa: BLE001 — assignee auto-resolution is best-effort
         logger.debug(
-            'pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic',
+            "pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic",
             pod_id=pod_id,
             user_id=user_id,
         )
@@ -848,9 +855,7 @@ async def _record_import_retry(
 ) -> None:
     state.error = "GitHub is temporarily unavailable; retrying import."
     state.error_type = type(exc).__name__
-    state.error_code = str(
-        getattr(exc, "code", None) or "GITHUB_IMPORT_TRANSIENT"
-    )
+    state.error_code = str(getattr(exc, "code", None) or "GITHUB_IMPORT_TRANSIENT")
     state.retryable = True
     await store.save_import(state)
 
@@ -896,9 +901,7 @@ async def _fail_import(
     state.status = ImportStatus.FAILED
     state.error = public_message or str(error)
     state.error_type = type(error).__name__ if isinstance(error, Exception) else None
-    state.error_code = str(
-        getattr(error, "code", None) or "POD_BUNDLE_IMPORT_FAILED"
-    )
+    state.error_code = str(getattr(error, "code", None) or "POD_BUNDLE_IMPORT_FAILED")
     state.retryable = False
     state.completed_at = _now()
     try:
@@ -909,7 +912,7 @@ async def _fail_import(
         )
     except Exception:  # noqa: BLE001 - failure bookkeeping is best-effort
         logger.debug(
-            'pod_bundle.handlers.persist_state_import_s_s.diagnostic',
+            "pod_bundle.handlers.persist_state_import_s_s.diagnostic",
             import_id=state.import_id,
         )
 
@@ -935,7 +938,9 @@ async def sweep_pod_bundle_staging() -> None:
         get_pod_bundle_state_store(), BundleStagingStorage()
     )
     if reclaimed or recovered:
-        logger.debug("pod_bundle.handlers.swept", reclaimed=reclaimed, recovered=recovered)
+        logger.debug(
+            "pod_bundle.handlers.swept", reclaimed=reclaimed, recovered=recovered
+        )
 
 
 async def _sweep(store, staging) -> tuple[int, int]:
@@ -985,7 +990,8 @@ async def _sweep(store, staging) -> tuple[int, int]:
                     reclaimed += 1
                 except Exception:  # noqa: BLE001
                     logger.debug(
-                        'pod_bundle.handlers.sweep_delete_s_s_s.diagnostic', job_id=job_id
+                        "pod_bundle.handlers.sweep_delete_s_s_s.diagnostic",
+                        job_id=job_id,
                     )
                 continue
             if not state.is_terminal and state.updated_at < cutoff:

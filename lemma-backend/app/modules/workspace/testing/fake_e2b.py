@@ -304,14 +304,13 @@ class FakeE2B:
             @staticmethod
             def list(query=None, **_kwargs):
                 wanted = dict(getattr(query, "metadata", None) or {})
-                return _Paginator(page_size=world.list_page_size, items=
-                    [
+                return _Paginator(
+                    page_size=world.list_page_size,
+                    items=[
                         info
                         for info in world.sandboxes.values()
-                        if all(
-                            info.metadata.get(k) == v for k, v in wanted.items()
-                        )
-                    ]
+                        if all(info.metadata.get(k) == v for k, v in wanted.items())
+                    ],
                 )
 
             async def is_running(self, **_kwargs):

@@ -30,7 +30,7 @@ async def publish_conversation_event(
         await service.publish(conversation_channel(conversation_id), payload)
     except Exception as exc:
         logger.debug(
-            'agent.realtime.publishing_agent_realtime_event.diagnostic',
+            "agent.realtime.publishing_agent_realtime_event.diagnostic",
             conversation_id=str(conversation_id),
             error_type=type(exc).__name__,
         )

@@ -40,8 +40,23 @@ _NON_TEXT_TAGS = frozenset({"style", "script", "head", "title"})
 # and an HTML-only email arrives as one unbroken wall of text.
 _BLOCK_TAGS = frozenset(
     {
-        "p", "div", "br", "tr", "li", "ul", "ol", "table",
-        "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "section",
+        "p",
+        "div",
+        "br",
+        "tr",
+        "li",
+        "ul",
+        "ol",
+        "table",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+        "pre",
+        "section",
     }
 )
 
@@ -151,7 +166,9 @@ def plain_text_from_html(value: str | None) -> str:
 # anchors, so they bought nothing and truncated real content.
 _QUOTE_MARKERS = (
     re.compile(r"^\s*On .{0,200}?wrote:\s*$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE | re.MULTILINE
+    ),
     re.compile(r"^\s*_{5,}\s*$", re.MULTILINE),
 )
 
@@ -212,9 +229,7 @@ def strip_quoted_reply(text: str | None, subject: str | None = None) -> str:
     for index, line in enumerate(lines):
         if line.lstrip().startswith(">") and body[:offset].strip():
             rest = lines[index:]
-            if all(
-                not text.strip() or text.lstrip().startswith(">") for text in rest
-            ):
+            if all(not text.strip() or text.lstrip().startswith(">") for text in rest):
                 earliest = min(earliest, offset)
             break
         offset += len(line) + 1
@@ -253,7 +268,7 @@ def decode_email_html(html: Any, html_format: Any = None) -> str:
             if ";base64" in raw.split(",", 1)[0]:
                 return base64.b64decode(payload).decode("utf-8", errors="replace")
             return unquote(payload)
-        except (ValueError, binascii.Error):
+        except ValueError, binascii.Error:
             # A malformed data URI is not worth losing the email over; fall
             # through and let the HTML extractor salvage what it can.
             return raw
@@ -504,7 +519,7 @@ async def resolve_outbound_email_attachments(
             # would fail the whole send. Skip (with a warning) rather than hard-fail.
             if len(content) > inline_cap_bytes:
                 logger.debug(
-                    'agent_surfaces.email_common.skipping_oversize_workspace_email_attachment.diagnostic',
+                    "agent_surfaces.email_common.skipping_oversize_workspace_email_attachment.diagnostic",
                     count=len(content),
                     inline_cap_bytes=inline_cap_bytes,
                 )

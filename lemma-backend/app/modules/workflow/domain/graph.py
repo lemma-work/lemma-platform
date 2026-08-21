@@ -78,9 +78,7 @@ class WorkflowGraphValidator:
             outgoing.setdefault(edge.source, []).append(edge)
 
         loop_body_ids = {
-            node.config.child_node_id
-            for node in nodes
-            if isinstance(node, LoopNode)
+            node.config.child_node_id for node in nodes if isinstance(node, LoopNode)
         }
 
         # Per-node-type rules
@@ -105,7 +103,9 @@ class WorkflowGraphValidator:
                 elif node.config.child_node_id == node.id:
                     issues.append(f"loop '{node.id}' cannot be its own body")
                 issues.extend(
-                    cls._expression_issues(node.id, "items_path", node.config.items_path)
+                    cls._expression_issues(
+                        node.id, "items_path", node.config.items_path
+                    )
                 )
                 if len(node_edges) > 1:
                     issues.append(

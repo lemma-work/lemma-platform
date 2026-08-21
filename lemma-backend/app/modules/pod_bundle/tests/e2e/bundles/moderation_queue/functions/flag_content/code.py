@@ -1,6 +1,6 @@
-#input_type_name: FlagInput
-#output_type_name: FlagResult
-#function_name: flag_content
+# input_type_name: FlagInput
+# output_type_name: FlagResult
+# function_name: flag_content
 
 from typing import Optional
 
@@ -42,7 +42,5 @@ async def flag_content(ctx: FunctionContext, data: FlagInput) -> FlagResult:
             }
         )
     except LemmaAPIError as exc:
-        return FlagResult(
-            denied=True, status_code=exc.status_code, error_code=exc.code
-        )
+        return FlagResult(denied=True, status_code=exc.status_code, error_code=exc.code)
     return FlagResult(submission_id=str(record["id"]), status=status, reason=reason)

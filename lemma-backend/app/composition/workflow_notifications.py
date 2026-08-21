@@ -102,9 +102,7 @@ class WorkflowNotificationAdapter:
         # Both are plain factories despite their FastAPI ``Depends`` annotations;
         # calling them directly is how the other composition adapters build the
         # same services outside a request.
-        return get_notification_service(
-            self._uow, get_conversation_service(self._uow)
-        )
+        return get_notification_service(self._uow, get_conversation_service(self._uow))
 
     async def notify_form_assignee(
         self,
@@ -137,10 +135,8 @@ class WorkflowNotificationAdapter:
 
             fields = _describe_fields(schema)
             title = f"{flow_name or 'A workflow'} needs your input"
-            body = (
-                f"{title}.\n\n"
-                f"Step: {node_id}."
-                + (f"\nIt asks for: {fields}." if fields else "")
+            body = f"{title}.\n\nStep: {node_id}." + (
+                f"\nIt asks for: {fields}." if fields else ""
             )
             await service.notify(
                 pod_id=pod_id,

@@ -242,6 +242,17 @@ test-collect:
 lint:
 	uv run ruff check app migrations scripts
 
+# Formatting, over first-party code only. `lemma-connectors/` is generated from
+# provider OpenAPI specs, so reformatting it would be undone by the next
+# generation run and would show up as codegen drift.
+FORMAT_PATHS = app migrations scripts sandbox_runtime load_tests standalone_app.py sitecustomize.py
+
+format:
+	uv run ruff format $(FORMAT_PATHS)
+
+format-check:
+	uv run ruff format --check $(FORMAT_PATHS)
+
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \

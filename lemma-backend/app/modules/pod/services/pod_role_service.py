@@ -130,7 +130,9 @@ class PodRoleService:
         if not normalized_roles:
             raise HTTPException(status_code=400, detail="At least one role is required")
 
-        role_rows = await self._roles.get_roles_by_names(pod_id=pod_id, names=normalized_roles)
+        role_rows = await self._roles.get_roles_by_names(
+            pod_id=pod_id, names=normalized_roles
+        )
         missing = set(normalized_roles) - {role.name for role in role_rows}
         if missing:
             raise HTTPException(
@@ -177,9 +179,7 @@ class PodRoleService:
             grantee_type="POD_MEMBER",
             grantee_id=pod_member_id,
         )
-        self._uow.after_commit(
-            lambda: invalidate_role_snapshot_cache(user_id=user_id)
-        )
+        self._uow.after_commit(lambda: invalidate_role_snapshot_cache(user_id=user_id))
 
     async def get_member_roles_by_user_id(
         self,

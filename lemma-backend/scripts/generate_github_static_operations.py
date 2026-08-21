@@ -58,6 +58,7 @@ def _ensure_spec() -> None:
     with urllib.request.urlopen(SPEC_URL, timeout=60) as response:  # noqa: S310
         SPEC_PATH.write_bytes(response.read())
 
+
 SERVER_URL = "https://api.github.com"
 
 DEFAULT_HEADERS = {

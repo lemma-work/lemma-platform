@@ -249,8 +249,6 @@ def test_only_the_primary_lane_watches_for_signals():
     it is SIGKILLed, and an in-flight agent run never finalizes. The primary
     handles the signal; run_worker_lanes stops the rest when it unwinds.
     """
-    handlers = {
-        lane: worker.handle_signals for lane, worker in LANE_WORKERS.items()
-    }
+    handlers = {lane: worker.handle_signals for lane, worker in LANE_WORKERS.items()}
     assert handlers[Lane.INTERACTIVE] is True
     assert [lane for lane, on in handlers.items() if on] == [Lane.INTERACTIVE]

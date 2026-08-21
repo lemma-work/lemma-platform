@@ -203,7 +203,7 @@ async def datastore_changes_ws(
         return
     except Exception:
         logger.debug(
-            'datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic',
+            "datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic",
             exc_info=True,
         )
         await websocket.close(
@@ -241,7 +241,7 @@ async def datastore_changes_ws(
         return
     except Exception:
         logger.debug(
-            'datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic',
+            "datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic",
             pod_id=str(pod_id),
             user_id=str(user_id),
             exc_info=True,

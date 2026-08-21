@@ -65,9 +65,6 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-
-
-
 class E2BOpsMixin:
     """The `SandboxOpsProvider` half of the E2B provider.
 
@@ -161,6 +158,7 @@ class E2BOpsMixin:
 
         with sdk_errors():
             if request.tty is not None:
+
                 async def on_pty(data: bytes) -> None:
                     await self._output.append(
                         process_id, channel=ProcessOutputChannel.PTY, data=data
@@ -559,7 +557,6 @@ def _decode_pid(raw) -> tuple[int, bool]:
     return int(pid), flag == "1"
 
 
-
 def _to_stat(entry) -> FileStat:
     is_dir = str(getattr(entry, "type", "")).lower().endswith("dir")
     modified = getattr(entry, "modified_time", None)
@@ -572,5 +569,3 @@ def _to_stat(entry) -> FileStat:
         # 0o644/0o755 is the honest default rather than inventing a number.
         mode=int(getattr(entry, "mode", 0) or (0o755 if is_dir else 0o644)),
     )
-
-

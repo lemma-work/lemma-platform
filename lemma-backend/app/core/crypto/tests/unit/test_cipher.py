@@ -26,7 +26,9 @@ def _keyring(*entries: tuple[str, bytes], primary: str) -> Keyring:
     )
 
 
-def _cipher(keyring: Keyring, legacy: list[bytes] | None = None) -> EnvelopeSecretCipher:
+def _cipher(
+    keyring: Keyring, legacy: list[bytes] | None = None
+) -> EnvelopeSecretCipher:
     return EnvelopeSecretCipher(StaticKeyProvider(keyring), legacy_secrets=legacy)
 
 
@@ -90,7 +92,9 @@ def test_string_round_trip():
 
 def test_reads_legacy_v1_envelope():
     legacy_key = local_fallback_secret()
-    payload = json.dumps({"a": "legacy"}, sort_keys=True, separators=(",", ":")).encode()
+    payload = json.dumps(
+        {"a": "legacy"}, sort_keys=True, separators=(",", ":")
+    ).encode()
     v1 = {
         "_encrypted": "fernet-json-v1",
         "ciphertext": Fernet(legacy_key).encrypt(payload).decode("ascii"),

@@ -62,16 +62,18 @@ async def test_publish_without_github_account_fails_cleanly(
 
     # No GitHub connection in the harness → the job resolves to a terminal FAILED
     # (never hangs, never 500s the request).
-    final = await _wait(authenticated_client, pod_id, publish_id, until={"COMPLETED", "FAILED"})
+    final = await _wait(
+        authenticated_client, pod_id, publish_id, until={"COMPLETED", "FAILED"}
+    )
     assert final["status"] == "FAILED", final
     assert final["error"]
 
 
-async def test_publish_status_expired_returns_410(authenticated_client, test_pod, worker):
+async def test_publish_status_expired_returns_410(
+    authenticated_client, test_pod, worker
+):
     pod_id = test_pod["id"]
-    res = await authenticated_client.get(
-        f"/pods/{pod_id}/bundle/publishes/{uuid4()}"
-    )
+    res = await authenticated_client.get(f"/pods/{pod_id}/bundle/publishes/{uuid4()}")
     assert res.status_code == status.HTTP_410_GONE, res.text
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 

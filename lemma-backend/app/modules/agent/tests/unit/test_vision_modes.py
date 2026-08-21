@@ -60,9 +60,7 @@ class TestModeResolution:
 
     def test_unavailable_is_the_default_on_a_bare_context(self) -> None:
         """A tool that cannot determine the mode must assume the unsafe case."""
-        ctx = BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        )
+        ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
         assert ctx.vision_mode is AgentVisionMode.UNAVAILABLE
 
 
@@ -135,9 +133,7 @@ class TestPdfPagesRespectTheMode:
             return "A flowchart: Ingest -> Validate -> Store."
 
         # Delegation now lives in one shared module, so patch it there.
-        monkeypatch.setattr(
-            vision_delegation, "describe_images", fake_describe
-        )
+        monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
         result = await pod_adapter.pod_view_document_pages(
             _ctx(AgentVisionMode.DELEGATED),
@@ -205,9 +201,7 @@ class TestViewImageRespectsTheMode:
         async def fake_describe(images, *, instructions, organization_id, user_id):
             return "A bar chart with four bars."
 
-        monkeypatch.setattr(
-            vision_delegation, "describe_images", fake_describe
-        )
+        monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
         result = await workspace_cli.view_image_internal(
             SimpleNamespace(

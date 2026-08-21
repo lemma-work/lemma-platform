@@ -49,7 +49,7 @@ def _app_id(connection) -> UUID | None:
         return None
     try:
         return UUID(raw.strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         # A caller-supplied header that is not an id is not a dimension value.
         return None
 

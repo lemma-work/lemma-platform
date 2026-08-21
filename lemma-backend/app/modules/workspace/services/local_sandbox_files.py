@@ -224,7 +224,7 @@ class LocalSandboxFilesMixin:
             await self._provider.delete_python_session(
                 instance, session_id=str(session_id), deadline_at=deadline_at
             )
-        except (ProviderGone, SandboxUnavailable):
+        except ProviderGone, SandboxUnavailable:
             # Closing a session against a sandbox that is already gone has
             # achieved what it was asking for.
             return

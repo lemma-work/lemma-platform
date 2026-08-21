@@ -197,9 +197,7 @@ async def test_a_real_paused_sandbox_keeps_its_files_and_is_adopted(
         deadline_at=_deadline(),
     )
 
-    await provider.release(
-        first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
-    )
+    await provider.release(first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline())
 
     # A later epoch must still adopt: identity decides, not the epoch.
     resumed = await provider.create(_spec(provider, sandbox_id, epoch=2))
@@ -282,13 +280,17 @@ async def test_a_first_contact_herd_all_get_served(
 
         path = f"/workspace/herd-{marker.decode()}.txt"
         await provider.write_file(
-            instance, path=path, data=payload(),
-            expected_sha256=None, deadline_at=_deadline(),
+            instance,
+            path=path,
+            data=payload(),
+            expected_sha256=None,
+            deadline_at=_deadline(),
         )
         chunks = [
             chunk
             async for chunk in provider.open_file(
-                instance, path=path,
+                instance,
+                path=path,
                 byte_range=ByteRange(offset=0, length=None),
                 deadline_at=_deadline(),
             )
@@ -325,8 +327,11 @@ async def test_files_survive_a_pause_and_a_herd_after_resume(
         yield b"written-before-the-pause"
 
     await provider.write_file(
-        first, path="/workspace/before.txt", data=payload(),
-        expected_sha256=None, deadline_at=_deadline(),
+        first,
+        path="/workspace/before.txt",
+        data=payload(),
+        expected_sha256=None,
+        deadline_at=_deadline(),
     )
     await provider.release(first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline())
 
@@ -341,7 +346,8 @@ async def test_files_survive_a_pause_and_a_herd_after_resume(
         chunks = [
             chunk
             async for chunk in provider.open_file(
-                resumed, path="/workspace/before.txt",
+                resumed,
+                path="/workspace/before.txt",
                 byte_range=ByteRange(offset=0, length=None),
                 deadline_at=_deadline(),
             )
@@ -358,8 +364,7 @@ async def test_real_storage_kind_is_sandbox_native(
 ) -> None:
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
 
 

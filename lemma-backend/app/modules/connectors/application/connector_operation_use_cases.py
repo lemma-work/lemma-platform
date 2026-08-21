@@ -249,7 +249,7 @@ class ConnectorOperationUseCases:
                     force_refresh=True,
                 )
                 credentials = refreshed.model_dump(exclude_none=True)
-        except (ConnectorDomainError, httpx.HTTPError, OSError, TimeoutError):
+        except ConnectorDomainError, httpx.HTTPError, OSError, TimeoutError:
             # Refresh itself failed: no refresh token on the account, or the
             # provider is unreachable. Fall back to the reauth path rather than
             # masking the original rejection. Anything outside this set is a bug

@@ -24,9 +24,7 @@ def _make_fake_client_and_run(fake_schedules_obj, captured):
     fake_client = FakeClient()
 
     def fake_run_with_client(ctx, fn):
-        state = SimpleNamespace(
-            config={"_runtime": {"pod": "pod-1"}}, output="pretty"
-        )
+        state = SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty")
         return fn(fake_client, state)
 
     return fake_run_with_client
@@ -117,7 +115,9 @@ def test_schedules_delete_requires_yes(monkeypatch):
     monkeypatch.setattr(schedules, "run_with_client", fake_run)
 
     # CliRunner is non-interactive; confirm_destructive should call fail().
-    result = runner.invoke(app, ["schedules", "delete", "my-schedule", "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["schedules", "delete", "my-schedule", "--pod", "pod-1"]
+    )
 
     assert result.exit_code != 0
     assert "deleted" not in captured
@@ -142,9 +142,7 @@ def test_schedule_create_workflow_cron_dispatches_api(monkeypatch):
             return SimpleNamespace(schedules=FakeSchedules())
 
     def fake_run_with_client(ctx, fn):
-        state = SimpleNamespace(
-            config={"_runtime": {"pod": "pod-1"}}, output="pretty"
-        )
+        state = SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty")
         return fn(FakeClient(), state)
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
@@ -192,9 +190,7 @@ def test_schedule_create_connector_trigger_dispatches_api(monkeypatch):
             return SimpleNamespace(schedules=FakeSchedules())
 
     def fake_run_with_client(ctx, fn):
-        state = SimpleNamespace(
-            config={"_runtime": {"pod": "pod-1"}}, output="pretty"
-        )
+        state = SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty")
         return fn(FakeClient(), state)
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
@@ -245,8 +241,12 @@ def test_schedules_list_shows_the_target(monkeypatch):
         schedules_mod,
         "run_with_client",
         lambda ctx, fn: fn(
-            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())),
-            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False),
+            SimpleNamespace(
+                pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())
+            ),
+            SimpleNamespace(
+                config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False
+            ),
         ),
     )
 
@@ -272,8 +272,12 @@ def test_schedules_list_json_is_untouched_by_the_target_column(monkeypatch):
         schedules_mod,
         "run_with_client",
         lambda ctx, fn: fn(
-            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())),
-            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="json", full=False),
+            SimpleNamespace(
+                pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())
+            ),
+            SimpleNamespace(
+                config={"_runtime": {"pod": "pod-1"}}, output="json", full=False
+            ),
         ),
     )
 

@@ -68,9 +68,7 @@ class DatastoreEventHandler:
         fired_schedule_ids: list[UUID] = []
         for schedule in schedules:
             if not self._matches_conditions(schedule, event, operation):
-                await self._record_fire(
-                    schedule.id, status=ScheduleFireStatus.FILTERED
-                )
+                await self._record_fire(schedule.id, status=ScheduleFireStatus.FILTERED)
                 continue
 
             # Let the connection go before processing. A schedule carrying a
@@ -99,10 +97,10 @@ class DatastoreEventHandler:
                     )
             except Exception as exc:
                 logger.debug(
-                    'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated',
+                    "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated",
                     record_id=event.record_id,
-                exc_info=True,
-            )
+                    exc_info=True,
+                )
                 await self._record_fire(
                     schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
                 )
@@ -197,7 +195,7 @@ class DatastoreEventHandler:
             active = []
         if active:
             logger.debug(
-                'schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic',
+                "schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic",
                 record_id=event.record_id,
                 count=len(active),
                 pod_id=event.pod_id,

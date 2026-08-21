@@ -438,6 +438,7 @@ class FunctionUseCases:
         suspends on the run id and releases its run-row lock instead of pinning it
         across the sandbox round-trip. The FunctionRunCompleted event resumes the
         workflow."""
+
         async def resolve_once() -> ResolvedExecution:
             async with uow_scope(self._uow_factory) as uow:
                 auth_ctx = await AuthorizationDataService(

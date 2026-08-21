@@ -121,9 +121,9 @@ async def message_user(
         background_instruction=request.background_instruction,
         expects_response=request.expects_response,
         expires_in_seconds=request.expires_in_seconds,
-            # A retried worker job replays this exact tool call. Without a key it
-            # posts the message twice, and there is no outbound dedup store to
-            # catch it.
+        # A retried worker job replays this exact tool call. Without a key it
+        # posts the message twice, and there is no outbound dedup store to
+        # catch it.
         idempotency_key=(
             f"run:{deps.agent_run_id}:{ctx.tool_call_id}"
             if deps.agent_run_id and ctx.tool_call_id

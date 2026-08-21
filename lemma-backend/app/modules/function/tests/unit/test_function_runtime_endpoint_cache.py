@@ -31,8 +31,7 @@ def _endpoint(
         allocation_id=uuid4(),
         allocation_epoch=1,
         profile_digest=f"sha256:{'a' * 64}",
-        expires_at=expires_at
-        or datetime.now(timezone.utc) + timedelta(hours=1),
+        expires_at=expires_at or datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
 

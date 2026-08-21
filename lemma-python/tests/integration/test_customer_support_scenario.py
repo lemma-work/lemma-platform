@@ -13,12 +13,18 @@ import httpx
 import pytest
 
 from lemma_sdk import Lemma
-from lemma_sdk.config import DEFAULT_CONFIG_PATH, get_access_token_from_config, load_config
+from lemma_sdk.config import (
+    DEFAULT_CONFIG_PATH,
+    get_access_token_from_config,
+    load_config,
+)
 from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.agent_toolset import AgentToolset
 from lemma_sdk.openapi_client.models.column_schema import ColumnSchema
 from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
-from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
+from lemma_sdk.openapi_client.models.create_function_request import (
+    CreateFunctionRequest,
+)
 from lemma_sdk.openapi_client.models.create_table_request import CreateTableRequest
 from lemma_sdk.openapi_client.models.datastore_data_type import DatastoreDataType
 from lemma_sdk.openapi_client.models.function_run_status import FunctionRunStatus
@@ -28,7 +34,9 @@ from lemma_sdk.openapi_client.models.manual_workflow_start_input import (
 )
 from lemma_sdk.openapi_client.models.pod_create_request import PodCreateRequest
 from lemma_sdk.openapi_client.models.resource_visibility import ResourceVisibility
-from lemma_sdk.openapi_client.models.workflow_create_request import WorkflowCreateRequest
+from lemma_sdk.openapi_client.models.workflow_create_request import (
+    WorkflowCreateRequest,
+)
 from lemma_sdk.openapi_client.models.workflow_mode import WorkflowMode
 
 
@@ -59,7 +67,9 @@ class ScenarioSummary:
             )
             raise
         else:
-            self.steps.append(ScenarioStep(name, "PASS", "", time.perf_counter() - started))
+            self.steps.append(
+                ScenarioStep(name, "PASS", "", time.perf_counter() - started)
+            )
 
     def note(self, name: str, detail: str) -> None:
         self.steps.append(ScenarioStep(name, "INFO", detail, 0.0))
@@ -159,7 +169,9 @@ def _wait_for_function_run(pod, function_name: str, run_id: str):
         FunctionRunStatus.CANCELLED,
     }:
         if time.monotonic() >= deadline:
-            raise AssertionError(f"Function run {run_id} did not finish; status={run.status}")
+            raise AssertionError(
+                f"Function run {run_id} did not finish; status={run.status}"
+            )
         time.sleep(1)
         run = pod.functions.run_get(function_name, run_id)
     return run
@@ -167,7 +179,9 @@ def _wait_for_function_run(pod, function_name: str, run_id: str):
 
 @pytest.mark.integration
 @pytest.mark.connector
-def test_customer_support_pod_real_user_workflow(scenario_summary: ScenarioSummary) -> None:
+def test_customer_support_pod_real_user_workflow(
+    scenario_summary: ScenarioSummary,
+) -> None:
     base_url, token, verify_ssl = _connector_settings()
     _require_api(base_url, verify_ssl)
 
@@ -275,7 +289,9 @@ def test_customer_support_pod_real_user_workflow(scenario_summary: ScenarioSumma
                     directory_path="/support",
                     description="Refund handling runbook",
                 )
-                uploaded_path = uploaded.to_dict().get("path") or "/support/refund-runbook.md"
+                uploaded_path = (
+                    uploaded.to_dict().get("path") or "/support/refund-runbook.md"
+                )
                 fetched = pod.files.get(uploaded_path)
                 assert fetched.to_dict()["path"] == uploaded_path
 

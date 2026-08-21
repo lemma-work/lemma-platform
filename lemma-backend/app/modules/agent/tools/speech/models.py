@@ -22,9 +22,7 @@ class ListenResponse(BaseModel):
     success: bool = Field(default=False)
     message: str | None = None
     error: str | None = None
-    transcript: str | None = Field(
-        default=None, description="The transcribed text."
-    )
+    transcript: str | None = Field(default=None, description="The transcribed text.")
     detected_language: str | None = None
     duration_seconds: float | None = None
 

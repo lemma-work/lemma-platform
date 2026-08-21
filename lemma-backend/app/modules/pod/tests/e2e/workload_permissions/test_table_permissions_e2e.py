@@ -55,7 +55,9 @@ def _table_grant(name: str, *permissions: str) -> dict:
     }
 
 
-async def _list_records_response(api: DatastoreApi, table: str, *, mode: str | None = None):
+async def _list_records_response(
+    api: DatastoreApi, table: str, *, mode: str | None = None
+):
     """Raw list-records request (the harness ``list_records`` hardcodes 200, so
     use this when asserting a denial)."""
     params = {"mode": mode} if mode else None
@@ -384,7 +386,9 @@ async def test_named_workload_table_delete_requires_explicit_grant(
     )
     api = DatastoreApi(client, pod_id)
     try:
-        denied = await api.delete_table(table, expected_status=status.HTTP_403_FORBIDDEN)
+        denied = await api.delete_table(
+            table, expected_status=status.HTTP_403_FORBIDDEN
+        )
         # Datastore wraps the authz denial; the underlying reason is the gate.
         assert denied  # a 403 body is returned
     finally:
@@ -441,7 +445,9 @@ async def test_default_pod_agent_table_delete_is_gated_despite_user_admin(
     )
     api = DatastoreApi(client, pod_id)
     try:
-        denied = await api.delete_table(table, expected_status=status.HTTP_403_FORBIDDEN)
+        denied = await api.delete_table(
+            table, expected_status=status.HTTP_403_FORBIDDEN
+        )
         assert denied
     finally:
         await client.aclose()

@@ -53,7 +53,10 @@ def validate_against_schema(
     ]
     raise ConnectorValidationError(
         f"Invalid {what}.",
-        details={"reason": f"invalid_{what.replace(' ', '_')}", "violations": violations},
+        details={
+            "reason": f"invalid_{what.replace(' ', '_')}",
+            "violations": violations,
+        },
     )
 
 
@@ -100,4 +103,6 @@ def validate_install_config(
 def validate_credentials(
     spec: KindSpec, credentials: dict[str, Any] | None
 ) -> dict[str, Any]:
-    return validate_against_schema(spec.credential_schema, credentials, what="credentials")
+    return validate_against_schema(
+        spec.credential_schema, credentials, what="credentials"
+    )
