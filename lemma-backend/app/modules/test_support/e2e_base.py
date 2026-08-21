@@ -1062,11 +1062,7 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
             # Once per database, not once per test — see _ensure_schema_once.
             await _ensure_schema_once(e2e_settings.database_url)
             # Start each test from a clean slate without dropping the schema.
-            await manager.truncate_all(
-                preserve=_PRESERVED_TABLES,
-                keep_rows=_session_user_keep_rows(),
-            )
-            await _clear_session_user_redis_state(e2e_settings.redis_url)
+            await manager.truncate_all()
             break
         except (DBAPIError, OSError) as exc:
             if not _is_transient_db_error(exc):
@@ -1125,109 +1121,8 @@ async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
             await _close_e2e_process_clients()
 
 
-# What survives the per-test wipe, so the session identity outlives the test
-# that created it.
-#
-# Measured: signing a user up costs 0.238s per test (SuperTokens signup, email
-# verification and signin, three round trips to the auth container) -- the
-# single largest per-test fixture in the suite, paid by every test to reach a
-# starting state identical to the last test's. Reusing one user drops that to
-# 0.020s.
-#
-# `auth_permissions` is a global catalog seeded on first org creation, not
-# per-test data, so it is preserved wholesale. Preserving it also sidesteps the
-# check-then-insert race documented in
-# test_org_creation_permission_seed_race_e2e.
-#
-# `users` is preserved by *row*, not wholesale, and the difference is not
-# theoretical: keeping every user made
-# test_whatsapp_transaction_sender_match_single_use_and_cache_invalidation fail
-# whenever it ran alongside another test that had used the same phone number --
-# green on its own, red in a suite. Tests that sign up their own users still get
-# a clean slate; only the shared session user stays.
-#
-# Organizations, pods and roles are not preserved at all: they are per-test data
-# in most suites, and keeping them would let rows accumulate until any test that
-# lists or counts them fails. Widening this means proving that first.
-_PRESERVED_TABLES = frozenset({"auth_permissions"})
-
-# The session's user, created once per process. One process runs one xdist
-# worker against one database, so a plain dict is the right scope.
-_SESSION_USER: dict[str, dict] = {}
-
-
-async def _clear_session_user_redis_state(redis_url: str) -> None:
-    """Drop Redis state keyed by the session user, between tests.
-
-    Deleting the user used to clear this implicitly: a fresh user each test
-    meant a fresh key space, so per-user counters, caches and dedup markers
-    started empty without anyone arranging it. Reusing one user removes that
-    accident, and the state it was hiding is real -- pod_bundle counts imports
-    per user per UTC day in Redis, so ten of its tests started failing with
-    "Daily import limit reached (5 per day)" once the sixth test in the module
-    inherited the fifth's tally.
-
-    A pattern sweep rather than a list of key shapes: the keys that embed a user
-    id are spread across modules and put it in different positions
-    (``pod-bundle:ratelimit:import:{user}:{day}``, ``{org}:{user}``,
-    ``{user}:{client_key}``), and a list would rot the first time someone added
-    one. The per-worker Redis database holds a few dozen keys, so SCAN is cheap.
-    """
-    user = _SESSION_USER.get("user")
-    if not user:
-        return
-
-    import redis.asyncio as redis
-
-    client = redis.from_url(redis_url, decode_responses=True)
-    try:
-        keys = [key async for key in client.scan_iter(match=f"*{user['id']}*")]
-        if keys:
-            await client.delete(*keys)
-    finally:
-        await client.aclose()
-
-
-#: Markers whose tests provision a real sandbox, and so cannot share a user.
-_SANDBOX_MARKERS = frozenset({"workspace", "fast_workspace", "real_sandbox"})
-
-
-def _needs_own_sandbox(request) -> bool:
-    return any(request.node.get_closest_marker(name) for name in _SANDBOX_MARKERS)
-
-
-def _session_user_keep_rows() -> dict[str, str]:
-    """Rows the per-test wipe must not delete: the session user, if there is one."""
-    user = _SESSION_USER.get("user")
-    if not user:
-        return {}
-    # The id is a SuperTokens-issued UUID this process just created, not test
-    # input, but quote it anyway so this can never become a way to smuggle SQL.
-    user_id = str(user["id"]).replace("'", "''")
-    return {"users": f"id = '{user_id}'"}
-
-
 @pytest_asyncio.fixture(scope="function")
-async def fixed_test_user(request, async_client: "AsyncClient"):
-    # Created once per process and reused. The row survives the per-test wipe
-    # (see _PRESERVED_TABLES) and the SuperTokens session lives in the auth
-    # container, which nothing here resets -- so the token stays valid.
-    #
-    # Except for tests that provision a real sandbox, which get a fresh user.
-    # A WORKSPACE sandbox is owned by the USER (sandbox_composition.py) and
-    # `sandbox_id` *defaults to the owner id* (sandbox_service.resolve), so the
-    # sandbox identity is the user id. Sharing a user therefore points every
-    # test at the same sandbox, while the per-test wipe deletes the `sandboxes`
-    # row out from under a container that is then reaped -- which surfaced as
-    # `ProviderGone: sandbox container ... no longer exists` in CI and a missing
-    # workspace notice locally. A fresh user is what kept those tests isolated,
-    # by accident rather than by design; this makes it deliberate.
-    #
-    # It costs little: this is the `sandbox` shard plus three fast_workspace
-    # journeys, against ~750 tests that never touch a container.
-    if not _needs_own_sandbox(request) and "user" in _SESSION_USER:
-        return _SESSION_USER["user"]
-
+async def fixed_test_user(async_client: "AsyncClient"):
     email = f"test+module-e2e-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
 
@@ -1251,10 +1146,7 @@ async def fixed_test_user(request, async_client: "AsyncClient"):
     )
     assert access_token
 
-    user = {"email": email, "token": access_token, "id": data["user"]["id"]}
-    if not _needs_own_sandbox(request):
-        _SESSION_USER["user"] = user
-    return user
+    return {"email": email, "token": access_token, "id": data["user"]["id"]}
 
 
 @pytest_asyncio.fixture(scope="function")
