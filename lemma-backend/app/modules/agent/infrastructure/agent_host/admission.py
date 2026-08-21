@@ -28,10 +28,10 @@ from app.modules.agent.domain.agent_host import (
 from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
     AgentHostNotFound,
     AgentHostRunConflict,

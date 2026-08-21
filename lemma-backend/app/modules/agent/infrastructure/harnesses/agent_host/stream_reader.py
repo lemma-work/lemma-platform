@@ -14,7 +14,7 @@ from uuid import UUID
 from redis.exceptions import RedisError
 
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     StreamBatch,
 )

@@ -132,14 +132,17 @@ def _to_pydantic_ai_messages(
     return converted
 
 
-def _build_tool_batch(
-    messages: list[object],
-    start_index: int,
-    consumed_tool_return_indexes: set[int],
-) -> tuple[ModelResponse | None, ModelRequest | None, int, set[int]]:
+def _collect_tool_calls(
+    messages: list[object], start_index: int
+) -> tuple[list[object], int]:
+    """The run of consecutive assistant tool calls starting here.
+
+    A model can ask for several tools in one response, and they have to be
+    rebuilt into one `ModelResponse` -- splitting them would misrepresent the
+    turn and break the tool_use/tool_result pairing Anthropic requires.
+    """
     call_entries: list[object] = []
     index = start_index
-
     while index < len(messages):
         msg = messages[index]
         role = _normalize_role(getattr(msg, "role", ""))
@@ -150,30 +153,45 @@ def _build_tool_batch(
             break
         call_entries.append(msg)
         index += 1
+    return call_entries, index
 
-    matched_returns: dict[str, tuple[int, object]] = {}
-    search_index = index
-    while search_index < len(messages):
-        msg = messages[search_index]
+
+def _match_tool_returns(
+    messages: list[object],
+    start_index: int,
+    consumed_tool_return_indexes: set[int],
+) -> dict[str, tuple[int, object]]:
+    """The returns belonging to those calls, keyed by tool call id.
+
+    The search stops at the next assistant message or the next user message,
+    because a return after either of those belongs to a later turn. `setdefault`
+    keeps the first return for an id: a resumed pause can leave two, and the
+    earlier one is the one the model was shown.
+    """
+    matched: dict[str, tuple[int, object]] = {}
+    index = start_index
+    while index < len(messages):
+        msg = messages[index]
         role = _normalize_role(getattr(msg, "role", ""))
         kind = getattr(msg, "kind", None)
-
         if role == MessageRole.TOOL and kind == MessageKind.TOOL_RETURN:
-            if search_index not in consumed_tool_return_indexes:
-                matched_returns.setdefault(
-                    getattr(msg, "tool_call_id", None),
-                    (search_index, msg),
-                )
-            search_index += 1
+            if index not in consumed_tool_return_indexes:
+                matched.setdefault(getattr(msg, "tool_call_id", None), (index, msg))
+            index += 1
             continue
+        if role in (MessageRole.ASSISTANT, MessageRole.USER):
+            break
+        index += 1
+    return matched
 
-        if role == MessageRole.ASSISTANT and kind == MessageKind.TOOL_CALL:
-            break
-        if role == MessageRole.USER:
-            break
-        if role == MessageRole.ASSISTANT:
-            break
-        search_index += 1
+
+def _build_tool_batch(
+    messages: list[object],
+    start_index: int,
+    consumed_tool_return_indexes: set[int],
+) -> tuple[ModelResponse | None, ModelRequest | None, int, set[int]]:
+    call_entries, index = _collect_tool_calls(messages, start_index)
+    matched_returns = _match_tool_returns(messages, index, consumed_tool_return_indexes)
 
     response_parts: list[ToolCallPart] = []
     request_parts: list[ToolReturnPart] = []

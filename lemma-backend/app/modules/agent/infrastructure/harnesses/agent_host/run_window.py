@@ -19,7 +19,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import AgentEvent
-from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventNormalizer,
     error_event,
 )

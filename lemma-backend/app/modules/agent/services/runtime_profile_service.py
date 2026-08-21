@@ -31,7 +31,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     HarnessKind,
 )
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )

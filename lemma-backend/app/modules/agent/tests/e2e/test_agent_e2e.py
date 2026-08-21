@@ -47,7 +47,7 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     build_final_answer_toolset,
 )
-from app.modules.agent.infrastructure.agent_host_final_answer import (
+from app.modules.agent.infrastructure.agent_host.final_answer import (
     read_final_answer,
 )
 from app.modules.agent.tools.tool_errors import AgentInputRequired

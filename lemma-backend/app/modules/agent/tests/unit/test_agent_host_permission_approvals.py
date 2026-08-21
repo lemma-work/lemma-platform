@@ -339,7 +339,7 @@ def _patch_agent_host(
     poked: list,
 ) -> None:
     """Stub the Agent Host infrastructure the dispatch imports lazily."""
-    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host_channels")
+    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host.channels")
 
     async def poke_host(host_id) -> None:
         poked.append(host_id)
@@ -355,7 +355,7 @@ def _patch_agent_host(
             return command
 
     dispatch = types.ModuleType(
-        "app.modules.agent.infrastructure.agent_host_dispatch_repository"
+        "app.modules.agent.infrastructure.agent_host.dispatch_repository"
     )
     dispatch.AgentHostDispatchRepository = _Repository
     monkeypatch.setitem(sys.modules, channels.__name__, channels)

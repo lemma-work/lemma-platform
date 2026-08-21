@@ -37,7 +37,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
 from app.modules.agent.infrastructure.repositories import (

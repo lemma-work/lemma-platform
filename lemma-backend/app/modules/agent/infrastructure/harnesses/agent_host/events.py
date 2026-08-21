@@ -25,7 +25,7 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_event_text import (
+from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
     _Segment,
     _integer,
     _number,
@@ -39,10 +39,10 @@ from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffe
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_tool_calls import (
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
     ToolCallLedger,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_tool_payload import (
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
     bounded_tool_value,
     first_present,
     json_object,
@@ -50,7 +50,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host_tool_payload import (
     tool_name_from_payload,
     unwrap_mcp_content,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_final_answer_stream import (
+from app.modules.agent.infrastructure.harnesses.agent_host.final_answer_stream import (
     final_answer_metadata,
     final_answer_record,
     infer_final_answer,

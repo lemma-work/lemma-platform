@@ -139,8 +139,8 @@ async def dispatch_agent_host_permission(
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
-    from app.modules.agent.infrastructure.agent_host_channels import poke_host
-    from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+    from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
         AgentHostDispatchRepository,
     )
 

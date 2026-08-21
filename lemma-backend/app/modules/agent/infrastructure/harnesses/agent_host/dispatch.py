@@ -20,24 +20,24 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.domain.value_objects import HarnessOptions
-from app.modules.agent.infrastructure.agent_host_channels import poke_host
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.channels import poke_host
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure import agent_host_session_memory
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host import session_memory
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_config import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     _AgentHostRunConfig,
     _joined_prompt,
     _json_object,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
     credential_bounded_timeout,
 )
@@ -137,7 +137,7 @@ async def enqueue_run(
         )
         if harness is None:
             raise RuntimeError("Agent Host harness is unavailable")
-        resume_session_id = await agent_host_session_memory.resume_session_id(
+        resume_session_id = await session_memory.resume_session_id(
             uow,
             conversation_id=conversation.id,
             harness_id=run_config.harness_id,
@@ -191,11 +191,11 @@ async def enqueue_run(
     system_prompt = str(
         prompt.get("system_prompt") or prompt.get("recovery_system_prompt") or ""
     )
-    digest = agent_host_session_memory.instructions_digest(system_prompt)
+    digest = session_memory.instructions_digest(system_prompt)
     system_prompt_delivery: str | None = None
     if resume_session_id is not None:
         async with uow_factory() as uow:
-            if await agent_host_session_memory.instructions_already_delivered(
+            if await session_memory.instructions_already_delivered(
                 uow,
                 conversation_id=conversation.id,
                 harness_id=harness_id,
@@ -241,7 +241,7 @@ async def enqueue_run(
         # record only when the host reports that it prompted, so a run that
         # dies on the way out does not leave these instructions marked
         # delivered and skipped for the rest of the conversation.
-        await agent_host_session_memory.record_pending_instructions(
+        await session_memory.record_pending_instructions(
             uow,
             conversation_id=conversation.id,
             run_id=agent_run_id,

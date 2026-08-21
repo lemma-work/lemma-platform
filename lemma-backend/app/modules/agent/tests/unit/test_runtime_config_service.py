@@ -641,7 +641,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     harness does not advertise — so an unpinned profile must dispatch with no
     model at all.
     """
-    from app.modules.agent.infrastructure.harnesses.agent_host import (
+    from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
         _agent_host_run_config,
     )
 
