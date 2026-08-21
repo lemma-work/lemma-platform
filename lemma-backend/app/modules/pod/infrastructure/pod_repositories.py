@@ -197,7 +197,9 @@ class PodMemberRepository(PodMemberRepositoryPort):
             exclude={"user_id", "user_email", "user_name", "user", "roles"}
         )
 
-    async def _member_roles_by_id(self, member_ids: Sequence[UUID]) -> dict[UUID, list[str]]:
+    async def _member_roles_by_id(
+        self, member_ids: Sequence[UUID]
+    ) -> dict[UUID, list[str]]:
         if not member_ids:
             return {}
         stmt = (
@@ -210,7 +212,9 @@ class PodMemberRepository(PodMemberRepositoryPort):
             .order_by(RoleModel.name)
         )
         rows = (await self.session.execute(stmt)).all()
-        roles_by_member_id: dict[UUID, list[str]] = {member_id: [] for member_id in member_ids}
+        roles_by_member_id: dict[UUID, list[str]] = {
+            member_id: [] for member_id in member_ids
+        }
         for member_id, role_name in rows:
             roles_by_member_id.setdefault(member_id, []).append(role_name)
         return {
@@ -219,14 +223,18 @@ class PodMemberRepository(PodMemberRepositoryPort):
         }
 
     async def _attach_member_roles(self, entities: Sequence[PodMemberEntity]) -> None:
-        roles_by_member_id = await self._member_roles_by_id([entity.id for entity in entities])
+        roles_by_member_id = await self._member_roles_by_id(
+            [entity.id for entity in entities]
+        )
         for entity in entities:
             entity.roles = roles_by_member_id.get(entity.id, [])
 
     @staticmethod
     def _member_options():
         return (
-            joinedload(PodMember.organization_member).joinedload(OrganizationMember.user),
+            joinedload(PodMember.organization_member).joinedload(
+                OrganizationMember.user
+            ),
         )
 
     async def create(self, entity: PodMemberEntity) -> PodMemberEntity:
@@ -239,9 +247,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
 
     async def get(self, id: UUID) -> Optional[PodMemberEntity]:
         stmt = (
-            select(PodMember)
-            .options(*self._member_options())
-            .where(PodMember.id == id)
+            select(PodMember).options(*self._member_options()).where(PodMember.id == id)
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
@@ -330,7 +336,10 @@ class PodMemberRepository(PodMemberRepositoryPort):
     ) -> Optional[PodMemberEntity]:
         stmt = (
             select(PodMember)
-            .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(
+                OrganizationMember,
+                PodMember.organization_member_id == OrganizationMember.id,
+            )
             .options(*self._member_options())
             .where(
                 PodMember.pod_id == pod_id,
@@ -351,7 +360,10 @@ class PodMemberRepository(PodMemberRepositoryPort):
         normalized = normalize_identity_email(email)
         stmt = (
             select(PodMember)
-            .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(
+                OrganizationMember,
+                PodMember.organization_member_id == OrganizationMember.id,
+            )
             .join(User, OrganizationMember.user_id == User.id)
             .options(*self._member_options())
             .where(
@@ -432,9 +444,7 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         entity = instance.to_entity()
         if user is not None:
             entity.user_email = user.email
-            name = " ".join(
-                part for part in [user.first_name, user.last_name] if part
-            )
+            name = " ".join(part for part in [user.first_name, user.last_name] if part)
             entity.user_name = name or None
         return entity
 

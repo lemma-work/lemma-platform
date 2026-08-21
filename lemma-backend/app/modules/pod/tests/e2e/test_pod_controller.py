@@ -7,7 +7,9 @@ from app.modules.test_support.e2e_authz import signup_user
 pytestmark = pytest.mark.e2e
 
 
-async def _create_pod(authenticated_client: AsyncClient, org_id: str, *, name: str) -> dict:
+async def _create_pod(
+    authenticated_client: AsyncClient, org_id: str, *, name: str
+) -> dict:
     payload = {
         "name": name,
         "organization_id": org_id,
@@ -80,7 +82,9 @@ async def test_pod_workflow(authenticated_client, fixed_test_org):
     assert len(member_items) >= 1
 
     # 7. Delete Pod
-    response = await authenticated_client.delete(f"/pods/{pod_id}", follow_redirects=True)
+    response = await authenticated_client.delete(
+        f"/pods/{pod_id}", follow_redirects=True
+    )
     assert response.status_code == 204
 
     # 8. Verify deleted pods are no longer visible
@@ -406,9 +410,7 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     org_id = fixed_test_org["id"]
     pod = await _create_pod(authenticated_client, org_id, name="Visible To Creator")
 
-    outsider = await signup_user(
-        async_client, f"pod-list-{uuid4().hex[:10]}"
-    )
+    outsider = await signup_user(async_client, f"pod-list-{uuid4().hex[:10]}")
     outsider_email = outsider["email"]
     outsider_token = outsider["token"]
 

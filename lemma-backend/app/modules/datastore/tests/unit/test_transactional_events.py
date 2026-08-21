@@ -36,7 +36,12 @@ async def test_stage_domain_events_uses_one_bulk_insert() -> None:
     assert len(inserts) == 1
     rows = inserts[0].args[1]
     assert {row["id"] for row in rows} == {event.event_id for event in events}
-    assert sum("pg_notify" in str(call.args[0]) for call in session.execute.await_args_list) == 1
+    assert (
+        sum(
+            "pg_notify" in str(call.args[0]) for call in session.execute.await_args_list
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio

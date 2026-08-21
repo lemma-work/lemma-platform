@@ -191,8 +191,10 @@ class NotificationEgress:
             # Cold-open email: no prior thread exists by definition.
             return await self.open_conversation(channel, notification=notification)
 
-        conversation = await self.conversation_service.conversation_repository.get_conversation(
-            channel.link.conversation_id
+        conversation = (
+            await self.conversation_service.conversation_repository.get_conversation(
+                channel.link.conversation_id
+            )
         )
         if conversation is not None:
             touched = conversation.updated_at

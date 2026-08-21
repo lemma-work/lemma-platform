@@ -110,7 +110,9 @@ async def fake_composio_server():
 
 
 @pytest_asyncio.fixture(scope="session")
-async def worker(e2e_settings, sandbox_reachable_backend, fake_composio_server, request):
+async def worker(
+    e2e_settings, sandbox_reachable_backend, fake_composio_server, request
+):
     """Surface shard's production worker with a hermetic Composio transport.
 
     Default e2e mode uses the deterministic FunctionModel token source. When

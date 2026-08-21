@@ -80,9 +80,7 @@ async def main() -> int:
     print("\non timeout:")
     for action, count in sorted(by_action.items(), key=lambda kv: -kv[1]):
         print(f"  {count:>5}  {action}")
-    print(
-        f"\nno recorded template (replaced on next ensure): {len(unstamped)}"
-    )
+    print(f"\nno recorded template (replaced on next ensure): {len(unstamped)}")
     legacy = sum(count for action, count in by_action.items() if "pause" not in action)
     if legacy:
         print(

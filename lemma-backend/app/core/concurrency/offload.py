@@ -99,7 +99,7 @@ def configure_thread_pool() -> None:
         logger.debug("concurrency.offload.configured_offload_thread_pool.observed")
     except Exception:  # pragma: no cover - defensive; never block startup
         logger.debug(
-            'concurrency.offload.could_not_configure_offload_thread.diagnostic'
+            "concurrency.offload.could_not_configure_offload_thread.diagnostic"
         )
 
 

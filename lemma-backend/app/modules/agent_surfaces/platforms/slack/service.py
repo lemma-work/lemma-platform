@@ -78,7 +78,7 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         if not user_id or not token:
             logger.debug(
-                'agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic',
+                "agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic",
                 user_id=user_id,
             )
             return None
@@ -97,7 +97,7 @@ class SlackPlatformService:
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_fetch_sender_profile_user.propagated',
+                "agent_surfaces.service.slack_fetch_sender_profile_user.propagated",
                 user_id=user_id,
                 exc_info=True,
             )
@@ -137,7 +137,7 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_send_message_skipped_due.diagnostic'
+                "agent_surfaces.service.slack_send_message_skipped_due.diagnostic"
             )
             return
 
@@ -170,7 +170,7 @@ class SlackPlatformService:
                 await client.chat_postMessage(**payload)
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_send_message_channel_s.propagated',
+                "agent_surfaces.service.slack_send_message_channel_s.propagated",
                 exc_info=True,
             )
             raise
@@ -186,7 +186,7 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_send_display_resource_skipped.diagnostic'
+                "agent_surfaces.service.slack_send_display_resource_skipped.diagnostic"
             )
             return
 
@@ -211,7 +211,7 @@ class SlackPlatformService:
             await client.chat_postMessage(**payload)
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_send_display_resource_channel.propagated',
+                "agent_surfaces.service.slack_send_display_resource_channel.propagated",
                 exc_info=True,
             )
             raise
@@ -286,7 +286,7 @@ class SlackPlatformService:
         thread_ts = event.reply_target.get("thread_ts")
         if not token or not channel or not timestamp:
             logger.debug(
-                'agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic'
+                "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic"
             )
             return
 
@@ -318,7 +318,7 @@ class SlackPlatformService:
                         # returning, or the DM shows no indicator at all while
                         # the agent works.
                         logger.debug(
-                            'agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic',
+                            "agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic",
                             error_code=error_code,
                         )
                     else:
@@ -332,12 +332,12 @@ class SlackPlatformService:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
                 logger.debug(
-                    'agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic',
+                    "agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic",
                     error_code=error_code,
                 )
                 return
             logger.debug(
-                'agent_surfaces.service.slack_add_processing_indicator_channel.propagated',
+                "agent_surfaces.service.slack_add_processing_indicator_channel.propagated",
                 exc_info=True,
             )
             raise
@@ -509,7 +509,7 @@ class SlackPlatformService:
         channel = ctx.deps.external_channel_id
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_get_recent_channel_messages.diagnostic',
+                "agent_surfaces.service.slack_get_recent_channel_messages.diagnostic",
                 conversation_id=ctx.deps.conversation_id,
             )
             return SlackRecentChannelMessagesResult(
@@ -539,7 +539,7 @@ class SlackPlatformService:
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_get_recent_channel_messages.propagated',
+                "agent_surfaces.service.slack_get_recent_channel_messages.propagated",
                 conversation_id=ctx.deps.conversation_id,
                 exc_info=True,
             )
@@ -576,7 +576,7 @@ class SlackPlatformService:
                 raw = list(reversed(response.get("messages") or []))
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic'
+                "agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic"
             )
             return []
 
@@ -605,7 +605,7 @@ class SlackPlatformService:
         channel = ctx.deps.external_channel_id
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_search_current_channel_missing.diagnostic',
+                "agent_surfaces.service.slack_search_current_channel_missing.diagnostic",
                 conversation_id=ctx.deps.conversation_id,
             )
             return SlackSearchChannelMessagesResult(
@@ -666,7 +666,7 @@ class SlackPlatformService:
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_search_current_channel_channel.propagated',
+                "agent_surfaces.service.slack_search_current_channel_channel.propagated",
                 conversation_id=ctx.deps.conversation_id,
                 exc_info=True,
             )

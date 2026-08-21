@@ -79,7 +79,9 @@ def _external_id(platform: str, suffix: int) -> str:
     return f"1555{suffix:07d}"
 
 
-def _thread_id(platform: str, external_id: str, *, phone_number_id: str | None = None) -> str:
+def _thread_id(
+    platform: str, external_id: str, *, phone_number_id: str | None = None
+) -> str:
     if platform == "TELEGRAM":
         return external_id
     return f"{external_id}@{phone_number_id or SYSTEM_WHATSAPP_PHONE_NUMBER_ID}"
@@ -463,9 +465,7 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     )
     assert isinstance(continuity_first, SurfaceChatContext)
     opposite_surface = (
-        surface_b
-        if continuity_first.surface_id == UUID(surface_a["id"])
-        else surface_a
+        surface_b if continuity_first.surface_id == UUID(surface_a["id"]) else surface_a
     )
     # With NO default set, a follow-up message continues on the same surface and
     # conversation (continuity holds).

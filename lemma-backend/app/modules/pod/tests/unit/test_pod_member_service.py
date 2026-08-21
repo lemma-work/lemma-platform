@@ -586,10 +586,12 @@ async def test_check_pod_permission_role_matrix(
     if pod_member_role is None:
         pod_member_repository_mock.get_by_pod_and_org_member.return_value = None
     else:
-        pod_member_repository_mock.get_by_pod_and_org_member.return_value = PodMemberEntity(
-            pod_id=pod.id,
-            organization_member_id=org_member.id,
-            role=pod_member_role,
+        pod_member_repository_mock.get_by_pod_and_org_member.return_value = (
+            PodMemberEntity(
+                pod_id=pod.id,
+                organization_member_id=org_member.id,
+                role=pod_member_role,
+            )
         )
 
     result = await pod_member_service.check_pod_permission(

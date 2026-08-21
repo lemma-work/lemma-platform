@@ -109,7 +109,7 @@ def parse_project_repo(value: object) -> ProjectRepo | None:
     raw_account = value.get("account_id")
     try:
         account_id = UUID(str(raw_account)) if raw_account else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         account_id = None
     return ProjectRepo(owner=owner, repo=repo, ref=ref, account_id=account_id)
 
@@ -218,9 +218,7 @@ async def apply_location_metadata(
             metadata.setdefault(key, parent_meta[key])
 
 
-def _write_repo(
-    metadata: dict, repo: ProjectRepo, *, overwrite: bool = True
-) -> None:
+def _write_repo(metadata: dict, repo: ProjectRepo, *, overwrite: bool = True) -> None:
     write = metadata.__setitem__ if overwrite else metadata.setdefault
     write("repo", repo.as_metadata())
     # Flat and denormalized on purpose: conversation listing filters metadata by
@@ -278,7 +276,7 @@ def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     if workspace_cwd == _WORKSPACE_ROOT:
         return _POD_ROOT
     if workspace_cwd.startswith(f"{_WORKSPACE_ROOT}/"):
-        return f"{_POD_ROOT}/{workspace_cwd[len(_WORKSPACE_ROOT) + 1:]}"
+        return f"{_POD_ROOT}/{workspace_cwd[len(_WORKSPACE_ROOT) + 1 :]}"
     return f"{_POD_ROOT}/{workspace_cwd.lstrip('/')}"
 
 

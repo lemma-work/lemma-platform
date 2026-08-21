@@ -144,14 +144,14 @@ jobs:
       - name: Pull e2e container images
         if: steps.cache-e2e-images.outputs.cache-hit != 'true'
         run: |
-          docker pull docker.io/pgvector/pgvector:0.8.3-pg15
+          docker pull docker.io/pgvector/pgvector:0.8.3-pg18
           docker pull redis:7.4-alpine
           docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
       - name: Save e2e container images to cache
         if: steps.cache-e2e-images.outputs.cache-hit != 'true'
         run: |
           docker save -o /tmp/e2e-docker-images.tar \
-            docker.io/pgvector/pgvector:0.8.3-pg15 \
+            docker.io/pgvector/pgvector:0.8.3-pg18 \
             redis:7.4-alpine \
             docker.io/supertokens/supertokens-postgresql:11.4.5
       # e2e forces embedding_provider=local (e2e_base.py), which is FastEmbed

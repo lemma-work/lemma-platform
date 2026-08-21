@@ -122,7 +122,7 @@ class PodMemberService:
                 )
             else:
                 logger.debug(
-                    'pod.pod_member_service.could_not_find_user_details.diagnostic',
+                    "pod.pod_member_service.could_not_find_user_details.diagnostic",
                     organization_member_id=entity.organization_member_id,
                 )
         except Exception:
@@ -317,7 +317,7 @@ class PodMemberService:
                 pod_member.mark_removed(user_id=org_member_to_remove.user_id)
         except Exception:
             logger.debug(
-                'pod.pod_member_service.fetch_user_info_event_emission.diagnostic'
+                "pod.pod_member_service.fetch_user_info_event_emission.diagnostic"
             )
 
         deleted = await self.pod_member_repository.delete_entity(pod_member)

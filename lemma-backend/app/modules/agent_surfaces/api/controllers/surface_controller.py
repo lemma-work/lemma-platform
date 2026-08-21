@@ -88,6 +88,7 @@ async def get_slack_app_manifest(user: CurrentUser) -> dict:
     del user
     return build_slack_app_manifest()
 
+
 # A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
 # surface to exist yet, so it lives outside the surface-resource router.
 setup_guide_router = APIRouter(
@@ -161,7 +162,9 @@ async def _resolve_agent_id_filter(
     return agent.id
 
 
-async def _resolve_agent_display_name(agent_service, agent_id: UUID | None) -> str | None:
+async def _resolve_agent_display_name(
+    agent_service, agent_id: UUID | None
+) -> str | None:
     if agent_id is None:
         return None
     try:
@@ -410,7 +413,9 @@ async def update_surface(
         action=Permissions.AGENT_UPDATE,
     )
 
-    existing = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
+    existing = await service.get_surface_by_name_in_pod(
+        pod_id=pod_id, name=surface_name
+    )
     config = await merge_surface_config(
         uow=uow,
         existing=existing.config,
@@ -432,9 +437,7 @@ async def update_surface(
         ),
         account_id=request.account_id,
         is_active=(
-            request.is_enabled
-            if "is_enabled" in request.model_fields_set
-            else None
+            request.is_enabled if "is_enabled" in request.model_fields_set else None
         ),
         ctx=ctx,
     )
@@ -443,8 +446,10 @@ async def update_surface(
         and "telegram" in request.config.model_fields_set
     ):
         await service.sync_telegram_mini_app(updated)
-    resolved_agent_name = agent.name if agent else await _resolve_agent_display_name(
-        agent_service, updated.agent_id
+    resolved_agent_name = (
+        agent.name
+        if agent
+        else await _resolve_agent_display_name(agent_service, updated.agent_id)
     )
     reach = await _resolve_surface_reach(
         updated, service=service, connector_service=connector_service

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
 from collections import defaultdict
 from pathlib import Path
@@ -109,11 +110,39 @@ def render(catalog: dict[str, tuple[str, frozenset[str]]]) -> str:
 
 
 def main() -> None:
+    # `--check` is what makes this a gate rather than a script someone has to
+    # remember. Without it the catalog silently drifts from the calls it is
+    # generated from, and the logging contract is enforced against a stale file.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if a catalog is out of date instead of rewriting it",
+    )
+    args = parser.parse_args()
+
+    stale: list[str] = []
     for destination, packages in TARGETS.items():
         catalog = collect(packages)
-        destination.write_text(render(catalog))
+        rendered = render(catalog)
         roots = ", ".join(str(package.relative_to(ROOT)) for package in packages)
+        if args.check:
+            current = destination.read_text() if destination.exists() else ""
+            if current != rendered:
+                stale.append(str(destination.relative_to(ROOT)))
+                continue
+            print(f"{roots}: {len(catalog)} events (current)")
+            continue
+        destination.write_text(rendered)
         print(f"{roots}: {len(catalog)} events")
+
+    if stale:
+        print(
+            "Event catalog is out of date: "
+            + ", ".join(stale)
+            + "\nRegenerate with: uv run python scripts/generate_logging_event_catalogs.py"
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

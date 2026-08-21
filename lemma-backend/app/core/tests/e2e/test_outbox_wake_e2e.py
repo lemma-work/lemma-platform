@@ -55,9 +55,7 @@ class _WakeEvent(DomainEvent):
 async def outbox_engine(test_database_url: str):
     engine = create_async_engine(test_database_url)
     async with engine.begin() as connection:
-        await connection.run_sync(
-            DomainEventOutbox.__table__.create, checkfirst=True
-        )
+        await connection.run_sync(DomainEventOutbox.__table__.create, checkfirst=True)
     yield engine
     await engine.dispose()
 
@@ -133,7 +131,9 @@ async def test_a_notification_issued_with_no_listener_is_lost(
         **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-probe")
     )
     try:
-        await connection.execute(f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'")
+        await connection.execute(
+            f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'"
+        )
     finally:
         await connection.close()
 

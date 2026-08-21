@@ -79,7 +79,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
         if status == OrganizationInvitationStatus.EXPIRED:
             return query.where(
                 or_(
-                    OrganizationInvitation.status == OrganizationInvitationStatus.EXPIRED,
+                    OrganizationInvitation.status
+                    == OrganizationInvitationStatus.EXPIRED,
                     and_(
                         OrganizationInvitation.status
                         == OrganizationInvitationStatus.PENDING,
@@ -362,7 +363,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def list_organization_invitations(
         self,
         organization_id: UUID,
-        status: OrganizationInvitationStatus | None = OrganizationInvitationStatus.PENDING,
+        status: OrganizationInvitationStatus
+        | None = OrganizationInvitationStatus.PENDING,
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[OrganizationInvitationEntity], Optional[str]]:
@@ -389,7 +391,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def list_user_invitations(
         self,
         user_email: str,
-        status: OrganizationInvitationStatus | None = OrganizationInvitationStatus.PENDING,
+        status: OrganizationInvitationStatus
+        | None = OrganizationInvitationStatus.PENDING,
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[OrganizationInvitationEntity], Optional[str]]:
@@ -417,7 +420,9 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def update_invitation(
         self, entity: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        stmt = select(OrganizationInvitation).where(OrganizationInvitation.id == entity.id)
+        stmt = select(OrganizationInvitation).where(
+            OrganizationInvitation.id == entity.id
+        )
         result = await self.session.execute(stmt)
         invitation = result.scalars().first()
         if not invitation:

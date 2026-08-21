@@ -88,3 +88,16 @@ def function_profile(*, image: str | None = None) -> SandboxProfile:
 
 def profile_for(kind: SandboxKind) -> SandboxProfile:
     return function_profile() if kind is SandboxKind.FUNCTION else workspace_profile()
+
+
+def profile_is_stale(*, kind: SandboxKind, recorded_digest: str | None) -> bool:
+    """Was this sandbox built from a profile that is no longer configured?
+
+    A row with no digest has never been provisioned (or was backfilled by the
+    migration), which is not stale -- there is nothing to compare and the first
+    provision adopts whatever is configured.
+
+    Here rather than on the service: it is a question about profiles, and
+    `profile_for` is the other half of the answer.
+    """
+    return bool(recorded_digest) and recorded_digest != profile_for(kind).digest

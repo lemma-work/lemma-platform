@@ -41,7 +41,9 @@ class PodTablesRequest(BaseModel):
             "describe just that table."
         ),
     )
-    limit: int = Field(default=100, ge=1, le=500, description="Max tables when listing.")
+    limit: int = Field(
+        default=100, ge=1, le=500, description="Max tables when listing."
+    )
 
 
 class PodGetRecordsRequest(BaseModel):
@@ -76,7 +78,7 @@ class PodWriteRecordRequest(BaseModel):
     data: JsonObject | str | None = Field(
         default=None,
         description=(
-            "Column -> value mapping, e.g. {\"title\": \"Q3 report\", \"amount\": 42}, "
+            'Column -> value mapping, e.g. {"title": "Q3 report", "amount": 42}, '
             "or a JSON-encoded string of it. Required and non-empty for 'create' "
             "and 'update'."
         ),
@@ -102,7 +104,7 @@ class PodWriteRecordRequest(BaseModel):
             parsed = json.loads(text)
         except (ValueError, TypeError) as exc:
             raise ValueError(
-                '`data` was a string but not valid JSON; pass a JSON object like '
+                "`data` was a string but not valid JSON; pass a JSON object like "
                 '{"title": "Q3 report"} (or a JSON-encoded string of it).'
             ) from exc
         if not isinstance(parsed, dict):
@@ -143,7 +145,10 @@ class PodListFilesRequest(BaseModel):
         default=100, ge=1, le=500, description="Max entries when not recursive."
     )
     files_per_directory: int = Field(
-        default=20, ge=1, le=200, description="Sample files per directory when recursive."
+        default=20,
+        ge=1,
+        le=200,
+        description="Sample files per directory when recursive.",
     )
 
 
@@ -159,7 +164,9 @@ class PodWriteFileRequest(BaseModel):
     overwrite: bool = Field(
         default=True, description="If false, reject the write when the file exists."
     )
-    description: str | None = Field(default=None, description="Optional file description.")
+    description: str | None = Field(
+        default=None, description="Optional file description."
+    )
 
 
 class PodReadFileRequest(BaseModel):

@@ -17,6 +17,7 @@ runner = CliRunner()
 # Shared fake client helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_client_and_captured():
     captured = {}
 
@@ -30,12 +31,16 @@ def _make_client_and_captured():
             return {"id": "tbl-1", "name": table, "columns": []}
 
         def create(self, request):
-            captured["request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "tbl-1", "name": "my_table"}
 
         def add_column(self, table, request):
             captured["add_column_table"] = table
-            captured["add_column_request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["add_column_request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "tbl-1"}
 
         def delete(self, table):
@@ -78,6 +83,7 @@ def _patch(monkeypatch, client, output="pretty"):
 # ---------------------------------------------------------------------------
 # Tables tests
 # ---------------------------------------------------------------------------
+
 
 def test_tables_list_dispatches_api(monkeypatch):
     client, captured = _make_client_and_captured()
@@ -135,7 +141,16 @@ def test_tables_add_column_dispatches_api(monkeypatch):
 
     result = runner.invoke(
         app,
-        ["tables", "add-column", "my_table", "score", "--type", "INTEGER", "--pod", "pod-1"],
+        [
+            "tables",
+            "add-column",
+            "my_table",
+            "score",
+            "--type",
+            "INTEGER",
+            "--pod",
+            "pod-1",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -170,6 +185,7 @@ def test_tables_delete_requires_yes(monkeypatch):
 # Records tests
 # ---------------------------------------------------------------------------
 
+
 def test_records_list_dispatches_api(monkeypatch):
     client, captured = _make_client_and_captured()
     _patch(monkeypatch, client)
@@ -189,7 +205,9 @@ def test_records_list_json_output(monkeypatch):
     )
     monkeypatch.setattr(data, "run_with_client", lambda ctx, fn: fn(client, state))
 
-    result = runner.invoke(app, ["--json", "--pod", "pod-1", "records", "list", "my_table"])
+    result = runner.invoke(
+        app, ["--json", "--pod", "pod-1", "records", "list", "my_table"]
+    )
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
@@ -229,6 +247,8 @@ def test_records_delete_requires_yes(monkeypatch):
     _patch(monkeypatch, client)
 
     # CliRunner is non-interactive (stdin is not a TTY), so --yes is required.
-    result = runner.invoke(app, ["records", "delete", "my_table", "rec-1", "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["records", "delete", "my_table", "rec-1", "--pod", "pod-1"]
+    )
 
     assert result.exit_code != 0

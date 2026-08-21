@@ -33,9 +33,7 @@ def test_terminal_logs_keeps_stderr_when_stdout_is_empty() -> None:
 
 
 def test_terminal_logs_appends_truncation_marker_when_output_was_truncated() -> None:
-    logs = terminal_logs(
-        _request(stdout="partial output", output_truncated=True)
-    )
+    logs = terminal_logs(_request(stdout="partial output", output_truncated=True))
 
     assert logs is not None
     assert "partial output" in logs

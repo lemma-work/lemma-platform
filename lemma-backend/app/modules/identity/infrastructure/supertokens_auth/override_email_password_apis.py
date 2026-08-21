@@ -105,9 +105,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         try:
             email = _normalize_form_email(form_fields)
         except ValueError:
-            return SignUpPostNotAllowedResponse(
-                "Please use a valid email address"
-            )
+            return SignUpPostNotAllowedResponse("Please use a valid email address")
         try:
             email = await validate_auth_email(email)
         except EmailPolicyError:

@@ -163,7 +163,7 @@ jobs:
       # how a sweep that deleted live user workspaces reached production with 24
       # tests written about it.
       postgres:
-        image: pgvector/pgvector:0.8.3-pg15
+        image: pgvector/pgvector:0.8.3-pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -277,7 +277,7 @@ jobs:
         working-directory: lemma-backend
     services:
       postgres:
-        image: pgvector/pgvector:0.8.3-pg15
+        image: pgvector/pgvector:0.8.3-pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -628,7 +628,7 @@ jobs:
         with:
           python-version: "3.14"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -804,7 +804,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
 
@@ -856,7 +856,7 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
           targets: x86_64-pc-windows-msvc

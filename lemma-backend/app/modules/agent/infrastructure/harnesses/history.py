@@ -74,9 +74,7 @@ def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
     return index
 
 
-def enforce_token_ceiling(
-    messages: Sequence[object], *, ceiling: int
-) -> list[object]:
+def enforce_token_ceiling(messages: Sequence[object], *, ceiling: int) -> list[object]:
     """Drop the oldest messages until the history fits, keeping pairs intact.
 
     This is the backstop, not the strategy: it runs when summarization was

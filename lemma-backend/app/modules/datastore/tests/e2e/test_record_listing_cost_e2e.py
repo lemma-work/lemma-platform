@@ -39,7 +39,9 @@ def _counts(statements: list[str], table: str) -> int:
     as the per-page count this test exists to forbid.
     """
     return sum(
-        1 for statement in statements if "COUNT(*)" in statement.upper() and table in statement
+        1
+        for statement in statements
+        if "COUNT(*)" in statement.upper() and table in statement
     )
 
 
@@ -182,7 +184,10 @@ class TestBulkUpdateCost:
         with counted_commits() as many, counted_queries() as many_statements:
             updated = await pod_api.bulk_update(
                 table,
-                [{"id": row["id"], "title": f"again-{index}"} for index, row in enumerate(rows)],
+                [
+                    {"id": row["id"], "title": f"again-{index}"}
+                    for index, row in enumerate(rows)
+                ],
             )
 
         assert updated["count"] == 20
@@ -217,9 +222,7 @@ class TestBulkUpdateCost:
         )
 
     @pytest.mark.asyncio
-    async def test_a_bulk_update_that_fails_writes_nothing(
-        self, pod_api: DatastoreApi
-    ):
+    async def test_a_bulk_update_that_fails_writes_nothing(self, pod_api: DatastoreApi):
         """The atomicity half, which matters more than the latency.
 
         Per-row commits meant a batch failing halfway left the first half

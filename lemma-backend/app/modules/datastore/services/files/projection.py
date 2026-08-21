@@ -49,7 +49,7 @@ class FileProjection:
             )
         except Exception:
             logger.debug(
-                'datastore.projection.delete_derived_child_artifacts_s.diagnostic',
+                "datastore.projection.delete_derived_child_artifacts_s.diagnostic",
                 exc_info=True,
             )
 
@@ -66,7 +66,7 @@ class FileProjection:
                 await self.storage.delete_file(self.storage_key(file_entity))
             except Exception:
                 logger.debug(
-                    'datastore.projection.delete_file_s_s.diagnostic', exc_info=True
+                    "datastore.projection.delete_file_s_s.diagnostic", exc_info=True
                 )
             await self.delete_child_artifacts(file_entity.pod_id, file_entity.path)
 
@@ -75,7 +75,7 @@ class FileProjection:
                 await search_service.remove_file(file_entity.id)
             except Exception:
                 logger.debug(
-                    'datastore.projection.remove_indexed_chunks_s_s.diagnostic',
+                    "datastore.projection.remove_indexed_chunks_s_s.diagnostic",
                     exc_info=True,
                 )
 

@@ -97,9 +97,7 @@ async def _reclaimable(
     handle = await service.ensure(sandbox.id)
     await service.destroy(sandbox.id)
     provider.destroyed.clear()
-    return _object(
-        name=handle.provider_id, sandbox_id=sandbox.id, epoch=handle.epoch
-    )
+    return _object(name=handle.provider_id, sandbox_id=sandbox.id, epoch=handle.epoch)
 
 
 async def test_unidentifiable_containers_are_left_alone(
@@ -166,7 +164,9 @@ async def test_unattributed_objects_are_reported_once_per_sweep(
 
 
 async def test_a_deleted_row_still_being_provisioned_is_not_reclaimed(
-    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService,
+    sweeper: SandboxSweeper,
+    provider: SweepableProvider,
+    service: SandboxService,
     sandbox_uow_factory,
 ) -> None:
     """`destroy` sets DELETED and only the `_provision` after it sets PRESENT.
@@ -200,7 +200,9 @@ async def test_a_deleted_row_still_being_provisioned_is_not_reclaimed(
 
 
 async def test_a_deleted_row_with_no_provision_in_flight_is_reclaimed(
-    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService,
+    sweeper: SandboxSweeper,
+    provider: SweepableProvider,
+    service: SandboxService,
     sandbox_uow_factory,
 ) -> None:
     """The sweep has to stay useful, not merely safe: a sandbox this database

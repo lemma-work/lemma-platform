@@ -56,7 +56,7 @@ async def handle_llm_filter_task(
 
     if not schedule.filter_instruction:
         logger.debug(
-            'schedule.schedule_consumer.s_has_no_filter_instruction.diagnostic',
+            "schedule.schedule_consumer.s_has_no_filter_instruction.diagnostic",
             schedule_id=schedule_id,
         )
         return

@@ -49,7 +49,9 @@ def test_unknown_kind_rejected(monkeypatch):
 
     from app.modules.pod_bundle.infrastructure import download_url as m
 
-    payload = json.dumps({"k": "pod-secrets", "i": str(uuid4()), "e": int(time.time()) + 60}).encode()
+    payload = json.dumps(
+        {"k": "pod-secrets", "i": str(uuid4()), "e": int(time.time()) + 60}
+    ).encode()
     from app.core.crypto import get_secret_signer
 
     token = f"{m._b64e(payload)}.{get_secret_signer().sign(m._PURPOSE, payload)}"

@@ -57,6 +57,10 @@ import {
   ensureSuperTokensInit,
   isTelegramMiniApp,
 } from "@/components/auth/portal/auth/supertokens";
+import {
+  abandonSession,
+  isUnrepairableSessionFailure,
+} from "@/components/auth/portal/auth/session-recovery";
 import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
 import { PasswordResetScreen } from "@/components/auth/portal/auth/password-reset-screen";
 import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
@@ -84,6 +88,20 @@ export {
   destinationHeroCopy,
 } from "@/components/auth/portal/auth-portal-chrome";
 export type { HeroCopy } from "@/components/auth/portal/auth-portal-chrome";
+
+/**
+ * A session the server refuses on every authorized route.
+ *
+ * Distinct from a network failure on purpose: one is worth retrying and the
+ * other is worth signing out of, and collapsing them is what left this screen
+ * offering a "Continue" button into a workspace that answers 401 to everything.
+ */
+class SessionUnusableError extends Error {
+  constructor() {
+    super("This session is no longer accepted by the server.");
+    this.name = "SessionUnusableError";
+  }
+}
 
 type CurrentUser = {
   id: string;
@@ -214,6 +232,7 @@ function AuthLanding() {
   const doesSessionExist = session.loading ? false : session.doesSessionExist;
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [isFetchingUser, setIsFetchingUser] = useState(false);
+  const [sessionUnusable, setSessionUnusable] = useState(false);
   const [desktopCompletion, setDesktopCompletion] = useState<
     "idle" | "completing" | "complete" | "error"
   >("idle");
@@ -384,6 +403,13 @@ function AuthLanding() {
       credentials: "include",
     })
       .then(async (response) => {
+        if (response.status === 401) {
+          // The SuperTokens interceptor has already refreshed and retried by
+          // the time this is seen. A 401 that survives that is not an expired
+          // token; it is a session this server will never accept, and asking
+          // for it again only produces the same answer.
+          throw new SessionUnusableError();
+        }
         if (!response.ok) {
           throw new Error(`Unable to load user: ${response.status}`);
         }
@@ -392,12 +418,16 @@ function AuthLanding() {
       .then((user) => {
         if (isActive) {
           setCurrentUser(user);
+          setSessionUnusable(false);
         }
       })
-      .catch(() => {
-        if (isActive) {
-          setCurrentUser(null);
-        }
+      .catch((error: unknown) => {
+        if (!isActive) return;
+        setCurrentUser(null);
+        setSessionUnusable(
+          error instanceof SessionUnusableError ||
+            isUnrepairableSessionFailure(error),
+        );
       })
       .finally(() => {
         if (isActive) {
@@ -583,6 +613,44 @@ function AuthLanding() {
     );
   }
 
+  if (doesSessionExist && sessionUnusable) {
+    // The session exists in this browser and is rejected by the server. Neither
+    // "Continue" nor a plain sign-out works from here — sign-out is an
+    // authorized call too — so this offers the one action that does.
+    return (
+      <AuthScreenLayout destination={destination}>
+        <section className="session-state">
+          <div className="session-panel">
+            <span className="panel-label">Session expired</span>
+            <strong>This sign-in is no longer accepted.</strong>
+            <p>
+              Your saved session belongs to a workspace this server no longer
+              recognises. Signing in again fixes it.
+            </p>
+          </div>
+
+          <div className="button-row">
+            <button
+              type="button"
+              className="primary-button auth-portal-session-button"
+              onClick={() => {
+                void abandonSession().then(() => {
+                  clearStoredRedirectUri();
+                  resetAnalyticsIdentity();
+                  setCurrentUser(null);
+                  setSessionUnusable(false);
+                  window.location.replace(getDefaultPostAuthRedirect());
+                });
+              }}
+            >
+              Sign in again
+            </button>
+          </div>
+        </section>
+      </AuthScreenLayout>
+    );
+  }
+
   if (doesSessionExist) {
     return (
       <AuthScreenLayout destination={destination}>
@@ -617,7 +685,11 @@ function AuthLanding() {
               type="button"
               className="secondary-button auth-portal-session-button"
               onClick={() => {
-                void Session.signOut().then(() => {
+                // `abandonSession`, not `Session.signOut`: sign-out is itself
+                // an authorized call, so the state a user most needs to leave
+                // is the one in which the plain call throws and this button
+                // does nothing at all.
+                void abandonSession().then(() => {
                   clearStoredRedirectUri();
                   // This path does not go through `logoutToHome`, so it needs
                   // its own reset or identity leaks across accounts here.

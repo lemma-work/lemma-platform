@@ -18,9 +18,7 @@ from app.modules.agent_surfaces.domain.entities import (
 
 
 class SurfaceConfigurationAuthorizationMixin:
-    async def _configuration_surface_candidates(
-        self, request, *, tenant_id, platform
-    ):
+    async def _configuration_surface_candidates(self, request, *, tenant_id, platform):
         candidates = await self.surface_repository.list_active_by_type(platform)
         receiver_surface_ids = getattr(request, "receiver_surface_ids", None)
         receiver_ids = set(receiver_surface_ids or [])
@@ -67,7 +65,7 @@ class SurfaceConfigurationAuthorizationMixin:
                 profile = await adapter.fetch_sender_profile(
                     credentials=credentials, event=event
                 )
-        except (SlackApiError, ClientError):
+        except SlackApiError, ClientError:
             profile = None
         resolved = await self.identity_service.resolve(
             event=event, sender_profile=profile
@@ -107,9 +105,9 @@ class SurfaceConfigurationAuthorizationMixin:
         for surface in candidates:
             if surface.pod_id not in member_pod_ids:
                 continue
-            ctx = await create_authorization_data_service(
-                self.uow
-            ).build_user_context(user_id=user_id, pod_id=surface.pod_id)
+            ctx = await create_authorization_data_service(self.uow).build_user_context(
+                user_id=user_id, pod_id=surface.pod_id
+            )
             if await self._can_configure_surface(
                 surface=surface, ctx=ctx, action=action
             ):
@@ -158,9 +156,7 @@ class SurfaceConfigurationAuthorizationMixin:
         default_id = await self.pod_membership_port.get_user_default_surface_id(
             user_id, str(getattr(platform, "value", platform))
         )
-        return next(
-            (entry for entry in authorized if entry[0].id == default_id), None
-        )
+        return next((entry for entry in authorized if entry[0].id == default_id), None)
 
     async def _surface_choice_labels(self, authorized) -> list[tuple[str, str]]:
         choices: list[tuple[str, str]] = []

@@ -14,7 +14,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "datamodel-code-generator>=0.56.1",
+    # The floor is a security bound, not a preference: eleven advisories sat
+    # against 0.56.1 -- code injection via unescaped input and arbitrary local
+    # file read among them -- and 0.64.0 is the highest first-patched version
+    # across them. Below this the generator is exploitable by a hostile spec.
+    "datamodel-code-generator>=0.64.0",
     "openapi-python-client>=0.29.0",
 ]
 

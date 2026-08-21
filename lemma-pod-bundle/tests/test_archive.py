@@ -129,7 +129,9 @@ def test_extract_bundle_enforces_size_cap(tmp_path: Path):
     with pytest.raises(ValueError, match="maximum uncompressed size"):
         extract_bundle(archive, tmp_path / "out", max_uncompressed_bytes=1024)
     # And a generous cap extracts fine.
-    bundle_root = extract_bundle(archive, tmp_path / "out2", max_uncompressed_bytes=1024 * 1024)
+    bundle_root = extract_bundle(
+        archive, tmp_path / "out2", max_uncompressed_bytes=1024 * 1024
+    )
     assert (bundle_root / "big.bin").stat().st_size == 4096
 
 

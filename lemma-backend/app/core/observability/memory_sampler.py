@@ -61,7 +61,7 @@ def resident_bytes() -> int | None:
         with open("/proc/self/statm", "rb") as handle:
             fields = handle.read().split()
         return int(fields[1]) * 4096  # resident pages
-    except (OSError, IndexError, ValueError):
+    except OSError, IndexError, ValueError:
         return None
 
 

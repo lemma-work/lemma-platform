@@ -167,9 +167,7 @@ async def test_full_correlation_journey_changes_only_boundary_identifiers() -> N
     request_id = "journey-request"
     correlation_id = uuid4()
 
-    with bind_request_context(
-        request_id=request_id, correlation_id=correlation_id
-    ):
+    with bind_request_context(request_id=request_id, correlation_id=correlation_id):
         event = _JourneyEvent()
     claimed = ClaimedEvent(
         id=event.event_id,
@@ -190,9 +188,7 @@ async def test_full_correlation_journey_changes_only_boundary_identifiers() -> N
             event_id=str(claimed.id),
         )
 
-    await _Inbox().process(
-        "journey.consumer", claimed.payload, enqueue_descendant_job
-    )
+    await _Inbox().process("journey.consumer", claimed.payload, enqueue_descendant_job)
     _, raw, _ = worker.redis.set_calls[0]
     inherited = json.loads(raw)
     with bind_job_context(

@@ -23,7 +23,6 @@ from fastapi import status
 pytestmark = pytest.mark.e2e
 
 
-
 async def _create_pod(authenticated_client, fixed_test_org) -> str:
     response = await authenticated_client.post(
         "/pods",
@@ -69,9 +68,7 @@ async def _granted_tables(authenticated_client, pod_id: str, kind: str, name: st
         f"/pods/{pod_id}/{kind}s/{name}/permissions"
     )
     assert response.status_code == status.HTTP_200_OK, response.text
-    return {
-        grant["resource_name"] for grant in response.json().get("grants") or []
-    }
+    return {grant["resource_name"] for grant in response.json().get("grants") or []}
 
 
 @pytest.mark.asyncio
@@ -88,7 +85,9 @@ async def test_an_agent_keeps_its_inline_grants_across_an_update(
         json={"name": name, "instruction": "go", "permissions": _grants("alpha")},
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
-    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {"alpha"}
+    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {
+        "alpha"
+    }
 
     # The regression: this block used to be dropped, leaving `alpha` in place
     # and the author believing they had moved the grant.
@@ -97,7 +96,9 @@ async def test_an_agent_keeps_its_inline_grants_across_an_update(
         json={"instruction": "go on", "permissions": _grants("beta")},
     )
     assert updated.status_code == status.HTTP_200_OK, updated.text
-    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {"beta"}
+    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {
+        "beta"
+    }
 
 
 @pytest.mark.asyncio
@@ -148,4 +149,6 @@ async def test_omitting_the_block_leaves_existing_grants_alone(
         f"/pods/{pod_id}/agents/{name}", json={"instruction": "unrelated edit"}
     )
 
-    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {"alpha"}
+    assert await _granted_tables(authenticated_client, pod_id, "agent", name) == {
+        "alpha"
+    }

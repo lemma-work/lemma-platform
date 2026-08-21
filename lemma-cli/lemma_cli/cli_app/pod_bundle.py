@@ -106,8 +106,12 @@ from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
 from lemma_sdk.openapi_client.models.update import Update
 from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
 from lemma_sdk.openapi_client.models.create_app_request import CreateAppRequest
-from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
-from lemma_sdk.openapi_client.models.create_schedule_request import CreateScheduleRequest
+from lemma_sdk.openapi_client.models.create_function_request import (
+    CreateFunctionRequest,
+)
+from lemma_sdk.openapi_client.models.create_schedule_request import (
+    CreateScheduleRequest,
+)
 from lemma_sdk.openapi_client.models.create_table_request import CreateTableRequest
 from lemma_sdk.openapi_client.models.function_permissions_replace_request import (
     FunctionPermissionsReplaceRequest,
@@ -115,11 +119,19 @@ from lemma_sdk.openapi_client.models.function_permissions_replace_request import
 from lemma_sdk.openapi_client.models.pod_update_request import PodUpdateRequest
 from lemma_sdk.openapi_client.models.update_agent_request import UpdateAgentRequest
 from lemma_sdk.openapi_client.models.update_app_request import UpdateAppRequest
-from lemma_sdk.openapi_client.models.update_function_request import UpdateFunctionRequest
-from lemma_sdk.openapi_client.models.update_schedule_request import UpdateScheduleRequest
+from lemma_sdk.openapi_client.models.update_function_request import (
+    UpdateFunctionRequest,
+)
+from lemma_sdk.openapi_client.models.update_schedule_request import (
+    UpdateScheduleRequest,
+)
 from lemma_sdk.openapi_client.models.update_table_request import UpdateTableRequest
-from lemma_sdk.openapi_client.models.workflow_create_request import WorkflowCreateRequest
-from lemma_sdk.openapi_client.models.workflow_update_request import WorkflowUpdateRequest
+from lemma_sdk.openapi_client.models.workflow_create_request import (
+    WorkflowCreateRequest,
+)
+from lemma_sdk.openapi_client.models.workflow_update_request import (
+    WorkflowUpdateRequest,
+)
 from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
 from ..cli_core.state import err_console as console
@@ -217,7 +229,9 @@ def _run_command(
 ) -> subprocess.CompletedProcess[str]:
     if stream_output:
         return subprocess.run(command, cwd=cwd, check=True, text=True, env=env)
-    return subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True, env=env)
+    return subprocess.run(
+        command, cwd=cwd, check=True, text=True, capture_output=True, env=env
+    )
 
 
 def _detect_package_manager(source_dir: Path) -> str:
@@ -228,15 +242,25 @@ def _detect_package_manager(source_dir: Path) -> str:
     return "npm"
 
 
-def _install_command_for_package_manager(source_dir: Path, package_manager: str) -> list[str]:
+def _install_command_for_package_manager(
+    source_dir: Path, package_manager: str
+) -> list[str]:
     if package_manager == "npm":
         if (source_dir / "package-lock.json").exists():
             return ["npm", "ci"]
         return ["npm", "install"]
     if package_manager == "pnpm":
-        return ["pnpm", "install", "--frozen-lockfile"] if (source_dir / "pnpm-lock.yaml").exists() else ["pnpm", "install"]
+        return (
+            ["pnpm", "install", "--frozen-lockfile"]
+            if (source_dir / "pnpm-lock.yaml").exists()
+            else ["pnpm", "install"]
+        )
     if package_manager == "yarn":
-        return ["yarn", "install", "--frozen-lockfile"] if (source_dir / "yarn.lock").exists() else ["yarn", "install"]
+        return (
+            ["yarn", "install", "--frozen-lockfile"]
+            if (source_dir / "yarn.lock").exists()
+            else ["yarn", "install"]
+        )
     raise ValueError(f"Unsupported package manager: {package_manager}")
 
 
@@ -268,7 +292,9 @@ def _build_app_bundle(
             return dist_file
         if dist_file.exists():
             return dist_file
-        raise ValueError(f"App bundle is missing both source/ and dist.zip in {resource_dir}")
+        raise ValueError(
+            f"App bundle is missing both source/ and dist.zip in {resource_dir}"
+        )
 
     package_json = source_dir / "package.json"
     if not package_json.exists():
@@ -277,27 +303,39 @@ def _build_app_bundle(
     package_manager = _detect_package_manager(source_dir)
     install_command = _install_command_for_package_manager(source_dir, package_manager)
 
-    console.print(f"[cyan]app[/cyan] building {resource_dir.name}: {' '.join(install_command)}")
+    console.print(
+        f"[cyan]app[/cyan] building {resource_dir.name}: {' '.join(install_command)}"
+    )
     try:
         _run_command(install_command, cwd=source_dir, stream_output=stream_output)
     except subprocess.CalledProcessError as exc:
         details = exc.stderr or exc.stdout or str(exc)
-        raise ValueError(f"{' '.join(install_command)} failed for app {resource_dir.name}: {details}") from exc
+        raise ValueError(
+            f"{' '.join(install_command)} failed for app {resource_dir.name}: {details}"
+        ) from exc
 
     build_command = [package_manager, "run", "build"]
-    console.print(f"[cyan]app[/cyan] building {resource_dir.name}: {' '.join(build_command)}")
+    console.print(
+        f"[cyan]app[/cyan] building {resource_dir.name}: {' '.join(build_command)}"
+    )
     try:
         _run_command(build_command, cwd=source_dir, stream_output=stream_output)
     except subprocess.CalledProcessError as exc:
         details = exc.stderr or exc.stdout or str(exc)
-        raise ValueError(f"{' '.join(build_command)} failed for app {resource_dir.name}: {details}") from exc
+        raise ValueError(
+            f"{' '.join(build_command)} failed for app {resource_dir.name}: {details}"
+        ) from exc
 
     dist_dir = source_dir / "dist"
     if not (dist_dir / "index.html").exists():
-        raise ValueError(f"App build did not produce dist/index.html for {resource_dir.name}")
+        raise ValueError(
+            f"App build did not produce dist/index.html for {resource_dir.name}"
+        )
 
     _archive_dist_directory(dist_dir, dist_file)
-    console.print(f"[green]app[/green] built {resource_dir.name}: wrote dist.zip from source/dist/")
+    console.print(
+        f"[green]app[/green] built {resource_dir.name}: wrote dist.zip from source/dist/"
+    )
     return dist_file
 
 
@@ -362,16 +400,18 @@ def _export_table_data(
 
 def _has_seed_data(resource_dir: Path) -> bool:
     """True when a table dir carries a `data.{csv,jsonl,json}` file to seed from."""
-    return any(
-        (resource_dir / name).is_file() for name in _TABLE_DATA_CANDIDATES
-    )
+    return any((resource_dir / name).is_file() for name in _TABLE_DATA_CANDIDATES)
 
 
 def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int:
     """Seed a table from a bundled ``data.{csv,jsonl,json}`` file via bulk create.
     Returns the number of rows sent (0 when there is no data file)."""
     data_file = next(
-        (resource_dir / name for name in _TABLE_DATA_CANDIDATES if (resource_dir / name).is_file()),
+        (
+            resource_dir / name
+            for name in _TABLE_DATA_CANDIDATES
+            if (resource_dir / name).is_file()
+        ),
         None,
     )
     if data_file is None:
@@ -506,11 +546,15 @@ def _build_variable_applier(
     from .scaffold import substitute_placeholders
 
     pod_path = source_dir / "pod.json"
-    declared = (_read_json(pod_path).get("variables") or {}) if pod_path.is_file() else {}
+    declared = (
+        (_read_json(pod_path).get("variables") or {}) if pod_path.is_file() else {}
+    )
     try:
         require_account_variable_metadata(declared)
     except ValueError as exc:
-        raise ValueError(f"{exc} Re-export this bundle with a newer lemma-cli.") from exc
+        raise ValueError(
+            f"{exc} Re-export this bundle with a newer lemma-cli."
+        ) from exc
     overrides = dict(var_overrides or {})
     unknown = sorted(set(overrides) - set(declared))
     if unknown:
@@ -622,9 +666,7 @@ def _resolve_grant_permissions(
             continue
         resource_name = grant.get("resource_name")
         if isinstance(resource_name, str) and _PLACEHOLDER_RE.fullmatch(resource_name):
-            dropped.append(
-                f"{grant.get('resource_type')} {resource_name}"
-            )
+            dropped.append(f"{grant.get('resource_type')} {resource_name}")
             continue
         kept.append(_strip_keys(grant, set(GRANT_METADATA_KEYS)))
     if dropped:
@@ -667,7 +709,9 @@ def _download_app_assets(
     except LemmaAPIError:
         archive_bytes = b""
     if archive_bytes:
-        if not app_budget.allow(name=f"apps/{app_name}/source", size=len(archive_bytes)):
+        if not app_budget.allow(
+            name=f"apps/{app_name}/source", size=len(archive_bytes)
+        ):
             return
         source_dir = resource_dir / "source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -675,7 +719,9 @@ def _download_app_assets(
             for member in archive.infolist():
                 target = source_dir / member.filename
                 if not target.resolve().is_relative_to(source_dir.resolve()):
-                    raise ValueError(f"Unsafe path in app source archive for {app_name}: {member.filename}")
+                    raise ValueError(
+                        f"Unsafe path in app source archive for {app_name}: {member.filename}"
+                    )
             archive.extractall(source_dir)
         return
 
@@ -794,7 +840,9 @@ def _export_pod_files(
 
     def export_folder(item: dict[str, Any]) -> None:
         nonlocal folder_count
-        relative_parts = [part for part in str(item.get("path") or "").split("/") if part]
+        relative_parts = [
+            part for part in str(item.get("path") or "").split("/") if part
+        ]
         if not relative_parts:
             return
         target_path = files_root.joinpath(*relative_parts)
@@ -910,7 +958,9 @@ def export_pod_bundle(
     # Row data is seeded only for the tables named here, and files only for the
     # folders named there. Neither has an "everything" switch. Independent of
     # `names` (which scopes whole resources).
-    seed_tables = {name.strip() for name in (data_tables or set()) if name and name.strip()}
+    seed_tables = {
+        name.strip() for name in (data_tables or set()) if name and name.strip()
+    }
     wants_data = bool(seed_tables)
     data_table_warnings: list[str] = []
     export_warnings = data_table_warnings
@@ -918,7 +968,9 @@ def export_pod_bundle(
     # one byte pool; app builds get their own.
     row_budget = _RowBudget()
     data_budget = _ByteBudget(
-        per_item=MAX_ITEM_BYTES, total=MAX_DATA_TOTAL_BYTES, warnings=data_table_warnings
+        per_item=MAX_ITEM_BYTES,
+        total=MAX_DATA_TOTAL_BYTES,
+        warnings=data_table_warnings,
     )
     app_budget = _ByteBudget(
         per_item=MAX_APP_BYTES, total=MAX_APPS_TOTAL_BYTES, warnings=data_table_warnings
@@ -961,7 +1013,10 @@ def export_pod_bundle(
             resource_dir = bundle_root / "tables" / table_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_table = to_plain(pod_sdk.tables.get(table_name))
-            _write_json(resource_dir / f"{table_name}.json", _normalize_table_payload(full_table))
+            _write_json(
+                resource_dir / f"{table_name}.json",
+                _normalize_table_payload(full_table),
+            )
             if table_name in seed_tables:
                 _export_table_data(
                     pod_sdk,
@@ -1111,7 +1166,9 @@ def export_pod_bundle(
             resource_dir = bundle_root / "apps" / app_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_app = to_plain(pod_sdk.apps.get(app_name))
-            _write_json(resource_dir / f"{app_name}.json", _normalize_app_payload(full_app))
+            _write_json(
+                resource_dir / f"{app_name}.json", _normalize_app_payload(full_app)
+            )
             _download_app_assets(
                 client, pod_id, app_name, resource_dir, app_budget=app_budget
             )
@@ -1184,7 +1241,10 @@ def _resource_dirs(root: Path, resource_type: str) -> list[Path]:
     for path in sorted(base.iterdir()):
         if not path.is_dir():
             continue
-        if _resource_manifest_path(path, path.name, resource_type=resource_type) is not None:
+        if (
+            _resource_manifest_path(path, path.name, resource_type=resource_type)
+            is not None
+        ):
             kept.append(path)
         elif any(path.iterdir()):
             console.print(
@@ -1231,7 +1291,9 @@ def _build_existing_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     }
 
 
-def _build_existing_schedule_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _build_existing_schedule_map(
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     mapping: dict[str, dict[str, Any]] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -1274,7 +1336,9 @@ def _build_import_plan(
                     resource_dir, resource_name, resource_type=resource_type
                 )
             except Exception as exc:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=str(exc)))
+                issues.append(
+                    BundleValidationIssue(path=str(resource_dir), message=str(exc))
+                )
                 continue
 
             payload_name = payload.get("name")
@@ -1312,7 +1376,9 @@ def _build_import_plan(
                 )
             )
             if resource_type == "functions":
-                issues.extend(_validate_function_payload(resource_dir, resource_name, payload))
+                issues.extend(
+                    _validate_function_payload(resource_dir, resource_name, payload)
+                )
             if resource_type == "schedules":
                 if not payload.get("name"):
                     payload["name"] = resource_name
@@ -1339,18 +1405,30 @@ def _build_import_plan(
             if upsert:
                 summary["tables"].append(f"updated:{table_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Table already exists: {table_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Table already exists: {table_name}",
+                    )
+                )
         else:
             summary["tables"].append(f"created:{table_name}")
 
-    existing_functions = _build_existing_map(list_items(pod_sdk.functions.list(limit=1000)))
+    existing_functions = _build_existing_map(
+        list_items(pod_sdk.functions.list(limit=1000))
+    )
     for resource_dir in _resource_dirs(source_dir, "functions"):
         function_name = resource_dir.name
         if function_name in existing_functions:
             if upsert:
                 summary["functions"].append(f"updated:{function_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Function already exists: {function_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Function already exists: {function_name}",
+                    )
+                )
         else:
             summary["functions"].append(f"created:{function_name}")
 
@@ -1361,7 +1439,12 @@ def _build_import_plan(
             if upsert:
                 summary["agents"].append(f"updated:{agent_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Agent already exists: {agent_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Agent already exists: {agent_name}",
+                    )
+                )
         else:
             summary["agents"].append(f"created:{agent_name}")
 
@@ -1377,7 +1460,12 @@ def _build_import_plan(
             if upsert:
                 summary["workflows"].append(f"updated:{workflow_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Workflow already exists: {workflow_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Workflow already exists: {workflow_name}",
+                    )
+                )
         else:
             summary["workflows"].append(f"created:{workflow_name}")
 
@@ -1393,7 +1481,12 @@ def _build_import_plan(
             if upsert:
                 summary["schedules"].append(f"updated:{schedule_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Schedule already exists: {schedule_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Schedule already exists: {schedule_name}",
+                    )
+                )
         else:
             summary["schedules"].append(f"created:{schedule_name}")
 
@@ -1441,20 +1534,32 @@ def _build_import_plan(
                     stream_output=False,
                 )
         except ValueError as exc:
-            issues.append(BundleValidationIssue(path=str(resource_dir), message=str(exc)))
+            issues.append(
+                BundleValidationIssue(path=str(resource_dir), message=str(exc))
+            )
             continue
         if app_name in existing_apps:
             if upsert:
                 summary["apps"].append(f"updated:{app_name}")
             else:
-                issues.append(BundleValidationIssue(path=str(resource_dir), message=f"App already exists: {app_name}"))
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"App already exists: {app_name}",
+                    )
+                )
         else:
             summary["apps"].append(f"created:{app_name}")
 
     files_root = source_dir / "files"
-    existing_folder_map = _build_existing_folder_map(_list_pod_visible_items(client, pod_id))
+    existing_folder_map = _build_existing_folder_map(
+        _list_pod_visible_items(client, pod_id)
+    )
     if files_root.exists():
-        for folder_dir in sorted([path for path in files_root.rglob("*") if path.is_dir()], key=lambda path: len(path.relative_to(files_root).parts)):
+        for folder_dir in sorted(
+            [path for path in files_root.rglob("*") if path.is_dir()],
+            key=lambda path: len(path.relative_to(files_root).parts),
+        ):
             parts = list(folder_dir.relative_to(files_root).parts)
             if not parts:
                 continue
@@ -1474,8 +1579,7 @@ def _build_import_plan(
             "function": set(existing_functions),
             "agent": set(existing_agents),
         },
-        valid_folder_keys=set(existing_folder_map)
-        | _bundle_folder_keys(files_root),
+        valid_folder_keys=set(existing_folder_map) | _bundle_folder_keys(files_root),
     )
 
     # Which workloads this import will CREATE (as opposed to upsert) — a new
@@ -1489,8 +1593,10 @@ def _build_import_plan(
         }
         for kind in ("agents", "functions")
     }
-    return summary, issues, _collect_grant_advisories(
-        source_dir, created_names=created_names
+    return (
+        summary,
+        issues,
+        _collect_grant_advisories(source_dir, created_names=created_names),
     )
 
 
@@ -1681,8 +1787,9 @@ def _validate_grant_references(
             except LemmaAPIError as exc:
                 # 403/404 means "not ours / not here" — a real plan error. A 429
                 # or 5xx is transient; don't fail the plan on infrastructure.
-                account_cache[account_id] = (
-                    getattr(exc, "status_code", None) not in (403, 404)
+                account_cache[account_id] = getattr(exc, "status_code", None) not in (
+                    403,
+                    404,
                 )
             except Exception:  # noqa: BLE001 — a check we can't run isn't a finding
                 # No accounts API on this client, or the lookup itself broke.
@@ -1697,7 +1804,9 @@ def _validate_grant_references(
         for resource_dir in _resource_dirs(source_dir, kind):
             try:
                 _, permissions = _split_resource_permissions_payload(
-                    load_resource_payload(resource_dir, resource_dir.name, resource_type=kind)
+                    load_resource_payload(
+                        resource_dir, resource_dir.name, resource_type=kind
+                    )
                 )
             except Exception:
                 continue  # payload errors are already reported elsewhere
@@ -1709,9 +1818,10 @@ def _validate_grant_references(
                 if not rname or _PLACEHOLDER_RE.fullmatch(rname):
                     continue
                 if rtype in ("folder", "document"):
-                    found = _file_path_key(
-                        [part for part in rname.split("/") if part]
-                    ) in valid_folder_keys
+                    found = (
+                        _file_path_key([part for part in rname.split("/") if part])
+                        in valid_folder_keys
+                    )
                     detail = (
                         "Add the folder to the bundle (export it with --with-files) "
                         "or drop the grant."
@@ -1823,8 +1933,7 @@ def _collect_grant_advisories(
                     if isinstance(entry, str)
                 }
                 has_agent_grants = any(
-                    str(grant.get("resource_type") or "") == "agent"
-                    for grant in grants
+                    str(grant.get("resource_type") or "") == "agent" for grant in grants
                 )
                 if "SUBAGENTS" in toolsets and not has_agent_grants:
                     advisories.append(
@@ -1835,7 +1944,9 @@ def _collect_grant_advisories(
     return advisories
 
 
-def _build_existing_folder_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _build_existing_folder_map(
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     folders_by_path: dict[str, dict[str, Any]] = {}
 
     for item in items:
@@ -1874,21 +1985,28 @@ def _import_pod_files(
             "visibility": folder_meta.get("visibility") or "POD",
         }
 
-    def sync_existing_folder(path_key: str, folder_dir: Path, existing: dict[str, Any]) -> None:
+    def sync_existing_folder(
+        path_key: str, folder_dir: Path, existing: dict[str, Any]
+    ) -> None:
         desired = desired_folder_metadata(folder_dir)
         update_args: dict[str, Any] = {}
         if existing.get("description") != desired["description"]:
             update_args["description"] = desired["description"]
-        if str(existing.get("visibility") or "").upper() != str(desired["visibility"]).upper():
+        if (
+            str(existing.get("visibility") or "").upper()
+            != str(desired["visibility"]).upper()
+        ):
             update_args["visibility"] = desired["visibility"]
         if not update_args:
             return
 
         _progress_start("file", path_key, "updating folder")
-        updated = to_plain(pod_sdk.files.update(
-            "/" + path_key,
-            Update.from_dict({"path": "/" + path_key, **update_args}),
-        ))
+        updated = to_plain(
+            pod_sdk.files.update(
+                "/" + path_key,
+                Update.from_dict({"path": "/" + path_key, **update_args}),
+            )
+        )
         folders_by_path[path_key] = updated
         folder_summaries.append(f"updated-folder:{path_key}")
         _progress_done("file", path_key, "updated folder")
@@ -1909,11 +2027,13 @@ def _import_pod_files(
             folder_meta = desired_folder_metadata(folder_dir)
             _progress_start("file", path_key, "creating folder")
             try:
-                created = to_plain(pod_sdk.files.create_folder(
-                    path="/" + path_key,
-                    description=folder_meta.get("description"),
-                    visibility=folder_meta.get("visibility"),
-                ))
+                created = to_plain(
+                    pod_sdk.files.create_folder(
+                        path="/" + path_key,
+                        description=folder_meta.get("description"),
+                        visibility=folder_meta.get("visibility"),
+                    )
+                )
                 folders_by_path[path_key] = created
                 folder_summaries.append(f"created-folder:{path_key}")
                 _progress_done("file", path_key, "created folder")
@@ -1936,9 +2056,7 @@ def _import_pod_files(
             ensure_folder(parts, folder_dir)
 
     if with_files:
-        folder_summaries.extend(
-            _upload_bundled_files(pod_sdk, files_root)
-        )
+        folder_summaries.extend(_upload_bundled_files(pod_sdk, files_root))
     return folder_summaries
 
 
@@ -2021,7 +2139,11 @@ def _create_or_update_app(
         return "updated"
 
     try:
-        pod_sdk.apps.create(build_request(CreateAppRequest, payload, context=f"app {app_name}", strict=True))
+        pod_sdk.apps.create(
+            build_request(
+                CreateAppRequest, payload, context=f"app {app_name}", strict=True
+            )
+        )
         return "created"
     except LemmaAPIError as exc:
         if exc.code != "APP_CONFLICT":
@@ -2055,7 +2177,10 @@ def _update_app_with_conflict_retry(
     update_payload = _strip_keys(payload, {"name"})
     try:
         pod_sdk.apps.update(
-            app_name, build_request(UpdateAppRequest, update_payload, context=f"app {app_name}", strict=True)
+            app_name,
+            build_request(
+                UpdateAppRequest, update_payload, context=f"app {app_name}", strict=True
+            ),
         )
     except LemmaAPIError as exc:
         if exc.code != "APP_CONFLICT":
@@ -2136,7 +2261,9 @@ def _create_schedule_from_payload(
     return created
 
 
-def _resolve_import_pod_member_id(client: Lemma, pod_sdk: Any, override: str | None) -> str:
+def _resolve_import_pod_member_id(
+    client: Lemma, pod_sdk: Any, override: str | None
+) -> str:
     """Concrete pod-member id that ``$POD_MEMBER`` tokens in imported workflows
     resolve to: an explicit ``--pod-member`` override, else the importing user's
     own membership in this pod. Raises (listing the pod's members) when neither
@@ -2217,7 +2344,9 @@ def import_pod_bundle(
             "pod_id": pod_id,
             "source_dir": str(source_dir),
             "summary": summary,
-            "errors": [{"path": issue.path, "message": issue.message} for issue in issues],
+            "errors": [
+                {"path": issue.path, "message": issue.message} for issue in issues
+            ],
             "advisories": advisories,
         }
     if issues:
@@ -2281,7 +2410,9 @@ def import_pod_bundle(
             _progress_done("table", table_name, "created")
             continue
         if not upsert:
-            raise ValueError(f"Table already exists and --no-upsert was requested: {table_name}")
+            raise ValueError(
+                f"Table already exists and --no-upsert was requested: {table_name}"
+            )
 
         # `--with-data` seeds new tables only, so the natural sequence — import
         # the structure, then re-import with data — seeds nothing, and used to
@@ -2309,9 +2440,7 @@ def import_pod_bundle(
             full_existing.get("enable_rls")
         ):
             update_fields["enable_rls"] = bool(desired_rls)
-        pod_sdk.tables.update(
-            table_name, UpdateTableRequest.from_dict(update_fields)
-        )
+        pod_sdk.tables.update(table_name, UpdateTableRequest.from_dict(update_fields))
         diff = diff_table_columns(full_existing, payload)
         if diff.incompatible:
             names = ", ".join(diff.incompatible)
@@ -2322,7 +2451,12 @@ def import_pod_bundle(
         for column in diff.to_add:
             pod_sdk.tables.add_column(
                 table_name,
-                build_request(AddColumnRequest, {"column": column}, context=f"table {table_name} column", strict=True),
+                build_request(
+                    AddColumnRequest,
+                    {"column": column},
+                    context=f"table {table_name} column",
+                    strict=True,
+                ),
             )
         for column_name in diff.to_remove:
             pod_sdk.tables.remove_column(table_name, column_name)
@@ -2347,7 +2481,9 @@ def import_pod_bundle(
     # permission payloads here and apply them in one pass at the end.
     pending_permissions: list[tuple[str, str, dict[str, Any]]] = []
 
-    existing_functions = _build_existing_map(list_items(pod_sdk.functions.list(limit=1000)))
+    existing_functions = _build_existing_map(
+        list_items(pod_sdk.functions.list(limit=1000))
+    )
     for resource_dir in _resource_dirs(source_dir, "functions"):
         function_name = resource_dir.name
         payload, permissions_payload = _split_resource_permissions_payload(
@@ -2359,7 +2495,9 @@ def import_pod_bundle(
         )
         if function_name in existing_functions:
             if not upsert:
-                raise ValueError(f"Function already exists and --no-upsert was requested: {function_name}")
+                raise ValueError(
+                    f"Function already exists and --no-upsert was requested: {function_name}"
+                )
             _progress_start("function", function_name, "updating")
             update_payload = _strip_keys(
                 payload,
@@ -2368,14 +2506,24 @@ def import_pod_bundle(
             if update_payload:
                 pod_sdk.functions.update(
                     function_name,
-                    build_request(UpdateFunctionRequest, update_payload, context=f"function {function_name}", strict=True),
+                    build_request(
+                        UpdateFunctionRequest,
+                        update_payload,
+                        context=f"function {function_name}",
+                        strict=True,
+                    ),
                 )
             summary["functions"].append(f"updated:{function_name}")
             _progress_done("function", function_name, "updated")
         else:
             _progress_start("function", function_name, "creating")
             pod_sdk.functions.create(
-                build_request(CreateFunctionRequest, payload, context=f"function {function_name}", strict=True)
+                build_request(
+                    CreateFunctionRequest,
+                    payload,
+                    context=f"function {function_name}",
+                    strict=True,
+                )
             )
             summary["functions"].append(f"created:{function_name}")
             _progress_done("function", function_name, "created")
@@ -2394,21 +2542,33 @@ def import_pod_bundle(
         )
         if agent_name in existing_agents:
             if not upsert:
-                raise ValueError(f"Agent already exists and --no-upsert was requested: {agent_name}")
+                raise ValueError(
+                    f"Agent already exists and --no-upsert was requested: {agent_name}"
+                )
             _progress_start("agent", agent_name, "updating")
             existing_agent = to_plain(pod_sdk.agents.get(agent_name))
             update_payload = _prepare_agent_update_payload(payload, existing_agent)
             if update_payload:
                 pod_sdk.agents.update(
                     agent_name,
-                    build_request(UpdateAgentRequest, update_payload, context=f"agent {agent_name}", strict=True),
+                    build_request(
+                        UpdateAgentRequest,
+                        update_payload,
+                        context=f"agent {agent_name}",
+                        strict=True,
+                    ),
                 )
             summary["agents"].append(f"updated:{agent_name}")
             _progress_done("agent", agent_name, "updated")
         else:
             _progress_start("agent", agent_name, "creating")
             pod_sdk.agents.create(
-                build_request(CreateAgentRequest, payload, context=f"agent {agent_name}", strict=True)
+                build_request(
+                    CreateAgentRequest,
+                    payload,
+                    context=f"agent {agent_name}",
+                    strict=True,
+                )
             )
             summary["agents"].append(f"created:{agent_name}")
             _progress_done("agent", agent_name, "created")
@@ -2426,7 +2586,9 @@ def import_pod_bundle(
         app_exists = app_name in apps
         if app_exists:
             if not upsert:
-                raise ValueError(f"App already exists and --no-upsert was requested: {app_name}")
+                raise ValueError(
+                    f"App already exists and --no-upsert was requested: {app_name}"
+                )
             _progress_start("app", app_name, "updating")
             _update_app_with_conflict_retry(
                 client,
@@ -2495,18 +2657,30 @@ def import_pod_bundle(
 
         if workflow_name in existing_workflows:
             if not upsert:
-                raise ValueError(f"Workflow already exists and --no-upsert was requested: {workflow_name}")
+                raise ValueError(
+                    f"Workflow already exists and --no-upsert was requested: {workflow_name}"
+                )
             _progress_start("workflow", workflow_name, "updating")
             pod_sdk.workflows.update(
                 workflow_name,
-                build_request(WorkflowUpdateRequest, metadata_payload, context=f"workflow {workflow_name}", strict=True),
+                build_request(
+                    WorkflowUpdateRequest,
+                    metadata_payload,
+                    context=f"workflow {workflow_name}",
+                    strict=True,
+                ),
             )
             action = "updated"
         else:
             create_payload = {"name": workflow_name, **metadata_payload}
             _progress_start("workflow", workflow_name, "creating")
             pod_sdk.workflows.create(
-                build_request(WorkflowCreateRequest, create_payload, context=f"workflow {workflow_name}", strict=True)
+                build_request(
+                    WorkflowCreateRequest,
+                    create_payload,
+                    context=f"workflow {workflow_name}",
+                    strict=True,
+                )
             )
             action = "created"
 
@@ -2534,7 +2708,9 @@ def import_pod_bundle(
         existing_id = str(existing.get("id") or "") if existing else ""
         if existing and existing_id:
             if not upsert:
-                raise ValueError(f"Schedule already exists and --no-upsert was requested: {schedule_name}")
+                raise ValueError(
+                    f"Schedule already exists and --no-upsert was requested: {schedule_name}"
+                )
             _progress_start("schedule", schedule_name, "updating")
             pod_sdk.schedules.update(
                 existing_id,
@@ -2554,7 +2730,9 @@ def import_pod_bundle(
                 pod_id=pod_id,
                 payload=payload,
             )
-            created_name = str(created.get("name") or created.get("id") or schedule_name)
+            created_name = str(
+                created.get("name") or created.get("id") or schedule_name
+            )
             summary["schedules"].append(f"created:{created_name}")
             _progress_done("schedule", schedule_name, "created")
 
@@ -2637,7 +2815,9 @@ def import_pod_bundle(
                 ),
             )
         summary[f"{kind}s"].append(f"permissions:{resource_name}:{len(grants)}")
-        _progress_done(kind, resource_name, f"replaced permissions ({len(grants)} grant(s))")
+        _progress_done(
+            kind, resource_name, f"replaced permissions ({len(grants)} grant(s))"
+        )
 
     return {
         "ok": True,

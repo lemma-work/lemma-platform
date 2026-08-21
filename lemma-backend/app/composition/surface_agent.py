@@ -18,6 +18,7 @@ def get_speech_provider():
 
     return resolve_provider()
 
+
 __all__ = [
     "AgentServiceDep",
     "ConversationModel",

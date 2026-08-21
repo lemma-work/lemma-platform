@@ -16,6 +16,7 @@ cheap ``__init__`` plus ``foo``; package-level access
 Idempotent: running on an already-lazy file is a no-op. Invoked automatically by
 ``generate_openapi_client.sh`` after generation; safe to run by hand too.
 """
+
 from __future__ import annotations
 
 import ast
@@ -39,9 +40,7 @@ def parse_mapping(source: str) -> list[tuple[str, str]]:
 def render(pairs: list[tuple[str, str]]) -> str:
     pairs = sorted(set(pairs))
     name_to_mod = "\n".join(f"    {name!r}: {mod!r}," for name, mod in pairs)
-    type_imports = "\n".join(
-        f"    from .{mod} import {name}" for name, mod in pairs
-    )
+    type_imports = "\n".join(f"    from .{mod} import {name}" for name, mod in pairs)
     all_names = "\n".join(f"    {name!r}," for name, _ in pairs)
     return f'''"""Contains all the data models used in inputs/outputs"""
 {MARKER}
@@ -82,7 +81,10 @@ __all__ = [
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: make_models_init_lazy.py <openapi_client/models/__init__.py>", file=sys.stderr)
+        print(
+            "usage: make_models_init_lazy.py <openapi_client/models/__init__.py>",
+            file=sys.stderr,
+        )
         return 2
     path = Path(sys.argv[1])
     source = path.read_text(encoding="utf-8")

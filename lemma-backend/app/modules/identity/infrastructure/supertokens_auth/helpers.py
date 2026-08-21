@@ -2,6 +2,7 @@ from uuid import UUID
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from sqlalchemy import select
+
 # Aliased, not bare. `get_user` is also the name of our own
 # `UserService.get_user` (a Redis GET plus a repository read), and importing
 # it bare put the name into the session-scope checker's global set of

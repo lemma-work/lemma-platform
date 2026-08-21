@@ -23,7 +23,10 @@ from app.core.settings_env import dotenv_path
 
 class ConnectorSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     connector_breaker_enabled: bool = Field(

@@ -139,18 +139,21 @@ class InboxConsumer:
                     causation_id = UUID(str(raw_causation_id))
                 except TypeError, ValueError:
                     causation_id = None
-                with event_lineage(
-                    correlation_id=correlation_id,
-                    event_id=event_id,
-                    causation_id=causation_id,
-                    request_id=(
-                        str(payload["request_id"])
-                        if payload.get("request_id")
-                        else None
+                with (
+                    event_lineage(
+                        correlation_id=correlation_id,
+                        event_id=event_id,
+                        causation_id=causation_id,
+                        request_id=(
+                            str(payload["request_id"])
+                            if payload.get("request_id")
+                            else None
+                        ),
+                        event_type=event_type,
+                        consumer=consumer,
                     ),
-                    event_type=event_type,
-                    consumer=consumer,
-                ), origin_scope(origin_from_payload(payload)):
+                    origin_scope(origin_from_payload(payload)),
+                ):
                     # Origin rides on the event, so a handler that raises its own
                     # domain events inherits how the *original* work arrived --
                     # a pod created by an import stays IMPORT, a run started by a

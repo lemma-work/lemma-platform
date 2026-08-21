@@ -248,7 +248,9 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
             stderr=asyncio.subprocess.STDOUT,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("ngrok is required when FUNCTION_BENCH_TUNNEL=ngrok") from exc
+        raise RuntimeError(
+            "ngrok is required when FUNCTION_BENCH_TUNNEL=ngrok"
+        ) from exc
     assert process.stdout is not None
     recent: list[str] = []
 
@@ -263,8 +265,7 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
         if not published.done():
             published.set_exception(
                 RuntimeError(
-                    "ngrok exited before publishing a tunnel: "
-                    + "".join(recent[-20:])
+                    "ngrok exited before publishing a tunnel: " + "".join(recent[-20:])
                 )
             )
 
@@ -294,8 +295,7 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
             else:
                 raise RuntimeError(
                     "ngrok tunnel never reached backend health; "
-                    f"last result: {last_health_error}; ngrok: "
-                    + "".join(recent[-20:])
+                    f"last result: {last_health_error}; ngrok: " + "".join(recent[-20:])
                 )
         yield public_url
     finally:
@@ -557,9 +557,7 @@ async def function_benchmark_runtime(
                             await client.destroy_sandbox(
                                 workload_kind,
                                 logical_id,
-                                deadline_at=(
-                                    datetime.now(UTC) + timedelta(seconds=60)
-                                ),
+                                deadline_at=(datetime.now(UTC) + timedelta(seconds=60)),
                             )
                         except SandboxNotFound:
                             continue
@@ -574,9 +572,8 @@ async def function_benchmark_runtime(
                                 f"{type(exc).__name__}: {exc}"
                             )
                 if cleanup_errors:
-                    message = (
-                        "benchmark sandbox cleanup failed:\n"
-                        + "\n".join(cleanup_errors)
+                    message = "benchmark sandbox cleanup failed:\n" + "\n".join(
+                        cleanup_errors
                     )
                     if benchmark_error is not None:
                         benchmark_error.add_note(message)

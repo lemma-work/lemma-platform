@@ -542,7 +542,6 @@ class DatastoreFileRepository(
         return [instance.to_entity() for instance in result.scalars().all()]
 
 
-
 def _file_payload_unset(entity: DatastoreFileEntity) -> dict:
     data = entity.model_dump(exclude_unset=True)
     data["kind"] = entity.kind.value

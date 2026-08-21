@@ -7,6 +7,7 @@ These are created from the raw ParsedInboundSurfaceEvent.metadata dict in the
 ingress service and injected directly into ConversationContext via chat_stream().
 They are NEVER stored in the DB — they are per-invocation runtime context only.
 """
+
 from __future__ import annotations
 
 from typing import Annotated, Literal, Union

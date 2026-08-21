@@ -187,7 +187,9 @@ class AgentRuntimeProfileRepository:
         try:
             await self.session.flush()
         except IntegrityError as exc:
-            raise RuntimeError(f"Runtime profile named {name!r} already exists") from exc
+            raise RuntimeError(
+                f"Runtime profile named {name!r} already exists"
+            ) from exc
 
     async def update(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfile:
         instance = await self._load(profile_id=entity.id)
@@ -272,15 +274,9 @@ class AgentRuntimeProfileRepository:
         stmt = select(AgentRuntimeProfileModel).where(
             AgentRuntimeProfileModel.organization_id == organization_id,
             AgentRuntimeProfileModel.protocol.in_(_KNOWN_RUNTIME_PROFILE_PROTOCOLS),
-            (
-                AgentRuntimeProfileModel.scope
-                == RuntimeProfileScope.ORGANIZATION.value
-            )
+            (AgentRuntimeProfileModel.scope == RuntimeProfileScope.ORGANIZATION.value)
             | (
-                (
-                    AgentRuntimeProfileModel.scope
-                    == RuntimeProfileScope.PERSONAL.value
-                )
+                (AgentRuntimeProfileModel.scope == RuntimeProfileScope.PERSONAL.value)
                 & (AgentRuntimeProfileModel.user_id == user_id)
             ),
         )
@@ -382,7 +378,9 @@ class AgentRepository:
             entity.allowed_actions = list(allowed_actions)
         return entity
 
-    async def get(self, agent_id: UUID, ctx: Context | None = None) -> AgentEntity | None:
+    async def get(
+        self, agent_id: UUID, ctx: Context | None = None
+    ) -> AgentEntity | None:
         if ctx is None:
             result = await self.session.execute(
                 select(AgentModel).where(AgentModel.id == agent_id)
@@ -428,9 +426,7 @@ class AgentRepository:
             )
         model.instruction = agent.instruction
         model.agent_runtime = (
-            agent.agent_runtime.model_dump(mode="json")
-            if agent.agent_runtime
-            else None
+            agent.agent_runtime.model_dump(mode="json") if agent.agent_runtime else None
         )
         model.toolsets = [toolset.value for toolset in agent.toolsets]
         model.input_schema = agent.input_schema
@@ -743,7 +739,9 @@ class ConversationRepository(ConversationRunQueriesMixin):
             selected_agent_id = DEFAULT_POD_AGENT_ID
             if agent_selection.scope is ConversationAgentScope.NAMED:
                 selected_agent_id = agent_selection.named_value
-            agent_scope_id = func.coalesce(ConversationModel.agent_id, _DEFAULT_POD_AGENT_ID_SQL)
+            agent_scope_id = func.coalesce(
+                ConversationModel.agent_id, _DEFAULT_POD_AGENT_ID_SQL
+            )
             stmt = stmt.where(agent_scope_id == selected_agent_id)
         if status is not None:
             stmt = stmt.where(
@@ -776,7 +774,6 @@ class ConversationRepository(ConversationRunQueriesMixin):
             rows = rows[:limit]
         next_cursor = rows[-1].id if has_more and rows else None
         return [row.to_entity() for row in rows], next_cursor
-
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await self.session.execute(

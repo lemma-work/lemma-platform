@@ -64,7 +64,9 @@ async def _make_file(owner_client: AsyncClient, pod_id: str) -> dict:
     return response.json()
 
 
-async def _set_visibility(owner_client: AsyncClient, pod_id: str, path: str, visibility: str):
+async def _set_visibility(
+    owner_client: AsyncClient, pod_id: str, path: str, visibility: str
+):
     response = await owner_client.request(
         "PATCH",
         f"/pods/{pod_id}/datastore/files/by-path",
@@ -93,7 +95,9 @@ async def _list_tree(client: AsyncClient, pod_id: str, headers: dict) -> int:
 
 
 @pytest.fixture
-async def matrix(authenticated_client: AsyncClient, async_client: AsyncClient, fixed_test_org):
+async def matrix(
+    authenticated_client: AsyncClient, async_client: AsyncClient, fixed_test_org
+):
     """One pod, one file, and three viewers with different standing."""
     pod_id = await _make_pod(authenticated_client, fixed_test_org["id"])
     file_payload = await _make_file(authenticated_client, pod_id)
@@ -135,9 +139,18 @@ class TestReadsWidenWithVisibility:
     ):
         pod_id, path = matrix["pod_id"], matrix["path"]
 
-        assert await _read(async_client, pod_id, path, matrix["member"]) == status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["colleague"]) != status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["outsider"]) != status.HTTP_200_OK
+        assert (
+            await _read(async_client, pod_id, path, matrix["member"])
+            == status.HTTP_200_OK
+        )
+        assert (
+            await _read(async_client, pod_id, path, matrix["colleague"])
+            != status.HTTP_200_OK
+        )
+        assert (
+            await _read(async_client, pod_id, path, matrix["outsider"])
+            != status.HTTP_200_OK
+        )
 
     async def test_restricted_visibility_admits_only_granted_pod_members(
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
@@ -147,8 +160,14 @@ class TestReadsWidenWithVisibility:
         pod_id, path = matrix["pod_id"], matrix["path"]
         await _set_visibility(authenticated_client, pod_id, path, "RESTRICTED")
 
-        assert await _read(async_client, pod_id, path, matrix["colleague"]) != status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["outsider"]) != status.HTTP_200_OK
+        assert (
+            await _read(async_client, pod_id, path, matrix["colleague"])
+            != status.HTTP_200_OK
+        )
+        assert (
+            await _read(async_client, pod_id, path, matrix["outsider"])
+            != status.HTTP_200_OK
+        )
 
     async def test_public_visibility_admits_everyone_signed_in(
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
@@ -156,9 +175,18 @@ class TestReadsWidenWithVisibility:
         pod_id, path = matrix["pod_id"], matrix["path"]
         await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
-        assert await _read(async_client, pod_id, path, matrix["member"]) == status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["colleague"]) == status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["outsider"]) == status.HTTP_200_OK
+        assert (
+            await _read(async_client, pod_id, path, matrix["member"])
+            == status.HTTP_200_OK
+        )
+        assert (
+            await _read(async_client, pod_id, path, matrix["colleague"])
+            == status.HTTP_200_OK
+        )
+        assert (
+            await _read(async_client, pod_id, path, matrix["outsider"])
+            == status.HTTP_200_OK
+        )
 
     async def test_personal_visibility_admits_nobody_else(
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
@@ -167,7 +195,10 @@ class TestReadsWidenWithVisibility:
         await _set_visibility(authenticated_client, pod_id, path, "PERSONAL")
 
         for viewer in ("member", "colleague", "outsider"):
-            assert await _read(async_client, pod_id, path, matrix[viewer]) != status.HTTP_200_OK
+            assert (
+                await _read(async_client, pod_id, path, matrix[viewer])
+                != status.HTTP_200_OK
+            )
 
 
 class TestEnumerationStaysShut:
@@ -181,7 +212,10 @@ class TestEnumerationStaysShut:
         await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
         # Readable...
-        assert await _read(async_client, pod_id, path, matrix["colleague"]) == status.HTTP_200_OK
+        assert (
+            await _read(async_client, pod_id, path, matrix["colleague"])
+            == status.HTTP_200_OK
+        )
         # ...but holding one link is not a directory of everything else.
         assert await _list_tree(async_client, pod_id, matrix["colleague"]) == (
             status.HTTP_403_FORBIDDEN
@@ -190,9 +224,7 @@ class TestEnumerationStaysShut:
             status.HTTP_403_FORBIDDEN
         )
 
-    async def test_members_still_walk_the_tree(
-        self, async_client: AsyncClient, matrix
-    ):
+    async def test_members_still_walk_the_tree(self, async_client: AsyncClient, matrix):
         assert await _list_tree(async_client, matrix["pod_id"], matrix["member"]) == (
             status.HTTP_200_OK
         )

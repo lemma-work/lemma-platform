@@ -74,6 +74,7 @@ def _flatten_message(exc: BaseException) -> str:
         return "; ".join(_flatten_message(inner) for inner in exc.exceptions)
     return str(exc)
 
+
 # (server_url, headers) -> an async-context-manager MCP client exposing
 # ``list_tools()`` and ``call_tool(name, args)``.
 McpClientFactory = Callable[..., Any]
@@ -141,7 +142,7 @@ class McpExecutor:
             client = self._client_factory(server_url, headers, deadline_seconds)
             async with client:
                 result = await client.call_tool(tool_name, payload or {})
-        except (OperationExecutionValidationError, OperationExecutionInfrastructureError):
+        except OperationExecutionValidationError, OperationExecutionInfrastructureError:
             raise
         except (*_MCP_TRANSPORT_ERRORS, BaseExceptionGroup, RuntimeError) as exc:
             if not _is_transport_failure(exc):
@@ -238,6 +239,6 @@ def _map_content_blocks(blocks: list[Any]) -> Any:
         return {}
     try:
         parsed = json.loads(joined)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return {"text": joined}
     return parsed if isinstance(parsed, (dict, list)) else {"result": parsed}

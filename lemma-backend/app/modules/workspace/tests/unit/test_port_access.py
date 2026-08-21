@@ -40,7 +40,9 @@ def test_the_signature_covers_the_sandbox_so_a_port_cannot_be_repointed() -> Non
     mine = signer.sign(_grant(sandbox_id=uuid4()))
     _, _, signature = mine.partition(".")
 
-    forged_payload = PortAccessSigner(key=KEY).sign(_grant(sandbox_id=uuid4())).split(".")[0]
+    forged_payload = (
+        PortAccessSigner(key=KEY).sign(_grant(sandbox_id=uuid4())).split(".")[0]
+    )
     with pytest.raises(PortAccessInvalid):
         signer.verify(f"{forged_payload}.{signature}")
 

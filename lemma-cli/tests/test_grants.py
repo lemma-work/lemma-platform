@@ -206,10 +206,10 @@ def test_subtract_grants_leaves_unnamed_grants_alone():
 def _fake_pod(existing_grants, calls):
     resource = SimpleNamespace(
         permissions=lambda name: {"grants": list(existing_grants)},
-        replace_permissions=lambda name, request: calls.append(
-            (name, request.to_dict())
-        )
-        or {"grants": request.to_dict()["grants"]},
+        replace_permissions=lambda name, request: (
+            calls.append((name, request.to_dict()))
+            or {"grants": request.to_dict()["grants"]}
+        ),
     )
     return SimpleNamespace(agents=resource, functions=resource)
 

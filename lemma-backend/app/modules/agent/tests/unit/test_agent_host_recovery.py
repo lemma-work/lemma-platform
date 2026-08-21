@@ -232,7 +232,9 @@ async def test_expire_unaccepted_run_times_out_leased_as_dispatch_unknown() -> N
 
 
 @pytest.mark.asyncio
-async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight() -> None:
+async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight() -> (
+    None
+):
     """The command sweep must be scoped to this run's START_RUN, not any command."""
     lease = _lease(
         state=AgentHostRunState.QUEUED_FOR_HOST,
@@ -240,7 +242,9 @@ async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight()
     )
     session = _ExpireSession(lease=lease, commands=[])
 
-    await agent_host_recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
+    await agent_host_recovery.expire_unaccepted_run(
+        session, run_id=lease.run_id, now=NOW
+    )
 
     assert len(session.execute_calls) == 1
     sql = _compile(session.execute_calls[0])
@@ -360,7 +364,9 @@ async def test_reconcile_expired_run_moves_running_lease_into_recovering() -> No
 
 
 @pytest.mark.asyncio
-async def test_reconcile_expired_run_moves_recovering_lease_into_dispatch_unknown() -> None:
+async def test_reconcile_expired_run_moves_recovering_lease_into_dispatch_unknown() -> (
+    None
+):
     lease = _lease(
         state=AgentHostRunState.RECOVERING,
         accepted_at=NOW - timedelta(seconds=200),
@@ -474,9 +480,15 @@ async def test_cancel_abandoned_host_runs_with_no_matches_returns_empty() -> Non
 
 
 @pytest.mark.asyncio
-async def test_cancel_abandoned_host_runs_queues_one_cancel_per_orphaned_lease() -> None:
-    lease_a = _lease(state=AgentHostRunState.RUNNING, lease_expires_at=NOW, lease_epoch=4)
-    lease_b = _lease(state=AgentHostRunState.DISPATCHING, lease_expires_at=NOW, lease_epoch=9)
+async def test_cancel_abandoned_host_runs_queues_one_cancel_per_orphaned_lease() -> (
+    None
+):
+    lease_a = _lease(
+        state=AgentHostRunState.RUNNING, lease_expires_at=NOW, lease_epoch=4
+    )
+    lease_b = _lease(
+        state=AgentHostRunState.DISPATCHING, lease_expires_at=NOW, lease_epoch=9
+    )
     session = _AbandonedSession(leases=[lease_a, lease_b])
 
     result = await agent_host_recovery.cancel_abandoned_host_runs(session, now=NOW)
@@ -491,7 +503,9 @@ async def test_cancel_abandoned_host_runs_queues_one_cancel_per_orphaned_lease()
         assert command.lease_epoch == lease.lease_epoch
         assert command.payload == {"agent_run_id": str(lease.run_id)}
         assert command.state == AgentHostCommandState.QUEUED.value
-        assert command.expires_at == NOW + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS)
+        assert command.expires_at == NOW + timedelta(
+            seconds=DEFAULT_COMMAND_TTL_SECONDS
+        )
     assert session.flushed is True
 
 
@@ -570,7 +584,9 @@ async def test_reconcile_expired_leases_sweeps_expire_and_reconcile_per_run(
         expire_calls.append((run_id, now))
         return None
 
-    async def fake_reconcile(session_arg, *, run_id, now=None, recovery_grace_seconds=120):
+    async def fake_reconcile(
+        session_arg, *, run_id, now=None, recovery_grace_seconds=120
+    ):
         assert session_arg is session
         reconcile_calls.append((run_id, now))
         return None
@@ -578,7 +594,9 @@ async def test_reconcile_expired_leases_sweeps_expire_and_reconcile_per_run(
     monkeypatch.setattr(agent_host_recovery, "expire_unaccepted_run", fake_expire)
     monkeypatch.setattr(agent_host_recovery, "reconcile_expired_run", fake_reconcile)
 
-    result = await agent_host_recovery.reconcile_expired_leases(session, now=NOW, limit=50)
+    result = await agent_host_recovery.reconcile_expired_leases(
+        session, now=NOW, limit=50
+    )
 
     assert result == 3
     assert [run_id for run_id, _ in expire_calls] == run_ids

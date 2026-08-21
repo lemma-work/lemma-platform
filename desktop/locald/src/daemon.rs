@@ -13,7 +13,9 @@ use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
 use crate::host_process::HostProcessManager;
-use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
+use crate::managed_runtime::{
+    ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
+};
 use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
 use crate::paths::LocalPaths;
@@ -1649,7 +1651,39 @@ impl Daemon {
             "operation_id": operation_id,
             "runtime_generation": runtime_generation,
         }));
+        self.warm_sandbox_images();
         Ok(())
+    }
+
+    /// Start fetching the sandbox images behind the workspace, and say so.
+    ///
+    /// After `ready`, never before it. The images are only needed once a pod
+    /// runs something; fetching them inline held the startup bar at 68% behind
+    /// several hundred megabytes on a first run. The app shows this as a
+    /// notice it can take away again, rather than as a phase of starting.
+    fn warm_sandbox_images(self: &Arc<Self>) {
+        let Some(runtime) = self.managed_runtime.as_ref() else {
+            // No guest to warm -- this is a supervisor-mode stack. Said out
+            // loud, and terminally, because the workspace polls until it hears
+            // an answer that cannot change; silence here left it asking every
+            // two seconds for the rest of the session.
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": SANDBOX_IMAGES_UNSUPPORTED,
+                "detail": "",
+            }));
+            return;
+        };
+        let daemon = Arc::clone(self);
+        runtime.warm_sandbox_images(move |status| {
+            daemon.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": status.state,
+                "detail": status.detail,
+            }));
+        });
     }
 
     fn recover_managed_stack(self: &Arc<Self>) -> io::Result<()> {
@@ -1682,6 +1716,7 @@ impl Daemon {
             "mode": "managed-local",
             "release": manager.release(),
         }));
+        self.warm_sandbox_images();
         Ok(())
     }
 

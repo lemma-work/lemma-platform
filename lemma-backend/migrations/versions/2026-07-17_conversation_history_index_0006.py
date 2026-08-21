@@ -51,8 +51,7 @@ def upgrade() -> None:
                 "user_id",
                 "pod_id",
                 sa.text(
-                    "COALESCE(agent_id, "
-                    "'00000000-0000-0000-0000-000000000001'::uuid)"
+                    "COALESCE(agent_id, '00000000-0000-0000-0000-000000000001'::uuid)"
                 ),
                 "id",
             ],

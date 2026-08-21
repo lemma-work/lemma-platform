@@ -39,7 +39,5 @@ def test_app_base_domain_allowed_when_set_outside_local():
 def test_missing_app_base_domain_tolerated_in_local_and_testing():
     # Local installs get it from the stack; the test suite leaves it unset.
     for environment in ("local", "testing"):
-        settings = Settings(
-            environment=environment, app_base_domain="", _env_file=None
-        )
+        settings = Settings(environment=environment, app_base_domain="", _env_file=None)
         assert settings.app_base_domain == ""

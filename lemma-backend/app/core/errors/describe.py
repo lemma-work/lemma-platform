@@ -31,7 +31,9 @@ def describe_exception(exc: BaseException, *, with_cause: bool = True) -> str:
     if not cause_text and type(cause) is type(exc):
         # A same-type re-raise with nothing new to say adds only noise.
         return rendered
-    caused_by = f"{type(cause).__name__}: {cause_text}" if cause_text else type(cause).__name__
+    caused_by = (
+        f"{type(cause).__name__}: {cause_text}" if cause_text else type(cause).__name__
+    )
     return f"{rendered} (caused by {caused_by})"
 
 

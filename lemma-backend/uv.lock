@@ -2010,7 +2010,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "datamodel-code-generator", specifier = ">=0.56.1" },
+    { name = "datamodel-code-generator", specifier = ">=0.64.0" },
     { name = "openapi-python-client", specifier = ">=0.29.0" },
 ]
 

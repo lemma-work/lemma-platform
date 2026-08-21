@@ -115,7 +115,9 @@ class PodService:
 
         if ctx is None:
             raise PodAccessDeniedError("Context is required for pod authorization")
-        await ctx.require(Permissions.POD_UPDATE, ResourceRef.pod(pod_id, pod_entity.organization_id))
+        await ctx.require(
+            Permissions.POD_UPDATE, ResourceRef.pod(pod_id, pod_entity.organization_id)
+        )
 
         merged_dict = pod_entity.model_dump()
         update_data = data.model_dump(exclude_unset=True)
@@ -184,7 +186,11 @@ class PodService:
         return True
 
     async def list_pods_by_organization(
-        self, organization_id: UUID, requester_user_id: UUID, limit: int = 100, cursor: str | None = None
+        self,
+        organization_id: UUID,
+        requester_user_id: UUID,
+        limit: int = 100,
+        cursor: str | None = None,
     ):
         org_member = await self.organization_repository.get_member(
             requester_user_id, organization_id

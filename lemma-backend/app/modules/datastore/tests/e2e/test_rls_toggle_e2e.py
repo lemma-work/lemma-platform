@@ -72,9 +72,7 @@ class TestRlsToggle:
         async_client,
         member_users,
     ):
-        editor_api = DatastoreApi(
-            async_client, pod_api.pod_id, member_users["editor"]
-        )
+        editor_api = DatastoreApi(async_client, pod_api.pod_id, member_users["editor"])
         name = f"scoped_{uuid4().hex[:8]}"
         await pod_api.create_table(
             {

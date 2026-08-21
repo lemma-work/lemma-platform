@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.telegram.client import (
 
 # --- URL helpers ----------------------------------------------------------
 
+
 def test_resolve_api_base_prefers_credential_override():
     assert resolve_api_base({"api_base_url": "http://fake/bot"}) == "http://fake/bot"
     assert resolve_api_base({}) == "https://api.telegram.org/bot"
@@ -45,6 +46,7 @@ def test_file_api_url_inserts_file_segment():
 
 
 # --- envelope parsing -----------------------------------------------------
+
 
 class _FakeResponse:
     def __init__(self, status_code: int, payload: dict, text: str = ""):
@@ -112,30 +114,39 @@ async def test_call_flags_parse_entities_error():
 
 # --- classification -------------------------------------------------------
 
+
 def test_classify_telegram_error():
-    assert classify_telegram_error(
-        TelegramApiError(method="m", status_code=429)
-    ) is DeliveryClassification.TRANSIENT
-    assert classify_telegram_error(
-        TelegramApiError(method="m", status_code=500)
-    ) is DeliveryClassification.TRANSIENT
-    assert classify_telegram_error(
-        TelegramApiError(method="m", status_code=400)
-    ) is DeliveryClassification.PERMANENT
-    assert classify_telegram_error(
-        httpx.ConnectError("boom")
-    ) is DeliveryClassification.TRANSIENT
+    assert (
+        classify_telegram_error(TelegramApiError(method="m", status_code=429))
+        is DeliveryClassification.TRANSIENT
+    )
+    assert (
+        classify_telegram_error(TelegramApiError(method="m", status_code=500))
+        is DeliveryClassification.TRANSIENT
+    )
+    assert (
+        classify_telegram_error(TelegramApiError(method="m", status_code=400))
+        is DeliveryClassification.PERMANENT
+    )
+    assert (
+        classify_telegram_error(httpx.ConnectError("boom"))
+        is DeliveryClassification.TRANSIENT
+    )
     assert classify_telegram_error(ValueError("x")) is DeliveryClassification.PERMANENT
 
 
 def test_telegram_retry_after():
-    assert telegram_retry_after(
-        TelegramApiError(method="m", status_code=429, retry_after=5)
-    ) == 5.0
+    assert (
+        telegram_retry_after(
+            TelegramApiError(method="m", status_code=429, retry_after=5)
+        )
+        == 5.0
+    )
     assert telegram_retry_after(TelegramApiError(method="m", status_code=400)) is None
 
 
 # --- with_retry -----------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_with_retry_retries_transient_then_succeeds():

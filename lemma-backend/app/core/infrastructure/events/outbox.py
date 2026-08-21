@@ -81,12 +81,8 @@ class OutboxDispatcher:
             else event_transport_settings.outbox_idle_poll_max_seconds,
         )
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
-        self._dispatch_incident = DependencyIncident(
-            "outbox.database", logger=logger
-        )
-        self._publish_incident = DependencyIncident(
-            "outbox.message_bus", logger=logger
-        )
+        self._dispatch_incident = DependencyIncident("outbox.database", logger=logger)
+        self._publish_incident = DependencyIncident("outbox.message_bus", logger=logger)
 
     async def dispatch_once(self) -> int:
         claimed = await self._claim_batch()
@@ -120,9 +116,7 @@ class OutboxDispatcher:
                 infrastructure_failures += 1
                 delay = min(30.0, 2 ** min(infrastructure_failures - 1, 5))
                 delay *= random.uniform(0.75, 1.25)
-                self._dispatch_incident.record_failure(
-                    error_type=type(exc).__name__
-                )
+                self._dispatch_incident.record_failure(error_type=type(exc).__name__)
                 await asyncio.sleep(delay)
                 continue
             self._dispatch_incident.record_success()
@@ -142,7 +136,9 @@ class OutboxDispatcher:
         """
         if self._wake is None:
             await asyncio.sleep(
-                min(self.max_idle_poll_seconds, backoff_delay * random.uniform(0.9, 1.1))
+                min(
+                    self.max_idle_poll_seconds, backoff_delay * random.uniform(0.9, 1.1)
+                )
             )
             return
         try:
@@ -232,9 +228,7 @@ class OutboxDispatcher:
             except Exception as exc:  # publication boundary; persisted for retry
                 failed_counter.add(1, {"event_type": event.event_type})
                 record_exception_on_current_span(exc)
-                self._publish_incident.record_failure(
-                    error_type=type(exc).__name__
-                )
+                self._publish_incident.record_failure(error_type=type(exc).__name__)
                 return exc
 
             self._publish_incident.record_success()

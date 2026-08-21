@@ -38,7 +38,7 @@ def final_answer_record(value: object) -> JsonObject | None:
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
     if isinstance(value, dict) and value.get(FINAL_ANSWER_MARKER) is True:
         return dict(value)
@@ -113,7 +113,7 @@ def _whole_message_json(message: str) -> JsonObject | None:
         return None
     try:
         parsed = json.loads(text)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
 

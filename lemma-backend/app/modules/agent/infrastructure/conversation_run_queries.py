@@ -194,9 +194,7 @@ class ConversationRunQueriesMixin:
                             func.count(),
                             func.max(MessageModel.created_at),
                         )
-                        .where(
-                            MessageModel.agent_run_id.in_([run.id for run in runs])
-                        )
+                        .where(MessageModel.agent_run_id.in_([run.id for run in runs]))
                         .group_by(MessageModel.agent_run_id)
                     )
                 ).all()
@@ -319,4 +317,3 @@ class ConversationRunQueriesMixin:
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
-

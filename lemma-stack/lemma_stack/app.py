@@ -461,9 +461,7 @@ def host_manifest(
     # infrastructure and sandbox images it runs against are still the pinned
     # ones, so the release manifest comes from --release-manifest or the pin.
     bundled_manifest = pack_root / "release.json" if pack_root is not None else None
-    if manifest_path is not None or (
-        bundled_manifest is not None and bundled_manifest.is_file()
-    ):
+    if manifest_path is not None or (bundled_manifest is not None and bundled_manifest.is_file()):
         release = release_manifest.load_file(manifest_path or bundled_manifest)
         release_manifest.pin(paths, release)
     else:
@@ -930,9 +928,7 @@ def self_register_cli(
     """Register managed Desktop as the `local` server for the Lemma pod CLI."""
     client = _managed_locald()
     if client is None:
-        raise AdminError(
-            "no managed Lemma Desktop runtime is installed; open Lemma Desktop first"
-        )
+        raise AdminError("no managed Lemma Desktop runtime is installed; open Lemma Desktop first")
     state = _managed_request(client, "status")
     base_url = state.get("api_url")
     workspace_url = state.get("url")

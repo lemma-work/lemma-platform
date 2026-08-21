@@ -1190,9 +1190,9 @@ async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatc
 
     assert handled is True
     sent = adapter.send_message.await_args.kwargs
-    assert "Open Field Log from the app button beside the message field" in sent[
-        "message"
-    ]
+    assert (
+        "Open Field Log from the app button beside the message field" in sent["message"]
+    )
     assert "metadata" not in sent
 
 
@@ -1313,7 +1313,9 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
     )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.ingress_service.create_authorization_data_service",
-        lambda uow: SimpleNamespace(build_user_context=AsyncMock(return_value=SimpleNamespace())),
+        lambda uow: SimpleNamespace(
+            build_user_context=AsyncMock(return_value=SimpleNamespace())
+        ),
     )
 
     indicator_active: list[int] = []
@@ -1703,7 +1705,9 @@ async def test_handle_interaction_resumes_via_approval_path():
     await service.handle_interaction(interaction)
 
     service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
-    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    kwargs = (
+        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    )
     assert kwargs["approval_id"] == "tool-1"
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
     # "Other" free text overrides the selected option for that question.
@@ -1746,7 +1750,9 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     await service.handle_interaction(interaction)
 
     service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
-    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    kwargs = (
+        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    )
     assert kwargs["approval_id"] == "tool-9"
     assert kwargs["decision"] == expected
     # An approval button carries a decision, not an answer payload.
@@ -1774,9 +1780,7 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
         surfaces=[surface],
         existing_link=link,
     )
-    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = (
-        surface.id
-    )
+    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = surface.id
     service.conversation_service.conversation_repository = SimpleNamespace(
         get_conversation=AsyncMock(return_value=conversation)
     )
@@ -1972,7 +1976,9 @@ async def test_send_approval_prompt_skips_when_no_pending():
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = None
 
-    sent = await service.send_approval_prompt_for_conversation(conversation_id=conversation_id)
+    sent = await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id
+    )
     assert sent is False
     adapter.send_message.assert_not_awaited()
 
@@ -2068,7 +2074,9 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
         ).model_dump(mode="json"),
     )
     adapter = AsyncMock()
-    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=older_link)
+    service = _build_service(
+        adapter=adapter, surfaces=[surface], existing_link=older_link
+    )
     service.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
@@ -2080,7 +2088,9 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (
         AsyncMock(return_value=latest_link)
     )
-    service.conversation_link_repository.get_by_conversation_id.return_value = latest_link
+    service.conversation_link_repository.get_by_conversation_id.return_value = (
+        latest_link
+    )
 
     sent = await service.send_to_member(
         surface=surface,
@@ -2149,7 +2159,11 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         )
     )
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (
-        AsyncMock(side_effect=lambda *, surface_id, external_user_id: links_by_surface[surface_id])
+        AsyncMock(
+            side_effect=lambda *, surface_id, external_user_id: links_by_surface[
+                surface_id
+            ]
+        )
     )
     service.conversation_link_repository.get_by_conversation_id.side_effect = (
         lambda conversation_id: links_by_conversation[conversation_id]
@@ -2234,12 +2248,16 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
         "agent_run_id": uuid4(),
     }
 
-    ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
+    ctx = SimpleNamespace(
+        conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
+    )
     resumed = await maybe_resume_pending_interaction(
         ctx, "approve", conversation_service=service.conversation_service
     )
     assert resumed is True
-    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    kwargs = (
+        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    )
     assert kwargs["approval_id"] == "tool-2"
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
 
@@ -2262,12 +2280,16 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
         "agent_run_id": uuid4(),
     }
 
-    ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
+    ctx = SimpleNamespace(
+        conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
+    )
     resumed = await maybe_resume_pending_interaction(
         ctx, "no", conversation_service=service.conversation_service
     )
     assert resumed is True
-    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    kwargs = (
+        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    )
     assert kwargs["decision"] == AgentRunApprovalDecision.DENY
 
 
@@ -2289,13 +2311,17 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
         "agent_run_id": uuid4(),
     }
 
-    ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
+    ctx = SimpleNamespace(
+        conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
+    )
     # "2" → second option label "Blue"
     resumed = await maybe_resume_pending_interaction(
         ctx, "2", conversation_service=service.conversation_service
     )
     assert resumed is True
-    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    kwargs = (
+        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    )
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
     assert kwargs["response"] == {"answers": {"color": "Blue"}}
 
@@ -2370,7 +2396,9 @@ async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch):
 async def test_transcribe_noop_without_audio(monkeypatch):
     service = _build_service(adapter=AsyncMock(), surfaces=[_slack_surface()])
     ingested = [
-        IngestedAttachment(path="/me/slack/report.pdf", name="report.pdf", mime="application/pdf")
+        IngestedAttachment(
+            path="/me/slack/report.pdf", name="report.pdf", mime="application/pdf"
+        )
     ]
     text = await service._transcribe_voice_attachments(
         ingested=ingested, original_text="see attached", metadata={}

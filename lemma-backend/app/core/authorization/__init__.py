@@ -13,7 +13,11 @@ from app.core.authorization.delegation import (
     WorkloadPrincipalType,
     parse_delegation_claims,
 )
-from app.core.authorization.permissions import PermissionDefinition, PermissionScope, Permissions
+from app.core.authorization.permissions import (
+    PermissionDefinition,
+    PermissionScope,
+    Permissions,
+)
 
 __all__ = [
     "ActorType",

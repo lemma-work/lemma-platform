@@ -27,10 +27,14 @@ from ..openapi_client.models.agent_surface_response import AgentSurfaceResponse
 from ..openapi_client.models.available_surface_channels_response import (
     AvailableSurfaceChannelsResponse,
 )
-from ..openapi_client.models.available_surfaces_response import AvailableSurfacesResponse
+from ..openapi_client.models.available_surfaces_response import (
+    AvailableSurfacesResponse,
+)
 from ..openapi_client.models.set_default_surface_request import SetDefaultSurfaceRequest
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
-from ..openapi_client.models.surface_platform_setup_guide import SurfacePlatformSetupGuide
+from ..openapi_client.models.surface_platform_setup_guide import (
+    SurfacePlatformSetupGuide,
+)
 from ..openapi_client.models.surface_send_request import SurfaceSendRequest
 from ..openapi_client.models.surface_send_response import SurfaceSendResponse
 from ..openapi_client.models.surface_setup_response import SurfaceSetupResponse
@@ -62,9 +66,7 @@ class PodSurfaces(BoundResource):
     def available(self) -> AvailableSurfacesResponse:
         return self._call(agent_surface_available, self._pod_uuid())
 
-    def create(
-        self, request: SurfaceCreateRequest | dict
-    ) -> AgentSurfaceResponse:
+    def create(self, request: SurfaceCreateRequest | dict) -> AgentSurfaceResponse:
         return self._call(
             agent_surface_create,
             self._pod_uuid(),
@@ -95,7 +97,9 @@ class PodSurfaces(BoundResource):
         try:
             return self.update(surface_name, body)
         except LemmaNotFoundError:
-            return self.create({**body, "platform": str(name).upper(), "name": surface_name})
+            return self.create(
+                {**body, "platform": str(name).upper(), "name": surface_name}
+            )
 
     def get(self, name: str) -> AgentSurfaceResponse:
         return self._call(agent_surface_get, self._pod_uuid(), name)

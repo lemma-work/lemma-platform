@@ -213,9 +213,7 @@ class LoopStallSampler:
             if not _is_doing_work(summaries):
                 continue
             label = names.get(other_id) or str(other_id)
-            others.append(
-                f"--- thread {label} ---\n" + format_stall_stack(summaries)
-            )
+            others.append(f"--- thread {label} ---\n" + format_stall_stack(summaries))
             if len(others) >= _MAX_REPORTED_THREADS:
                 break
 
@@ -235,9 +233,7 @@ def start_loop_stall_sampler(
     """Install the process-wide sampler. Call from the loop it should watch."""
     global _sampler
     stop_loop_stall_sampler()
-    sampler = LoopStallSampler(
-        stall_seconds=stall_seconds, service_name=service_name
-    )
+    sampler = LoopStallSampler(stall_seconds=stall_seconds, service_name=service_name)
     sampler.start()
     _sampler = sampler
     return sampler

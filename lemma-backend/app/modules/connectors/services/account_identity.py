@@ -114,7 +114,7 @@ async def _telegram_identity(creds: dict) -> AccountIdentity:
             result = (response.json() or {}).get("result") or {}
     except Exception:
         logger.debug(
-            'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic'
+            "connectors.account_identity.telegram_getme_while_resolving_account.diagnostic"
         )
         return AccountIdentity()
     bot_id = result.get("id")

@@ -82,7 +82,9 @@ async def test_unsupported_op_rejected():
 @pytest.mark.asyncio
 async def test_missing_host_or_database_rejected():
     with pytest.raises(OperationExecutionValidationError):
-        await _run("query", {"query": "SELECT 1"}, connection_config={"dialect": "postgresql"})
+        await _run(
+            "query", {"query": "SELECT 1"}, connection_config={"dialect": "postgresql"}
+        )
 
 
 @pytest.mark.asyncio
@@ -114,7 +116,9 @@ class TestEnginePooling:
         # credential they just revoked.
         executor = SqlExecutor()
         before = await executor._engine_for(CONN, CREDS)
-        after = await executor._engine_for(CONN, {"username": "u", "password": "rotated"})
+        after = await executor._engine_for(
+            CONN, {"username": "u", "password": "rotated"}
+        )
         assert after is not before
         assert len(executor._engines) == 1
         await executor.dispose_all()

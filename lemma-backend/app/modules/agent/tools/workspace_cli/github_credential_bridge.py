@@ -184,7 +184,7 @@ async def _resolve_github_credential(ctx: BaseAgentContext) -> _GithubCredential
                     auth_actor=auth_ctx,
                     account_id=account_id,
                 )
-            except (AccountResolutionError, ConnectorAccessDeniedError):
+            except AccountResolutionError, ConnectorAccessDeniedError:
                 return None
             credentials = account.credentials
             access_token = getattr(credentials, "access_token", None)

@@ -309,7 +309,7 @@ async def _build_pod_skill_catalog(
                     path=skill_md_path,
                     ctx=scope.ctx,
                 )
-            except (DatastoreFileNotFoundError, FileNotFoundError, UnicodeDecodeError):
+            except DatastoreFileNotFoundError, FileNotFoundError, UnicodeDecodeError:
                 continue
 
             try:

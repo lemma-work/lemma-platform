@@ -58,9 +58,7 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
     )
     harness.uow = SimpleNamespace()
     context = SimpleNamespace(can=AsyncMock(return_value=True))
-    auth_data = SimpleNamespace(
-        build_user_context=AsyncMock(return_value=context)
-    )
+    auth_data = SimpleNamespace(build_user_context=AsyncMock(return_value=context))
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.surface_configuration_authorization.create_authorization_data_service",
         lambda _uow: auth_data,
@@ -71,15 +69,17 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
         receiver_surface_ids=[allowed_surface.id, other_pod_surface.id],
     )
 
-    candidates, resolved_user_id, authorized = (
-        await harness._authorized_configuration_surfaces(
-            request,
-            tenant_id="T1",
-            platform=SurfacePlatform.SLACK,
-            actor_external_user_id="U1",
-            adapter=SimpleNamespace(),
-            action=Permissions.AGENT_UPDATE,
-        )
+    (
+        candidates,
+        resolved_user_id,
+        authorized,
+    ) = await harness._authorized_configuration_surfaces(
+        request,
+        tenant_id="T1",
+        platform=SurfacePlatform.SLACK,
+        actor_external_user_id="U1",
+        adapter=SimpleNamespace(),
+        action=Permissions.AGENT_UPDATE,
     )
 
     assert [surface.id for surface in candidates] == [

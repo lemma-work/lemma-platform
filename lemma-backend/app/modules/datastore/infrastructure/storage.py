@@ -104,7 +104,9 @@ class ObstoreDatastoreStorage:
         except Exception as exc:
             if self._is_missing_object_error(exc):
                 return False
-            logger.debug('datastore.storage.deleting_datastore_file_s.propagated', exc_info=True)
+            logger.debug(
+                "datastore.storage.deleting_datastore_file_s.propagated", exc_info=True
+            )
             raise DatastoreInfrastructureError("Failed to delete file")
 
     async def delete_prefix(self, prefix: str) -> int:
@@ -123,7 +125,10 @@ class ObstoreDatastoreStorage:
         except Exception as exc:
             if self._is_missing_object_error(exc):
                 return 0
-            logger.debug('datastore.storage.deleting_datastore_prefix_s.propagated', exc_info=True)
+            logger.debug(
+                "datastore.storage.deleting_datastore_prefix_s.propagated",
+                exc_info=True,
+            )
             raise DatastoreInfrastructureError("Failed to delete folder contents")
 
     def _is_missing_object_error(self, exc: Exception) -> bool:

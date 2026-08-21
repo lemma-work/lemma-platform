@@ -32,6 +32,7 @@ def convert_record(
     except ValueError as exc:
         raise DatastoreValidationError(str(exc)) from exc
 
+
 _PK_AUTO_TYPES = {
     DatastoreDataType.UUID,
     DatastoreDataType.USER,
@@ -65,9 +66,7 @@ class RecordValidator:
     @staticmethod
     def _can_auto_generate_primary_key(pk_col: ColumnSchema) -> bool:
         return (
-            pk_col.auto
-            or pk_col.default is not None
-            or pk_col.type in _PK_AUTO_TYPES
+            pk_col.auto or pk_col.default is not None or pk_col.type in _PK_AUTO_TYPES
         )
 
     def validate(
@@ -124,7 +123,12 @@ class RecordValidator:
 
         for key, value in data.items():
             col = column_map.get(key)
-            if col is not None and value is None and col.required and col.default is None:
+            if (
+                col is not None
+                and value is None
+                and col.required
+                and col.default is None
+            ):
                 errors.append(f"Column '{key}' cannot be null")
                 details.append({"field": key, "reason": "not_null"})
 
@@ -140,11 +144,13 @@ class RecordValidator:
                     f"Value '{value}' is not allowed for column '{key}'. "
                     f"Allowed values: {allowed}"
                 )
-                details.append({
-                    "field": key,
-                    "reason": "enum",
-                    "value": value,
-                    "allowed_values": col.options,
-                })
+                details.append(
+                    {
+                        "field": key,
+                        "reason": "enum",
+                        "value": value,
+                        "allowed_values": col.options,
+                    }
+                )
 
         return (len(errors) == 0, errors, details)

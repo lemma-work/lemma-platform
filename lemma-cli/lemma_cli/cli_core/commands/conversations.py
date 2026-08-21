@@ -99,6 +99,7 @@ def chat_once(
         )
     if show_user_message and state.output != "json":
         render_user_message(message)
+
     def stream(client, s):  # type: ignore[no-untyped-def]
         # Render inside the client session: the SSE response is only readable
         # while the underlying httpx client is open.
@@ -138,6 +139,7 @@ def send_once(
     )
     if conversation_id is None:
         return
+
     def send_and_peek(client, s):  # type: ignore[no-untyped-def]
         # Read the first event inside the client session: the SSE response is
         # only readable while the underlying httpx client is open.
@@ -193,7 +195,7 @@ def interactive_chat(
     while True:
         try:
             message = read_chat_prompt()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             console.print()
             return
         command = message.strip()
@@ -395,7 +397,9 @@ def stop(
     conversation_id = _resolve_conversation_arg(state, conversation)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).conversations.stop(conversation_id),
+        lambda client, s: pod_client(client, s, pod).conversations.stop(
+            conversation_id
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -426,10 +430,14 @@ def list_approvals(
 def approve(
     ctx: typer.Context,
     approval: str | None = typer.Argument(
-        None, help="Approval id (from `conversation approvals`). Omit to act on ALL pending."
+        None,
+        help="Approval id (from `conversation approvals`). Omit to act on ALL pending.",
     ),
     conversation: str | None = typer.Option(
-        None, "--conversation", "-c", help="Conversation id (default: $LEMMA_CONVERSATION_ID)."
+        None,
+        "--conversation",
+        "-c",
+        help="Conversation id (default: $LEMMA_CONVERSATION_ID).",
     ),
     deny: bool = typer.Option(False, "--deny", help="Reject instead of approving."),
     session: bool = typer.Option(

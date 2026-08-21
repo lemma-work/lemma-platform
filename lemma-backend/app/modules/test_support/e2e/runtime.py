@@ -285,9 +285,7 @@ def _workspace_image_name() -> str:
         return configured_image
     fingerprint = _sandbox_image_fingerprint(Path(__file__).resolve().parents[5])
     return (
-        f"lemma-workspace:e2e-{fingerprint}"
-        if fingerprint
-        else "lemma-workspace:e2e"
+        f"lemma-workspace:e2e-{fingerprint}" if fingerprint else "lemma-workspace:e2e"
     )
 
 
@@ -356,7 +354,9 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     )
 
     if should_build:
-        dockerfile = repo_root / "lemma-backend" / "sandbox-images" / "Dockerfile.workspace"
+        dockerfile = (
+            repo_root / "lemma-backend" / "sandbox-images" / "Dockerfile.workspace"
+        )
         build = subprocess.run(
             [
                 "docker",
@@ -408,7 +408,12 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
                 "--platform",
                 platform,
                 "-f",
-                str(repo_root / "lemma-backend" / "sandbox-images" / "Dockerfile.function"),
+                str(
+                    repo_root
+                    / "lemma-backend"
+                    / "sandbox-images"
+                    / "Dockerfile.function"
+                ),
                 "-t",
                 image,
                 str(repo_root),
@@ -528,9 +533,7 @@ async def local_sandbox_server(
     else:
         required = {
             "E2B_API_KEY": _e2b_environment("E2B_API_KEY"),
-            "E2B_WORKSPACE_TEMPLATE": _e2b_environment(
-                "E2B_WORKSPACE_TEMPLATE"
-            ),
+            "E2B_WORKSPACE_TEMPLATE": _e2b_environment("E2B_WORKSPACE_TEMPLATE"),
             "E2B_FUNCTION_TEMPLATE": _e2b_environment("E2B_FUNCTION_TEMPLATE"),
         }
         missing = [name for name, value in required.items() if not value]
@@ -564,9 +567,7 @@ async def local_sandbox_server(
         env_updates.update({k: v for k, v in required.items() if v})
         env_updates["E2B_METADATA_NAMESPACE"] = namespace
 
-    original_settings = {
-        key: getattr(workspace_settings, key) for key in overrides
-    }
+    original_settings = {key: getattr(workspace_settings, key) for key in overrides}
     original_env = {key: os.environ.get(key) for key in env_updates}
     for key, value in overrides.items():
         setattr(workspace_settings, key, value)
@@ -604,9 +605,7 @@ async def configure_workspace_api_url(
     original_callback_url = settings.workspace_callback_api_url
     original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
     original_function_gateway_url = settings.function_runtime_gateway_url
-    original_function_gateway_url_env = os.environ.get(
-        "FUNCTION_RUNTIME_GATEWAY_URL"
-    )
+    original_function_gateway_url_env = os.environ.get("FUNCTION_RUNTIME_GATEWAY_URL")
 
     # A sandbox running in someone else's cloud cannot reach a laptop, so the
     # backend has to be published for it. This is needed whenever the *live*

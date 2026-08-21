@@ -1629,8 +1629,24 @@
         var bBack = document.getElementById("b-back");
         var POD_URL = "growth-ops.lemma.work";
 
+        // The card's own markup is the only thing that sets `data-app-src`
+        // today, but an iframe `src` is a navigation and a `javascript:` value
+        // there executes in this page. Reading it from the DOM and assigning it
+        // back without asking what scheme it is makes the page depend on markup
+        // never going wrong. Resolve it and require an ordinary web URL.
+        function safeAppSrc(src) {
+          try {
+            var resolved = new URL(String(src || ""), window.location.href);
+            return resolved.protocol === "https:" || resolved.protocol === "http:"
+              ? resolved.href
+              : "about:blank";
+          } catch (e) {
+            return "about:blank";
+          }
+        }
+
         function openApp(src, url) {
-          launchFrame.src = src;
+          launchFrame.src = safeAppSrc(src);
           launcher.classList.add("show");
           bUrl.textContent = url || POD_URL;
           bBack.disabled = false;

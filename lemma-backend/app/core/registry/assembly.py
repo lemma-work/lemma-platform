@@ -30,11 +30,7 @@ def configure_stream_topology(modules: Sequence[LemmaModule]) -> None:
         declare_stream_groups,
     )
 
-    declare_stream_groups(
-        group
-        for module in modules
-        for group in module.stream_groups
-    )
+    declare_stream_groups(group for module in modules for group in module.stream_groups)
 
 
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
@@ -76,9 +72,7 @@ def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
             module.event_routers()
 
 
-def wire_module_events(
-    modules: Sequence[LemmaModule], broker: "RedisBroker"
-) -> None:
+def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") -> None:
     """Register streaq tasks then include every module's FastStream routers."""
     configure_stream_topology(modules)
     register_streaq_tasks(modules)

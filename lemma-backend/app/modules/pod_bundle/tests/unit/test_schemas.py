@@ -70,7 +70,9 @@ def test_publish_requires_account_and_defaults_to_create():
         PublishStartRequest(repo_name="my-pod")
 
 
-@pytest.mark.parametrize("repo_name", ["space name", "owner/repo", ".", "..", "a" * 101])
+@pytest.mark.parametrize(
+    "repo_name", ["space name", "owner/repo", ".", "..", "a" * 101]
+)
 def test_publish_rejects_invalid_repository_names(repo_name: str):
     with pytest.raises(ValidationError):
         PublishStartRequest(repo_name=repo_name, account_id=uuid4())

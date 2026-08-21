@@ -38,11 +38,18 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-__all__ = ["downgrade", "upgrade", "schema_upgrades", "schema_downgrades", "data_upgrades", "data_downgrades"]
+__all__ = [
+    "downgrade",
+    "upgrade",
+    "schema_upgrades",
+    "schema_downgrades",
+    "data_upgrades",
+    "data_downgrades",
+]
 
 # revision identifiers, used by Alembic.
-revision = '0002_surfaces_rework'
-down_revision = '0001_baseline'
+revision = "0002_surfaces_rework"
+down_revision = "0001_baseline"
 branch_labels = None
 depends_on = None
 
@@ -66,47 +73,47 @@ def downgrade() -> None:
 def schema_upgrades() -> None:
     # --- accounts: multiple per auth config + is_default ---
     op.add_column(
-        'accounts',
+        "accounts",
         sa.Column(
-            'is_default',
+            "is_default",
             sa.Boolean(),
             nullable=False,
-            server_default=sa.text('false'),
+            server_default=sa.text("false"),
         ),
     )
-    op.create_index('ix_accounts_is_default', 'accounts', ['is_default'])
+    op.create_index("ix_accounts_is_default", "accounts", ["is_default"])
     # Existing rows are unique per (user, auth_config) under the old constraint,
     # so promoting them all to default keeps at most one default per pair.
     op.execute("UPDATE accounts SET is_default = true")
-    op.drop_index('ix_unique_user_auth_config_account', table_name='accounts')
+    op.drop_index("ix_unique_user_auth_config_account", table_name="accounts")
     op.create_index(
-        'uq_accounts_default_per_auth_config',
-        'accounts',
-        ['user_id', 'auth_config_id'],
+        "uq_accounts_default_per_auth_config",
+        "accounts",
+        ["user_id", "auth_config_id"],
         unique=True,
-        postgresql_where=sa.text('is_default'),
+        postgresql_where=sa.text("is_default"),
     )
     # A human-friendly label so a user can tell several accounts of the same app
     # apart (e.g. "@lemmabot", "rahul@gmail.com", "+1 555…"); derived at connect.
     op.add_column(
-        'accounts',
-        sa.Column('display_name', sa.String(length=255), nullable=True),
+        "accounts",
+        sa.Column("display_name", sa.String(length=255), nullable=True),
     )
     # One account per provider identity per (user, auth_config): reject connecting
     # the same underlying account twice. Partial (provider_account_id NOT NULL) so
     # accounts whose identity couldn't be derived don't collide on NULL.
     op.create_index(
-        'uq_accounts_provider_identity',
-        'accounts',
-        ['user_id', 'auth_config_id', 'provider_account_id'],
+        "uq_accounts_provider_identity",
+        "accounts",
+        ["user_id", "auth_config_id", "provider_account_id"],
         unique=True,
-        postgresql_where=sa.text('provider_account_id IS NOT NULL'),
+        postgresql_where=sa.text("provider_account_id IS NOT NULL"),
     )
 
     # --- agent_surfaces: stable, pod-unique name ---
     op.add_column(
-        'agent_surfaces',
-        sa.Column('name', sa.String(length=255), nullable=True),
+        "agent_surfaces",
+        sa.Column("name", sa.String(length=255), nullable=True),
     )
     op.execute("UPDATE agent_surfaces SET name = lower(surface_type)")
     # Dedupe any (pod_id, name) collisions left by the backfill (e.g. a pod that
@@ -126,27 +133,25 @@ def schema_upgrades() -> None:
         WHERE a.id = ranked.id AND ranked.rn > 1
         """
     )
-    op.alter_column('agent_surfaces', 'name', nullable=False)
-    op.create_index('ix_agent_surfaces_name', 'agent_surfaces', ['name'])
+    op.alter_column("agent_surfaces", "name", nullable=False)
+    op.create_index("ix_agent_surfaces_name", "agent_surfaces", ["name"])
     op.create_unique_constraint(
-        'uq_agent_surface_pod_name', 'agent_surfaces', ['pod_id', 'name']
+        "uq_agent_surface_pod_name", "agent_surfaces", ["pod_id", "name"]
     )
     # Superseded by uq_agent_surface_pod_name above. It's a unique INDEX, not a
     # table constraint (created via CREATE UNIQUE INDEX pre-squash), so this
     # must be DROP INDEX, not DROP CONSTRAINT. Not part of any migration here
     # (pre-dates the baseline squash), so it's only present on DBs carried
     # forward from before 2026-06-24 — IF EXISTS covers fresh DBs too.
-    op.execute(
-        "DROP INDEX IF EXISTS ux_agent_surfaces_pod_surface_type"
-    )
+    op.execute("DROP INDEX IF EXISTS ux_agent_surfaces_pod_surface_type")
 
     # --- users: typed JSON preferences blob (e.g. per-platform default surface
     # used to disambiguate a user reachable via a shared system bot across pods
     # in multiple orgs). Nullable; absent means "no preferences set". ---
     op.add_column(
-        'users',
+        "users",
         sa.Column(
-            'preferences',
+            "preferences",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
         ),
@@ -154,30 +159,32 @@ def schema_upgrades() -> None:
 
 
 def schema_downgrades() -> None:
-    op.drop_column('users', 'preferences')
+    op.drop_column("users", "preferences")
 
     # Restores the legacy unique index dropped in schema_upgrades(). Fails if
     # any pod now has two surfaces of the same platform — correct: that data
     # can't be represented under the old one-per-platform rule being restored.
     op.create_index(
-        'ux_agent_surfaces_pod_surface_type', 'agent_surfaces', ['pod_id', 'surface_type'],
+        "ux_agent_surfaces_pod_surface_type",
+        "agent_surfaces",
+        ["pod_id", "surface_type"],
         unique=True,
     )
-    op.drop_constraint('uq_agent_surface_pod_name', 'agent_surfaces', type_='unique')
-    op.drop_index('ix_agent_surfaces_name', table_name='agent_surfaces')
-    op.drop_column('agent_surfaces', 'name')
+    op.drop_constraint("uq_agent_surface_pod_name", "agent_surfaces", type_="unique")
+    op.drop_index("ix_agent_surfaces_name", table_name="agent_surfaces")
+    op.drop_column("agent_surfaces", "name")
 
-    op.drop_index('uq_accounts_provider_identity', table_name='accounts')
-    op.drop_column('accounts', 'display_name')
-    op.drop_index('uq_accounts_default_per_auth_config', table_name='accounts')
+    op.drop_index("uq_accounts_provider_identity", table_name="accounts")
+    op.drop_column("accounts", "display_name")
+    op.drop_index("uq_accounts_default_per_auth_config", table_name="accounts")
     op.create_index(
-        'ix_unique_user_auth_config_account',
-        'accounts',
-        ['user_id', 'auth_config_id'],
+        "ix_unique_user_auth_config_account",
+        "accounts",
+        ["user_id", "auth_config_id"],
         unique=True,
     )
-    op.drop_index('ix_accounts_is_default', table_name='accounts')
-    op.drop_column('accounts', 'is_default')
+    op.drop_index("ix_accounts_is_default", table_name="accounts")
+    op.drop_column("accounts", "is_default")
 
 
 def data_upgrades() -> None:

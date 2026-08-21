@@ -25,8 +25,14 @@ class DatastorePodFileGateway(PodFileGatewayPort):
     async def read_bytes(
         self, *, pod_id: UUID, path: str, ctx: Any
     ) -> Tuple[bytes, Optional[str], Optional[str]]:
-        entity, content = await self._service.download_file_content_by_path(pod_id, path, ctx)
-        return content, getattr(entity, "mime_type", None), getattr(entity, "name", None)
+        entity, content = await self._service.download_file_content_by_path(
+            pod_id, path, ctx
+        )
+        return (
+            content,
+            getattr(entity, "mime_type", None),
+            getattr(entity, "name", None),
+        )
 
     async def write_bytes(
         self,

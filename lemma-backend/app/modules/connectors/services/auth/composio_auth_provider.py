@@ -63,13 +63,13 @@ class ComposioAuthProvider(AuthProviderInterface):
                                 seconds=int(expires_in)
                             )
                     logger.debug(
-                        'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic',
+                        "connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic",
                         status=response.status,
                     )
                     return None
         except Exception:
             logger.debug(
-                'connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic'
+                "connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic"
             )
             return None
 

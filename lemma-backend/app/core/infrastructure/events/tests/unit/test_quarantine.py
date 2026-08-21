@@ -52,8 +52,14 @@ class _FakeRedis:
 
 
 class _Message:
-    def __init__(self, *, stream="surface_events", group="surface-webhook-events",
-                 message_id="1786862052832-0", body=b'{"event_type":"surface.connected"}'):
+    def __init__(
+        self,
+        *,
+        stream="surface_events",
+        group="surface-webhook-events",
+        message_id="1786862052832-0",
+        body=b'{"event_type":"surface.connected"}',
+    ):
         self.raw_message = {"channel": stream, "group": group}
         self.message_id = message_id
         self.body = body
@@ -127,9 +133,7 @@ async def test_a_healthy_message_passes_straight_through(redis):
 @pytest.mark.asyncio
 async def test_a_permanent_failure_is_dead_lettered_and_swallowed(redis):
     """Swallowing is the point: it is what lets the ack clear the PEL entry."""
-    result = await _consume(
-        _middleware(), _Message(), _validation_error()
-    )
+    result = await _consume(_middleware(), _Message(), _validation_error())
 
     assert result is None
     entries = redis.streams["surface_events:dead"]
@@ -147,9 +151,7 @@ async def test_a_permanent_failure_is_dead_lettered_and_swallowed(redis):
 @pytest.mark.asyncio
 async def test_a_transient_failure_is_re_raised_and_not_dead_lettered(redis):
     with pytest.raises(ConnectionError):
-        await _consume(
-            _middleware(), _Message(), ConnectionError("redis")
-        )
+        await _consume(_middleware(), _Message(), ConnectionError("redis"))
 
     assert redis.streams == {}
 
@@ -195,9 +197,7 @@ async def test_a_dead_letter_write_failure_still_acks(monkeypatch):
 
     monkeypatch.setattr(q, "get_redis", lambda **kwargs: _BrokenRedis())
 
-    result = await _consume(
-        _middleware(), _Message(), _validation_error()
-    )
+    result = await _consume(_middleware(), _Message(), _validation_error())
 
     assert result is None
 

@@ -261,9 +261,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         title: str,
     ) -> bool:
-        return await self._home(credentials).set_thread_title(
-            event=event, title=title
-        )
+        return await self._home(credentials).set_thread_title(event=event, title=title)
 
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

@@ -47,13 +47,13 @@ class TelegramMessageParser:
         if from_user.get("last_name"):
             sender_display += f" {from_user['last_name']}"
         sender_username = from_user.get("username")
-        contact_details = self._extract_contact_details(message=message, sender_id=sender_id)
+        contact_details = self._extract_contact_details(
+            message=message, sender_id=sender_id
+        )
 
         is_dm = chat_type == "private"
         conversation_type = (
-            ConversationType.EXTERNAL_DM
-            if is_dm
-            else ConversationType.EXTERNAL_GROUP
+            ConversationType.EXTERNAL_DM if is_dm else ConversationType.EXTERNAL_GROUP
         )
 
         thread_id = str(message.get("message_thread_id") or chat_id)
@@ -172,9 +172,7 @@ class TelegramMessageParser:
         return message.get("text") or message.get("caption") or ""
 
     @staticmethod
-    def _extract_mention_username(
-        entity: dict[str, Any], text: str
-    ) -> str | None:
+    def _extract_mention_username(entity: dict[str, Any], text: str) -> str | None:
         """Pull the @username out of a `mention` entity using its offset/length.
 
         Telegram `mention` entities point at a substring like ``@lemmabot`` in
@@ -200,20 +198,24 @@ class TelegramMessageParser:
                 continue
             if key == "photo" and isinstance(data, list):
                 largest = max(data, key=lambda p: p.get("file_size", 0))
-                attachments.append({
-                    "file_id": largest.get("file_id"),
-                    "name": "photo",
-                    "content_type": "image",
-                    "size": largest.get("file_size"),
-                })
+                attachments.append(
+                    {
+                        "file_id": largest.get("file_id"),
+                        "name": "photo",
+                        "content_type": "image",
+                        "size": largest.get("file_size"),
+                    }
+                )
             elif isinstance(data, dict):
-                attachments.append({
-                    "file_id": data.get("file_id"),
-                    "name": data.get("file_name") or key,
-                    "content_type": key,
-                    "mime_type": data.get("mime_type"),
-                    "size": data.get("file_size"),
-                })
+                attachments.append(
+                    {
+                        "file_id": data.get("file_id"),
+                        "name": data.get("file_name") or key,
+                        "content_type": key,
+                        "mime_type": data.get("mime_type"),
+                        "size": data.get("file_size"),
+                    }
+                )
         return attachments
 
     def _extract_contact_details(

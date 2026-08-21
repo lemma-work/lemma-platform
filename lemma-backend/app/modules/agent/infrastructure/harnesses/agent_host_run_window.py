@@ -73,9 +73,7 @@ class DispatchedRun:
     @property
     def deadline_message(self) -> str:
         return (
-            CREDENTIAL_DEADLINE_MESSAGE
-            if self.credential_bounded
-            else DEADLINE_MESSAGE
+            CREDENTIAL_DEADLINE_MESSAGE if self.credential_bounded else DEADLINE_MESSAGE
         )
 
 
@@ -87,9 +85,7 @@ def credential_refresh_due(
     """Whether the run's Lemma credential is close enough to expiry to renew."""
     if expires_at is None:
         return False
-    return (
-        expires_at - now
-    ).total_seconds() <= CREDENTIAL_REFRESH_MARGIN_SECONDS
+    return (expires_at - now).total_seconds() <= CREDENTIAL_REFRESH_MARGIN_SECONDS
 
 
 def credential_exhausted(
@@ -106,9 +102,7 @@ def credential_exhausted(
     """
     if expires_at is None:
         return False
-    return (
-        expires_at - now
-    ).total_seconds() <= CREDENTIAL_SAFETY_MARGIN_SECONDS
+    return (expires_at - now).total_seconds() <= CREDENTIAL_SAFETY_MARGIN_SECONDS
 
 
 @dataclass(frozen=True, slots=True)

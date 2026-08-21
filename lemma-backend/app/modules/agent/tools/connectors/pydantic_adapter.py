@@ -164,7 +164,9 @@ def _validate_arguments(
     if not schema:
         return None
     validator = jsonschema.Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(arguments), key=lambda e: list(e.absolute_path))
+    errors = sorted(
+        validator.iter_errors(arguments), key=lambda e: list(e.absolute_path)
+    )
     if not errors:
         return None
     return _error(

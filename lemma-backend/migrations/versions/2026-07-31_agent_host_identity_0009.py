@@ -42,7 +42,6 @@ UUID = postgresql.UUID(as_uuid=True)
 JSONB = postgresql.JSONB(astext_type=sa.Text())
 
 
-
 def _created_columns() -> list[sa.Column]:
     return [
         sa.Column("id", UUID, nullable=False),
@@ -165,9 +164,7 @@ def _restore_legacy_daemon_schema() -> None:
             name="uq_agent_runtime_daemon_user_device",
         ),
     )
-    op.create_index(
-        "ix_agent_runtime_daemons_id", "agent_runtime_daemons", ["id"]
-    )
+    op.create_index("ix_agent_runtime_daemons_id", "agent_runtime_daemons", ["id"])
     op.create_index(
         "ix_agent_runtime_daemons_status", "agent_runtime_daemons", ["status"]
     )
@@ -180,9 +177,7 @@ def _restore_legacy_daemon_schema() -> None:
         ["user_id", "status"],
     )
 
-    op.add_column(
-        "agent_runtime_profiles", sa.Column("daemon_id", UUID, nullable=True)
-    )
+    op.add_column("agent_runtime_profiles", sa.Column("daemon_id", UUID, nullable=True))
     op.create_index(
         "ix_agent_runtime_profiles_daemon_id",
         "agent_runtime_profiles",

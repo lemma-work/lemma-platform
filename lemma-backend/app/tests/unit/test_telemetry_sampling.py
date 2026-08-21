@@ -75,10 +75,10 @@ def test_parentbased_sampler_preserves_parent_decision(monkeypatch):
     def decision(flags):
         parent = trace.NonRecordingSpan(
             trace.SpanContext(
-                    trace_id=1,
-                    span_id=2,
-                    is_remote=True,
-                    trace_flags=trace.TraceFlags(flags),
+                trace_id=1,
+                span_id=2,
+                is_remote=True,
+                trace_flags=trace.TraceFlags(flags),
             )
         )
         return sampler.should_sample(

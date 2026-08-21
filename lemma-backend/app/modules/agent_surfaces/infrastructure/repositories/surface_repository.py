@@ -110,7 +110,8 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             select(AgentSurface)
             .where(
                 AgentSurface.surface_type == str(platform).upper(),
-                func.lower(AgentSurface.surface_identity_email) == address.strip().lower(),
+                func.lower(AgentSurface.surface_identity_email)
+                == address.strip().lower(),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
             .limit(1)
@@ -119,9 +120,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model = result.scalars().first()
         return model.to_entity() if model else None
 
-    async def list_active_by_type(
-        self, surface_type: str
-    ) -> list[AgentSurfaceEntity]:
+    async def list_active_by_type(self, surface_type: str) -> list[AgentSurfaceEntity]:
         # Stable ordering so surface selection is deterministic when a sender
         # resolves to several candidate surfaces on a shared bot/number (the
         # ingress tiebreak relies on this order).
@@ -145,7 +144,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         stmt = (
             select(AgentSurface)
             .where(
-                AgentSurface.surface_type.in_([platform.value for platform in platforms]),
+                AgentSurface.surface_type.in_(
+                    [platform.value for platform in platforms]
+                ),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
             .order_by(AgentSurface.surface_type, AgentSurface.id)
@@ -156,9 +157,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
     async def get_by_email_schedule_id(
         self, schedule_id: UUID
     ) -> AgentSurfaceEntity | None:
-        stmt = select(AgentSurface).where(
-            AgentSurface.schedule_id == schedule_id
-        )
+        stmt = select(AgentSurface).where(AgentSurface.schedule_id == schedule_id)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
@@ -189,9 +188,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         exclude_surface_id: UUID | None = None,
     ) -> AgentSurfaceEntity | None:
         target_org_id = (
-            select(Pod.organization_id)
-            .where(Pod.id == pod_id)
-            .scalar_subquery()
+            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
         )
         stmt = (
             select(AgentSurface)
@@ -218,9 +215,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         exclude_surface_id: UUID | None = None,
     ) -> AgentSurfaceEntity | None:
         target_org_id = (
-            select(Pod.organization_id)
-            .where(Pod.id == pod_id)
-            .scalar_subquery()
+            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
         )
         stmt = (
             select(AgentSurface)
@@ -246,7 +241,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,
-            mode=entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode),
+            mode=entity.mode.value
+            if hasattr(entity.mode, "value")
+            else str(entity.mode),
             event_mode=(
                 entity.event_mode.value
                 if hasattr(entity.event_mode, "value")
@@ -281,7 +278,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.updated_at = entity.updated_at
         model.agent_id = entity.agent_id
         model.surface_type = entity.surface_type.value
-        model.mode = entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode)
+        model.mode = (
+            entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode)
+        )
         model.event_mode = (
             entity.event_mode.value
             if hasattr(entity.event_mode, "value")
@@ -394,9 +393,9 @@ class SurfaceConversationLinkRepository:
             stmt = stmt.where(
                 AgentSurfaceConversationLinkModel.external_user_id == external_user_id
             )
-        stmt = stmt.order_by(
-            AgentSurfaceConversationLinkModel.updated_at.desc()
-        ).limit(1)
+        stmt = stmt.order_by(AgentSurfaceConversationLinkModel.updated_at.desc()).limit(
+            1
+        )
         return await self.session.scalar(stmt)
 
     async def get_latest_by_surface_and_external_user(

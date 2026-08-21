@@ -57,7 +57,9 @@ class WebhookEventMapper:
                     or metadata_payload.get("trigger_id"),
                     "event_type": metadata_payload.get("trigger_slug")
                     or payload.get("type"),
-                    "connected_account_id": metadata_payload.get("connected_account_id"),
+                    "connected_account_id": metadata_payload.get(
+                        "connected_account_id"
+                    ),
                     "webhook_event_type": payload.get("webhook_type")
                     or payload.get("type"),
                     "source_event_id": payload.get("id")

@@ -43,7 +43,13 @@ class OpenApiHttpExecutionError(Exception):
     like the vendored-package execution path (reads ``status_code`` + ``details``).
     """
 
-    def __init__(self, message: str, *, status_code: int | None = None, details: dict | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        details: dict | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.details = details or {}
@@ -83,7 +89,7 @@ def _coerce_file_bytes(value: Any) -> tuple[bytes, str | None]:
         elif "pod_path" in value:
             raise OpenApiHttpExecutionError(
                 "File input references a pod path but no pod context was available "
-                "to resolve it; pass {\"base64\": ...} or run within a pod."
+                'to resolve it; pass {"base64": ...} or run within a pod.'
             )
         else:
             raise OpenApiHttpExecutionError(
@@ -207,7 +213,9 @@ class OpenApiHttpExecutor:
     ) -> Any:
         connection_config = connection_config or {}
         mode = (execution or {}).get("mode", "openapi")
-        base_url = self._resolve_base_url(execution, third_party_credentials, connection_config)
+        base_url = self._resolve_base_url(
+            execution, third_party_credentials, connection_config
+        )
         # Re-checked at execution, not just at install. The base URL can come
         # from the *account* (Jira's per-tenant cloud URL), which never passed
         # through install validation, and DNS for an install-time-valid host can
@@ -291,7 +299,11 @@ class OpenApiHttpExecutor:
         connection_config = connection_config or {}
         user_data = creds.get("user_data") or {}
         account_base = creds.get("base_url") or user_data.get("base_url")
-        base = account_base or connection_config.get("server_url") or execution.get("server_url")
+        base = (
+            account_base
+            or connection_config.get("server_url")
+            or execution.get("server_url")
+        )
         if not base:
             raise OpenApiHttpExecutionError("No base URL configured for the operation.")
         return base.rstrip("/")
@@ -339,7 +351,9 @@ class OpenApiHttpExecutor:
         multi_segment = set(execution.get("multi_segment_path_params") or [])
         for name in execution.get("path_params", []):
             if name not in payload or payload[name] is None:
-                raise OpenApiHttpExecutionError(f"Missing required path parameter '{name}'.")
+                raise OpenApiHttpExecutionError(
+                    f"Missing required path parameter '{name}'."
+                )
             value = _scalar(payload[name])
             if name in multi_segment:
                 # Keeping `/` literal also keeps `..` literal, which would let a
@@ -393,7 +407,9 @@ class OpenApiHttpExecutor:
 
         return method, url, params, headers, _raw_body(payload.get("body"))
 
-    def _encode_query(self, name: str, value: Any, spec: dict[str, Any]) -> list[tuple[str, str]]:
+    def _encode_query(
+        self, name: str, value: Any, spec: dict[str, Any]
+    ) -> list[tuple[str, str]]:
         if isinstance(value, list):
             explode = spec.get("explode")
             style = spec.get("style") or "form"
@@ -414,7 +430,12 @@ class OpenApiHttpExecutor:
         body = payload.get(request_body.get("field", "body"))
         if body is None:
             return {}
-        content_type = (request_body.get("content_type") or "application/json").split(";", 1)[0].strip().lower()
+        content_type = (
+            (request_body.get("content_type") or "application/json")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+        )
         binary_fields = request_body.get("binary_fields") or []
 
         if content_type == "application/json" and not binary_fields:
@@ -434,19 +455,27 @@ class OpenApiHttpExecutor:
 
     # --- response handling --------------------------------------------------
 
-    def _handle_response(self, response: httpx.Response, operation_name: str, *, want_binary: bool):
+    def _handle_response(
+        self, response: httpx.Response, operation_name: str, *, want_binary: bool
+    ):
         status = response.status_code
         if status >= 400:
             body = _summarize_error_body(response.content)
             raise OpenApiHttpExecutionError(
-                f"{operation_name} failed: HTTP {status}." + (f" {body}" if body else ""),
+                f"{operation_name} failed: HTTP {status}."
+                + (f" {body}" if body else ""),
                 status_code=status,
                 details={"error": body, "status_code": status},
             )
         if status == 204 or not response.content:
             return {}
 
-        content_type = (response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        content_type = (
+            (response.headers.get("content-type") or "")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+        )
         is_json = content_type == "application/json" or content_type.endswith("+json")
         if want_binary or not is_json:
             return BinaryContentResult.from_http_response(

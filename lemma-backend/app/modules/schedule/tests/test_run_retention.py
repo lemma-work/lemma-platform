@@ -119,9 +119,9 @@ def test_every_run_status_is_classified_one_way_or_the_other() -> None:
     classified = set(run_retention._TERMINAL_STATUSES) | retryable_or_in_flight
 
     assert classified == {status.value for status in ScheduleRunStatus}
-    assert (
-        ScheduleRunStatus.FAILED.value not in run_retention._TERMINAL_STATUSES
-    ), "FAILED is retryable; recovery must dead-letter it before retention sees it"
+    assert ScheduleRunStatus.FAILED.value not in run_retention._TERMINAL_STATUSES, (
+        "FAILED is retryable; recovery must dead-letter it before retention sees it"
+    )
 
 
 @pytest.mark.anyio
@@ -189,9 +189,7 @@ async def test_a_short_batch_ends_the_sweep(deleted) -> None:
 
 @pytest.mark.anyio
 async def test_a_zero_budget_deletes_exactly_one_batch(deleted, monkeypatch) -> None:
-    monkeypatch.setattr(
-        schedule_settings, "schedule_run_retention_budget_seconds", 0.0
-    )
+    monkeypatch.setattr(schedule_settings, "schedule_run_retention_budget_seconds", 0.0)
     batch = schedule_settings.schedule_run_retention_batch_size
     calls = deleted(batch, batch, batch)
 

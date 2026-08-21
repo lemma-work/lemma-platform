@@ -59,7 +59,7 @@ class FastStreamRedisMessageBus:
                         await broker.stop()
                     except Exception:
                         logger.debug(
-                            'infrastructure.message_bus.closing_cancelled_redis_connection.diagnostic'
+                            "infrastructure.message_bus.closing_cancelled_redis_connection.diagnostic"
                         )
                     raise
                 except Exception:
@@ -67,7 +67,7 @@ class FastStreamRedisMessageBus:
                         await broker.stop()
                     except Exception:
                         logger.debug(
-                            'infrastructure.message_bus.closing_partial_redis_connection.diagnostic'
+                            "infrastructure.message_bus.closing_partial_redis_connection.diagnostic"
                         )
                     raise
                 self._broker = broker

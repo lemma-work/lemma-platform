@@ -27,11 +27,7 @@ async def get_ready_pod_app_by_name(
     if not resolved_name:
         return None
     app = await AppRepository(uow).get_by_name(pod_id, resolved_name, ctx=ctx)
-    if (
-        app is None
-        or app.id is None
-        or app.status is not AppStatus.READY
-    ):
+    if app is None or app.id is None or app.status is not AppStatus.READY:
         return None
     return ReadyPodApp(
         id=app.id,

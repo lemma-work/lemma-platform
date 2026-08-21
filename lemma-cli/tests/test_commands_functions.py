@@ -17,25 +17,38 @@ runner = CliRunner()
 # Shared fake client helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_client_and_captured():
     captured = {}
 
     class FakeFunctions:
         def list(self, *, limit=100):
             captured["limit"] = limit
-            return {"items": [{"id": "fn-1", "name": "adder", "code": "def adder(input): return input"}]}
+            return {
+                "items": [
+                    {
+                        "id": "fn-1",
+                        "name": "adder",
+                        "code": "def adder(input): return input",
+                    }
+                ]
+            }
 
         def get(self, name):
             captured["function"] = name
             return {"id": "fn-1", "name": name}
 
         def create(self, request):
-            captured["request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "fn-1", "name": "adder"}
 
         def update(self, name, request):
             captured["function"] = name
-            captured["request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "fn-1", "name": name}
 
         def delete(self, name):
@@ -80,6 +93,7 @@ def _patch(monkeypatch, client):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_functions_list_dispatches_api(monkeypatch):
     client, captured = _make_client_and_captured()
@@ -269,7 +283,9 @@ def test_functions_create_applies_inline_permissions(monkeypatch):
             "permissions": {"grants": _GRANTS},
         }
     )
-    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["functions", "create", "--data", payload, "--pod", "pod-1"]
+    )
 
     assert result.exit_code == 0, result.stdout
     # The create body carries no `permissions` (the endpoint has no such field)...
@@ -285,7 +301,16 @@ def test_functions_update_applies_inline_permissions(monkeypatch):
 
     payload = json.dumps({"description": "Updated", "permissions": {"grants": _GRANTS}})
     result = runner.invoke(
-        app, ["functions", "update", "maybe_rewrite_lesson", "--data", payload, "--pod", "pod-1"]
+        app,
+        [
+            "functions",
+            "update",
+            "maybe_rewrite_lesson",
+            "--data",
+            payload,
+            "--pod",
+            "pod-1",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -300,7 +325,9 @@ def test_functions_create_without_permissions_leaves_grants_alone(monkeypatch):
     _patch(monkeypatch, client)
 
     payload = json.dumps({"name": "plain", "code": "def plain(i): return i"})
-    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["functions", "create", "--data", payload, "--pod", "pod-1"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert "permissions" not in captured
@@ -311,7 +338,9 @@ def test_functions_create_warns_on_an_unrecognized_field(monkeypatch):
     _patch(monkeypatch, client)
 
     payload = json.dumps({"name": "plain", "code": "x", "descriptoin": "typo"})
-    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["functions", "create", "--data", payload, "--pod", "pod-1"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "descriptoin" in result.output

@@ -22,7 +22,11 @@ from app.modules.workflow.domain.nodes import (
     WaitUntilNode,
     WaitUntilNodeConfig,
 )
-from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus, StepStatus
+from app.modules.workflow.domain.run import (
+    WorkflowRunEntity,
+    WorkflowRunStatus,
+    StepStatus,
+)
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.stepper import RunStepper
 
@@ -155,9 +159,9 @@ async def test_form_resolves_schema_expr_against_context():
     ]
     flow = _flow(nodes, [_edge(1, "src", "intake"), _edge(2, "intake", "end")])
     run = _run(flow)
-    result = await _stepper(
-        {"fn": {"labels": ["a", "b"], "draft": "hello"}}
-    ).advance(run, flow)
+    result = await _stepper({"fn": {"labels": ["a", "b"], "draft": "hello"}}).advance(
+        run, flow
+    )
 
     assert run.status == WorkflowRunStatus.WAITING
     schema = result.wait.payload["input_schema"]

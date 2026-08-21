@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 # colleagues instead of between dev and prod. These must say who they are.
 _AMBIGUOUS_ENVIRONMENTS = frozenset({"local", "testing"})
 
+
 def build_provider(name: str | None = None):
     """Construct the configured sandbox provider.
 

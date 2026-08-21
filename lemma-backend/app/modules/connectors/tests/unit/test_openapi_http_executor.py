@@ -58,7 +58,12 @@ async def test_get_path_substitution_and_array_query(monkeypatch):
         "response": {"binary": False},
         "default_headers": {"User-Agent": "lemma"},
     }
-    result = await _run(monkeypatch, hr, {"owner": "me", "repo": "demo", "labels": ["bug", "p1"]}, handler)
+    result = await _run(
+        monkeypatch,
+        hr,
+        {"owner": "me", "repo": "demo", "labels": ["bug", "p1"]},
+        handler,
+    )
     assert result == {"ok": True}
     assert seen["url"] == "https://api.github.com/repos/me/demo/issues?labels=bug%2Cp1"
     assert seen["auth"] == "Bearer tok123"
@@ -83,11 +88,19 @@ async def test_post_json_body(monkeypatch):
         "path_params": ["owner", "repo"],
         "query_params": [],
         "header_params": [],
-        "request_body": {"content_type": "application/json", "field": "body", "binary_fields": [], "form_fields": []},
+        "request_body": {
+            "content_type": "application/json",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": [],
+        },
         "response": {"binary": False},
     }
     result = await _run(
-        monkeypatch, hr, {"owner": "me", "repo": "demo", "body": {"title": "hi"}}, handler
+        monkeypatch,
+        hr,
+        {"owner": "me", "repo": "demo", "body": {"title": "hi"}},
+        handler,
     )
     assert result == {"number": 7}
     assert seen["method"] == "POST"
@@ -120,7 +133,12 @@ async def test_multipart_upload_from_base64(monkeypatch):
         },
         "response": {"binary": False},
     }
-    payload = {"body": {"file": {"base64": base64.b64encode(b"hello-bytes").decode()}, "name": "a.txt"}}
+    payload = {
+        "body": {
+            "file": {"base64": base64.b64encode(b"hello-bytes").decode()},
+            "name": "a.txt",
+        }
+    }
     result = await _run(monkeypatch, hr, payload, handler)
     assert result == {"uploaded": True}
     assert seen["content_type"].startswith("multipart/form-data")
@@ -145,7 +163,12 @@ async def test_octet_stream_single_body(monkeypatch):
         "path_params": [],
         "query_params": [],
         "header_params": [],
-        "request_body": {"content_type": "application/octet-stream", "field": "body", "binary_fields": ["body"], "form_fields": []},
+        "request_body": {
+            "content_type": "application/octet-stream",
+            "field": "body",
+            "binary_fields": ["body"],
+            "form_fields": [],
+        },
         "response": {"binary": False},
     }
     payload = {"body": {"base64": base64.b64encode(b"\x00\x01\x02rawblob").decode()}}
@@ -160,7 +183,10 @@ async def test_binary_response_returns_binary_content_result(monkeypatch):
         return httpx.Response(
             200,
             content=b"tarball-bytes",
-            headers={"content-type": "application/gzip", "content-disposition": 'attachment; filename="out.tgz"'},
+            headers={
+                "content-type": "application/gzip",
+                "content-disposition": 'attachment; filename="out.tgz"',
+            },
         )
 
     hr = {
@@ -295,11 +321,15 @@ async def test_raw_mode_and_ssrf_guard(monkeypatch):
         return httpx.Response(200, json={"path": str(request.url.path)})
 
     hr = {"mode": "raw", "server_url": "https://api.github.com"}
-    result = await _run(monkeypatch, hr, {"method": "GET", "path": "/repos/o/r"}, handler)
+    result = await _run(
+        monkeypatch, hr, {"method": "GET", "path": "/repos/o/r"}, handler
+    )
     assert result == {"path": "/repos/o/r"}
 
     with pytest.raises(OpenApiHttpExecutionError, match="absolute path"):
-        await _run(monkeypatch, hr, {"method": "GET", "path": "https://evil.com/x"}, handler)
+        await _run(
+            monkeypatch, hr, {"method": "GET", "path": "https://evil.com/x"}, handler
+        )
 
     with pytest.raises(OpenApiHttpExecutionError, match="absolute path"):
         await _run(monkeypatch, hr, {"method": "GET", "path": "//evil.com/x"}, handler)

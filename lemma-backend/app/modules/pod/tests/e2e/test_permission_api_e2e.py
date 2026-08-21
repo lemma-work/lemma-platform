@@ -133,9 +133,7 @@ async def test_resource_access_api_manages_role_and_member_grants_e2e(
     role_list = await authenticated_client.get(f"/pods/{pod_id}/roles")
     assert role_list.status_code == status.HTTP_200_OK, role_list.text
     custom_role = next(
-        role
-        for role in role_list.json()["items"]
-        if role["name"] == ctx["custom_role"]
+        role for role in role_list.json()["items"] if role["name"] == ctx["custom_role"]
     )
 
     agent_name = f"restricted_share_agent_{uuid4().hex[:8]}"
@@ -180,9 +178,10 @@ async def test_resource_access_api_manages_role_and_member_grants_e2e(
             ("agent.execute", "agent.read"),
         ),
     }
-    assert next(grant for grant in grants if grant["grantee_type"] == "ROLE")[
-        "role_name"
-    ] == ctx["custom_role"]
+    assert (
+        next(grant for grant in grants if grant["grantee_type"] == "ROLE")["role_name"]
+        == ctx["custom_role"]
+    )
     member_access = next(
         grant for grant in grants if grant["grantee_type"] == "POD_MEMBER"
     )
@@ -380,7 +379,7 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                     "resource_type": "connector",
                     "resource_name": connector_id,
                     "permission_ids": ["connector.use"],
-                }
+                },
             ]
         },
     )
@@ -420,7 +419,7 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                     "resource_type": "connector",
                     "resource_name": connector_id,
                     "permission_ids": ["connector.use"],
-                }
+                },
             ]
         },
     )
@@ -816,10 +815,10 @@ async def test_restricted_workload_resources_appear_in_lists_after_role_grant_e2
         f"/pods/{pod_id}/agents",
         headers=viewer_headers,
     )
-    assert agent_list_before.status_code == status.HTTP_200_OK, (
-        agent_list_before.text
-    )
-    assert agent_name not in {item["name"] for item in agent_list_before.json()["items"]}
+    assert agent_list_before.status_code == status.HTTP_200_OK, agent_list_before.text
+    assert agent_name not in {
+        item["name"] for item in agent_list_before.json()["items"]
+    }
 
     function_list_before = await async_client.get(
         f"/pods/{pod_id}/functions",
@@ -997,7 +996,9 @@ async def test_workload_create_permissions_do_not_imply_update_or_delete_e2e(
             "description": "Create-only role can create functions.",
         },
     )
-    assert created_function.status_code == status.HTTP_201_CREATED, created_function.text
+    assert created_function.status_code == status.HTTP_201_CREATED, (
+        created_function.text
+    )
     created_workflow = await async_client.post(
         f"/pods/{pod_id}/workflows",
         headers=creator_headers,
@@ -1097,7 +1098,9 @@ async def test_grant_unknown_resource_names_report_every_missing_name_e2e(
     authenticated_client,
     fixed_test_org,
 ):
-    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Unknown Names Pod")
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Unknown Names Pod"
+    )
 
     agent_response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
@@ -1235,12 +1238,16 @@ async def test_agent_delete_removes_grants_in_both_directions_e2e(
     from uuid import UUID as _UUID
 
     rows = (
-        await db_session.execute(
-            sa_select(ResourcePermissionGrantModel).where(
-                ResourcePermissionGrantModel.pod_id == _UUID(pod_id),
+        (
+            await db_session.execute(
+                sa_select(ResourcePermissionGrantModel).where(
+                    ResourcePermissionGrantModel.pod_id == _UUID(pod_id),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     leftover = [
         row
         for row in rows
@@ -1325,7 +1332,9 @@ async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
     functions could not rewire the ones it had just built, and the denial named
     `agent.delete` at someone who was only editing. Deleting is still gated.
     """
-    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Editor Rewire Pod")
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Editor Rewire Pod"
+    )
 
     agent_response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",

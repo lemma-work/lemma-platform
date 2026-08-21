@@ -118,9 +118,7 @@ class PublishUseCases:
             raise BundleJobExpiredError()
         return state
 
-    async def _authorize(
-        self, *, pod_id: UUID, user_id: UUID, action: str
-    ) -> None:
+    async def _authorize(self, *, pod_id: UUID, user_id: UUID, action: str) -> None:
         async with uow_scope(self._uow_factory) as uow:
             ctx = await AuthorizationDataService(uow.session).build_user_context(
                 user_id=user_id, pod_id=pod_id

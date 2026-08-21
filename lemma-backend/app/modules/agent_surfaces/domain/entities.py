@@ -88,7 +88,6 @@ class SurfacePlatform(StrEnum):
         }
 
 
-
 class ExternalSurfaceUserEntity(Entity):
     platform: str
     tenant_id: str | None = None
@@ -231,8 +230,8 @@ class AgentSurfaceEntity(AggregateRoot):
     external_channel_id: str | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
-    schedule_id: UUID | None = None       # Gmail/Outlook: linked email schedule
-    surface_identity_email: str | None = None    # Gmail/Outlook: for self-email filtering
+    schedule_id: UUID | None = None  # Gmail/Outlook: linked email schedule
+    surface_identity_email: str | None = None  # Gmail/Outlook: for self-email filtering
     webhook_secret: str | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
@@ -336,7 +335,9 @@ class AgentSurfaceEntity(AggregateRoot):
         account_id: UUID | None,
     ) -> None:
         if mode is SurfaceMode.EMAIL and not surface_type.is_email:
-            raise AgentSurfaceValidationError("EMAIL mode is only supported for Gmail and Outlook")
+            raise AgentSurfaceValidationError(
+                "EMAIL mode is only supported for Gmail and Outlook"
+            )
         # Resend is an email surface delivered over a native webhook (system
         # creds), not a Composio trigger like Gmail/Outlook.
         if (
@@ -347,16 +348,23 @@ class AgentSurfaceEntity(AggregateRoot):
             raise AgentSurfaceValidationError(
                 "EMAIL surfaces require COMPOSIO_TRIGGER event_mode"
             )
-        if mode is not SurfaceMode.EMAIL and event_mode is SurfaceEventMode.COMPOSIO_TRIGGER:
+        if (
+            mode is not SurfaceMode.EMAIL
+            and event_mode is SurfaceEventMode.COMPOSIO_TRIGGER
+        ):
             raise AgentSurfaceValidationError(
                 "COMPOSIO_TRIGGER event_mode is only supported for EMAIL surfaces"
             )
-        if surface_type in {
-            SurfacePlatform.SLACK,
-            SurfacePlatform.TEAMS,
-            SurfacePlatform.GMAIL,
-            SurfacePlatform.OUTLOOK,
-        } and account_id is None:
+        if (
+            surface_type
+            in {
+                SurfacePlatform.SLACK,
+                SurfacePlatform.TEAMS,
+                SurfacePlatform.GMAIL,
+                SurfacePlatform.OUTLOOK,
+            }
+            and account_id is None
+        ):
             raise AgentSurfaceValidationError(
                 f"{surface_type.value} surfaces require account_id"
             )
@@ -400,7 +408,11 @@ class AgentSurfaceEntity(AggregateRoot):
         external_channel_id: str | None = None,
         surface_identity_id: str | None = None,
     ) -> None:
-        next_mode = self._resolve_mode(self.surface_type, mode) if mode is not None else self.mode
+        next_mode = (
+            self._resolve_mode(self.surface_type, mode)
+            if mode is not None
+            else self.mode
+        )
         next_event_mode = (
             self._default_event_mode(self.surface_type, event_mode)
             if event_mode is not None
@@ -431,9 +443,7 @@ class AgentSurfaceEntity(AggregateRoot):
 
     def toggle_active(self, is_active: bool) -> None:
         self.status = (
-            AgentSurfaceStatus.ACTIVE
-            if is_active
-            else AgentSurfaceStatus.INACTIVE
+            AgentSurfaceStatus.ACTIVE if is_active else AgentSurfaceStatus.INACTIVE
         )
         self.updated_at = datetime.now(timezone.utc)
 
@@ -496,8 +506,9 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
-        if self.surface_type is not SurfacePlatform.TELEGRAM and not self.matches_channel(
-            event.external_channel_id
+        if (
+            self.surface_type is not SurfacePlatform.TELEGRAM
+            and not self.matches_channel(event.external_channel_id)
         ):
             return False
         # Channels and groups (Slack channels, Teams channels, Telegram groups):

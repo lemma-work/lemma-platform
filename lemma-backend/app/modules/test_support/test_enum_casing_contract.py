@@ -59,7 +59,9 @@ def test_internal_domain_enums_use_uppercase_values():
     for enum_cls in _INTERNAL_CAPS_ENUMS:
         for member in enum_cls:
             if member.value != member.value.upper():
-                offenders.append(f"{enum_cls.__name__}.{member.name} = {member.value!r}")
+                offenders.append(
+                    f"{enum_cls.__name__}.{member.name} = {member.value!r}"
+                )
     assert not offenders, (
         "Internal-domain enums must use UPPERCASE values. Lowercase offenders: "
         + ", ".join(offenders)
@@ -71,9 +73,10 @@ def test_wire_contract_enums_stay_lowercase():
     for enum_cls in _LOWERCASE_ALLOW_LIST:
         for member in enum_cls:
             if member.value != member.value.lower():
-                offenders.append(f"{enum_cls.__name__}.{member.name} = {member.value!r}")
+                offenders.append(
+                    f"{enum_cls.__name__}.{member.name} = {member.value!r}"
+                )
     assert not offenders, (
         "These enums are external/wire contracts and must stay lowercase "
-        "(changing them breaks integrations, not just style): "
-        + ", ".join(offenders)
+        "(changing them breaks integrations, not just style): " + ", ".join(offenders)
     )

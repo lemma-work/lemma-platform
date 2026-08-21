@@ -43,10 +43,7 @@ def test_reliable_subscriber_reads_new_and_reclaims_abandoned_messages():
     streams = [subscriber.stream_sub for subscriber in router.subscribers]
 
     assert len(streams) == 2
-    assert {
-        (stream.consumer, stream.min_idle_time)
-        for stream in streams
-    } == {
+    assert {(stream.consumer, stream.min_idle_time) for stream in streams} == {
         ("pod-provisioning-events-consumer", None),
         ("pod-provisioning-events-consumer-reclaimer", 60_000),
     }

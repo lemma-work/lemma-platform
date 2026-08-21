@@ -37,7 +37,12 @@ def _contract() -> dict:
     """
     for parent in Path(__file__).resolve().parents:
         candidate = (
-            parent / "desktop" / "agent-host" / "tests" / "fixtures" / "wire_contract.json"
+            parent
+            / "desktop"
+            / "agent-host"
+            / "tests"
+            / "fixtures"
+            / "wire_contract.json"
         )
         if candidate.exists():
             return json.loads(candidate.read_text())

@@ -68,7 +68,9 @@ class UsageRecord(UUIDAuditBase):
         Index("ix_usage_user_time", "user_id", "occurred_at"),
         Index("ix_usage_agent_time", "agent_id", "occurred_at"),
         Index("ix_usage_agent_run_time", "agent_run_id", "occurred_at"),
-        Index("ix_usage_org_profile_time", "organization_id", "profile_id", "occurred_at"),
+        Index(
+            "ix_usage_org_profile_time", "organization_id", "profile_id", "occurred_at"
+        ),
         Index(
             "ix_usage_org_profile_scope_time",
             "organization_id",
@@ -159,8 +161,12 @@ class UsageLimitCounter(UUIDAuditBase):
     organization_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     user_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     window_kind: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     used_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     reserved_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 

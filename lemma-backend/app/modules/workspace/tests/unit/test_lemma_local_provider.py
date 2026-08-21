@@ -49,7 +49,7 @@ def _bridge(tmp_path: Path, script: str) -> Path:
     return path
 
 
-_RECORDING_BRIDGE = '''
+_RECORDING_BRIDGE = """
 import hashlib, json, os, sys
 state_path = os.environ["BRIDGE_STATE"]
 state = json.load(open(state_path)) if os.path.exists(state_path) else {"sandboxes": {}, "calls": []}
@@ -114,7 +114,7 @@ if op == "sandbox.list":
         for k, v in state["sandboxes"].items()
     ]})
 fail("unsupported", "unknown operation: " + op, retryable=False)
-'''
+"""
 
 
 @pytest.fixture
@@ -156,8 +156,7 @@ async def test_the_guest_sandbox_is_its_own_storage(
     the sandbox would take the user's files with it."""
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
     with pytest.raises(ProviderRejected):
         await provider.ensure_volume(
@@ -186,9 +185,7 @@ async def test_the_guest_id_is_derived_and_stable(
     instance = await provider.create(_spec(sandbox_id))
     assert instance.provider_id == f"w-{sandbox_id.hex}"
 
-    functions = await provider.create(
-        _spec(sandbox_id, kind=SandboxKind.FUNCTION)
-    )
+    functions = await provider.create(_spec(sandbox_id, kind=SandboxKind.FUNCTION))
     # A pod id and a user id may coincide, so the kinds must not collide.
     assert functions.provider_id == f"f-{sandbox_id.hex}"
 
@@ -292,7 +289,7 @@ async def test_a_retryable_bridge_failure_is_ambiguous_not_rejected(
     that it definitively failed."""
     bridge = _bridge(
         tmp_path,
-        'import json,sys; sys.stdin.read();'
+        "import json,sys; sys.stdin.read();"
         ' print(json.dumps({"ok": False, "error": {"code": "busy",'
         ' "message": "guest is starting", "retryable": True}})); sys.exit(1)',
     )
@@ -309,7 +306,7 @@ async def test_a_definitive_bridge_failure_is_rejected(
 ) -> None:
     bridge = _bridge(
         tmp_path,
-        'import json,sys; sys.stdin.read();'
+        "import json,sys; sys.stdin.read();"
         ' print(json.dumps({"ok": False, "error": {"code": "bad_image",'
         ' "message": "unknown image", "retryable": False}})); sys.exit(1)',
     )
@@ -326,7 +323,7 @@ async def test_garbage_from_the_bridge_is_surfaced_not_swallowed(
 ) -> None:
     bridge = _bridge(
         tmp_path,
-        'import sys; sys.stdin.read(); '
+        "import sys; sys.stdin.read(); "
         'sys.stderr.write("guest panicked\\n"); print("not json"); sys.exit(1)',
     )
     provider = LemmaLocalSandboxProvider(

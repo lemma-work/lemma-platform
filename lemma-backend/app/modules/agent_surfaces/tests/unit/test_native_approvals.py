@@ -30,6 +30,7 @@ def _plan(*, allow_session: bool = False):
 
 # --- renderer -------------------------------------------------------------
 
+
 def test_build_approval_render_plan_defaults_to_approve_deny():
     plan = _plan()
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
@@ -48,6 +49,7 @@ def test_build_approval_render_plan_session_button_gated():
 
 
 # --- Slack ----------------------------------------------------------------
+
 
 def test_slack_approval_blocks_and_parse_round_trip():
     from app.modules.agent_surfaces.platforms.slack.service import _approval_blocks
@@ -88,6 +90,7 @@ def test_slack_approval_blocks_and_parse_round_trip():
 
 # --- Teams ----------------------------------------------------------------
 
+
 def test_teams_approval_card_and_parse_round_trip():
     from app.modules.agent_surfaces.platforms.teams.adapter import _teams_approval_card
     from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
@@ -112,6 +115,7 @@ def test_teams_approval_card_and_parse_round_trip():
 
 
 # --- WhatsApp -------------------------------------------------------------
+
 
 def test_whatsapp_approval_buttons_and_parse_round_trip():
     from app.modules.agent_surfaces.platforms.whatsapp.service import (
@@ -161,6 +165,7 @@ def test_whatsapp_approval_buttons_and_parse_round_trip():
 
 
 # --- Telegram (Redis token store mocked) ----------------------------------
+
 
 @pytest.mark.asyncio
 async def test_telegram_approval_token_parse():

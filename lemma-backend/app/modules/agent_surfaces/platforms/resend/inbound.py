@@ -63,7 +63,9 @@ def _header_value(value: Any) -> str:
         except ValueError:
             return text
         if isinstance(decoded, list):
-            return " ".join(_header_value(item) for item in decoded if _header_value(item))
+            return " ".join(
+                _header_value(item) for item in decoded if _header_value(item)
+            )
     return text
 
 

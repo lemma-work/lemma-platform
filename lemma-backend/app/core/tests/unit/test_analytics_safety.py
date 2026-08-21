@@ -97,7 +97,11 @@ def test_unknown_event_is_dropped_and_raises_in_strict_mode(sink: MemorySink) ->
 
     configure(sink, deployment="test", strict=True)
     with pytest.raises(UnknownAnalyticEventError):
-        emit("pod.definitely_not_a_real_event", actor=AnalyticsActor.user(USER), pod_id=POD)
+        emit(
+            "pod.definitely_not_a_real_event",
+            actor=AnalyticsActor.user(USER),
+            pod_id=POD,
+        )
 
 
 def test_event_restricted_to_an_origin_rejects_every_other_origin(
@@ -280,7 +284,8 @@ def test_catalog_is_internally_consistent() -> None:
             failures.append(f"{name}: unknown group types {sorted(unknown)}")
         for prop in spec.properties:
             if any(
-                part in prop for part in ("name", "email", "prompt", "url", "path", "text")
+                part in prop
+                for part in ("name", "email", "prompt", "url", "path", "text")
             ):
                 failures.append(f"{name}: property {prop!r} names a PII-shaped field")
     assert not failures, "\n" + "\n".join(failures)

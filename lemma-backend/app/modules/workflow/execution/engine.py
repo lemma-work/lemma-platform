@@ -203,9 +203,7 @@ class WorkflowEngine:
                 )
                 if existing is not None:
                     return existing
-            raise WorkflowConflictError(
-                "Workflow run identity already exists"
-            ) from exc
+            raise WorkflowConflictError("Workflow run identity already exists") from exc
 
         result = await self._stepper(ctx).advance(run, flow)
 
@@ -596,4 +594,3 @@ class WorkflowEngine:
             scheduled_at=request.scheduled_at,
             payload=payload,
         )
-

@@ -7,7 +7,9 @@ from uuid import uuid4
 import pytest
 
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.infrastructure.reindex_queue import RedisDatastoreReindexQueue
+from app.modules.datastore.infrastructure.reindex_queue import (
+    RedisDatastoreReindexQueue,
+)
 
 
 @pytest.mark.asyncio

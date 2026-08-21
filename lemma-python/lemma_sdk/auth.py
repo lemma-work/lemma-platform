@@ -40,7 +40,9 @@ def fetch_cli_auth_info(
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        raise ValueError(f"Unable to load CLI auth info from {base_url}: {exc}") from exc
+        raise ValueError(
+            f"Unable to load CLI auth info from {base_url}: {exc}"
+        ) from exc
     return response.json()
 
 
@@ -62,13 +64,19 @@ def refresh_cli_session(
             headers={"Accept": "application/json"},
         )
     except requests.RequestException as exc:
-        raise ValueError(f"Unable to reach {base_url} for session refresh: {exc}") from exc
+        raise ValueError(
+            f"Unable to reach {base_url} for session refresh: {exc}"
+        ) from exc
     if response.status_code >= 400:
         try:
             payload = response.json()
         except ValueError:
             payload = {"message": response.text.strip() or response.reason}
-        message = payload.get("message") or payload.get("detail") or "Unable to refresh session"
+        message = (
+            payload.get("message")
+            or payload.get("detail")
+            or "Unable to refresh session"
+        )
         raise ValueError(message)
     return response.json()
 
@@ -134,7 +142,9 @@ class _LoopbackCallbackServer:
                 self.wfile.write(b'{"ok":true}')
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.callback_url = f"http://127.0.0.1:{self._server.server_address[1]}/callback"
+        self.callback_url = (
+            f"http://127.0.0.1:{self._server.server_address[1]}/callback"
+        )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def __enter__(self) -> "_LoopbackCallbackServer":
@@ -171,21 +181,20 @@ def run_login_flow(
     import webbrowser
     from urllib.parse import urlencode
 
-    info = fetch_cli_auth_info(base_url=base_url, verify_ssl=verify_ssl, timeout=timeout)
+    info = fetch_cli_auth_info(
+        base_url=base_url, verify_ssl=verify_ssl, timeout=timeout
+    )
     resolved_auth_url = (auth_url or info.get("auth_frontend_url") or "").rstrip("/")
     if not resolved_auth_url:
         raise ValueError("Auth frontend URL is not configured by the backend.")
 
     state = secrets.token_urlsafe(24)
     with _LoopbackCallbackServer() as callback_server:
-        login_url = (
-            f"{resolved_auth_url}/cli/login?"
-            + urlencode(
-                {
-                    "callback": callback_server.callback_url,
-                    "state": state,
-                }
-            )
+        login_url = f"{resolved_auth_url}/cli/login?" + urlencode(
+            {
+                "callback": callback_server.callback_url,
+                "state": state,
+            }
         )
 
         browser_opened = webbrowser.open(login_url)

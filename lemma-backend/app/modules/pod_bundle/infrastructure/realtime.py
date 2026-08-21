@@ -36,7 +36,7 @@ async def publish_bundle_event(
         await service.publish(bundle_job_channel(job_id), payload)
     except Exception:
         logger.debug(
-            'pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic',
+            "pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic",
             job_id=job_id,
         )
 

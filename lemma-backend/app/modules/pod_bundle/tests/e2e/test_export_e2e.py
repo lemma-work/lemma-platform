@@ -46,7 +46,9 @@ async def _wait_for_export_ready(
     )
 
 
-async def _create_table_with_rows(authenticated_client, pod_id: str, table_name: str) -> None:
+async def _create_table_with_rows(
+    authenticated_client, pod_id: str, table_name: str
+) -> None:
     create = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -202,7 +204,9 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
-async def _create_app_with_source(authenticated_client, pod_id: str, app_name: str) -> None:
+async def _create_app_with_source(
+    authenticated_client, pod_id: str, app_name: str
+) -> None:
     """Create an app and upload a (static) source+dist bundle, so the export path
     has real stored source bytes to download."""
     create = await authenticated_client.post(
@@ -215,8 +219,16 @@ async def _create_app_with_source(authenticated_client, pod_id: str, app_name: s
     upload = await authenticated_client.post(
         f"/pods/{pod_id}/apps/{app_name}/bundle",
         files={
-            "source_archive": ("source.zip", _zip_bytes({"index.html": html}), "application/zip"),
-            "dist_archive": ("dist.zip", _zip_bytes({"index.html": html}), "application/zip"),
+            "source_archive": (
+                "source.zip",
+                _zip_bytes({"index.html": html}),
+                "application/zip",
+            ),
+            "dist_archive": (
+                "dist.zip",
+                _zip_bytes({"index.html": html}),
+                "application/zip",
+            ),
         },
     )
     assert upload.status_code == status.HTTP_200_OK, upload.text
@@ -257,7 +269,9 @@ async def test_export_includes_app_source_and_tokenizes_slug(
     assert pod["variables"][var_name]["type"] == "app_slug", pod["variables"]
 
 
-async def test_export_status_expired_returns_410(authenticated_client, test_pod, worker):
+async def test_export_status_expired_returns_410(
+    authenticated_client, test_pod, worker
+):
     pod_id = test_pod["id"]
     missing_export_id = str(uuid4())
     res = await authenticated_client.get(
@@ -267,7 +281,9 @@ async def test_export_status_expired_returns_410(authenticated_client, test_pod,
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 
 
-async def test_export_without_data_omits_data_csv(authenticated_client, test_pod, worker, tmp_path):
+async def test_export_without_data_omits_data_csv(
+    authenticated_client, test_pod, worker, tmp_path
+):
     pod_id = test_pod["id"]
     table_name = f"nodata_{uuid4().hex[:8]}"
     await _create_table_with_rows(authenticated_client, pod_id, table_name)

@@ -19,13 +19,17 @@ class WidgetAssetRepository:
     ) -> list[dict]:
         """The display_resource tool_args dict(s) for a (conversation, tool_call)."""
         rows = (
-            await self._session.execute(
-                select(MessageModel.tool_args).where(
-                    MessageModel.conversation_id == conversation_id,
-                    MessageModel.tool_call_id == tool_call_id,
+            (
+                await self._session.execute(
+                    select(MessageModel.tool_args).where(
+                        MessageModel.conversation_id == conversation_id,
+                        MessageModel.tool_call_id == tool_call_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return [row for row in rows if isinstance(row, dict)]
 
     async def get_conversation_pod_id(self, conversation_id: UUID) -> UUID | None:

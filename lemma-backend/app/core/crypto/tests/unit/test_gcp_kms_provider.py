@@ -36,11 +36,13 @@ class _FakeKms:
         self.decrypt_calls += 1
         ct = request["ciphertext"]
         assert ct.startswith(b"WRAP:")
-        return types.SimpleNamespace(plaintext=ct[len(b"WRAP:"):])
+        return types.SimpleNamespace(plaintext=ct[len(b"WRAP:") :])
 
     def get_crypto_key(self, name):
         assert name == KEY_NAME
-        return types.SimpleNamespace(primary=types.SimpleNamespace(name=PRIMARY_VERSION))
+        return types.SimpleNamespace(
+            primary=types.SimpleNamespace(name=PRIMARY_VERSION)
+        )
 
 
 def _provider() -> tuple[GcpKmsKeyProvider, _FakeKms]:

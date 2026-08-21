@@ -514,7 +514,7 @@ async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
 async def test_a_chat_only_agent_falls_back_to_email_it_does_not_yet_have(
     monkeypatch,
 ):
-    """"Email always works" was not true when the agent had no mailbox.
+    """ "Email always works" was not true when the agent had no mailbox.
 
     An agent whose only surface is a Slack bot the recipient never wrote to
     could reach nobody, and reported NEVER_INTERACTED — which reads as the
@@ -694,7 +694,9 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     Inbound routing still honours a user's default surface — that question is
     genuinely "which of our surfaces did this person mean to talk to".
     """
-    service = _notification_service(surfaces=(_surface_for(None, SurfacePlatform.RESEND),))
+    service = _notification_service(
+        surfaces=(_surface_for(None, SurfacePlatform.RESEND),)
+    )
 
     # Autospecced against the Protocol: reading a method it no longer declares
     # raises, so this is what proves the lookup is gone rather than just unused.

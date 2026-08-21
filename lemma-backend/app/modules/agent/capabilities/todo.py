@@ -49,9 +49,7 @@ class WriteTodosRequest(BaseModel):
 # or "[x]"/"[X]"/"[*]" (done). The remainder is the task text.
 _CHECKBOX_RE = re.compile(r"^\s*(?:[-*]\s+)?\[(?P<mark>[ xX*])\]\s*(?P<text>.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+")
-_DUPLICATE_CHECKBOX_PREFIX_RE = re.compile(
-    r"^\s*(?:(?:[-*]\s*)?\[[ xX*]\]\s*){2,}"
-)
+_DUPLICATE_CHECKBOX_PREFIX_RE = re.compile(r"^\s*(?:(?:[-*]\s*)?\[[ xX*]\]\s*){2,}")
 _PLAN_XML_TAG_RE = re.compile(
     r"</?\s*(?:todos?|item)\b[^>]*>"
     r"|</\s*td\s*>(?=\s*(?:<\s*(?:item|/?todos?)\b|$))",
@@ -89,7 +87,7 @@ def _remove_duplicate_checkbox_prefix(line: str) -> str:
     marks = re.findall(r"\[([ xX*])\]", prefix.group(0))
     if not marks:
         return line
-    return f"[{marks[-1]}] {line[prefix.end():].lstrip()}"
+    return f"[{marks[-1]}] {line[prefix.end() :].lstrip()}"
 
 
 def _text_status(text: str, *, infer_status: bool) -> tuple[str, bool | None]:
@@ -101,11 +99,7 @@ def _text_status(text: str, *, infer_status: bool) -> tuple[str, bool | None]:
     # Accept normal prose only when it came from a flattened plan. For untagged
     # calls, require an explicit separator ("— done") or an all-caps status label
     # such as "RESEARCH DONE", both shapes seen from XML-oriented tool parsers.
-    if (
-        not infer_status
-        and match.group("separator") is None
-        and text != text.upper()
-    ):
+    if not infer_status and match.group("separator") is None and text != text.upper():
         return text, None
     status = match.group("status").lower().replace("_", " ").replace("-", " ")
     return match.group("text").strip(), status in {"done", "complete", "completed"}
@@ -203,7 +197,6 @@ def _normalize_stored(stored: list[JsonObject]) -> list[JsonObject]:
     return todos
 
 
-
 def _close_open_match(content: str, todos: list[JsonObject]) -> JsonObject | None:
     """The open task a reworded check-off almost certainly meant.
 
@@ -213,7 +206,9 @@ def _close_open_match(content: str, todos: list[JsonObject]) -> JsonObject | Non
     list quietly grew. Matched conservatively: only when one open task is close
     enough that nothing else competes, so "add a task I forgot" still adds.
     """
-    open_by_key = {_norm(str(item["content"])): item for item in todos if not item.get("done")}
+    open_by_key = {
+        _norm(str(item["content"])): item for item in todos if not item.get("done")
+    }
     if not open_by_key:
         return None
     matches = difflib.get_close_matches(
@@ -320,8 +315,10 @@ def build_todo_toolset(
         # A finished task list is historical. The first unchecked item after all
         # stored items are complete starts a fresh plan instead of appending new
         # work to an ever-growing conversation-wide archive.
-        if todos and all(bool(item.get("done")) for item in todos) and any(
-            not done for _, done in parsed
+        if (
+            todos
+            and all(bool(item.get("done")) for item in todos)
+            and any(not done for _, done in parsed)
         ):
             todos = []
 

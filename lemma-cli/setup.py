@@ -22,6 +22,7 @@ and nothing outside a tagged run ever exercised the packaging. Now a bare
 loudly rather than publishing a package that imports nothing (which is exactly
 how lemma-terminal 0.4.1 shipped without skills).
 """
+
 from __future__ import annotations
 
 import shutil

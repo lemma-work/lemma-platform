@@ -42,9 +42,7 @@ def _not_reserved():
     ``autoescape`` treats the ``_`` in the prefix as a literal, not a LIKE
     wildcard, so only real ``reserved_``-prefixed names are filtered.
     """
-    return ~DatastoreTable.table_name.startswith(
-        RESERVED_TABLE_PREFIX, autoescape=True
-    )
+    return ~DatastoreTable.table_name.startswith(RESERVED_TABLE_PREFIX, autoescape=True)
 
 
 class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepositoryPort):
@@ -155,8 +153,7 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
                 )
             )
             return {
-                table.table_name: table.to_entity()
-                for table in result.scalars().all()
+                table.table_name: table.to_entity() for table in result.scalars().all()
             }
 
         actions = _table_actions_expr(ctx)
@@ -232,7 +229,9 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
         if len(rows) > limit:
             next_cursor = str(rows[limit - 1][0].id)
             rows = rows[:limit]
-        return [self._to_summary(table, allowed) for table, allowed in rows], next_cursor
+        return [
+            self._to_summary(table, allowed) for table, allowed in rows
+        ], next_cursor
 
     async def list_visible_by_datastore(
         self,

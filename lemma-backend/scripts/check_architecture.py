@@ -195,7 +195,9 @@ def _cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
         if len(component) > 1:
             components.append(tuple(sorted(component)))
 
-    for node in sorted(set(graph) | {item for values in graph.values() for item in values}):
+    for node in sorted(
+        set(graph) | {item for values in graph.values() for item in values}
+    ):
         if node not in indexes:
             visit(node)
     return sorted(components)
@@ -222,7 +224,9 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["forbidden_imports"], baseline.get("forbidden_imports", {})
     ).items():
         failures.append(f"forbidden import count grew: {name} ({before} -> {after})")
-    for cycle in _new_pairs(current["module_cycles"], baseline.get("module_cycles", [])):
+    for cycle in _new_pairs(
+        current["module_cycles"], baseline.get("module_cycles", [])
+    ):
         failures.append(f"new module cycle: {' -> '.join(cycle)}")
     for label, key in (
         ("oversized file", "oversized_files"),

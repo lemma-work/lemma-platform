@@ -22,13 +22,13 @@ _MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
 # protected), then bold/strikethrough before italic (so ``**`` is not mistaken
 # for two italics), then links.
 _TOKEN_RE = re.compile(
-    r"```[\s\S]*?```"            # fenced code block
-    r"|`[^`\n]+`"                # inline code
-    r"|\*\*[\s\S]+?\*\*"         # **bold**
-    r"|__[\s\S]+?__"             # __bold__
-    r"|~~[\s\S]+?~~"             # ~~strikethrough~~
-    r"|\*[^*\n]+?\*"             # *italic*
-    r"|_[^_\n]+?_"               # _italic_
+    r"```[\s\S]*?```"  # fenced code block
+    r"|`[^`\n]+`"  # inline code
+    r"|\*\*[\s\S]+?\*\*"  # **bold**
+    r"|__[\s\S]+?__"  # __bold__
+    r"|~~[\s\S]+?~~"  # ~~strikethrough~~
+    r"|\*[^*\n]+?\*"  # *italic*
+    r"|_[^_\n]+?_"  # _italic_
     r"|\[[^\]\n]+\]\([^)\n]+\)"  # [text](url)
 )
 

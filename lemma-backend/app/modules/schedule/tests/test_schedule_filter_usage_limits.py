@@ -57,7 +57,10 @@ class _NonCountingModel(Model):
 
 
 def test_model_without_token_counting_skips_the_precount() -> None:
-    assert filter_usage_limits_for(_NonCountingModel()).count_tokens_before_request is False
+    assert (
+        filter_usage_limits_for(_NonCountingModel()).count_tokens_before_request
+        is False
+    )
 
 
 def test_model_with_token_counting_keeps_the_precount() -> None:

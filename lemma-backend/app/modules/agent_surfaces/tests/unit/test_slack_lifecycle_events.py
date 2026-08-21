@@ -143,8 +143,7 @@ async def test_setup_prompt_needs_somebody_to_ask(monkeypatch):
 
     home = SlackHomeSurface(credentials={"access_token": "xoxb-test"})
     assert (
-        await home.send_channel_setup_prompt(channel_id="C_SALES", user_id="")
-        is False
+        await home.send_channel_setup_prompt(channel_id="C_SALES", user_id="") is False
     )
 
 
@@ -276,9 +275,7 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
         pod_name=None,
         dm_agent_name=None,
         channel_routes=[],
-        surface_choices=[
-            ("Sales pod", "00000000-0000-0000-0000-000000000001")
-        ],
+        surface_choices=[("Sales pod", "00000000-0000-0000-0000-000000000001")],
     )
     button = view["blocks"][2]["elements"][0]
     parsed = SlackMessageParser().parse_channel_setup(
@@ -437,7 +434,9 @@ async def test_choosing_the_pod_assistant_is_distinct_from_never_choosing():
     assert never_picked.chose_pod_assistant("U_A") is False
     assert never_picked.agent_for_user("U_A") is None
     # ...and the two "None" answers above mean different things.
-    assert picked_assistant.choice_for_user("U_A") != never_picked.choice_for_user("U_A")
+    assert picked_assistant.choice_for_user("U_A") != never_picked.choice_for_user(
+        "U_A"
+    )
 
 
 async def test_pod_assistant_dm_does_not_wear_the_default_agents_name():

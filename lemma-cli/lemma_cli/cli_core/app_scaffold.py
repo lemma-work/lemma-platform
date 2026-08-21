@@ -413,7 +413,7 @@ def resolve_local_sdk_path() -> Path | None:
         if package_json.exists():
             try:
                 name = json.loads(package_json.read_text(encoding="utf-8")).get("name")
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 name = None
             if name == "lemma-sdk":
                 return candidate
@@ -431,7 +431,7 @@ def _latest_published_lemma_sdk_version() -> str | None:
             text=True,
             timeout=20,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     if result.returncode != 0:
         return None
@@ -535,7 +535,9 @@ def _app_metadata_json(options: AppScaffoldOptions) -> str:
     return json.dumps(metadata, indent=2) + "\n"
 
 
-def _agents_md(options: AppScaffoldOptions, client_module: str = "src/lib/lemma-client.ts") -> str:
+def _agents_md(
+    options: AppScaffoldOptions, client_module: str = "src/lib/lemma-client.ts"
+) -> str:
     return f"""# {options.title}
 
 This is a Lemma app app generated from the Vite template.

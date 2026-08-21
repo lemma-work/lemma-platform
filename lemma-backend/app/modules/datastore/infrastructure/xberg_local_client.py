@@ -149,7 +149,9 @@ class XbergLocalClient:
         return _as_extraction_result(result, mime_type)
 
 
-def _as_extraction_result(result: Any, mime_type: str | None) -> KreuzbergExtractionResult:
+def _as_extraction_result(
+    result: Any, mime_type: str | None
+) -> KreuzbergExtractionResult:
     """Shape one xberg result the way the shared normalizer reads it.
 
     Separate from the call above so the transport stays legible: everything here

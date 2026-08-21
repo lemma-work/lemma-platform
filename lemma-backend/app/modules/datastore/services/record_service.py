@@ -121,12 +121,14 @@ class RecordService:
                     f"Value '{value}' is not allowed for column '{key}'. "
                     f"Allowed values: {allowed}"
                 )
-                error_details.append({
-                    "field": key,
-                    "reason": "enum",
-                    "value": value,
-                    "allowed_values": column.options,
-                })
+                error_details.append(
+                    {
+                        "field": key,
+                        "reason": "enum",
+                        "value": value,
+                        "allowed_values": column.options,
+                    }
+                )
 
         if errors:
             raise DatastoreValidationError(
@@ -153,11 +155,7 @@ class RecordService:
 
         for key, value in converted.items():
             column = ctx.get_column(key)
-            if (
-                column is None
-                or column.type != DatastoreDataType.USER
-                or value is None
-            ):
+            if column is None or column.type != DatastoreDataType.USER or value is None:
                 continue
 
             user_id = value if isinstance(value, UUID) else UUID(str(value))
@@ -182,7 +180,9 @@ class RecordService:
         validator = RecordValidator(ctx)
         sanitized_data = validator.strip_system_write_overrides(data)
 
-        is_valid, errors, error_details = validator.validate(sanitized_data, is_creation=True)
+        is_valid, errors, error_details = validator.validate(
+            sanitized_data, is_creation=True
+        )
         if not is_valid:
             raise DatastoreValidationError(
                 f"Invalid record data: {'; '.join(errors)}",
@@ -232,7 +232,8 @@ class RecordService:
     async def _ensure_listing_index(self, table) -> None:
         await self.record_repository.ensure_listing_index(
             TableContext.from_table_entity(
-                table, self.record_repository.schema_manager.get_schema_name(table.pod_id)
+                table,
+                self.record_repository.schema_manager.get_schema_name(table.pod_id),
             )
         )
 
@@ -268,9 +269,7 @@ class RecordService:
             # No registered table referenced (e.g. SELECT from a set-returning
             # function); fall back to a pod-level read check since there is no
             # per-table grant to authorize against.
-            await self._require_datastore_read(
-                user_id=user_id, pod_id=pod_id, ctx=ctx
-            )
+            await self._require_datastore_read(user_id=user_id, pod_id=pod_id, ctx=ctx)
 
         is_pod_admin = await resolve_query_row_scope(
             pod_id=pod_id,
@@ -422,7 +421,9 @@ class RecordService:
         ]
 
         for record in sanitized_records:
-            is_valid, errors, error_details = validator.validate(record, is_creation=True)
+            is_valid, errors, error_details = validator.validate(
+                record, is_creation=True
+            )
             if not is_valid:
                 raise DatastoreValidationError(
                     f"Invalid record data: {'; '.join(errors)}",

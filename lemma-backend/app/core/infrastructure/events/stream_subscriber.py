@@ -47,7 +47,7 @@ def _record_event_binding(handler, *, stream: str, group: str) -> None:
     """Capture the first parameter's annotation for the convention gate."""
     try:
         parameters = list(inspect.signature(handler).parameters.values())
-    except (TypeError, ValueError):  # pragma: no cover - not a plain function
+    except TypeError, ValueError:  # pragma: no cover - not a plain function
         return
     if not parameters:
         return
@@ -223,7 +223,7 @@ async def ensure_consumer_groups(
             created += 1
             if warn_on_create:
                 logger.debug(
-                    'infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic'
+                    "infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic"
                 )
             else:
                 logger.debug(
@@ -232,7 +232,7 @@ async def ensure_consumer_groups(
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
                 logger.debug(
-                    'infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic',
+                    "infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic",
                     error_type=type(exc).__name__,
                 )
     return created
@@ -258,12 +258,12 @@ async def ensure_named_groups(
             created += 1
             if warn_on_create:
                 logger.debug(
-                    'infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic'
+                    "infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic"
                 )
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
                 logger.debug(
-                    'infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic',
+                    "infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic",
                     error_type=type(exc).__name__,
                 )
     return created

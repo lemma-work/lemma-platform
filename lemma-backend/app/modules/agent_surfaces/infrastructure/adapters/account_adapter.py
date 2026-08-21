@@ -79,7 +79,9 @@ class SqlAlchemySurfaceAuthConfigAdapter:
     def __init__(self, uow: IUnitOfWork):
         self._uow = uow
 
-    async def get_auth_config(self, auth_config_id: UUID) -> SurfaceAuthConfigInfo | None:
+    async def get_auth_config(
+        self, auth_config_id: UUID
+    ) -> SurfaceAuthConfigInfo | None:
         from app.composition.surface_connectors import AuthConfig
 
         auth_config = await self._uow.session.get(AuthConfig, auth_config_id)

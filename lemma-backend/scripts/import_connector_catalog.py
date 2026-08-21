@@ -151,9 +151,7 @@ COMPOSIO_CONNECTOR_ID_TO_TOOLKIT = {
     for toolkit_slug, connector_id in COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.items()
 }
 COMPOSIO_NATIVE_CONNECTOR_IDS = set(COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.values())
-NATIVE_OPERATION_CONNECTOR_IDS = (
-    supported_lemma_connectors()
-)
+NATIVE_OPERATION_CONNECTOR_IDS = supported_lemma_connectors()
 NATIVE_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
     "apollo": AuthMethod.API_KEY,
     "airtable": AuthMethod.API_KEY,
@@ -259,6 +257,7 @@ IMPORT_BATCH_OPERATION_CHUNK_SIZE = 100
 # Lemma native apps config loaded from JSON (committed to repo, no secrets)
 LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
 
+
 def _load_lemma_apps_config() -> list[dict]:
     """Load Lemma native apps configuration from JSON file."""
     if not LEMMA_APPS_CONFIG_PATH.exists():
@@ -333,7 +332,9 @@ def _build_operation_search_document(
         seen.add(lowered)
     return "\n".join(normalized_chunks)
 
+
 get_native_info_client = create_lemma_info_client
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -447,9 +448,7 @@ def _composio_field_json_type(field_type: object) -> str:
     return _COMPOSIO_FIELD_TYPE_TO_JSON.get(str(field_type).lower(), "string")
 
 
-def _composio_credential_schema(
-    toolkit_detail, auth_method: AuthMethod
-) -> dict | None:
+def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict | None:
     """Build a JSON Schema describing the credentials a user must submit to
     connect a non-OAuth Composio app, derived from the toolkit's
     ``connected_account_initiation`` fields so the UI can render the form."""
@@ -552,7 +551,10 @@ def _existing_capabilities(
 ) -> dict[AuthProvider, object]:
     if not existing:
         return {}
-    return {AuthProvider(capability.provider.value): capability for capability in existing.provider_capabilities}
+    return {
+        AuthProvider(capability.provider.value): capability
+        for capability in existing.provider_capabilities
+    }
 
 
 def _merge_provider_capabilities(
@@ -696,9 +698,7 @@ def _operation_id(
     return f"{connector_id}:{resolved}:{operation_name}"
 
 
-def _trigger_id(
-    connector_id: str, provider: AuthProvider, trigger_slug: str
-) -> str:
+def _trigger_id(connector_id: str, provider: AuthProvider, trigger_slug: str) -> str:
     return f"{connector_id}:{provider.value.lower()}:{trigger_slug.lower()}"
 
 
@@ -843,7 +843,10 @@ def _is_excluded_composio_connector(entity: ConnectorEntity) -> bool:
 
     return bool(normalized_ids & COMPOSIO_EXCLUDED_CONNECTOR_IDS) and (
         AuthProvider.COMPOSIO
-        in {AuthProvider(capability.provider.value) for capability in entity.provider_capabilities}
+        in {
+            AuthProvider(capability.provider.value)
+            for capability in entity.provider_capabilities
+        }
     )
 
 
@@ -924,7 +927,9 @@ async def _upsert_operation(
     # like the execute-operation route's never finds it.
     resolved_kind = kind or provider_to_kind(provider).value
     operation_name = (
-        _normalize_operation_name(public_name) if normalize_name else public_name.strip()
+        _normalize_operation_name(public_name)
+        if normalize_name
+        else public_name.strip()
     )
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
@@ -1018,7 +1023,9 @@ async def _upsert_trigger(
         trigger.slug,
     )
     entity = ConnectorTriggerEntity(
-        id=existing.id if existing else _trigger_id(connector_id, provider, trigger.slug),
+        id=existing.id
+        if existing
+        else _trigger_id(connector_id, provider, trigger.slug),
         connector_id=connector_id,
         provider=provider,
         event_type=trigger.slug,
@@ -1160,9 +1167,7 @@ async def _sync_native_catalog(
     # First sync Lemma-managed apps from JSON config (Slack, Jira, Confluence)
     lemma_apps = _load_lemma_apps_config()
     normalized_app_filters = (
-        {_normalize_connector_id(slug) for slug in app_filters}
-        if app_filters
-        else None
+        {_normalize_connector_id(slug) for slug in app_filters} if app_filters else None
     )
     for app_config in lemma_apps:
         app_name = app_config["name"]
@@ -1235,12 +1240,10 @@ async def _sync_native_catalog(
                 ConnectorTriggerEntity,
             )
 
-            existing_trigger = (
-                await trigger_repository.get_by_connector_kind_and_name(
-                    connector_id,
-                    provider_to_kind(AuthProvider.LEMMA).value,
-                    trigger_data["event_type"],
-                )
+            existing_trigger = await trigger_repository.get_by_connector_kind_and_name(
+                connector_id,
+                provider_to_kind(AuthProvider.LEMMA).value,
+                trigger_data["event_type"],
             )
             trigger_entity = ConnectorTriggerEntity(
                 id=(
@@ -1286,7 +1289,9 @@ async def _sync_native_catalog(
                 operation_descriptors = [
                     SimpleNamespace(
                         name=operation_name,
-                        **(await info_client.get_operation_details(operation_name)).__dict__,
+                        **(
+                            await info_client.get_operation_details(operation_name)
+                        ).__dict__,
                     )
                     for operation_name in operation_names
                 ]
@@ -1300,7 +1305,9 @@ async def _sync_native_catalog(
         entity = ConnectorEntity(
             id=connector_id,
             title=app_title or connector_id.replace("_", " ").title(),
-            description=(app_description or (existing.description if existing else None)),
+            description=(
+                app_description or (existing.description if existing else None)
+            ),
             icon=existing.icon if existing else None,
             provider_capabilities=_merge_provider_capabilities(
                 existing,
@@ -1455,7 +1462,9 @@ async def _sync_single_composio_toolkit(
             profile_operations, connector_id, AuthProvider.LEMMA
         )
         try:
-            lemma_capability = existing.capability_for(AuthProvider.LEMMA) if existing else None
+            lemma_capability = (
+                existing.capability_for(AuthProvider.LEMMA) if existing else None
+            )
         except ValueError:
             lemma_capability = None
         if lemma_capability is not None:
@@ -1523,9 +1532,7 @@ async def _sync_single_composio_toolkit(
             connector_id,
             provider=AuthProvider.COMPOSIO,
             public_name=str(tool.slug).strip(),
-            provider_operation_name=_resolve_composio_provider_operation_name(
-                tool
-            ),
+            provider_operation_name=_resolve_composio_provider_operation_name(tool),
             display_name=tool.name,
             description=description,
             input_schema=tool.input_parameters,
@@ -1563,7 +1570,10 @@ async def _sync_single_composio_toolkit(
 
 
 async def _run_in_session_batch(
-    sync_fn: Callable[[ConnectorRepository, ConnectorOperationRepository, ConnectorTriggerRepository], Awaitable[tuple[int, int, int]]],
+    sync_fn: Callable[
+        [ConnectorRepository, ConnectorOperationRepository, ConnectorTriggerRepository],
+        Awaitable[tuple[int, int, int]],
+    ],
     *,
     dry_run: bool,
 ) -> tuple[int, int, int]:
@@ -1744,9 +1754,7 @@ async def _run_composio_retirements(*, dry_run: bool) -> int:
         uow = SqlAlchemyUnitOfWork(session)
         connector_repository = ConnectorRepository(uow)
         try:
-            retired = await _retire_composio_capabilities(
-                connector_repository, session
-            )
+            retired = await _retire_composio_capabilities(connector_repository, session)
             if dry_run:
                 await uow.rollback()
             else:
@@ -1788,12 +1796,14 @@ async def _sync_native_catalog_batched(
             connector_id=app_slug,
         )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
-            lambda connector_repository, operation_repository, trigger_repository: _sync_native_catalog(
-                connector_repository,
-                operation_repository,
-                trigger_repository,
-                app_filters={app_slug},
-                schema_compiler=schema_compiler,
+            lambda connector_repository, operation_repository, trigger_repository: (
+                _sync_native_catalog(
+                    connector_repository,
+                    operation_repository,
+                    trigger_repository,
+                    app_filters={app_slug},
+                    schema_compiler=schema_compiler,
+                )
             ),
             dry_run=dry_run,
         )
@@ -1837,13 +1847,15 @@ async def _sync_composio_catalog_batched(
             connector_id=toolkit_item.slug,
         )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
-            lambda connector_repository, operation_repository, trigger_repository: _sync_single_composio_toolkit(
-                composio,
-                toolkit_item,
-                connector_repository=connector_repository,
-                operation_repository=operation_repository,
-                trigger_repository=trigger_repository,
-                page_size=page_size,
+            lambda connector_repository, operation_repository, trigger_repository: (
+                _sync_single_composio_toolkit(
+                    composio,
+                    toolkit_item,
+                    connector_repository=connector_repository,
+                    operation_repository=operation_repository,
+                    trigger_repository=trigger_repository,
+                    page_size=page_size,
+                )
             ),
             dry_run=dry_run,
         )
@@ -1856,7 +1868,10 @@ async def _sync_composio_catalog_batched(
 
 SKILLS_DIR = Path(__file__).parent.parent / "app" / "modules" / "connectors" / "skills"
 
-def _build_skill_prompt(app_id: str, title: str, description: str, operations: list) -> str:
+
+def _build_skill_prompt(
+    app_id: str, title: str, description: str, operations: list
+) -> str:
     """Build the complete LLM prompt for skill doc generation as one plain string."""
     ops_info: list[str] = []
     for op in operations[:20]:
@@ -1870,7 +1885,9 @@ def _build_skill_prompt(app_id: str, title: str, description: str, operations: l
             props = input_schema.get("properties", {})
             required = set(input_schema.get("required", []))
             for fname, finfo in list(props.items())[:8]:
-                ftype = finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                ftype = (
+                    finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                )
                 fdesc = finfo.get("description", "") if isinstance(finfo, dict) else ""
                 req_mark = "*" if fname in required else ""
                 fields.append(f"  - {fname}{req_mark} ({ftype}): {fdesc[:80]}")
@@ -1884,9 +1901,15 @@ def _build_skill_prompt(app_id: str, title: str, description: str, operations: l
         )
 
     ops_block = "\n\n".join(ops_info) if ops_info else "(no operations available)"
-    app_desc = (description[:400] if description else f"Connector with {title or app_id}.").strip()
+    app_desc = (
+        description[:400] if description else f"Connector with {title or app_id}."
+    ).strip()
 
-    example_cmd = "lemma connectors operations execute " + app_id + ' OPERATION_NAME --json \'{"payload": {"field1": "value1"}}\''
+    example_cmd = (
+        "lemma connectors operations execute "
+        + app_id
+        + ' OPERATION_NAME --json \'{"payload": {"field1": "value1"}}\''
+    )
 
     return (
         "Write a skill guide for an AI agent. The entire document must be 300-500 words — concise and scannable.\n\n"
@@ -2006,7 +2029,6 @@ async def _generate_app_skills(
         await _for_provider(None)
 
 
-
 _SKILL_MODEL = "accounts/fireworks/models/deepseek-v4-pro"
 _SKILL_BASE_URL = "https://api.fireworks.ai/inference/v1"
 
@@ -2019,10 +2041,14 @@ def _build_skill_agent():
 
     api_key = settings.lemma_openai_api_key or os.environ.get("FIREWORKS_API_KEY")
     if not api_key:
-        raise SystemExit("Set lemma_openai_api_key or FIREWORKS_API_KEY to generate skills.")
+        raise SystemExit(
+            "Set lemma_openai_api_key or FIREWORKS_API_KEY to generate skills."
+        )
 
     client = AsyncOpenAI(base_url=_SKILL_BASE_URL, api_key=api_key)
-    return PydanticAIAgent(OpenAIChatModel(_SKILL_MODEL, provider=OpenAIProvider(openai_client=client)))
+    return PydanticAIAgent(
+        OpenAIChatModel(_SKILL_MODEL, provider=OpenAIProvider(openai_client=client))
+    )
 
 
 async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
@@ -2050,7 +2076,12 @@ async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
         batch_size = 5
         for i in range(0, len(apps), batch_size):
             batch = apps[i : i + batch_size]
-            await asyncio.gather(*[_generate_app_skills(skill_agent, session, app, SKILLS_DIR) for app in batch])
+            await asyncio.gather(
+                *[
+                    _generate_app_skills(skill_agent, session, app, SKILLS_DIR)
+                    for app in batch
+                ]
+            )
             logger.debug(
                 "connector_catalog.skill_batch.completed",
                 count=min(i + batch_size, len(apps)),

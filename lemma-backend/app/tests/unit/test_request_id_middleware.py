@@ -34,7 +34,9 @@ async def _run(inbound_headers):
     }
     await middleware(scope, receive, send)
 
-    start = next(message for message in sent if message["type"] == "http.response.start")
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
     return captured, dict(start["headers"])
 
 
@@ -120,6 +122,8 @@ async def test_response_contains_exactly_one_normalized_request_id() -> None:
         receive,
         send,
     )
-    start = next(message for message in sent if message["type"] == "http.response.start")
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
     ids = [value for key, value in start["headers"] if key == b"x-request-id"]
     assert ids == [b"ingress"]

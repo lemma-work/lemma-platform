@@ -205,18 +205,25 @@ async def test_agent_run_records_usage_and_usage_apis_filter_it(
 
     summary = await authenticated_client.get(
         f"/usage/organizations/{org_id}/summary",
-        params={"pod_id": pod_id, "agent_id": agent["id"], "user_id": user_id, "days": 1},
+        params={
+            "pod_id": pod_id,
+            "agent_id": agent["id"],
+            "user_id": user_id,
+            "days": 1,
+        },
     )
     assert summary.status_code == 200, summary.text
     summary_payload = summary.json()
     assert summary_payload["total_tokens"] >= usage_event["total_tokens"]
     assert summary_payload["system_cost_usd"] >= usage_event["cost_usd"]
-    assert summary_payload["total_by_model"][
-        SYSTEM_LEMMA_DEFAULT_MODEL
-    ]["total_tokens"] >= usage_event["total_tokens"]
-    assert summary_payload["total_by_kind"]["llm"]["total_tokens"] >= usage_event[
-        "total_tokens"
-    ]
+    assert (
+        summary_payload["total_by_model"][SYSTEM_LEMMA_DEFAULT_MODEL]["total_tokens"]
+        >= usage_event["total_tokens"]
+    )
+    assert (
+        summary_payload["total_by_kind"]["llm"]["total_tokens"]
+        >= usage_event["total_tokens"]
+    )
 
     stats = await authenticated_client.get(
         f"/usage/organizations/{org_id}/stats",
@@ -237,9 +244,7 @@ async def test_agent_run_records_usage_and_usage_apis_filter_it(
         for item in stats_items
     )
 
-    limits = await authenticated_client.get(
-        f"/usage/organizations/{org_id}/limits"
-    )
+    limits = await authenticated_client.get(f"/usage/organizations/{org_id}/limits")
     assert limits.status_code == 200, limits.text
     limits_payload = limits.json()
     assert limits_payload["organization_id"] == org_id
@@ -291,7 +296,10 @@ async def test_non_default_model_run_records_nonzero_cost(
 
     create_conversation = await authenticated_client.post(
         f"/pods/{pod_id}/conversations",
-        json={"agent_name": "alt_model_usage_agent", "title": "Alt model usage tracking"},
+        json={
+            "agent_name": "alt_model_usage_agent",
+            "title": "Alt model usage tracking",
+        },
     )
     assert create_conversation.status_code == 201, create_conversation.text
     conversation_id = create_conversation.json()["id"]

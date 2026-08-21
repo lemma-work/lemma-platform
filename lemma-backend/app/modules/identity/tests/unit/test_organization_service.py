@@ -303,7 +303,9 @@ async def test_create_invitation_requires_editor_or_owner(
     )
 
     with pytest.raises(IdentityAccessDeniedError):
-        await organization_service.create_invitation(invitation, inviter_user_id=uuid4())
+        await organization_service.create_invitation(
+            invitation, inviter_user_id=uuid4()
+        )
 
 
 @pytest.mark.asyncio
@@ -332,7 +334,9 @@ async def test_create_invitation_raises_member_conflict(
     )
 
     with pytest.raises(OrganizationConflictError):
-        await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+        await organization_service.create_invitation(
+            invitation, inviter_user_id=inviter_id
+        )
 
 
 @pytest.mark.asyncio
@@ -358,7 +362,9 @@ async def test_create_invitation_raises_existing_invitation_conflict(
     organization_repository_mock.get_invitation_by_email.return_value = invitation
 
     with pytest.raises(OrganizationConflictError):
-        await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+        await organization_service.create_invitation(
+            invitation, inviter_user_id=inviter_id
+        )
 
 
 @pytest.mark.asyncio
@@ -462,7 +468,9 @@ async def test_create_invitation_marks_expired_existing_and_creates_new(
         role=OrganizationRole.ORG_OWNER,
     )
     organization_repository_mock.get_member_by_email.return_value = None
-    organization_repository_mock.get_invitation_by_email.return_value = expired_invitation
+    organization_repository_mock.get_invitation_by_email.return_value = (
+        expired_invitation
+    )
     organization_repository_mock.update_invitation.return_value = expired_invitation
     organization_repository_mock.add_invitation.return_value = invitation
 
@@ -936,7 +944,9 @@ async def test_create_invitation_with_pod_id_validates_pod_belongs_to_org(
     )
 
     with pytest.raises(IdentityValidationError, match="Pod does not belong"):
-        await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+        await organization_service.create_invitation(
+            invitation, inviter_user_id=inviter_id
+        )
 
 
 @pytest.mark.asyncio
@@ -966,7 +976,9 @@ async def test_create_invitation_with_pod_id_raises_when_pod_not_found(
     pod_membership_port_mock.get_pod_invitation_details.return_value = None
 
     with pytest.raises(IdentityValidationError, match="Pod not found"):
-        await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+        await organization_service.create_invitation(
+            invitation, inviter_user_id=inviter_id
+        )
 
 
 @pytest.mark.asyncio
@@ -1001,7 +1013,9 @@ async def test_create_invitation_with_pod_id_succeeds_when_pod_in_same_org(
         org.id,
     )
 
-    result = await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+    result = await organization_service.create_invitation(
+        invitation, inviter_user_id=inviter_id
+    )
 
     assert result.pod_id == pod_id
     assert result.pod_role == "POD_USER"
@@ -1190,8 +1204,8 @@ async def test_resolving_names_steps_past_a_taken_name(
     organization_repository_mock: AsyncMock,
 ):
     taken = {"Acme"}
-    organization_repository_mock.get_by_name.side_effect = (
-        lambda name: OrganizationEntity(name=name, slug="x") if name in taken else None
+    organization_repository_mock.get_by_name.side_effect = lambda name: (
+        OrganizationEntity(name=name, slug="x") if name in taken else None
     )
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
@@ -1213,10 +1227,8 @@ async def test_resolving_names_steps_past_a_taken_slug_too(
 ):
     """A free name whose slug is taken is not a free identity."""
     organization_repository_mock.get_by_name.return_value = None
-    organization_repository_mock.get_by_slug.side_effect = (
-        lambda slug: OrganizationEntity(name="Other", slug=slug)
-        if slug == "acme"
-        else None
+    organization_repository_mock.get_by_slug.side_effect = lambda slug: (
+        OrganizationEntity(name="Other", slug=slug) if slug == "acme" else None
     )
     organization_repository_mock.create.side_effect = lambda entity: entity
 
@@ -1236,8 +1248,8 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
 ):
     """Every readable rung taken must still not fail a signup."""
     readable = {"Acme"} | {f"Acme {n}" for n in range(2, 12)}
-    organization_repository_mock.get_by_name.side_effect = (
-        lambda name: OrganizationEntity(name=name, slug="x") if name in readable else None
+    organization_repository_mock.get_by_name.side_effect = lambda name: (
+        OrganizationEntity(name=name, slug="x") if name in readable else None
     )
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity

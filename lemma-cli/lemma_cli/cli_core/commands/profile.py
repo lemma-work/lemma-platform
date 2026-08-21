@@ -35,7 +35,9 @@ def update_profile(
     country: str | None = typer.Option(None, "--country"),
     timezone: str | None = typer.Option(None, "--timezone"),
     date_of_birth: str | None = typer.Option(None, "--date-of-birth"),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",

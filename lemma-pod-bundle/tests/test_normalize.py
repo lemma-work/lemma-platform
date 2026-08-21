@@ -84,11 +84,19 @@ def test_normalize_function_payload_strips_server_fields():
         "input_schema": {},
         "allowed_actions": ["run"],
     }
-    assert _normalize_function_payload(function) == {"name": "hello", "code": "print('hi')"}
+    assert _normalize_function_payload(function) == {
+        "name": "hello",
+        "code": "print('hi')",
+    }
 
 
 def test_normalize_agent_payload_makes_schemas_explicit():
-    agent = {"id": "a1", "name": "helper", "instruction": "hi", "output_schema": {"x": 1}}
+    agent = {
+        "id": "a1",
+        "name": "helper",
+        "instruction": "hi",
+        "output_schema": {"x": 1},
+    }
     payload = _normalize_agent_payload(agent)
     assert payload["output_schema"] == {"x": 1}
     assert payload["input_schema"] is None
@@ -195,11 +203,15 @@ def test_normalize_app_payload_strips_server_fields():
 def test_split_and_attach_permissions_payload():
     payload = {
         "name": "helper",
-        "permissions": {"grants": [{"resource_type": "function", "resource_name": "f1"}]},
+        "permissions": {
+            "grants": [{"resource_type": "function", "resource_name": "f1"}]
+        },
     }
     resource, permissions = _split_resource_permissions_payload(payload)
     assert "permissions" not in resource
-    assert permissions == {"grants": [{"resource_type": "function", "resource_name": "f1"}]}
+    assert permissions == {
+        "grants": [{"resource_type": "function", "resource_name": "f1"}]
+    }
 
     reattached = _attach_permissions_payload(resource, permissions)
     assert reattached["permissions"] == permissions
@@ -207,7 +219,9 @@ def test_split_and_attach_permissions_payload():
     with pytest.raises(ValueError):
         _split_resource_permissions_payload({"permissions": "nope"})
     with pytest.raises(ValueError):
-        _split_resource_permissions_payload({"permissions": {"grants": [{"resource_type": "x"}]}})
+        _split_resource_permissions_payload(
+            {"permissions": {"grants": [{"resource_type": "x"}]}}
+        )
 
 
 def test_validate_function_payload_happy_path(tmp_path: Path):

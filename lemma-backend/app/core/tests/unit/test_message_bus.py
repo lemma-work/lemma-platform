@@ -88,7 +88,14 @@ async def test_publish_ensures_declared_groups_before_stream_write(monkeypatch):
         ),
         (
             # Redis may report historical lag for a group created at `$`.
-            [{"name": "workers", "pending": 0, "lag": 60, "last-delivered-id": "100-0"}],
+            [
+                {
+                    "name": "workers",
+                    "pending": 0,
+                    "lag": 60,
+                    "last-delivered-id": "100-0",
+                }
+            ],
             "100-0",
             100,
         ),

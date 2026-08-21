@@ -12,12 +12,21 @@ def _safe_connector_details(details: object | None) -> dict | None:
         for key, value in details.items()
         if str(key).lower()
         in {
-            "status", "status_code", "code", "error", "reason", "error_type",
-            "upstream_status", "upstream_code",
+            "status",
+            "status_code",
+            "code",
+            "error",
+            "reason",
+            "error_type",
+            "upstream_status",
+            "upstream_code",
             # Which connector and operation, and when to come back. The circuit
             # breaker builds both and they were dropped here, so a caller got
             # `details: null` and a message naming nothing at all.
-            "scope", "connector_id", "operation_name", "retry_after",
+            "scope",
+            "connector_id",
+            "operation_name",
+            "retry_after",
         }
     }
     return redact_value(allowed) if allowed else None
@@ -143,9 +152,7 @@ class CredentialsNotFoundError(_ConnectorNotFoundBase):
 
 class AccountAlreadyConnectedError(ConnectorConflictError):
     def __init__(self, connector_id: str):
-        super().__init__(
-            f"Account already connected for connector '{connector_id}'"
-        )
+        super().__init__(f"Account already connected for connector '{connector_id}'")
         self.code = "ACCOUNT_ALREADY_CONNECTED"
 
 

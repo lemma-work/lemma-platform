@@ -233,25 +233,34 @@ def test_scaffold_app_gitignore_renamed(tmp_path):
 
 def test_resolve_sdk_spec_pins_latest_published_version(monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: "1.2.3")
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: "1.2.3"
+    )
     assert app_scaffold._resolve_lemma_sdk_spec(None) == "^1.2.3"
 
 
 def test_resolve_sdk_spec_falls_back_to_template_latest_when_offline(monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: None)
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: None
+    )
     # None => leave the template's "latest" untouched (npm install still gets newest).
     assert app_scaffold._resolve_lemma_sdk_spec(None) is None
 
 
 def test_resolve_sdk_spec_uses_sdk_path_file_link(tmp_path: Path):
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
-    assert app_scaffold._resolve_lemma_sdk_spec(str(tmp_path)) == f"file:{tmp_path.resolve()}"
+    assert (
+        app_scaffold._resolve_lemma_sdk_spec(str(tmp_path))
+        == f"file:{tmp_path.resolve()}"
+    )
 
 
 def test_update_package_json_writes_resolved_latest(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: "9.9.9")
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: "9.9.9"
+    )
     pkg = tmp_path / "package.json"
     pkg.write_text(
         json.dumps({"name": "tmpl", "dependencies": {"lemma-sdk": "latest"}}),

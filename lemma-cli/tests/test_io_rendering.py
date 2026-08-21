@@ -14,6 +14,7 @@ from lemma_cli.cli_core.io import emit, list_items, to_plain
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _capture_emit(state, data):
     """Call emit() with a temporary Rich console that writes to a StringIO buffer."""
     buffer = StringIO()
@@ -29,6 +30,7 @@ def _capture_emit(state, data):
 # ---------------------------------------------------------------------------
 # emit() — JSON output
 # ---------------------------------------------------------------------------
+
 
 def test_emit_json_output_is_valid_json():
     state = SimpleNamespace(output="json", full=False)
@@ -51,6 +53,7 @@ def test_emit_json_output_with_items_list():
 # emit() — pretty output
 # ---------------------------------------------------------------------------
 
+
 def test_emit_pretty_output_dict_shows_keys():
     state = SimpleNamespace(output="pretty", full=False)
     output = _capture_emit(state, {"id": "x", "name": "hello"})
@@ -67,6 +70,7 @@ def test_emit_pretty_output_list_shows_table():
 # ---------------------------------------------------------------------------
 # to_plain()
 # ---------------------------------------------------------------------------
+
 
 def test_to_plain_unwraps_to_dict():
     class Obj:
@@ -98,6 +102,7 @@ def test_to_plain_handles_nested_list():
 # ---------------------------------------------------------------------------
 # list_items()
 # ---------------------------------------------------------------------------
+
 
 def test_list_items_from_dict_with_items_key():
     result = list_items({"items": [{"a": 1}]})
@@ -158,6 +163,8 @@ def test_list_view_keeps_columns_compact():
 
 def test_column_without_options_is_unchanged():
     state = SimpleNamespace(output="pretty", full=False)
-    output = _capture_emit(state, {"name": "t", "columns": [{"name": "n", "type": "TEXT"}]})
+    output = _capture_emit(
+        state, {"name": "t", "columns": [{"name": "n", "type": "TEXT"}]}
+    )
     assert "n:text" in output
     assert "n:text(" not in output

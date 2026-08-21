@@ -23,6 +23,7 @@ from app.modules.test_support.e2e_authz import create_role_visibility_context
 
 pytestmark = pytest.mark.e2e
 
+
 def _table_names(listing: dict) -> set[str]:
     """Table names in a list response. System-managed ``reserved_*`` tables are
     filtered out by the list API itself, so no exclusion is needed here."""
@@ -84,9 +85,7 @@ class TestDatastoreAuthorizationBoundaries:
             expected_status=status.HTTP_403_FORBIDDEN,
         )
         hidden_root_files = await operator_api.list_files(directory_path="/")
-        assert folder["id"] not in {
-            item["id"] for item in hidden_root_files["items"]
-        }
+        assert folder["id"] not in {item["id"] for item in hidden_root_files["items"]}
         hidden_search = await operator_api.search_files(
             "grant only datastore search marker"
         )
@@ -276,7 +275,7 @@ class TestDatastoreAuthorizationBoundaries:
         custom_table_items = {item["name"]: item for item in custom_tables["items"]}
         assert set(custom_table_items[table_names["default"]]["allowed_actions"]) == {
             "datastore.record.read",
-            "datastore.table.read"
+            "datastore.table.read",
         }
         assert set(custom_table_items[table_names["custom"]]["allowed_actions"]) == {
             "datastore.table.read"
@@ -398,9 +397,7 @@ class TestDatastoreAuthorizationBoundaries:
             "folder.write",
         }
         editor_get_restricted_file = await editor_api.get_file(editor_file["path"])
-        assert set(editor_get_restricted_file["allowed_actions"]) == {
-            "folder.read"
-        }
+        assert set(editor_get_restricted_file["allowed_actions"]) == {"folder.read"}
 
         custom_files = await custom_api.list_files(
             directory_path="/shared",
@@ -417,9 +414,7 @@ class TestDatastoreAuthorizationBoundaries:
             "folder.read"
         }
         custom_get_restricted_file = await custom_api.get_file(custom_file["path"])
-        assert set(custom_get_restricted_file["allowed_actions"]) == {
-            "folder.read"
-        }
+        assert set(custom_get_restricted_file["allowed_actions"]) == {"folder.read"}
 
         for file_entity in (default_file, editor_file, custom_file):
             await index_file(index_datastore_file, file_entity)

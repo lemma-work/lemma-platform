@@ -51,7 +51,9 @@ async def eventually(
             if fail_fast is not None:
                 failure = fail_fast(last_value)
                 if failure:
-                    pytest.fail(f"{label} failed: {failure}. Last value: {last_value!r}")
+                    pytest.fail(
+                        f"{label} failed: {failure}. Last value: {last_value!r}"
+                    )
             if done(last_value):
                 return last_value
         # Checked after every attempt (not before) so a zero/tiny timeout
@@ -102,4 +104,3 @@ async def wait_for_status(
         timeout_seconds=timeout_seconds,
         interval_seconds=interval_seconds,
     )
-

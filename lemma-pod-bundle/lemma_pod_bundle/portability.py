@@ -106,8 +106,7 @@ def _iter_account_grants(payload: object):
     for grant in raw or []:
         if (
             isinstance(grant, dict)
-            and str(grant.get("resource_type") or "")
-            in _GRANT_ACCOUNT_RESOURCE_TYPES
+            and str(grant.get("resource_type") or "") in _GRANT_ACCOUNT_RESOURCE_TYPES
         ):
             yield grant
 

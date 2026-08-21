@@ -200,7 +200,9 @@ async def test_get_pod_requires_access(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("org_role", [OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR])
+@pytest.mark.parametrize(
+    "org_role", [OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR]
+)
 async def test_get_pod_org_owner_or_editor_has_access(
     pod_service: PodService,
     pod_repository_mock: AsyncMock,

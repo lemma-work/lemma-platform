@@ -9,7 +9,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -87,8 +89,7 @@ async def test_teams_channel_surface_handles_platform_payload_and_replies(
         headers={
             "Content-Type": "application/json",
             "Authorization": (
-                "Bearer "
-                f"{fake_teams.issue_webhook_token(audience='teams-app-id')}"
+                f"Bearer {fake_teams.issue_webhook_token(audience='teams-app-id')}"
             ),
         },
     )
@@ -343,9 +344,7 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
     )
     site_calls = message_store.get_all("TEAMS_GRAPH_SITES")
     assert any(call.get("path") == "root" for call in site_calls)
-    assert any(
-        call.get("hostname") == "contoso.sharepoint.com" for call in site_calls
-    )
+    assert any(call.get("hostname") == "contoso.sharepoint.com" for call in site_calls)
 
 
 # ---------------------------------------------------------------------------
