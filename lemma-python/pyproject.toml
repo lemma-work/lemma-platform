@@ -14,6 +14,21 @@ dependencies = [
   "python-dateutil>=2.9.0.post0",
 ]
 
+# Dev-only; PEP 735 groups are not part of the published distribution, so this
+# cannot reach Requires-Dist on PyPI.
+#
+# The upper bound matters and is not cargo-culted from lemma-backend: ruff 0.16
+# widened its *default* rule selection, which is why an unpinned
+# `uv run --with ruff` reported 711 findings here (nearly all in the generated
+# openapi_client) while the same tree is clean under the 0.15 defaults every
+# other component in this repo is linted with. Pinning all three components to
+# the same bound is what keeps "lint passes" meaning the same thing in each.
+# Lift this bound for lemma-backend, lemma-cli and lemma-python together.
+[dependency-groups]
+dev = [
+  "ruff>=0.14.8,<0.16",
+]
+
 [build-system]
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
