@@ -3,9 +3,8 @@
 import { useMemo } from 'react';
 import { ResourceIconUploader } from '@/components/shared/resource-icon-uploader';
 import { ResourceIdentity } from '@/components/shared/resource-identity';
-import { identityGenes } from '@/lib/identity/seeded-identity';
 import { cn } from '@/lib/utils';
-import { formatIdentityIcon, identityVariantSeed, parseResourceIcon } from '@/lib/utils/resource-icon-value';
+import { distinctIdentityVariants, formatIdentityIcon, identityVariantSeed, parseResourceIcon } from '@/lib/utils/resource-icon-value';
 
 /**
  * Enough faces to find one you like without turning the choice into work. The
@@ -38,32 +37,11 @@ export function AgentAvatarPicker({
     const icon = useMemo(() => parseResourceIcon(value), [value]);
     const isPicture = icon?.kind === 'url' || icon?.kind === 'glyph';
     const selectedVariant = icon?.kind === 'identity' ? icon.variant : 0;
-    /**
-     * Offer faces that actually look different from each other.
-     *
-     * Taking variants 0…17 straight off the counter draws whatever the hash
-     * happens to give, which in practice meant four near-identical violet
-     * squircles sitting in a row — a choice between things you cannot tell
-     * apart is not a choice. Walking further up the counter and keeping only
-     * the first face of each tone-and-form pair costs nothing and makes the
-     * grid read as a set of options. The agent's own face is always first,
-     * whatever it looks like, because that is the one it already has.
-     */
-    const variants = useMemo(() => {
-        const chosen: number[] = [0];
-        const seen = new Set<string>();
-        const first = identityGenes(identityVariantSeed(baseSeed, 0));
-        seen.add(`${first.tone}|${first.form}`);
-
-        for (let variant = 1; variant < 400 && chosen.length < VARIANT_COUNT; variant += 1) {
-            const genes = identityGenes(identityVariantSeed(baseSeed, variant));
-            const key = `${genes.tone}|${genes.form}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            chosen.push(variant);
-        }
-        return chosen;
-    }, [baseSeed]);
+    /** Shared with the create page — see `distinctIdentityVariants`. */
+    const variants = useMemo(
+        () => distinctIdentityVariants(baseSeed, VARIANT_COUNT),
+        [baseSeed],
+    );
 
     return (
         <div className={cn('space-y-4', compact && 'space-y-3')}>

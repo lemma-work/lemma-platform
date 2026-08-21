@@ -22,6 +22,7 @@ export type AgentSummaryResponse = {
     metadata?: (Record<string, any> | null);
     name: string;
     pod_id: string;
+    takes_input?: boolean;
     toolsets?: Array<AgentToolset>;
     updated_at: string;
     user_id: string;

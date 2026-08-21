@@ -794,3 +794,450 @@ button.agent-identity-avatar:focus-visible {
   background: currentColor;
 }
 }
+
+/* ────────────────────────────────────────────
+   THE AGENT'S FRONT DOOR
+   What the conversation shows before the first message: who this is, and the
+   places it can be reached outside this app. It centres inside the column
+   rather than the viewport — the conversation rail sits to its left, and a hero
+   centred on the window would sit visibly off-axis from the composer beneath it.
+   ──────────────────────────────────────────── */
+.agent-home {
+  display: flex;
+  /* 44rem. 34rem was a ribbon down the middle of a very wide pane; 52rem — taken
+     to match `.resource-page-column` so Configure would not shift the column —
+     bought that consistency by running conversation titles nearly edge to edge.
+     The columns are allowed to differ: hitting Configure replaces the content
+     wholesale, so a change of measure underneath it is the smaller event. */
+  max-width: 44rem;
+  flex-direction: column;
+  align-items: center;
+  margin-inline: auto;
+  gap: var(--space-3);
+  /* Asymmetric on purpose. The face is the first thing on the page and it needs
+     room above it to read as placed rather than as flush against the pane —
+     more so here than on most pages, because with the context bar gone there is
+     no chrome overhead to stand off from. */
+  padding-top: var(--space-12);
+  padding-bottom: var(--space-8);
+  text-align: center;
+}
+
+/* The page's own action, at the pane's corner rather than the column's. Inside a
+   44rem block centred in a very wide pane, "top-right of the column" is not a
+   corner — it is a point in open space with no edge to belong to, which is why
+   the button read as parked at random. Sticky, not absolute, so it stays put
+   while a long home scrolls under it. */
+.agent-home-page-actions {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+/* And the column reclaims the headroom the action row used to take, so a page
+   with Configure starts at the same height as one without. */
+.agent-home-page-actions + .agent-home {
+  padding-top: var(--space-6);
+}
+
+.agent-home-face {
+  flex: none;
+}
+
+.agent-home-greeting {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-2xl);
+  font-weight: 500;
+  letter-spacing: -0.016em;
+  line-height: 1.2;
+}
+
+.agent-home-description {
+  margin: 0;
+  /* Held well short of the column: a sentence is read, and 52rem of it is a
+     wider line than prose wants even when the things below happily fill it. */
+  max-width: 36rem;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+/* One row of ways in. These are the product's own argument as a control — the
+   agent is reachable where you already talk — so they are buttons, not the
+   informational chips the wiring rows draw. A platform we cannot build a link
+   for still gets named: it reaches the agent, it just cannot be opened from
+   here, and `data-static` drops the affordances that would promise otherwise. */
+.agent-home-reach {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.agent-home-reach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 2rem;
+  padding-inline: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1;
+  text-decoration: none;
+  transition:
+    border-color var(--dur-hover) var(--ease-standard),
+    color var(--dur-hover) var(--ease-standard);
+}
+
+.agent-home-reach-chip:hover,
+.agent-home-reach-chip:focus-visible {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.agent-home-reach-chip[data-static="true"] {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.agent-home-reach-chip[data-static="true"]:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-tertiary);
+}
+
+/* Pod home's ground, not the editor's. `.resource-page-scroll` sits on
+   `--bg-canvas` because it holds cards, and a card needs a darker sheet behind
+   it to read as raised. The agent's home has no cards — it is one column of
+   content, exactly like pod home — so it takes `--pod-main-bg` and the two front
+   doors of this product finally stand on the same paper. */
+.resource-page-scroll.agent-home-scroll {
+  background: var(--pod-main-bg);
+}
+
+
+/* A connect offer sits back from a working link: same shape, quieter ink, and
+   the logo at partial strength. It is an invitation, not a route you already
+   have — and the two must not look equally ready or the row stops reporting
+   which ones actually work. */
+.agent-home-reach-chip:not([data-connected="true"]):not([data-static="true"]) {
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+.agent-home-reach-chip:not([data-connected="true"]):not([data-static="true"]):hover,
+.agent-home-reach-chip:not([data-connected="true"]):not([data-static="true"]):focus-visible {
+  border-style: solid;
+  color: var(--text-secondary);
+}
+
+/* The box that starts something. It launches rather than hosts — sending opens
+   the conversation in its own tab — so it is sized like a starting point, not
+   like a transcript's composer: two rows, its own measure, and a line saying
+   where the answer will appear so the tab is not a surprise. */
+.agent-home-composer {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-1);
+  text-align: left;
+}
+
+.agent-home-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-inline: var(--space-1-5);
+  padding-bottom: var(--space-1);
+}
+
+/* What it has been doing. A section of a home — one measure, left-aligned rows
+   inside a centred column — not a rail: the difference between a list on a page
+   and a second navigation column is that this one scrolls with the page. */
+.agent-home-runs {
+  width: 100%;
+  margin-top: var(--space-4);
+  text-align: left;
+}
+
+.agent-home-runs-heading {
+  margin: 0 0 var(--space-1) 0;
+  padding-inline: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.25rem;
+}
+
+.agent-home-run {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 2rem;
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  text-decoration: none;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.agent-home-run:hover,
+.agent-home-run:focus-visible {
+  background: color-mix(in srgb, var(--surface-1) 58%, transparent);
+  color: var(--text-primary);
+}
+
+.agent-home-run-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.agent-home-run-all {
+  color: var(--text-tertiary);
+}
+
+/* Stands where the composer would, and says why there isn't one. */
+.agent-home-called {
+  margin: var(--space-2) 0 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* The run form, on the home. Boxed to the composer's footprint so a called
+   agent's home has the same shape as a conversational one — the thing that
+   starts it sits in the same place, and only its contents differ. Bounded in
+   height because a schema with many fields is a form, not a page. */
+.agent-home-run-form {
+  width: 100%;
+  text-align: left;
+}
+
+/* No border, no fill. The form is already a stack of labelled fields on a page
+   that is one column of content — boxing it added an edge that said "panel" on a
+   screen with no other panels, and the fields inside carry their own.
+   It also has no height of its own. A capped, scrolling box cut the form off at
+   26rem — which on any agent with a few fields meant clipping "Start run", so the
+   form had no way to be submitted at all. The panel is built for a dock, where a
+   fixed height and an inner scroller are right; on a page that scrolls already,
+   both are wrong, and the rules below hand the scrolling back to the page. */
+.agent-home-run-form-body,
+.agent-home-run-form-body .agent-test-panel,
+.agent-home-run-form-body .agent-test-run-start,
+.agent-home-run-form-body .agent-test-run-start > div {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  background: transparent;
+}
+
+/* And the dock's padding goes with its height. The panel nests two boxes inside
+   the scroller — an inner that pads up to 2.5rem at the top and 3rem at the
+   bottom, then a start-panel that pads another 1.25rem and paints its own
+   gradient. Stacked under a page that has already given the form a heading and a
+   column, that reads as a panel inside a panel inside a page: the gap above the
+   first field, and the faint wash behind it. On the home the form is just the
+   fields. */
+.agent-home-run-form-body .agent-test-run-start-inner {
+  width: 100%;
+  padding: 0;
+}
+
+.agent-home-run-form-body .agent-test-start-panel {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* ────────────────────────────────────────────
+   MAKING ONE
+   Two panels: what you are making on the left, what you are filling in on the
+   right. Earlier passes tried a single centred stack — first with the fields
+   drawn as the result (which left them looking like headings), then as a plain
+   form (which worked and was lifeless). The preview belongs beside the form, not
+   inside it.
+   ──────────────────────────────────────────── */
+/* A page, not a dialog. This carried a border, a radius, a raised sheet and a
+   shadow — a modal's costume with none of a modal's behaviour, floating on a
+   route that has nothing behind it. A real dialog would have to render over an
+   empty page here, which is what intercepting routes are for and not worth the
+   plumbing; so it commits to being what it already is. The two columns stay:
+   they are the composition, and the composition was never the problem. */
+/* Framed, and the frame is `.resource-card` — the same hairline, radius and
+   near-stock fill every other resource page in the product uses.
+   The earlier frame was wrong for a different reason than "a frame": it was a
+   raised sheet with a shadow, floating on a route that had no header, which is a
+   dialog impersonating a page. With the bar restored, a panel under it is
+   ordinary page furniture — and without one this composition had nothing holding
+   it, two columns adrift in a very wide pane. Elevation stays paper, not glass:
+   `--shadow-xs`, the card's own, not a modal's lift. */
+.agent-create-card {
+  display: grid;
+  /* The preview column hugs its content. At 17rem it was holding a 96px face and
+     a name in the middle of 272px, so the composition read as a void with a face
+     in it and the form pushed off to the right — the "space on the left". The
+     two halves belong near each other; the panel does the containing. */
+  grid-template-columns: auto minmax(0, 24rem);
+  justify-content: center;
+  gap: var(--space-8);
+  margin: var(--space-8) auto var(--space-10);
+  max-width: 44rem;
+  border: 1px solid var(--card-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--card-bg);
+  padding: var(--space-8) var(--space-7);
+  box-shadow: var(--shadow-xs);
+}
+
+@container resource-page (max-width: 44rem) {
+  .agent-create-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+    margin-inline: var(--space-4);
+    padding: var(--space-6) var(--space-5);
+  }
+
+  .agent-create-preview {
+    width: 100%;
+    align-self: stretch;
+  }
+}
+
+/* No fill and no rule between the columns. A divider would draw the seam of the
+   panel that is no longer there; the gap does the separating, which is what a
+   page uses. It aligns to the top rather than centring, so the face sits level
+   with the title it belongs to instead of drifting against a column whose
+   height is decided by however many templates there happen to be. */
+/* Centred against the form, not hung from the top of the column. Top-aligned it
+   left the face stranded above a few hundred pixels of nothing — a single object
+   with no relationship to anything beside it. Levelled with the middle of the
+   fields it reads as the pair it is: this is the thing, these are its details. */
+.agent-create-preview {
+  display: flex;
+  width: 11rem;
+  flex-direction: column;
+  align-self: center;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.agent-create-preview-name {
+  margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--text-xl);
+  font-weight: 500;
+  letter-spacing: -0.016em;
+  text-align: center;
+}
+
+.agent-create-preview-name[data-empty="true"] {
+  color: var(--text-soft);
+}
+
+.agent-create-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-create-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.agent-create-row + .agent-create-faces {
+  margin-bottom: var(--space-2);
+}
+
+.agent-create-field + .agent-create-row {
+  margin-top: var(--space-3);
+}
+
+.agent-create-reshuffle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  transition: color var(--dur-base) var(--ease-out);
+}
+
+.agent-create-reshuffle:hover,
+.agent-create-reshuffle:focus-visible {
+  color: var(--text-secondary);
+}
+
+.agent-create-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.agent-create-face {
+  border-radius: var(--radius-lg);
+  padding: 2px;
+  box-shadow: 0 0 0 1.5px transparent;
+  transition:
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-hover) var(--ease-out);
+}
+
+.agent-create-face:hover {
+  transform: translateY(-1px);
+}
+
+.agent-create-face[data-active="true"] {
+  box-shadow: 0 0 0 1.5px var(--action-primary);
+}
+
+.agent-create-field {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  text-align: left;
+}
+
+.agent-create-label {
+  display: block;
+  margin-bottom: var(--space-1-5);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.agent-create-row .agent-create-label {
+  margin-bottom: 0;
+}
+
+.agent-create-submit {
+  margin-top: var(--space-4);
+  width: 100%;
+}
+
+.agent-create-note {
+  margin: var(--space-1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+/* Says why the faces change as the name is typed, at the weight of an aside. */
+.agent-create-hint {
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}

@@ -1,6 +1,7 @@
 import { Mail, type LemmaIcon } from '@/components/ui/icons';
 
 import type { SurfacePlatformValue } from '@/lib/hooks/use-pod-surfaces';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 /**
  * What each surface platform needs from the setup UI, in one place.
@@ -303,5 +304,5 @@ export function getSurfaceDefinition(
 
 /** Substitutes the agent's name into registry copy. `null` = the pod default. */
 export function forAgent(copy: string, agentName: string | null): string {
-    return copy.replaceAll('{agent}', agentName || 'the pod assistant');
+    return copy.replaceAll('{agent}', agentName || DEFAULT_RESPONDER_NAME);
 }

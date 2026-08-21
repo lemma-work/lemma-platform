@@ -2184,6 +2184,11 @@
             "title": "Pod Id",
             "type": "string"
           },
+          "takes_input": {
+            "default": false,
+            "title": "Takes Input",
+            "type": "boolean"
+          },
           "toolsets": {
             "items": {
               "$ref": "#/components/schemas/AgentToolset"

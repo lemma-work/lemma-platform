@@ -472,7 +472,7 @@ export function SurfaceModal({
                               channel_id: route.channel_id,
                               channel_name: route.channel_name || null,
                               // Sent apart, never derived from an empty name:
-                              // "the pod assistant answers here" and "nobody has
+                              // "Lem answers here" and "nobody has
                               // said" both leave agent_name null, and the API
                               // rejects a route that claims to be both.
                               agent_name: route.use_pod_assistant ? null : route.agent_name,

@@ -30,9 +30,9 @@ describe('the address an agent is about to get', () => {
         expect(slugify(null, 'pod')).toBe('pod');
     });
 
-    // The pod assistant is the absence of an agent, not an unset field: it is
+    // Lem is the absence of an agent, not an unset field: it is
     // the pod answering, so it gets the pod's own name and no agent half.
-    it('gives the pod assistant the pod name alone', () => {
+    it('gives Lem the pod name alone', () => {
         expect(buildAgentEmailPreview({ agentName: null, podName: 'Acme', domain: DOMAIN }))
             .toBe('acme@ops.lemma.work');
     });

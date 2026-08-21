@@ -49,14 +49,8 @@ describe('pod workspace tabs', () => {
                 title: 'Pricing follow-up',
                 status: null,
             },
-            {
-                id: 'app:quote-desk',
-                kind: 'app',
-                resourceId: 'quote-desk',
-                title: 'Quote Desk',
-                icon: 'Q',
-                url: 'https://quote.example.com',
-            },
+            // The pinned app tab above is left behind on purpose: apps live in
+            // the sidebar rail now, and stored app tabs are dropped at the door.
         ]);
     });
 
@@ -122,40 +116,22 @@ describe('pod workspace tabs', () => {
         });
     });
 
-    it('pins every installed app before the working set', () => {
+    it('drops app tabs outright, even for apps that still exist', () => {
         const conversation = conversationWorkspaceTab('conv-1', { title: 'First', status: 'completed' });
-        const staleApp = appWorkspaceTab({ slug: 'old-app', title: 'Old App' });
+        // This app's page still exists — the tab is dropped anyway, because
+        // apps live in the sidebar rail now and the strip never holds them.
+        const openApp = appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' });
         const staleAppRoute = routeWorkspaceTab(
             'apps',
-            'Old App',
-            '/pod/pod-1/app/view?page=old-app',
+            'Quote Desk',
+            '/pod/pod-1/app/view?page=quote-desk',
         );
-        const pages = [
-            { slug: 'morning-brief', title: 'Morning Brief', icon: 'M', order: 0, path: '' },
-            { slug: 'quote-desk', title: 'Quote Desk', icon: 'Q', order: 1, path: '' },
-        ];
 
-        // Tabs hold what someone opened, so syncing must not open anything:
-        // `pages` here has two apps and neither becomes a tab. The stale app tab
-        // is dropped because its app is gone, and the duplicate route goes too.
         expect(syncAppWorkspaceTabs(
-            [HOME_WORKSPACE_TAB, staleApp, conversation, staleAppRoute],
-            pages,
+            [HOME_WORKSPACE_TAB, openApp, conversation, staleAppRoute],
         )).toEqual([
             HOME_WORKSPACE_TAB,
             conversation,
-        ]);
-    });
-
-    it('keeps an open app tab and refreshes its title', () => {
-        const pages = [
-            { slug: 'quote-desk', title: 'Quote Desk Renamed', icon: 'Q', order: 0, path: '' },
-        ];
-        const open = appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' });
-
-        expect(syncAppWorkspaceTabs([HOME_WORKSPACE_TAB, open], pages)).toEqual([
-            HOME_WORKSPACE_TAB,
-            appWorkspaceTab(pages[0]),
         ]);
     });
 
@@ -208,8 +184,10 @@ describe('pod workspace tabs', () => {
 
     it('uses routes as the active-tab source of truth', () => {
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1')).toBe('home');
+        // The focused app yields its ephemeral tab id — rendered while viewed,
+        // never stored. A slug-less viewer has no app to mark.
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view', 'quote-desk')).toBe('app:quote-desk');
-        expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view')).toBe('route:apps');
+        expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view')).toBeNull();
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/pages')).toBe('route:apps');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/data/projects')).toBe('route:data');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/datastores/default')).toBe('route:data');

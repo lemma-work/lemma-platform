@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
 )
 from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.platforms.slack.blocks import DEFAULT_RESPONDER_NAME
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_agent,
@@ -414,7 +415,10 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
     assert "lemma_channel_setup_view" in view_repr
     assert "C-SUPPORT" in view_repr
     assert specialist["name"] in view_repr
-    assert "Pod assistant" in view_repr
+    # Read the label from the module that renders it. Pinning the string here
+    # meant a copy change turned this into a failure about the modal rather
+    # than about the name, which is what it was.
+    assert DEFAULT_RESPONDER_NAME in view_repr
 
     submit_payload = {
         "type": "view_submission",

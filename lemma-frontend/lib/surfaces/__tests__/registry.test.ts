@@ -5,6 +5,7 @@ import {
     getSurfaceDefinition,
     SURFACE_PLATFORM_ORDER,
 } from '@/lib/surfaces/registry';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 describe('surface registry', () => {
     it('resolves a definition regardless of casing', () => {
@@ -71,8 +72,8 @@ describe('surface registry', () => {
         }
     });
 
-    it('names the agent in second-person copy, and the pod assistant otherwise', () => {
+    it('names the agent in second-person copy, and the default responder otherwise', () => {
         expect(forAgent('Make {agent} reachable', 'Ops')).toBe('Make Ops reachable');
-        expect(forAgent('Make {agent} reachable', null)).toBe('Make the pod assistant reachable');
+        expect(forAgent('Make {agent} reachable', null)).toBe(`Make ${DEFAULT_RESPONDER_NAME} reachable`);
     });
 });

@@ -30,6 +30,15 @@ export type PodTopbarState = {
     actions?: ReactNode;
     fullscreen?: boolean;
     /**
+     * Drop the context bar entirely rather than render it empty.
+     *
+     * The bar draws for every route that is not pod home, a conversation, or an
+     * app view — so a page that hands it no title, no back link and no actions
+     * still gets a 48px strip of nothing above it. A route that has moved its
+     * own chrome into the page says so here instead of leaving the gap.
+     */
+    hideContextBar?: boolean;
+    /**
      * Which `ResourceHeader` owns the bar right now.
      *
      * A leaving route must not blank a bar that the arriving route has already

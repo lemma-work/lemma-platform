@@ -465,12 +465,37 @@
 /* Table switcher. Lives on the left of the table toolbar, so it adds no band of
    its own. Scrolls sideways rather than wrapping — the strip must stay one line
    however many tables a pod grows. */
+/* The scrollbar stays hidden — a strip of five tabs should not carry a track
+   under it — but hiding it removed the only sign that a sixth table existed.
+   The edges carry that instead: whichever side still has content behind it
+   fades, so the strip says "there is more this way" in the place the more
+   actually is. The wheel that reaches it lives in `useHorizontalOverflow`. */
 .data-table-strip {
   scrollbar-width: none;
+  --strip-fade: 1.75rem;
+  transition: mask-image var(--dur-base) var(--ease-out);
 }
 
 .data-table-strip::-webkit-scrollbar {
   display: none;
+}
+
+.data-table-strip[data-hidden-left="true"] {
+  mask-image: linear-gradient(to right, transparent, #000 var(--strip-fade));
+}
+
+.data-table-strip[data-hidden-right="true"] {
+  mask-image: linear-gradient(to left, transparent, #000 var(--strip-fade));
+}
+
+.data-table-strip[data-hidden-left="true"][data-hidden-right="true"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--strip-fade),
+    #000 calc(100% - var(--strip-fade)),
+    transparent
+  );
 }
 
 .data-table-workbench {
