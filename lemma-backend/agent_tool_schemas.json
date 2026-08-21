@@ -415,7 +415,7 @@
             }
           ],
           "default": null,
-          "description": "Inline SVG or HTML, for WIDGET. No DOCTYPE/<html>/<head>/<body>."
+          "description": "Inline HTML fragment, for WIDGET. Raw markup only \u2014 never base64. No DOCTYPE/<html>/<head>/<body>. A standalone SVG image is a pod file shown with type=FILE, not a widget."
         },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",

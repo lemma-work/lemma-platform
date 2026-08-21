@@ -3,7 +3,8 @@
 ``lint_app_html`` remains advisory for app uploads: callers log common authoring
 mistakes without rejecting a bundle. ``validate_widget_html`` promotes those same
 mistakes plus fragment/starter/loader checks to blocking errors before an inline
-widget is persisted and rendered.
+widget is persisted and rendered. A widget is an HTML fragment: encoded content
+and standalone SVG images are rejected there rather than rendered as-is.
 
 The browser SDK is served only from the API origin, so widgets and apps must build
 its URL from the injected ``window.__LEMMA_CONFIG__.apiUrl`` and boot their code
@@ -67,6 +68,15 @@ _HARDCODED_POD_ID = re.compile(
 _FULL_DOCUMENT = re.compile(
     r"<!doctype|<html[\s>]|<head[\s>]|<body[\s>]", re.IGNORECASE
 )
+# Content carrying no element tag at all is an encoding mistake (base64, an
+# unresolved placeholder), not markup. Every other rule here matches known-bad
+# *markup*, so an encoded blob trips none of them and would render as literal
+# text in the iframe. Checked first so the error names the actual mistake.
+_ELEMENT_TAG = re.compile(r"<[a-zA-Z][^>]*>")
+# A widget is a view, not an image. An SVG-rooted fragment belongs in pod files,
+# where it is addressable and reusable, and displays via FILE. Only the root is
+# rejected — inline <svg> icons inside an HTML fragment stay fine.
+_SVG_ROOT = re.compile(r"\A(?:<!--.*?-->\s*)*<svg\b", re.IGNORECASE | re.DOTALL)
 _UNRESOLVED_TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 _RUNTIME_CONFIG_REFERENCE = re.compile(r"\b(?:window\.)?__LEMMA_CONFIG__\b")
 _API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
@@ -122,10 +132,23 @@ def validate_widget_html(html: str) -> list[str]:
     if not content:
         return ["Widget content must not be empty."]
 
+    if not _ELEMENT_TAG.search(content):
+        return [
+            "Widget content must be an HTML fragment — no element tag found. "
+            "Pass raw markup, not base64 or any other encoded form."
+        ]
+
+    if _SVG_ROOT.match(content):
+        return [
+            "Widget content must be an HTML fragment, not a standalone SVG. "
+            "Upload the image with `lemma files upload` and show it with "
+            'display_resource(type="FILE", path=...).'
+        ]
+
     errors = list(lint_app_html(content))
     if _FULL_DOCUMENT.search(content):
         errors.append(
-            "Widget content must be an HTML/SVG fragment without doctype, html, head, or body tags."
+            "Widget content must be an HTML fragment without doctype, html, head, or body tags."
         )
     naked_css = _naked_css_error(content)
     if naked_css:

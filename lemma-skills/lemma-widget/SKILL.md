@@ -1,6 +1,6 @@
 ---
 name: lemma-widget
-description: "Create lightweight inline Lemma widgets for conversations via display_resource(type=\"WIDGET\"): self-contained HTML/CSS/JS or SVG for metrics, lists, comparisons, timelines, record details, previews, and charts, optionally powered by live pod data through the browser Lemma SDK. Use an app, not a widget, when the UI needs React, routing, or substantial application state."
+description: "Create lightweight inline Lemma widgets for conversations via display_resource(type=\"WIDGET\"): self-contained HTML/CSS/JS for metrics, lists, comparisons, timelines, record details, previews, and charts, optionally powered by live pod data through the browser Lemma SDK. Use an app, not a widget, when the UI needs React, routing, or substantial application state."
 ---
 
 # Lemma Widget
@@ -16,7 +16,7 @@ answer, display that resource directly instead of recreating it as a widget.
 
 ## Widget or app?
 
-- **Widget:** one compact inline view; plain HTML/CSS/JS or SVG; quick to render in
+- **Widget:** one compact inline view; plain HTML/CSS/JS; quick to render in
   the conversation; little local state.
 - **Vite app:** React, routing, multiple screens, reusable components, substantial
   interaction/state, or a UI people will return to as a product.
@@ -61,7 +61,7 @@ The backend rejects unresolved placeholders and broken SDK loaders before displa
 
 `type="WIDGET"` takes **exactly one** of:
 
-- `content` — your inline HTML/SVG fragment (the usual case), or
+- `content` — your inline HTML fragment (the usual case), or
 - `public_url` — a URL to embed instead.
 
 Passing both, or neither, is rejected. Two more WIDGET-only fields:
@@ -72,7 +72,12 @@ Passing both, or neither, is rejected. Two more WIDGET-only fields:
 
 ## Fixed contract
 
-- Send an HTML/SVG **fragment**, never `<!doctype>`, `<html>`, `<head>`, or `<body>`.
+- Send an HTML **fragment**, never `<!doctype>`, `<html>`, `<head>`, or `<body>`.
+- Send raw markup. Base64 or any other encoded form is rejected, and an
+  encoded blob that slips through renders as literal text.
+- A standalone SVG image is not a widget. Save it as a pod file (`lemma files
+  upload`) and show it with `display_resource(type="FILE", path=...)`. Inline
+  `<svg>` icons *inside* an HTML fragment are fine.
 - Keep all CSS local. The widget runs in its own iframe and inherits no frontend CSS.
 - Use plain browser JavaScript. No build step, JSX, React, or framework runtime.
 - Never put secrets, credentials, a pod id, or an environment hostname in the HTML.

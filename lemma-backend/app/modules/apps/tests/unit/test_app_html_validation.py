@@ -103,7 +103,41 @@ def test_flags_hardcoded_pod_id():
 
 
 def test_widget_contract_accepts_static_fragment():
-    assert validate_widget_html("<svg><circle cx='5' cy='5' r='5'/></svg>") == []
+    assert validate_widget_html("<div class='card'><p>7 open</p></div>") == []
+
+
+def test_widget_contract_accepts_inline_svg_icon_inside_html():
+    """Only an SVG *root* is an image; icons inside a fragment stay legal."""
+    html = (
+        "<div class='row'><svg viewBox='0 0 8 8'><circle cx='4' cy='4' r='4'/>"
+        "</svg><span>Online</span></div>"
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_rejects_standalone_svg():
+    errors = validate_widget_html("<svg><circle cx='5' cy='5' r='5'/></svg>")
+    assert any("not a standalone SVG" in e for e in errors)
+    assert any('type="FILE"' in e for e in errors)
+
+
+def test_widget_contract_rejects_svg_root_behind_a_comment():
+    errors = validate_widget_html("<!-- chart --><svg><rect width='4'/></svg>")
+    assert any("not a standalone SVG" in e for e in errors)
+
+
+def test_widget_contract_rejects_base64_content():
+    """A base64 blob trips no markup rule, so it needs its own check."""
+    errors = validate_widget_html(
+        "PGRpdiBzdHlsZT0iY29sb3I6cmVkIj5oaTwvZGl2Pg=="
+    )
+    assert any("no element tag found" in e for e in errors)
+    assert any("base64" in e for e in errors)
+
+
+def test_widget_contract_rejects_unsubstituted_placeholder_text():
+    errors = validate_widget_html("GRLk5IzpCh72PD... [full HTML below]")
+    assert any("no element tag found" in e for e in errors)
 
 
 def test_widget_contract_accepts_portable_sdk_fragment():
