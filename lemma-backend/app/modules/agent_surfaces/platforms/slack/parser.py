@@ -32,6 +32,65 @@ logger = get_logger(__name__)
 class SlackMessageParser(SlackConfigurationParserMixin):
     platform = "SLACK"
 
+    # Slack sends every event on one webhook, so most of what arrives is not a
+    # message from a person. These three rejections are about the envelope
+    # rather than the message, and answering them together is what lets `parse`
+    # get on with reading one.
+    _IGNORED_SUBTYPES = frozenset(
+        {
+            "bot_message",
+            "message_changed",
+            "message_deleted",
+            "channel_join",
+            "channel_leave",
+            "thread_broadcast",
+        }
+    )
+
+    def _is_ignored_event(
+        self,
+        payload: dict[str, Any],
+        event: dict[str, Any],
+        event_type: str,
+        subtype: str,
+    ) -> bool:
+        """Whether this is something other than a person writing to us."""
+        if payload.get("type") != "event_callback":
+            return True
+        if event_type not in {"message", "app_mention"}:
+            return True
+        return bool(event.get("bot_id")) or subtype in self._IGNORED_SUBTYPES
+
+    def _message_metadata(
+        self,
+        *,
+        event_type: str,
+        subtype: str,
+        is_thread_reply: bool,
+        channel_type: str,
+        mentioned_user_ids: list[str],
+        assistant_thread: dict[str, Any],
+        attachments: list[SlackFileAttachment],
+    ) -> dict[str, Any]:
+        """What the run needs to know about the message beyond its text."""
+        metadata: dict[str, Any] = {
+            "event_type": event_type,
+            "event_subtype": subtype or None,
+            "is_thread_reply": is_thread_reply,
+            "channel_type": channel_type,
+            "mentioned_user_ids": mentioned_user_ids,
+            "assistant_thread_present": bool(assistant_thread),
+            "assistant_thread_action_token": (
+                payload_text(assistant_thread, "action_token") or None
+            ),
+        }
+        if attachments:
+            metadata["attachments"] = [
+                attachment.model_dump(mode="json", exclude_none=True)
+                for attachment in attachments
+            ]
+        return metadata
+
     def parse(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
@@ -39,22 +98,9 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             del headers
             payload = self._unwrap_payload(payload)
             event = payload_section(payload, "event")
-            if payload.get("type") != "event_callback":
-                return None
-
             event_type = payload_text(event, "type")
-            if event_type not in {"message", "app_mention"}:
-                return None
-
             subtype = payload_text(event, "subtype")
-            if event.get("bot_id") or subtype in {
-                "bot_message",
-                "message_changed",
-                "message_deleted",
-                "channel_join",
-                "channel_leave",
-                "thread_broadcast",
-            }:
+            if self._is_ignored_event(payload, event, event_type, subtype):
                 return None
 
             channel_id = payload_text(event, "channel").strip()
@@ -85,22 +131,15 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             if not external_thread_id:
                 return None
 
-            metadata: dict[str, Any] = {
-                "event_type": event_type,
-                "event_subtype": subtype or None,
-                "is_thread_reply": is_thread_reply,
-                "channel_type": channel_type,
-                "mentioned_user_ids": mentioned_user_ids,
-                "assistant_thread_present": bool(assistant_thread),
-                "assistant_thread_action_token": (
-                    payload_text(assistant_thread, "action_token") or None
-                ),
-            }
-            if attachments:
-                metadata["attachments"] = [
-                    attachment.model_dump(mode="json", exclude_none=True)
-                    for attachment in attachments
-                ]
+            metadata = self._message_metadata(
+                event_type=event_type,
+                subtype=subtype,
+                is_thread_reply=is_thread_reply,
+                channel_type=channel_type,
+                mentioned_user_ids=mentioned_user_ids,
+                assistant_thread=assistant_thread,
+                attachments=attachments,
+            )
 
             return ParsedInboundSurfaceEvent(
                 platform=self.platform,

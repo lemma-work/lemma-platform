@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.modules.agent_surfaces.platforms.common import (
     payload_first,
     payload_section,
@@ -13,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.platforms.email_common import (
+    ParsedEmailIdentity,
     decode_base64_bytes,
     parse_email_identity,
     plain_text_from_html,
@@ -177,8 +180,37 @@ def _extract_message_headers(data: dict[str, Any]) -> dict[str, str]:
     return _header_map(payload.get("headers"))
 
 
+@dataclass(frozen=True)
+class _GmailEnvelope:
+    """A push notification's addressing, before its content is read.
+
+    `is_complete` is the guard the parser used to spell inline: without a
+    thread, a message id and a sender we cannot route it, so there is nothing
+    to be gained by reading the body.
+    """
+
+    data: dict[str, Any]
+    headers: dict[str, str]
+    thread_id: str
+    message_id: str
+    sender_identity: ParsedEmailIdentity
+    mailbox_identity: ParsedEmailIdentity
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(self.thread_id and self.message_id and self.sender_identity.email)
+
+
 class GmailMessageParser:
     def parse(self, payload: dict[str, Any]) -> ParsedInboundSurfaceEvent | None:
+        """A Gmail push, once it has an addressee, a thread and a message."""
+        envelope = self._envelope(payload)
+        if not envelope.is_complete:
+            return None
+        return self._message_event(envelope, payload)
+
+    def _envelope(self, payload: dict[str, Any]) -> _GmailEnvelope:
+        """Who sent it, to which mailbox, in which thread."""
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         headers = _extract_message_headers(data)
         thread_id = str(
@@ -203,8 +235,25 @@ class GmailMessageParser:
             or headers.get("to"),
             fallback_email=data.get("mailbox_email") or data.get("to_email"),
         )
-        if not thread_id or not message_id or not sender_identity.email:
-            return None
+        return _GmailEnvelope(
+            data=data,
+            headers=headers,
+            thread_id=thread_id,
+            message_id=message_id,
+            sender_identity=sender_identity,
+            mailbox_identity=mailbox_identity,
+        )
+
+    def _message_event(
+        self, envelope: _GmailEnvelope, payload: dict[str, Any]
+    ) -> ParsedInboundSurfaceEvent:
+        """The message itself: its text, its attachments, what it replies to."""
+        data = envelope.data
+        headers = envelope.headers
+        thread_id = envelope.thread_id
+        message_id = envelope.message_id
+        sender_identity = envelope.sender_identity
+        mailbox_identity = envelope.mailbox_identity
 
         reply_identity = parse_email_identity(
             headers.get("reply-to"),
