@@ -95,7 +95,12 @@ from app.modules.agent.services.runtime_history import (
     runtime_full_run_ids,
     select_runtime_history,
 )
-from app.modules.agent.services.run_observer_delivery import notify_run_failed
+from app.modules.agent.services.run_observer_delivery import (
+    notify_event,
+    notify_run_failed,
+    notify_run_finished,
+    notify_run_started,
+)
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
     UsageReservation,
@@ -458,15 +463,9 @@ class AgentRunnerService:
                     # grouped correctly and every row is blank, so finding the run
                     # you want means opening each one.
                     record_span_input(span, _run_input_text(messages))
-                    if observer is not None:
-                        try:
-                            await observer.on_run_started(conversation, ctx)
-                            observer_started = True
-                        except Exception:
-                            logger.debug(
-                                "agent.agent_runner_service.agent_run_observer_start_run.diagnostic",
-                                agent_run_id=agent_run_id,
-                            )
+                    observer_started = await notify_run_started(
+                        observer, conversation, ctx, agent_run_id
+                    )
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -486,16 +485,9 @@ class AgentRunnerService:
                             ):
                                 if terminal_event_seen:
                                     continue
-                                if observer is not None:
-                                    try:
-                                        await observer.on_event(
-                                            event, conversation, ctx
-                                        )
-                                    except Exception:
-                                        logger.debug(
-                                            "agent.agent_runner_service.agent_run_observer_run_s.diagnostic",
-                                            agent_run_id=agent_run_id,
-                                        )
+                                await notify_event(
+                                    observer, event, conversation, ctx, agent_run_id
+                                )
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -544,14 +536,10 @@ class AgentRunnerService:
                         # cancelled part-way is the one worth reading, and it
                         # still has whatever the model produced before it went.
                         record_span_output(span, output_data)
-                        if observer is not None and observer_started:
-                            try:
-                                await observer.on_run_finished(conversation, ctx)
-                            except Exception:
-                                logger.debug(
-                                    "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic",
-                                    agent_run_id=agent_run_id,
-                                )
+                        if observer_started:
+                            await notify_run_finished(
+                                observer, conversation, ctx, agent_run_id
+                            )
         except BaseException as exc:
             if isinstance(exc, UsageLimitExceededError):
                 # Not a crash: the organisation is out of plan quota. This was
