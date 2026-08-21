@@ -201,6 +201,17 @@ input and no output. `_build_llm_fanout_processor` is that copy, and it forwards
 only spans that already carry an OpenInference kind: fanning out everything is
 what once filled Phoenix with `db.operation` noise.
 
+**The copied span arrives re-rooted.** Phoenix is sent `agent.run` and not the
+worker job span above it, so the span references a parent that backend will never
+receive — and an orphan is not a root to the software reading it. Phoenix resolves
+a trace's root with a literal `parent_id IS NULL`, with no orphan fallback in
+`trace_root_spans` or in the session input/output loaders, so an orphaned trace
+still counts toward `numTraces` while every panel that renders *through* the root
+span comes back empty: the session header says "2 traces" above a pane that says
+there are none. `TraceRootingSpanExporter` drops the parent on that one exporter's
+copy. Cloud Trace still gets the real one, and the model spans still name
+`agent.run` as their parent, because its span id is untouched.
+
 The consequence for sampling: **the general ratio must not be lower than the LLM
 ratio.** Set it lower and the root is sampled away while its children are kept,
 which is the headless-fragment failure by another route. Both are `1.0` wherever
