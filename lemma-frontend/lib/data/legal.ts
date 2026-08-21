@@ -31,13 +31,26 @@ export type LegalAnswer = {
     detail: string;
 };
 
-export type LegalDocument = {
+/**
+ * The shape `LegalPage`, and the markdown renderer in lib/markdown/render.ts,
+ * both know how to lay out. `LegalDocument` is the legal-specific case — an
+ * effective date and a "short version" summary always apply to a policy — but
+ * a page like About or Contact has real content in the same shape without
+ * either, so those fields live here as optional rather than forcing every
+ * structured page through the vocabulary of a policy.
+ */
+export type PageDocument = {
     title: string;
     description: string;
-    effectiveDate: string;
-    summary: string[];
+    effectiveDate?: string;
+    summary?: string[];
     answers?: LegalAnswer[];
     sections: LegalSection[];
+};
+
+export type LegalDocument = PageDocument & {
+    effectiveDate: string;
+    summary: string[];
 };
 
 export const privacyPolicy: LegalDocument = {
