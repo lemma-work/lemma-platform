@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -58,19 +59,10 @@ def extract_graph_message_attachments(item: dict[str, Any]) -> list[dict[str, An
             }
         )
     body = payload_section(item, "body")
-    inline_url = extract_image_url_from_html(payload_text(body, "content"))
-    if inline_url and not any(
-        existing.get("download_url") == inline_url for existing in results
-    ):
-        results.append(
-            {
-                "name": filename_from_url(inline_url) or "image",
-                "download_url": inline_url,
-                "file_type": file_type_from_url(inline_url),
-                "content_type": "image/*",
-                "size": None,
-            }
-        )
+    _append_unique(
+        results,
+        _image_entry(extract_image_url_from_html(payload_text(body, "content"))),
+    )
     return results
 
 
@@ -89,6 +81,128 @@ def file_type_from_url(url: str) -> str:
     if filename and "." in filename:
         return filename.rsplit(".", 1)[-1].lower()
     return ""
+
+
+def _image_entry(
+    url: str | None, *, name: str | None = None, file_type: str | None = None
+) -> dict[str, Any] | None:
+    """An inline image as an attachment descriptor, or None when there is no URL."""
+    if not url:
+        return None
+    return {
+        "name": name or filename_from_url(url) or "image",
+        "download_url": url,
+        "file_type": file_type or file_type_from_url(url),
+        "content_type": "image/*",
+        "size": None,
+    }
+
+
+def _append_unique(results: list[dict[str, Any]], entry: dict[str, Any] | None) -> None:
+    """Add an attachment unless its download URL is already in the list.
+
+    One Teams activity can describe the same file three ways -- a rich
+    attachment, an inline ``<img>``, and the message HTML -- so every producer
+    funnels through here rather than repeating the scan.
+    """
+    if entry is None:
+        return
+    if any(item.get("download_url") == entry["download_url"] for item in results):
+        return
+    results.append(entry)
+
+
+def _submitted_fields(value: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """The decision and the form inputs carried by one Action.Submit.
+
+    An approval-card submit carries the tapped decision and has no form inputs,
+    so the two are mutually exclusive rather than merely usually different.
+    """
+    decision = str(value.get(TEAMS_APPROVAL_DECISION_KEY) or "").strip() or None
+    if decision is not None:
+        return decision, {}
+    return None, {
+        key: item
+        for key, item in value.items()
+        if key not in (TEAMS_FORM_CALLBACK_KEY, TEAMS_APPROVAL_DECISION_KEY)
+    }
+
+
+def _interaction_reply_target(payload: dict[str, Any]) -> dict[str, str | None]:
+    """Where a reply to this submission has to be posted."""
+    conversation = payload_section(payload, "conversation")
+    return {
+        "service_url": payload_text(payload, "serviceUrl").rstrip("/") or None,
+        "conversation_id": payload_text(conversation, "id") or None,
+        "reply_to_id": payload_text(payload, "replyToId") or None,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamsRouting:
+    """Where a Teams activity lands: which channel, which thread, DM or not.
+
+    Both inbound shapes -- a Bot Framework activity and the legacy ``value``
+    event -- work this out identically, quirk for quirk, so they work it out
+    here once.
+    """
+
+    is_dm: bool
+    is_thread_reply: bool
+    channel_id: str | None
+    external_channel_id: str
+    external_thread_id: str
+    conversation_id: str
+    reply_to_id: str | None
+
+    @property
+    def is_addressable(self) -> bool:
+        """Whether the message can be placed. Without both ids there is no event."""
+        return bool(self.external_channel_id and self.external_thread_id)
+
+    @property
+    def conversation_type(self) -> ConversationType:
+        return (
+            ConversationType.EXTERNAL_DM
+            if self.is_dm
+            else ConversationType.EXTERNAL_GROUP
+        )
+
+    def should_start(self, *, mentioned: bool) -> bool:
+        """A DM, an @mention, or a reply inside a thread already under way."""
+        return self.is_dm or mentioned or self.is_thread_reply
+
+
+def _teams_routing(message: dict[str, Any]) -> _TeamsRouting:
+    """Read the channel/thread placement out of either activity shape."""
+    conversation = payload_section(message, "conversation")
+    channel = payload_section(payload_section(message, "channelData"), "channel")
+    conversation_id = payload_text(conversation, "id")
+    is_dm = payload_text(
+        conversation, "conversationType"
+    ).lower() == "personal" or not channel.get("id")
+
+    # For channel thread replies Teams may leave channelData.channel.id empty and
+    # set conversation.id to a compound string:
+    #   "19:<channelId>@thread.tacv2;messageid=<rootMsgId>"
+    # The clean channel ID has to come back out so it matches allowed_channel_ids.
+    channel_id = payload_text(channel, "id")
+    if not channel_id and not is_dm and ";messageid=" in conversation_id:
+        channel_id = conversation_id.split(";messageid=")[0]
+
+    return _TeamsRouting(
+        is_dm=is_dm,
+        is_thread_reply=bool(message.get("replyToId")),
+        channel_id=channel_id or None,
+        external_channel_id=channel_id or conversation_id,
+        # For channels the thread root is the message being replied to, or this
+        # message. For DMs conversation.id is stable across the whole chat.
+        external_thread_id=(
+            conversation_id if is_dm else payload_first(message, "replyToId", "id")
+        ),
+        conversation_id=conversation_id,
+        reply_to_id=None if is_dm else (payload_text(message, "id") or None),
+    )
 
 
 class TeamsMessageParser:
@@ -120,47 +234,32 @@ class TeamsMessageParser:
         callback_id = str(value.get(TEAMS_FORM_CALLBACK_KEY) or "").strip()
         if not callback_id:
             return None
-        # An approval-card submit carries the tapped decision; it has no form
-        # inputs, so its values map is empty.
-        approval_decision = (
-            str(value.get(TEAMS_APPROVAL_DECISION_KEY) or "").strip() or None
-        )
-        field_values = (
-            {}
-            if approval_decision is not None
-            else {
-                k: v
-                for k, v in value.items()
-                if k not in (TEAMS_FORM_CALLBACK_KEY, TEAMS_APPROVAL_DECISION_KEY)
-            }
-        )
-        from_user = payload_section(payload, "from")
-        conversation = payload_section(payload, "conversation")
+
+        approval_decision, field_values = _submitted_fields(value)
+        reply_target = _interaction_reply_target(payload)
         channel_data = payload_section(payload, "channelData")
         tenant = payload_section(channel_data, "tenant")
         channel = payload_section(channel_data, "channel")
-        service_url = payload_text(payload, "serviceUrl").rstrip("/") or None
-        conversation_id = payload_text(conversation, "id") or None
-        reply_to_id = payload_text(payload, "replyToId") or None
         return ParsedSurfaceInteraction(
             platform="TEAMS",
             tenant_id=str(tenant.get("id") or payload.get("tenantId") or "") or None,
             external_channel_id=payload_text(channel, "id") or None,
-            external_thread_id=reply_to_id or conversation_id,
+            external_thread_id=(
+                reply_target["reply_to_id"] or reply_target["conversation_id"]
+            ),
             # Match the same aad_id-or-bf_user_id precedence identity resolution
             # uses (TeamsSurfaceAdapter.fetch_sender_profile): when the AAD Object
             # ID was resolvable, it — not the bot-framework `id` — is what got
             # stored as the conversation link's external_user_id. Reading only
             # `id` here would reject every native submission's authz check.
-            external_user_id=(payload_first(from_user, "aadObjectId", "id") or None),
+            external_user_id=(
+                payload_first(payload_section(payload, "from"), "aadObjectId", "id")
+                or None
+            ),
             callback_id=callback_id,
             values=field_values,
             approval_decision=approval_decision,
-            reply_target={
-                "service_url": service_url,
-                "conversation_id": conversation_id,
-                "reply_to_id": reply_to_id,
-            },
+            reply_target=reply_target,
             dedup_id=payload_text(payload, "id") or None,
             raw_payload=payload,
         )
@@ -175,80 +274,19 @@ class TeamsMessageParser:
         if not raw_text and not attachments:
             return None
 
-        conversation = payload_section(payload, "conversation")
-        from_user = payload_section(payload, "from")
-        channel_data = payload_section(payload, "channelData")
-        team = payload_section(channel_data, "team")
-        channel = payload_section(channel_data, "channel")
-        tenant = payload_section(channel_data, "tenant")
-
-        is_thread_reply = bool(payload.get("replyToId"))
-        is_dm = str(
-            conversation.get("conversationType") or ""
-        ).lower() == "personal" or not channel.get("id")
-
-        # For channel thread replies Teams may leave channelData.channel.id empty and
-        # set conversation.id to a compound string:
-        #   "19:<channelId>@thread.tacv2;messageid=<rootMsgId>"
-        # We must extract the clean channel ID so it matches allowed_channel_ids.
-        channel_id_raw = payload_text(channel, "id")
-        if not channel_id_raw and not is_dm:
-            conv_id = payload_text(conversation, "id")
-            if ";messageid=" in conv_id:
-                channel_id_raw = conv_id.split(";messageid=")[0]
-
-        external_channel_id = str(channel_id_raw or conversation.get("id") or "")
-        # For channels: thread root is the message being replied to (replyToId) or the
-        # message itself. For DMs: the conversation ID is stable across the whole chat.
-        external_thread_id = (
-            payload_text(conversation, "id")
-            if is_dm
-            else payload_first(payload, "replyToId", "id")
-        )
-        if not external_channel_id or not external_thread_id:
+        routing = _teams_routing(payload)
+        if not routing.is_addressable:
             return None
 
-        service_url = payload_text(payload, "serviceUrl").rstrip("/")
-        conversation_id = payload_text(conversation, "id")
-        # reply_to_id lets Bot Framework thread our reply under the original message.
-        reply_to_id = payload_text(payload, "id") if not is_dm else None
-
-        text = self._message_text(raw_text, attachments)
-        mentioned = self._mentioned_bot(payload)
-        team_id = payload_text(team, "id") or None
-        team_aad_group_id = payload_text(team, "aadGroupId") or None
-        meta = self._build_metadata(
-            is_thread_reply=is_thread_reply,
-            team_id=team_id,
-            team_aad_group_id=team_aad_group_id,
-            channel_id=channel_id_raw or None,
-            service_url=service_url or None,
-            conversation_id=conversation_id or None,
-            reply_to_id=reply_to_id or None,
+        return self._event_from_activity(
+            message=payload,
+            payload=payload,
+            sender=payload_section(payload, "from"),
+            routing=routing,
+            text=self._message_text(raw_text, attachments),
             attachments=attachments,
-        )
-
-        return ParsedInboundSurfaceEvent(
-            platform=self.platform,
-            conversation_type=(
-                ConversationType.EXTERNAL_DM
-                if is_dm
-                else ConversationType.EXTERNAL_GROUP
-            ),
-            tenant_id=str(tenant.get("id") or payload.get("tenantId") or "") or None,
-            external_channel_id=external_channel_id,
-            external_thread_id=external_thread_id,
-            external_message_id=payload_text(payload, "id") or None,
-            sender_external_user_id=payload_text(from_user, "id") or None,
-            sender_aad_object_id=payload_text(from_user, "aadObjectId") or None,
-            sender_display_name=payload_text(from_user, "name") or None,
-            message_text=text,
-            is_dm=is_dm,
-            mentioned_agent=mentioned,
-            should_start_conversation=is_dm or mentioned or is_thread_reply,
-            reply_target=self._reply_target(meta),
-            metadata=meta,
-            raw_payload=payload,
+            service_url=payload_text(payload, "serviceUrl").rstrip("/"),
+            mentioned=self._mentioned_bot(payload),
         )
 
     def _parse_legacy_value_event(
@@ -260,74 +298,76 @@ class TeamsMessageParser:
         if not raw_text and not attachments:
             return None
 
-        sender = (payload_section(message, "from")).get("user", {}) or payload_section(
-            message, "from"
-        )
-        conversation = payload_section(message, "conversation")
-        channel_data = payload_section(message, "channelData")
-        channel = payload_section(channel_data, "channel")
-        team = payload_section(channel_data, "team")
-        tenant = payload_section(channel_data, "tenant")
-
-        is_thread_reply = bool(message.get("replyToId"))
-        is_dm = str(
-            conversation.get("conversationType") or ""
-        ).lower() == "personal" or not channel.get("id")
-
-        channel_id_raw = payload_text(channel, "id")
-        if not channel_id_raw and not is_dm:
-            conv_id = payload_text(conversation, "id")
-            if ";messageid=" in conv_id:
-                channel_id_raw = conv_id.split(";messageid=")[0]
-
-        external_channel_id = str(channel_id_raw or conversation.get("id") or "")
-        external_thread_id = (
-            payload_text(conversation, "id")
-            if is_dm
-            else payload_first(message, "replyToId", "id")
-        )
-        if not external_channel_id or not external_thread_id:
+        routing = _teams_routing(message)
+        if not routing.is_addressable:
             return None
 
-        service_url = str(
-            message.get("serviceUrl") or payload.get("serviceUrl") or ""
-        ).rstrip("/")
-        conversation_id = payload_text(conversation, "id")
-        reply_to_id = payload_text(message, "id") if not is_dm else None
-
         text = self._message_text(raw_text, attachments)
-        mentioned = "<at>" in text.lower()
-        team_id = payload_text(team, "id") or None
-        team_aad_group_id = payload_text(team, "aadGroupId") or None
-        meta = self._build_metadata(
-            is_thread_reply=is_thread_reply,
-            team_id=team_id,
-            team_aad_group_id=team_aad_group_id,
-            channel_id=channel_id_raw or None,
-            service_url=service_url or None,
-            conversation_id=conversation_id or None,
-            reply_to_id=reply_to_id or None,
+        from_field = payload_section(message, "from")
+        return self._event_from_activity(
+            message=message,
+            payload=payload,
+            # This shape nests the person one level deeper.
+            sender=payload_section(from_field, "user") or from_field,
+            routing=routing,
+            text=text,
             attachments=attachments,
+            # The outer activity carries the service URL when the message does not.
+            service_url=(
+                payload_first(message, "serviceUrl")
+                or payload_text(payload, "serviceUrl")
+            ).rstrip("/"),
+            # No entities array in this shape, so an <at> tag is the only signal.
+            mentioned="<at>" in text.lower(),
         )
 
+    def _event_from_activity(
+        self,
+        *,
+        message: dict[str, Any],
+        payload: dict[str, Any],
+        sender: dict[str, Any],
+        routing: _TeamsRouting,
+        text: str,
+        attachments: list[dict[str, Any]],
+        service_url: str,
+        mentioned: bool,
+    ) -> ParsedInboundSurfaceEvent:
+        """Build the event both activity shapes resolve to.
+
+        They differ in three fields only -- where the sender sits, where the
+        service URL comes from, and how a mention is detected. Everything below
+        was duplicated line for line between them until it was pulled here.
+        """
+        channel_data = payload_section(message, "channelData")
+        team = payload_section(channel_data, "team")
+        tenant = payload_section(channel_data, "tenant")
+        meta = self._build_metadata(
+            is_thread_reply=routing.is_thread_reply,
+            team_id=payload_text(team, "id") or None,
+            team_aad_group_id=payload_text(team, "aadGroupId") or None,
+            channel_id=routing.channel_id,
+            service_url=service_url or None,
+            conversation_id=routing.conversation_id or None,
+            reply_to_id=routing.reply_to_id,
+            attachments=attachments,
+        )
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
-            conversation_type=(
-                ConversationType.EXTERNAL_DM
-                if is_dm
-                else ConversationType.EXTERNAL_GROUP
+            conversation_type=routing.conversation_type,
+            tenant_id=(
+                payload_first(tenant, "id") or payload_text(payload, "tenantId") or None
             ),
-            tenant_id=str(tenant.get("id") or payload.get("tenantId") or "") or None,
-            external_channel_id=external_channel_id,
-            external_thread_id=external_thread_id,
+            external_channel_id=routing.external_channel_id,
+            external_thread_id=routing.external_thread_id,
             external_message_id=payload_text(message, "id") or None,
             sender_external_user_id=payload_text(sender, "id") or None,
             sender_aad_object_id=payload_text(sender, "aadObjectId") or None,
             sender_display_name=payload_text(sender, "name") or None,
             message_text=text,
-            is_dm=is_dm,
+            is_dm=routing.is_dm,
             mentioned_agent=mentioned,
-            should_start_conversation=is_dm or mentioned or is_thread_reply,
+            should_start_conversation=routing.should_start(mentioned=mentioned),
             reply_target=self._reply_target(meta),
             metadata=meta,
             raw_payload=payload,
@@ -350,71 +390,50 @@ class TeamsMessageParser:
         """
         results: list[dict[str, Any]] = []
         for att in payload.get("attachments") or []:
-            if not isinstance(att, dict):
-                continue
-            content_type = payload_text(att, "contentType")
-            name = payload_text(att, "name") or None
-            content = payload_section(att, "content")
-
-            if content_type == "text/html":
-                html_content = payload_text(att, "content")
-                image_url = extract_image_url_from_html(html_content)
-                if image_url and not any(
-                    existing.get("download_url") == image_url for existing in results
-                ):
-                    results.append(
-                        {
-                            "name": name or filename_from_url(image_url) or "image",
-                            "download_url": image_url,
-                            "file_type": (
-                                self._extract_image_type_from_html(html_content)
-                                or file_type_from_url(image_url)
-                            ),
-                            "content_type": "image/*",
-                            "size": None,
-                        }
-                    )
-                continue
-
-            download_url = self._attachment_download_url(att)
-            if download_url and self._looks_like_downloadable_attachment(att):
-                if not any(
-                    existing.get("download_url") == download_url for existing in results
-                ):
-                    file_type = (
-                        payload_text(content, "fileType").strip()
-                        or self._file_type_from_name(name)
-                        or file_type_from_url(download_url)
-                        or self._file_type_from_content_type(content_type)
-                    )
-                    results.append(
-                        {
-                            "name": name
-                            or filename_from_url(download_url)
-                            or "attachment",
-                            "download_url": download_url,
-                            "file_type": file_type,
-                            "content_type": content_type or "application/octet-stream",
-                            "size": content.get("fileSize"),
-                        }
-                    )
+            if isinstance(att, dict):
+                _append_unique(results, self._attachment_entry(att))
 
         # In some Teams activities the only clue is an inline <img src="..."> in the
         # message HTML itself rather than a rich attachment entry.
-        inline_url = extract_image_url_from_html(payload_text(payload, "text"))
-        if inline_url and not any(
-            existing.get("download_url") == inline_url for existing in results
-        ):
-            results.append(
-                {
-                    "name": filename_from_url(inline_url) or "image",
-                    "download_url": inline_url,
-                    "file_type": file_type_from_url(inline_url),
-                    "content_type": "image/*",
-                    "size": None,
-                }
-            )
+        _append_unique(
+            results,
+            _image_entry(extract_image_url_from_html(payload_text(payload, "text"))),
+        )
         return results
+
+    def _attachment_entry(self, att: dict[str, Any]) -> dict[str, Any] | None:
+        """One attachment as a descriptor, or None when it carries no file.
+
+        Two shapes arrive under the same key: a ``text/html`` card whose only
+        payload is an inline image, and a rich attachment with a download URL.
+        """
+        content_type = payload_text(att, "contentType")
+        name = payload_text(att, "name") or None
+
+        if content_type == "text/html":
+            html_content = payload_text(att, "content")
+            return _image_entry(
+                extract_image_url_from_html(html_content),
+                name=name,
+                file_type=self._extract_image_type_from_html(html_content) or None,
+            )
+
+        download_url = self._attachment_download_url(att)
+        if not download_url or not self._looks_like_downloadable_attachment(att):
+            return None
+        content = payload_section(att, "content")
+        return {
+            "name": name or filename_from_url(download_url) or "attachment",
+            "download_url": download_url,
+            "file_type": (
+                payload_text(content, "fileType").strip()
+                or self._file_type_from_name(name)
+                or file_type_from_url(download_url)
+                or self._file_type_from_content_type(content_type)
+            ),
+            "content_type": content_type or "application/octet-stream",
+            "size": content.get("fileSize"),
+        }
 
     def attachment_prompt_text(self, attachments: list[dict[str, Any]]) -> str:
         return render_attachment_prompt_block(attachments, platform=self.platform)

@@ -92,7 +92,7 @@ def test_slack_approval_blocks_and_parse_round_trip():
 
 
 def test_teams_approval_card_and_parse_round_trip():
-    from app.modules.agent_surfaces.platforms.teams.adapter import _teams_approval_card
+    from app.modules.agent_surfaces.platforms.teams.cards import _teams_approval_card
     from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
 
     plan = _plan()
