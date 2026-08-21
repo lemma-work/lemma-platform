@@ -32,7 +32,13 @@ from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
     dispatch_agent_host_permission,
 )
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.conversation_approvals import (
+    ApprovalCoordinator,
+)
 
 _PAYLOAD = {
     "toolCall": {
@@ -439,15 +445,22 @@ class TestResolutionRouting:
             tool_args=args,
         )
         repository = _ConversationRepository(call)
-        service = ConversationService.__new__(ConversationService)
-        service.conversation_repository = repository
         # The host dispatch is queued on the unit of work now rather than
         # awaited inline, so the fake has to accept it. It fires the callback
         # eagerly: these tests are about WHETHER the decision reaches the host,
         # and a fake that swallowed the callback would let them pass while
         # nothing happened. That it waits for the commit is asserted separately,
         # in `test_the_dispatch_waits_for_the_commit`.
-        service.uow = _AfterCommitUow()
+        uow = _AfterCommitUow()
+        # The real coordinator, not a stand-in and not a half-built service:
+        # what these tests check is its routing, so anything less would certify
+        # the test's own wiring instead.
+        service = ApprovalCoordinator(
+            uow,
+            repository,
+            ResumeToolReturnBuilder(uow, None),
+            PauseResume(uow, repository, None),
+        )
 
         async def _dispatch(*, request, agent_run_id, decision):
             dispatched.append((request.request_id, agent_run_id, decision))
@@ -459,8 +472,7 @@ class TestResolutionRouting:
             _dispatch,
         )
         monkeypatch.setattr(
-            "app.modules.agent.services.conversation_service"
-            ".publish_conversation_event",
+            "app.modules.agent.services.pause_resume.publish_conversation_event",
             _noop,
         )
         return service, repository, run_id

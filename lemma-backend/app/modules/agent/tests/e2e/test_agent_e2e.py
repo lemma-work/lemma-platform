@@ -36,6 +36,11 @@ from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.run_event_pump import RunOutcome
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.context import BaseAgentContext
@@ -772,7 +777,7 @@ class TestPodAgentLifecycle:
             harness_registry=object(),  # type: ignore[arg-type]
         )
 
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -781,10 +786,10 @@ class TestPodAgentLifecycle:
                     metadata={"is_final_answer": False, "harness_kind": "CODEX"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -795,10 +800,10 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -809,17 +814,17 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
                 data=MessageDraft.of_text("Final answer."),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
 
         messages = await authenticated_client.get(
@@ -1166,7 +1171,7 @@ class TestPodAgentLifecycle:
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fake_execute_as_user,
         )
@@ -1447,7 +1452,7 @@ class TestPodAgentLifecycle:
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fail_if_executed,
         )
@@ -1569,7 +1574,7 @@ class TestPodAgentLifecycle:
                 conversation_id
             )
             service = _build_conversation_service(uow)
-            live_deps = await service._build_resume_context(
+            live_deps = await service.resume_returns._build_resume_context(
                 conversation=conversation,
                 user_id=UUID(fixed_test_user["id"]),
                 agent_run_id=paused_run.id,

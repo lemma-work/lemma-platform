@@ -9,12 +9,20 @@ through one and not the other.
 
 Both checks are supersets now, with the extra condition optional. A caller that
 does not pass it gets exactly what it had.
+
+The permission checks below joined them for the same reason: they were private
+methods on `ConversationService`, and every collaborator split out of that class
+needed them, which is the definition of something that belongs one level down
+rather than inside.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
+from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.current import get_current_context
 from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
@@ -24,6 +32,7 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
+from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 
 POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
@@ -84,3 +93,99 @@ async def resolve_agent(
     if agent_name is not None and agent.name != agent_name:
         raise AgentNotFoundError(agent_name)
     return agent
+
+
+async def resolve_agent_for_path(
+    agent_repository: AgentRepository,
+    *,
+    pod_id: UUID,
+    agent_name: str,
+) -> Agent:
+    agent = await agent_repository.get_by_pod_and_name(
+        pod_id=pod_id,
+        name=agent_name,
+    )
+    if agent is None:
+        raise AgentNotFoundError(agent_name)
+    return agent
+
+
+async def resolve_expected_agent_id(
+    agent_repository: AgentRepository,
+    *,
+    pod_id: UUID,
+    agent_name: str | None,
+) -> UUID | None:
+    if agent_name is None:
+        return None
+    agent = await resolve_agent_for_path(
+        agent_repository,
+        pod_id=pod_id,
+        agent_name=agent_name,
+    )
+    return agent.id
+
+
+async def authorized_conversation(
+    conversation_repository: ConversationRepository,
+    agent_repository: AgentRepository,
+    *,
+    conversation_id: UUID,
+    user_id: UUID,
+    pod_id: UUID,
+    agent_name: str | None,
+    action: str,
+) -> Conversation:
+    agent_id = await resolve_expected_agent_id(
+        agent_repository,
+        pod_id=pod_id,
+        agent_name=agent_name,
+    )
+    conversation = await conversation_repository.get_conversation(conversation_id)
+    validate_conversation_access(
+        conversation,
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+    )
+    await require_agent_action(
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_id=conversation.agent_id,
+        action=action,
+    )
+    return conversation
+
+
+async def require_agent_action(
+    *,
+    user_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    action: str,
+) -> None:
+    await require_agent_actions(
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        actions=(action,),
+    )
+
+
+async def require_agent_actions(
+    *,
+    user_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    actions: Sequence[str],
+) -> None:
+    _ = user_id
+    ctx = get_current_context()
+    if ctx is None:
+        raise RuntimeError("Context is required for conversation authorization")
+    resource = ResourceRef(
+        resource_type=ResourceType.AGENT if agent_id is not None else ResourceType.POD,
+        resource_id=agent_id or pod_id,
+        pod_id=pod_id,
+    )
+    await ctx.require_all([(action, resource) for action in actions])

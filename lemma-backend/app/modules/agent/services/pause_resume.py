@@ -6,9 +6,11 @@ approval-specific: any tool that raises ``AgentInputRequired`` pauses the same
 way, and resumes by having its return synthesized and replayed by a fresh run.
 ``snooze`` is the second caller — it resolves on a timer instead of on a person.
 
-Lives in its own module as a mixin rather than inline on ``ConversationService``
-so the primitive reads as a primitive, and because that class is already well
-past the architecture ratchet's file-size limit.
+A collaborator rather than a mixin: it needs a unit of work, a conversation
+repository and an agent repository, and nothing else ``ConversationService``
+holds. Stated as constructor arguments, that is checkable; mixed in, it was a
+set of attribute names the mixin hoped its host had -- which is how it came to
+call a private helper the host later stopped having.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
 )
+from app.modules.agent.services.pod_runtime_defaults import (
+    default_agent_runtime_for_pod,
+)
 from app.modules.agent.services.serialization import message_to_payload
 
 logger = get_logger(__name__)
@@ -43,8 +48,18 @@ logger = get_logger(__name__)
 PAUSING_TOOL_NAMES = _PAUSING_TOOL_NAMES_DOMAIN
 
 
-class PauseResumeMixin:
-    """Mixed into ``ConversationService``; relies on its repo/uow attributes."""
+class PauseResume:
+    """Suspends and resumes a turn around a tool that waits for the world."""
+
+    def __init__(
+        self,
+        uow: object,
+        conversation_repository: object,
+        agent_repository: object,
+    ) -> None:
+        self.uow = uow
+        self.conversation_repository = conversation_repository
+        self.agent_repository = agent_repository
 
     async def append_pause_tool_return(
         self,
@@ -153,7 +168,7 @@ class PauseResumeMixin:
         selected_agent_runtime = (
             conversation.agent_runtime
             or agent.agent_runtime
-            or await self._default_agent_runtime_for_pod(pod_id=conversation.pod_id)
+            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
         )
         resume_run = await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,

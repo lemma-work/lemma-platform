@@ -14,7 +14,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
 )
-from app.modules.agent.services import runtime_profile_service
+from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     register_system_openai_catalog_customizer,
@@ -57,7 +57,7 @@ def test_default_catalog_uses_names_verbatim(openai_env):
 def test_pricing_catalog_is_empty_when_no_models_are_configured(monkeypatch):
     from app.core.config import settings
 
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
     monkeypatch.setattr(settings, "lemma_openai_model_names", "")
     monkeypatch.setattr(settings, "lemma_openai_default_model", "")
     monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
@@ -131,4 +131,4 @@ def test_clear_customizer_restores_default(openai_env):
     register_system_openai_catalog_customizer(None)
     catalog = _system_catalog()
     assert catalog["minimax-m3"].provider_model_name == "minimax-m3"
-    assert runtime_profile_service._system_openai_catalog_customizer is None
+    assert system_profiles._system_openai_catalog_customizer is None
