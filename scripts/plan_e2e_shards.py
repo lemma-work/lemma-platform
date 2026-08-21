@@ -89,7 +89,20 @@ PINNED = [
 # wall-clock, which is the floor for the whole workflow, while staying well
 # inside the free plan's twenty-concurrent-job budget.
 PACKED_SHARDS = 3
-PACKED_WORKERS = 3
+# Two, not three. Three was generalised from the one shard ever measured at it
+# -- the old `pod` shard, 94 tests of pure API work -- and it does not hold for
+# a packed bin. Each xdist worker runs its own SuperTokens container and its
+# own streaq worker subprocess, so three of them on a four-vCPU runner starve
+# the async workers the tests are waiting on. It shows up as a *condition*
+# wait timing out with a generous budget rather than as a slow assert:
+# test_apply_destructive_requires_confirmation blew a 90-second wait for a
+# bundle import, intermittently -- green on one run, red on the next with the
+# same shard contents.
+#
+# This costs no wall-clock. The `sandbox` shard runs serially at ~550s and is
+# the floor for the whole workflow; a packed bin at two workers lands near
+# 420s, still comfortably underneath it.
+PACKED_WORKERS = 2
 
 # The catch-all shard collects these roots and ignores every directory that was
 # explicitly assigned, so a new module's e2e tests land somewhere by default
