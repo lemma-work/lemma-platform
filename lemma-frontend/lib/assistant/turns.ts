@@ -243,64 +243,34 @@ interface MutableTurn extends ChatTurn {
 // lemma-typescript/src/react/useAssistantRuntime.ts); when the echo arrives it
 // replaces the message in place, changing the id. Turns are keyed by that id
 // and the transcript keys turns, so the swap would remount the live turn and
-// replay its entrance animations. Remember the turn id the provisional message
-// had so its echo — and every rebuild after it — can inherit it.
+// replay its entrance animation as a flicker.
 //
-// The memory key is conversation + content + a coarse time bucket: the echo's
-// server timestamp and the provisional message's client timestamp differ by
-// latency and clock skew, so an exact timestamp would miss. Buckets the size
-// of the SDK's own optimistic match window, checked ±1 on lookup, cover it.
-const OPTIMISTIC_USER_ID_PREFIX = "optimistic-user-";
-const OPTIMISTIC_TURN_ID_LIMIT = 256;
-const OPTIMISTIC_TURN_BUCKET_MS = 2 * 60 * 1000;
-const optimisticTurnIds = new Map<string, string>();
-
-function optimisticTurnKey(
-  conversationId: string,
-  content: string,
-  timestampMs: number,
-  bucketOffset = 0,
-): string {
-  const bucket = Math.floor(timestampMs / OPTIMISTIC_TURN_BUCKET_MS) + bucketOffset;
-  return `${conversationId}\u0000${content}\u0000${bucket}`;
-}
-
+// The store records which provisional message each echo replaced, so the echo
+// says outright which turn it belongs to. This used to be guessed instead —
+// from conversation + text + a coarse time bucket — which could not survive a
+// turn being shown before its conversation existed (there was no conversation
+// to key the guess by), and mismatched outright when two turns shared their
+// text and minute.
 function turnIdForUserMessage(
   message: AssistantRenderableMessage,
   fallbackId: string,
-  conversationId: string | null,
   taken: { id: string }[],
 ): string {
   const messageId = message.id || fallbackId;
-  const generated = `turn-${messageId}`;
-  const content = typeof message.content === "string" ? message.content : messageTextContent(message);
-  if (!conversationId || !content) return generated;
-  const timestampMs = messageTimeMs(message);
-  if (timestampMs === null) return generated;
+  const inheritedId = typeof message.optimistic_id === "string" && message.optimistic_id
+    ? message.optimistic_id
+    : null;
+  // Whatever id is chosen, the transcript keys turns by it — so two turns must
+  // never leave here with the same one. React's answer to a duplicate key is to
+  // drop one of the two turns, which costs the reader a message.
+  const unique = (candidate: string): string => {
+    if (!taken.some((turn) => turn.id === candidate)) return candidate;
+    let suffix = 2;
+    while (taken.some((turn) => turn.id === `${candidate}~${suffix}`)) suffix += 1;
+    return `${candidate}~${suffix}`;
+  };
 
-  if (messageId.startsWith(OPTIMISTIC_USER_ID_PREFIX)) {
-    // Set-if-absent: with two identical provisional messages pending, the key
-    // belongs to the first one, so the first echo inherits the first turn.
-    const key = optimisticTurnKey(conversationId, content, timestampMs);
-    if (!optimisticTurnIds.has(key)) optimisticTurnIds.set(key, generated);
-    if (optimisticTurnIds.size > OPTIMISTIC_TURN_ID_LIMIT) {
-      const oldest = optimisticTurnIds.keys().next().value;
-      if (oldest !== undefined) optimisticTurnIds.delete(oldest);
-    }
-    return generated;
-  }
-
-  for (const bucketOffset of [0, -1, 1]) {
-    const key = optimisticTurnKey(conversationId, content, timestampMs, bucketOffset);
-    const inherited = optimisticTurnIds.get(key);
-    if (!inherited) continue;
-    // Delete-then-set refreshes the entry's position in the eviction order:
-    // it must survive every rebuild for as long as this turn is on screen.
-    optimisticTurnIds.delete(key);
-    optimisticTurnIds.set(key, inherited);
-    return taken.some((turn) => turn.id === inherited) ? generated : inherited;
-  }
-  return generated;
+  return unique(`turn-${inheritedId ?? messageId}`);
 }
 
 function newTurn(id: string, userMessage: AssistantRenderableMessage | null): MutableTurn {
@@ -479,7 +449,7 @@ export function buildChatTurns({
     const message = row.message;
 
     if (message.role === "user") {
-      const turnId = turnIdForUserMessage(message, `${row.id || rowIndex}`, conversationId, turns);
+      const turnId = turnIdForUserMessage(message, `${row.id || rowIndex}`, turns);
       current = newTurn(turnId, message);
       turns.push(current);
       return;
