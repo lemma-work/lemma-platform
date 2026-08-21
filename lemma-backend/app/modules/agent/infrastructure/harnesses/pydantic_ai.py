@@ -1220,12 +1220,6 @@ class PydanticAIHarness:
         return final_answer_text(data, fallback=fallback)
 
 
-def _preview(raw: str, *, limit: int = 160) -> str:
-    if len(raw) <= limit:
-        return raw
-    return f"{raw[:limit]}..."
-
-
 def _runtime_profile_model(options: HarnessOptions):
     return require_pydantic_ai_model_from_runtime_profile(
         runtime_profile=options.extra.get("runtime_profile"),

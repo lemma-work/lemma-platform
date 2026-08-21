@@ -612,6 +612,7 @@ class TestPodAgentLifecycle:
 
         assert response.status_code == 400, response.text
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_file_creation_tool_call_streams_tool_json_tokens(
@@ -1728,6 +1729,7 @@ class TestPodAgentLifecycle:
         }
         assert new_run_ids and tool_return["agent_run_id"] not in new_run_ids
 
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_stopping_streaming_agent_run_does_not_wedge_worker(
         self,
@@ -1798,6 +1800,7 @@ class TestPodAgentLifecycle:
         )
         _assert_completed_without_error(followup_events)
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_task_conversation_waits_then_completes_with_real_worker_model(
@@ -1894,6 +1897,7 @@ class TestPodAgentLifecycle:
         assert completed_payload["status"] == ConversationStatus.COMPLETED.value
         assert "secret_code received" in str(completed_payload["output"])
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_agent_http_lifecycle_with_real_worker_model(
@@ -2279,6 +2283,7 @@ class TestAgentRoleVisibility:
 
 
 class TestPodAssistantLifecycle:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_assistant_http_lifecycle_with_real_worker_model(
         self,
@@ -2977,6 +2982,7 @@ class TestFinalAnswerToolset:
 
 
 class TestAgentToolApis:
+    @pytest.mark.provider
     async def test_agent_tool_http_apis(self, authenticated_client, db_session):
         await _seed_gmail_connector(db_session)
 
@@ -3160,6 +3166,7 @@ async def _wait_for_conversation_title(
 
 
 class TestConversationTitleGeneration:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_first_run_generates_title_with_real_worker_model(
         self,

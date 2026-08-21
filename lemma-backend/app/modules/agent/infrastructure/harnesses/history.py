@@ -120,7 +120,7 @@ def build_history_processors(
     summarization_model: object,
 ) -> list[object]:
     """The history processors this run should apply, in order."""
-    processors = list(options.history_processors)
+    processors: list[object] = []
     ceiling = options.history_hard_token_ceiling
 
     if (
