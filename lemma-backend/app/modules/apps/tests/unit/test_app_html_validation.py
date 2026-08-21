@@ -135,6 +135,22 @@ def test_widget_contract_rejects_base64_content():
     assert any("base64" in e for e in errors)
 
 
+def test_widget_contract_survives_comment_bomb_in_linear_time():
+    """The SVG-root check must not backtrack.
+
+    Folding the leading-comment skip into the pattern
+    (``(?:<!--.*?-->\\s*)*<svg``) backtracks exponentially on input that opens a
+    comment and never reaches an ``<svg>``. Widget content comes from the agent,
+    so that input is reachable; 20k repetitions would not return this decade.
+    """
+    import time
+
+    bomb = "<!--" + "--><!--" * 20_000
+    started = time.perf_counter()
+    validate_widget_html(bomb)
+    assert time.perf_counter() - started < 1.0
+
+
 def test_widget_contract_rejects_unsubstituted_placeholder_text():
     errors = validate_widget_html("GRLk5IzpCh72PD... [full HTML below]")
     assert any("no element tag found" in e for e in errors)

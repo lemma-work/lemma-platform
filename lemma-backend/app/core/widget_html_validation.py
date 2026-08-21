@@ -76,7 +76,12 @@ _ELEMENT_TAG = re.compile(r"<[a-zA-Z][^>]*>")
 # A widget is a view, not an image. An SVG-rooted fragment belongs in pod files,
 # where it is addressable and reusable, and displays via FILE. Only the root is
 # rejected — inline <svg> icons inside an HTML fragment stay fine.
-_SVG_ROOT = re.compile(r"\A(?:<!--.*?-->\s*)*<svg\b", re.IGNORECASE | re.DOTALL)
+#
+# Leading comments are stripped by hand rather than folded into this pattern:
+# `(?:<!--.*?-->\s*)*<svg` backtracks exponentially on input that opens a comment
+# and never reaches an <svg> (`"<!--" + "--><!--" * n`), and widget content comes
+# from the agent, so that is reachable.
+_SVG_ROOT = re.compile(r"\A<svg\b", re.IGNORECASE)
 _UNRESOLVED_TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 _RUNTIME_CONFIG_REFERENCE = re.compile(r"\b(?:window\.)?__LEMMA_CONFIG__\b")
 _API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
@@ -94,6 +99,16 @@ _SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script\b[^>]*>", re.IGNORECASE 
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _ANY_TAG = re.compile(r"<[^>]+>")
 _NAKED_CSS_RULE = re.compile(r"[^{}\s<>][^{}<>]*\{[^{}]*[a-zA-Z-]+\s*:[^{}]*\}")
+
+
+def _without_leading_comments(content: str) -> str:
+    """Drop leading HTML comments in one linear pass (no backtracking)."""
+    while content.startswith("<!--"):
+        end = content.find("-->", len("<!--"))
+        if end == -1:
+            return content
+        content = content[end + len("-->") :].lstrip()
+    return content
 
 
 def lint_app_html(html: str) -> list[str]:
@@ -138,7 +153,7 @@ def validate_widget_html(html: str) -> list[str]:
             "Pass raw markup, not base64 or any other encoded form."
         ]
 
-    if _SVG_ROOT.match(content):
+    if _SVG_ROOT.match(_without_leading_comments(content)):
         return [
             "Widget content must be an HTML fragment, not a standalone SVG. "
             "Upload the image with `lemma files upload` and show it with "
