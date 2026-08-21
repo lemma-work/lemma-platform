@@ -1,7 +1,7 @@
 'use client';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
-import { forgetBrowserSession } from '@/components/auth/portal/auth/session-recovery';
+import { forgetBrowserSession } from '@/lib/auth/browser-session';
 import { clearLastOpenedPodId } from '@/lib/pods/last-opened-pod';
 import { resetAnalyticsIdentity } from '@/lib/analytics/client';
 

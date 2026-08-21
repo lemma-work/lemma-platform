@@ -5,7 +5,7 @@ import {
   cookieDomainsFor,
   isUnrepairableSessionFailure,
   type SessionStateStore,
-} from "@/components/auth/portal/auth/session-recovery";
+} from "@/lib/auth/browser-session";
 
 /** The message the SuperTokens fetch interceptor throws at its retry ceiling. */
 const CEILING_MESSAGE =

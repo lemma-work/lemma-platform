@@ -127,6 +127,7 @@ impl ManagedRuntimeBootstrap {
             forwarders: Mutex::new(Vec::new()),
             status: Mutex::new(None),
             clock_keeper: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
         }))
     }
 }
@@ -177,6 +178,36 @@ fn clock_sync_due(
     None
 }
 
+/// Where the sandbox image warm-up has got to.
+///
+/// Reported rather than waited on. The image a pod runs its work in is several
+/// hundred megabytes and is not needed until something actually runs, so
+/// fetching it used to sit in the middle of the startup bar and hold "Lemma is
+/// ready" behind a download nobody had asked for yet. It now runs behind the
+/// workspace, and this is what the app shows about it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxImageStatus {
+    /// `pending`, `downloading`, `ready`, or `failed`.
+    pub state: String,
+    pub detail: String,
+}
+
+impl SandboxImageStatus {
+    fn new(state: &str, detail: &str) -> Self {
+        Self {
+            state: state.to_owned(),
+            detail: detail.to_owned(),
+        }
+    }
+}
+
+impl Default for SandboxImageStatus {
+    fn default() -> Self {
+        Self::new("pending", "")
+    }
+}
+
 struct ClockKeeper {
     stop: Arc<AtomicBool>,
     handle: JoinHandle<()>,
@@ -188,6 +219,7 @@ pub struct ManagedRuntimeController {
     forwarders: Mutex<Vec<TcpForwarder>>,
     status: Mutex<Option<ManagedRuntimeStatus>>,
     clock_keeper: Mutex<Option<ClockKeeper>>,
+    sandbox_images: Mutex<SandboxImageStatus>,
 }
 
 impl ManagedRuntimeController {
@@ -275,34 +307,6 @@ impl ManagedRuntimeController {
             let _ = self.runtime.stop();
             return Err(error);
         }
-        // Last, and deliberately not fatal.
-        //
-        // A sandbox image is only needed once a pod runs something, and it used
-        // to be fetched at exactly that moment -- `pull --quiet`, no progress,
-        // several hundred megabytes -- so the first real piece of work anybody
-        // asked for stopped dead and said nothing. Spending it here spends it
-        // once, on a bar that is already on screen, and leaves the first run
-        // fast.
-        //
-        // But everything above this line is what makes Lemma work at all, and
-        // this is a warm-up. Someone installing on a plane should still get a
-        // working local Lemma; `sandbox.ensure` will pull what it needs later,
-        // exactly as it does today.
-        progress(
-            "sandbox-images",
-            "Preparing the workspace sandbox",
-            68,
-            "downloading the images pods run their work in",
-        );
-        if let Err(error) = self.runtime.request("core.sandbox_images", parameters) {
-            eprintln!("locald: sandbox images could not be warmed up: {error}");
-            progress(
-                "sandbox-images",
-                "Workspace sandbox will download later",
-                68,
-                "Lemma is ready; the first task in a pod will fetch it",
-            );
-        }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
         self.start_clock_keeper();
         Ok(())
@@ -387,6 +391,72 @@ impl ManagedRuntimeController {
             ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
             ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
         ]))
+    }
+
+    /// What the app should currently say about the sandbox image.
+    pub fn sandbox_image_status(&self) -> SandboxImageStatus {
+        self.sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned")
+            .clone()
+    }
+
+    /// Fetch the images pods run their work in, behind the workspace.
+    ///
+    /// Deliberately not part of starting. Nothing needs these images until a
+    /// pod runs something, and they are several hundred megabytes -- so doing
+    /// it inline held "Lemma is ready" behind a download the user had not asked
+    /// for yet, on a first run, on whatever connection they happened to have.
+    ///
+    /// Equally deliberately not fatal. Someone installing on a plane gets a
+    /// working local Lemma; `sandbox.ensure` still pulls what it needs on first
+    /// use, exactly as it did before any of this existed. `report` is how the
+    /// app is told, and is called for every state this passes through so a
+    /// caller can show it and then take it away again.
+    pub fn warm_sandbox_images(
+        self: &Arc<Self>,
+        report: impl Fn(&SandboxImageStatus) + Send + 'static,
+    ) {
+        let controller = Arc::clone(self);
+        thread::spawn(move || {
+            let parameters = json!({
+                "images": controller.spec.images,
+                "credentials": controller.spec.credentials,
+            });
+            controller.publish_sandbox_images(
+                SandboxImageStatus::new(
+                    "downloading",
+                    "Downloading the image pods run their work in",
+                ),
+                &report,
+            );
+            let status = match controller
+                .runtime
+                .request("core.sandbox_images", parameters)
+            {
+                Ok(_) => SandboxImageStatus::new("ready", "The workspace sandbox is ready"),
+                Err(error) => {
+                    eprintln!("locald: sandbox images could not be warmed up: {error}");
+                    SandboxImageStatus::new(
+                        "failed",
+                        "Lemma is ready; the first task in a pod will fetch it",
+                    )
+                }
+            };
+            controller.publish_sandbox_images(status, &report);
+        });
+    }
+
+    fn publish_sandbox_images(
+        &self,
+        status: SandboxImageStatus,
+        report: &impl Fn(&SandboxImageStatus),
+    ) {
+        *self
+            .sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned") = status.clone();
+        report(&status);
     }
 
     /// Hold the guest clock on this machine's for as long as the stack runs.
@@ -1119,6 +1189,7 @@ mod tests {
             },
             forwarders: Mutex::new(Vec::new()),
             clock_keeper: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

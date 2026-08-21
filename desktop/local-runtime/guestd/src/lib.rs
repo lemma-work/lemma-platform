@@ -2006,6 +2006,18 @@ fn guest_platform() -> &'static str {
     "linux/amd64"
 }
 
+/// Did this container run and stop, as opposed to never having started?
+///
+/// Read from the fields nerdctl does fill when `State.Status` is absent: an
+/// exit code, or a finish timestamp.
+fn container_has_exited(state: &serde_json::Map<String, Value>) -> bool {
+    state.get("ExitCode").and_then(Value::as_i64).is_some()
+        || state
+            .get("FinishedAt")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn snapshot_from_inspect(
     sandbox_id: &str,
     inspect: &serde_json::Map<String, Value>,
@@ -2029,7 +2041,16 @@ fn snapshot_from_inspect(
         "RUNNING"
     } else if matches!(state_text, "created" | "restarting") {
         "CREATING"
-    } else if matches!(state_text, "exited" | "stopped" | "removing") {
+    } else if matches!(
+        state_text,
+        "exited" | "stopped" | "removing" | "paused" | "dead"
+    ) {
+        "STOPPED"
+    } else if state_text.is_empty() && state.is_some_and(container_has_exited) {
+        // nerdctl does not always fill `State.Status`. A container that is not
+        // running and carries an exit code has stopped -- which is the ordinary
+        // end of an idle release, not a fault. Reporting it as ERROR made the
+        // most common resting state of a workspace look like a broken one.
         "STOPPED"
     } else {
         "ERROR"
@@ -2992,6 +3013,51 @@ mod tests {
             "http://192.168.64.2:49152"
         );
         assert_eq!(snapshot["status"]["ready"], true);
+    }
+
+    /// The resting state of every idle workspace, read off a real guest that
+    /// had one: `Running: false`, a clean exit code, and no `Status` at all.
+    /// Calling that ERROR made the ordinary end of an idle release look like a
+    /// fault, in `sandbox.list` and in everything that reads it.
+    #[test]
+    fn a_cleanly_exited_container_without_a_status_field_reads_as_stopped() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false, "ExitCode": 0},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "STOPPED");
+        assert_eq!(snapshot["status"]["ready"], false);
+    }
+
+    /// A container that never ran and reports nothing is still a fault. The
+    /// fallback reads "has exited", not "is not running".
+    #[test]
+    fn a_container_that_never_started_still_reads_as_an_error() {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": false},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            }},
+            "NetworkSettings": {"Ports": {}}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+        assert_eq!(snapshot["status"]["status"], "ERROR");
     }
 
     #[test]

@@ -9,9 +9,7 @@ use std::process::{Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
-#[cfg(target_os = "macos")]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CAPABILITY_BYTES: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -1176,8 +1174,10 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
 fn decode_wsl_output(value: &[u8]) -> String {
     let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         let words: Vec<u16> = value
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         String::from_utf16_lossy(&words).replace('\0', "")
     } else {

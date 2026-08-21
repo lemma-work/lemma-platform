@@ -1649,7 +1649,29 @@ impl Daemon {
             "operation_id": operation_id,
             "runtime_generation": runtime_generation,
         }));
+        self.warm_sandbox_images();
         Ok(())
+    }
+
+    /// Start fetching the sandbox images behind the workspace, and say so.
+    ///
+    /// After `ready`, never before it. The images are only needed once a pod
+    /// runs something; fetching them inline held the startup bar at 68% behind
+    /// several hundred megabytes on a first run. The app shows this as a
+    /// notice it can take away again, rather than as a phase of starting.
+    fn warm_sandbox_images(self: &Arc<Self>) {
+        let Some(runtime) = self.managed_runtime.as_ref() else {
+            return;
+        };
+        let daemon = Arc::clone(self);
+        runtime.warm_sandbox_images(move |status| {
+            daemon.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": status.state,
+                "detail": status.detail,
+            }));
+        });
     }
 
     fn recover_managed_stack(self: &Arc<Self>) -> io::Result<()> {
@@ -1682,6 +1704,7 @@ impl Daemon {
             "mode": "managed-local",
             "release": manager.release(),
         }));
+        self.warm_sandbox_images();
         Ok(())
     }
 

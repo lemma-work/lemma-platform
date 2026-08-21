@@ -283,6 +283,85 @@ async def test_a_stopped_container_is_restarted_rather_than_replaced(
     assert len(provider.created) == 1
 
 
+class NonResumingProvider(FakeProvider):
+    """A provider whose stopped instances cannot be started where they are.
+
+    The desktop guest is this: its control protocol has no start, only a
+    create-or-replace `sandbox.ensure`.
+    """
+
+    resumes_stopped_instances = False
+
+
+async def test_a_stopped_container_is_rebuilt_when_the_provider_cannot_resume(
+    sandbox_uow_factory,
+) -> None:
+    """The bug this closes broke every desktop workspace three minutes after use.
+
+    Idle release stops the container by design. With nothing able to start it
+    again, `ensure` found the stopped container, waited for a runtime that was
+    never coming back, failed, and failed identically on every retry until its
+    deadline — so the workspace stayed broken until something deleted the
+    container by hand.
+    """
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    service.forget(sandbox.id)
+    second = await service.ensure(sandbox.id)
+
+    assert len(provider.created) == 2, "the stopped container was never rebuilt"
+    assert second.epoch > first.epoch
+
+
+async def test_rebuilding_a_stopped_container_keeps_the_files(
+    sandbox_uow_factory,
+) -> None:
+    """New compute, same disk. Rebuilding is only acceptable because of this."""
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    service.forget(sandbox.id)
+    await service.ensure(sandbox.id)
+
+    assert provider.created[1].volume_name == provider.created[0].volume_name
+
+
+async def test_a_running_container_is_still_reused_by_a_non_resuming_provider(
+    sandbox_uow_factory,
+) -> None:
+    """Rebuilding is for stopped instances only, not a second create per call."""
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    service.forget(sandbox.id)
+    second = await service.ensure(sandbox.id)
+
+    assert len(provider.created) == 1
+    assert second.epoch == first.epoch
+
+
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------

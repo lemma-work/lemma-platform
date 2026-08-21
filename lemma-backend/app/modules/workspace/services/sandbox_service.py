@@ -54,8 +54,9 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
+    resumes_stopped_instances,
 )
-from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -283,7 +284,9 @@ class SandboxService(SandboxVolumeMixin):
         if (
             instance is not None
             and instance.provider_id
-            and not self._profile_is_stale(sandbox)
+            and not profile_is_stale(
+                kind=sandbox.kind, recorded_digest=sandbox.profile_digest
+            )
         ):
             name = naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch)
             # A remote call on every ensure, including the warm path: the
@@ -293,6 +296,11 @@ class SandboxService(SandboxVolumeMixin):
             with tracer.start_as_current_span("lemma.sandbox.inspect"):
                 existing = await self._provider.inspect(name, deadline_at=deadline_at)
             if existing is not None:
+                # Rebuilt against the same volume rather than waited for: new
+                # compute, the same files. See `resumes_stopped_instances`.
+                if not existing.running and not resumes_stopped_instances(self._provider):
+                    span.set_attribute("lemma.ensure", "rebuild")
+                    return await self._provision(sandbox, deadline_at=deadline_at)
                 if not existing.running:
                     # E2B: resuming a paused sandbox. This is the single most
                     # expensive branch and the one the idle release window
@@ -354,18 +362,6 @@ class SandboxService(SandboxVolumeMixin):
             sandbox_id=str(sandbox.id),
         )
         return None
-
-    @staticmethod
-    def _profile_is_stale(sandbox: Sandbox) -> bool:
-        """Was this sandbox built from a profile that is no longer configured?
-
-        A row with no digest has never been provisioned (or was backfilled by
-        the migration), which is not stale -- there is nothing to compare and
-        the first provision adopts whatever is configured.
-        """
-
-        recorded = sandbox.profile_digest
-        return bool(recorded) and recorded != profile_for(sandbox.kind).digest
 
     async def _provision(
         self, sandbox: Sandbox, *, deadline_at: datetime
