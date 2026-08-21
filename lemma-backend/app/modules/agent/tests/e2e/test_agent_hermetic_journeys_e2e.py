@@ -814,9 +814,7 @@ async def test_scripted_tool_calls_reach_the_runtime_and_persist(
     )
     assert messages.status_code == status.HTTP_200_OK, messages.text
     items = messages.json()["items"]
-    tool_calls = {
-        item["tool_name"] for item in items if item["kind"] == "TOOL_CALL"
-    }
+    tool_calls = {item["tool_name"] for item in items if item["kind"] == "TOOL_CALL"}
     tool_returns_by_id = {
         item["tool_call_id"]: item for item in items if item["kind"] == "TOOL_RETURN"
     }
