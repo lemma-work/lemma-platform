@@ -54,9 +54,33 @@ CLOCK_SKEW_SUSPECT_SECONDS = 300
 # other side. One line a minute is enough to see it and enough to date it.
 CLOCK_SKEW_REPORT_INTERVAL_SECONDS = 60
 
-# Monotonic, so a corrected wall clock cannot push the next report into the far
-# future. Process-local by design: this describes the machine, not a request.
-_last_skew_report = -CLOCK_SKEW_REPORT_INTERVAL_SECONDS
+class _ReportThrottle:
+    """Lets one observation through per interval, and swallows the rest.
+
+    An object rather than a module-level counter and a `global`: the decision is
+    then something a test can drive directly, and the state has an owner.
+    """
+
+    __slots__ = ("_interval_seconds", "_last_at")
+
+    def __init__(self, interval_seconds: float) -> None:
+        self._interval_seconds = interval_seconds
+        self._last_at = -interval_seconds
+
+    def should_report(self, now: float) -> bool:
+        """`now` is monotonic, so a corrected wall clock cannot push the next
+        report into the far future."""
+        if now - self._last_at < self._interval_seconds:
+            return False
+        self._last_at = now
+        return True
+
+    def reset(self) -> None:
+        self._last_at = -self._interval_seconds
+
+
+# Process-local by design: this describes the machine, not a request.
+_skew_reports = _ReportThrottle(CLOCK_SKEW_REPORT_INTERVAL_SECONDS)
 
 
 def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
@@ -87,18 +111,14 @@ def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
 
 def _report_expired_access_token(connection: HTTPConnection) -> None:
     """Say so when a token is expired by more than an expiry explains."""
-    global _last_skew_report
-
     expiry = _unverified_token_expiry(connection)
     if expiry is None:
         return
     expired_by_seconds = int(time.time() - expiry)
     if expired_by_seconds < CLOCK_SKEW_SUSPECT_SECONDS:
         return
-    now = time.monotonic()
-    if now - _last_skew_report < CLOCK_SKEW_REPORT_INTERVAL_SECONDS:
+    if not _skew_reports.should_report(time.monotonic()):
         return
-    _last_skew_report = now
     logger.warning(
         "identity.session.access_token_expiry_implausible.degraded",
         expired_by_seconds=expired_by_seconds,

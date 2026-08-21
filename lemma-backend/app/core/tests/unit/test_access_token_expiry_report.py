@@ -42,7 +42,7 @@ def _connection(*, cookie: str | None = None, header: str | None = None):
 @pytest.fixture(autouse=True)
 def _report_again():
     """The throttle is process-local, so each test starts from a clean slate."""
-    security._last_skew_report = -security.CLOCK_SKEW_REPORT_INTERVAL_SECONDS
+    security._skew_reports.reset()
     yield
 
 
@@ -96,3 +96,13 @@ def test_a_loop_of_expired_requests_is_reported_once_per_window(caplog):
         security._report_expired_access_token(connection)
 
     assert len(_events(caplog)) == 1
+
+
+def test_the_throttle_lets_one_through_then_reopens() -> None:
+    """Driven directly, because the whole point of it being an object is that
+    the decision does not need a request to exercise."""
+    throttle = security._ReportThrottle(interval_seconds=60)
+
+    assert throttle.should_report(1_000.0) is True
+    assert throttle.should_report(1_059.0) is False
+    assert throttle.should_report(1_060.0) is True
