@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import (
+    payload_section,
+    payload_text,
+)
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -21,8 +26,8 @@ def _header_map(headers: Any) -> dict[str, str]:
     for item in headers:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip().lower()
-        value = str(item.get("value") or "").strip()
+        name = payload_text(item, "name").strip().lower()
+        value = payload_text(item, "value").strip()
         if name and value:
             normalized[name] = value
     return normalized
@@ -180,7 +185,7 @@ class GmailMessageParser:
             or data.get("threadId")
             or headers.get("thread-id")
             or data.get("conversation_id")
-            or (data.get("payload") or {}).get("threadId")
+            or (payload_section(data, "payload")).get("threadId")
             or data.get("id")
             or ""
         ).strip()
@@ -210,10 +215,10 @@ class GmailMessageParser:
 
         subject = str(data.get("subject") or headers.get("subject") or "").strip()
         body = (
-            str(data.get("message_text") or "").strip()
+            payload_text(data, "message_text").strip()
             or _read_email_body(data).strip()
             or _read_gmail_payload_body(data).strip()
-            or str(((data.get("preview") or {}).get("body")) or "").strip()
+            or str(((payload_section(data, "preview")).get("body")) or "").strip()
         )
         # Drop the quoted original. Without this every reply carries the whole
         # thread forward, so by the fourth exchange most of the prompt is the
@@ -240,13 +245,13 @@ class GmailMessageParser:
 
         header_references = [
             ref.strip()
-            for ref in str(headers.get("references") or "").split()
+            for ref in payload_text(headers, "references").split()
             if ref.strip()
         ]
         references = [
             str(ref) for ref in list(data.get("references") or header_references) if ref
         ]
-        internet_message_id = str(headers.get("message-id") or "").strip() or None
+        internet_message_id = payload_text(headers, "message-id").strip() or None
         in_reply_to = (
             str(data.get("in_reply_to") or headers.get("in-reply-to") or "").strip()
             or internet_message_id

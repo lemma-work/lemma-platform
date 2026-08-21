@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import (
+    payload_text,
+)
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -18,8 +22,8 @@ def _header_map(headers: Any) -> dict[str, str]:
     for item in headers:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip().lower()
-        value = str(item.get("value") or "").strip()
+        name = payload_text(item, "name").strip().lower()
+        value = payload_text(item, "value").strip()
         if name and value:
             normalized[name] = value
     return normalized
@@ -125,14 +129,14 @@ class OutlookMessageParser:
         )
 
         if thread_id and external_message_id and sender_identity.email:
-            subject = str(data.get("subject") or "").strip()
+            subject = payload_text(data, "subject").strip()
             # Quoted original trimmed for the same reason as every other
             # provider: a reply should be what the person just wrote.
             body = strip_quoted_reply(_body_text(data).strip(), subject)
             message_text = f"Email subject: {subject}\n\n{body}".strip()
             header_references = [
                 ref.strip()
-                for ref in str(headers.get("references") or "").split()
+                for ref in payload_text(headers, "references").split()
                 if ref.strip()
             ]
             references = [
@@ -223,7 +227,7 @@ class OutlookMessageParser:
                     "channel": "email",
                     "message_id": provider_message_id,
                     "internet_message_id": internet_message_id or None,
-                    "event_type": str(data.get("event_type") or "").strip() or None,
+                    "event_type": payload_text(data, "event_type").strip() or None,
                     "requires_message_fetch": True,
                 },
                 raw_payload=payload,

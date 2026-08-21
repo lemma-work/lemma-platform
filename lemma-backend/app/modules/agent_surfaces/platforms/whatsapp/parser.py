@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import (
+    payload_section,
+    payload_text,
+)
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -31,25 +36,25 @@ class WhatsAppMessageParser:
         try:
             entry = (payload.get("entry") or [{}])[0]
             change = (entry.get("changes") or [{}])[0]
-            value = change.get("value") or {}
+            value = payload_section(change, "value")
             messages = value.get("messages") or []
             if not messages:
                 return None
             msg = messages[0]
             if msg.get("type") != "interactive":
                 return None
-            interactive = msg.get("interactive") or {}
-            reply = (
-                interactive.get("button_reply") or interactive.get("list_reply") or {}
+            interactive = payload_section(msg, "interactive")
+            reply = interactive.get("button_reply") or payload_section(
+                interactive, "list_reply"
             )
-            reply_id = str(reply.get("id") or "")
+            reply_id = payload_text(reply, "id")
             parts = reply_id.split(WHATSAPP_INTERACTION_SEP, 2)
             if len(parts) != 3:
                 return None
             callback_id, header, answer = parts
             if not callback_id or not header:
                 return None
-            sender_wa_id = str(msg.get("from") or "")
+            sender_wa_id = payload_text(msg, "from")
             # An approval button reply carries the decision in place of an answer;
             # everything else is an ask_user answer keyed by question header.
             if header == WHATSAPP_APPROVAL_HEADER:
@@ -60,7 +65,7 @@ class WhatsAppMessageParser:
                     callback_id=callback_id,
                     approval_decision=answer or None,
                     reply_target={"sender_wa_id": sender_wa_id} if sender_wa_id else {},
-                    dedup_id=str(msg.get("id") or "") or None,
+                    dedup_id=payload_text(msg, "id") or None,
                     raw_payload=payload,
                 )
             return ParsedSurfaceInteraction(
@@ -70,7 +75,7 @@ class WhatsAppMessageParser:
                 callback_id=callback_id,
                 values={header: answer},
                 reply_target={"sender_wa_id": sender_wa_id} if sender_wa_id else {},
-                dedup_id=str(msg.get("id") or "") or None,
+                dedup_id=payload_text(msg, "id") or None,
                 raw_payload=payload,
             )
         except Exception:
@@ -90,7 +95,7 @@ class WhatsAppMessageParser:
             return None
 
         change = changes[0]
-        value = change.get("value") or {}
+        value = payload_section(change, "value")
         messages = value.get("messages") or []
         if not messages:
             return None
@@ -102,29 +107,33 @@ class WhatsAppMessageParser:
         attachments: list[dict[str, Any]] = []
 
         if msg_type == "text":
-            message_text = (msg.get("text") or {}).get("body", "")
+            message_text = (payload_section(msg, "text")).get("body", "")
         elif msg_type == "interactive":
-            interactive = msg.get("interactive") or {}
+            interactive = payload_section(msg, "interactive")
             if interactive.get("type") == "button_reply":
-                message_text = (interactive.get("button_reply") or {}).get("title", "")
+                message_text = (payload_section(interactive, "button_reply")).get(
+                    "title", ""
+                )
             elif interactive.get("type") == "list_reply":
-                message_text = (interactive.get("list_reply") or {}).get("title", "")
+                message_text = (payload_section(interactive, "list_reply")).get(
+                    "title", ""
+                )
             else:
                 message_text = str(interactive)
         else:
             attachment = self._parse_attachment(msg, msg_type)
             if attachment:
                 attachments.append(attachment)
-            message_text = (msg.get("text") or {}).get("body", "") or msg_type
+            message_text = (payload_section(msg, "text")).get("body", "") or msg_type
 
         contacts = value.get("contacts") or []
         sender = contacts[0] if contacts else {}
         sender_wa_id = msg.get("from", "")
         sender_name = (sender.get("wa_id") or "").replace("+", "") or sender_wa_id
-        sender_display = (sender.get("profile") or {}).get("name", sender_name)
+        sender_display = (payload_section(sender, "profile")).get("name", sender_name)
 
         waba_id = entry.get("id")
-        phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+        phone_number_id = (payload_section(value, "metadata")).get("phone_number_id")
 
         external_thread_id = f"{sender_wa_id}@{phone_number_id or waba_id}"
 

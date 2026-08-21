@@ -338,6 +338,28 @@ class ProviderFailure:
     provider_error: str | None = None
 
 
+def payload_text(source: Any, key: str) -> str:
+    """A webhook field as a string, with absent, null and empty all reading as "".
+
+    Every parser digs strings out of a payload it does not control, so every
+    read carries the same `or ""` to survive a missing key or an explicit null.
+    Ninety-five of them across six parsers, and each one counted as a branch --
+    which is most of why the parsers measured as the most complex code in the
+    module while doing nothing more complicated than reading a dictionary.
+    """
+    if not source:
+        return ""
+    return str(source.get(key) or "")
+
+
+def payload_section(source: Any, key: str) -> dict[str, Any]:
+    """A nested object from a payload, or an empty one to keep reading from."""
+    if not source:
+        return {}
+    value = source.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def provider_failure(exc: Exception) -> ProviderFailure:
     """What went wrong, in terms safe to write to a log.
 

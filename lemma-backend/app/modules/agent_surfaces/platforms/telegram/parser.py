@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import (
+    payload_section,
+    payload_text,
+)
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -37,11 +42,11 @@ class TelegramMessageParser:
         if not message_text:
             message_text = ""
 
-        chat = message.get("chat") or {}
+        chat = payload_section(message, "chat")
         chat_id = str(chat.get("id", ""))
         chat_type = chat.get("type", "private")
 
-        from_user = message.get("from") or {}
+        from_user = payload_section(message, "from")
         sender_id = str(from_user.get("id", ""))
         sender_display = from_user.get("first_name", "")
         if from_user.get("last_name"):
@@ -96,16 +101,18 @@ class TelegramMessageParser:
                 if username:
                     mentioned_usernames.append(username)
             elif entity_type == "text_mention":
-                user = entity.get("user") or {}
-                user_id = str(user.get("id") or "").strip()
+                user = payload_section(entity, "user")
+                user_id = payload_text(user, "id").strip()
                 if user_id:
                     text_mention_user_ids.append(user_id)
         # A reply to one of the bot's own messages continues the conversation in
         # a group without re-@mentioning. Telegram privacy mode only delivers
         # replies to THIS bot's messages, so reply_to_message.from.is_bot is a
         # safe signal here.
-        reply_to_message = message.get("reply_to_message") or {}
-        is_reply_to_bot = bool((reply_to_message.get("from") or {}).get("is_bot"))
+        reply_to_message = payload_section(message, "reply_to_message")
+        is_reply_to_bot = bool(
+            (payload_section(reply_to_message, "from")).get("is_bot")
+        )
 
         attachments = [
             attachment
@@ -145,13 +152,13 @@ class TelegramMessageParser:
                 "message_id": message_id,
                 # Forum-topic id so replies land in the same topic; empty for
                 # ordinary chats.
-                "message_thread_id": str(message.get("message_thread_id") or ""),
+                "message_thread_id": payload_text(message, "message_thread_id"),
             },
             metadata={
                 "chat_type": chat_type,
                 "chat_id": chat_id,
                 "is_topic_message": bool(message.get("is_topic_message")),
-                "message_thread_id": str(message.get("message_thread_id") or ""),
+                "message_thread_id": payload_text(message, "message_thread_id"),
                 "is_thread_reply": is_reply_to_bot,
                 "sender_username": sender_username,
                 "contact_shared": contact_details["contact_shared"],
@@ -233,8 +240,8 @@ class TelegramMessageParser:
                 "sender_phone": None,
             }
 
-        contact_user_id = str(contact.get("user_id") or "").strip() or None
-        shared_contact_phone = str(contact.get("phone_number") or "").strip() or None
+        contact_user_id = payload_text(contact, "user_id").strip() or None
+        shared_contact_phone = payload_text(contact, "phone_number").strip() or None
         shared_by_sender = bool(
             contact_user_id
             and sender_id
