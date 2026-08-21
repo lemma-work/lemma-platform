@@ -4,6 +4,14 @@ This is the test that decides whether the cutover is safe. Everything else
 verifies a piece; this verifies that an agent tool call issued through the
 unchanged session reaches a real sandbox and comes back with the right answer,
 and that a user's files survive the sandbox being stopped and resumed.
+
+It lives in the e2e lane because that is the only lane where it runs. As an
+`integration` test it took its image from `WORKSPACE_IMAGE`, which no CI job
+sets, and its database from a local postgres the unit lane did not have -- so
+all eight of these skipped themselves on every run, including the one that
+proves a user's files survive a release. The e2e workspace shard already builds
+a content-addressed workspace image and stands up postgres, so both of those
+questions already have answers here.
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.sandbox_session import SandboxWorkspaceSession
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
@@ -27,20 +36,32 @@ from app.modules.workspace.providers.docker_engine import DockerEngineClient
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.sandbox_service import SandboxService
 
-pytestmark = [pytest.mark.integration, pytest.mark.workspace, pytest.mark.asyncio]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.workspace,
+    pytest.mark.asyncio,
+    pytest.mark.timeout(600),
+]
 
 _SOCKET = os.getenv("WORKSPACE_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
-_IMAGE = os.getenv("WORKSPACE_IMAGE", "")
 
 
 @pytest_asyncio.fixture
-async def sandbox_stack(sandbox_uow_factory, monkeypatch) -> AsyncIterator[tuple]:
-    if not _IMAGE:
-        pytest.skip("set WORKSPACE_IMAGE to run the end-to-end sandbox test")
+async def sandbox_stack(
+    workspace_image, db_manager, monkeypatch
+) -> AsyncIterator[tuple]:
+    """The real Docker stack, on the image this lane already builds.
+
+    The image comes from the `workspace_image` fixture rather than an
+    environment variable. `WORKSPACE_IMAGE` was the gate that made this whole
+    file a no-op in CI: it is set nowhere, so every test here skipped rather
+    than failing, and nothing said so.
+    """
     if not os.path.exists(_SOCKET):
         pytest.skip(f"no docker socket at {_SOCKET}")
 
-    monkeypatch.setattr(workspace_settings, "workspace_image", _IMAGE)
+    sandbox_uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    monkeypatch.setattr(workspace_settings, "workspace_image", workspace_image)
 
     engine = DockerEngineClient(socket_path=_SOCKET)
     provider = DockerSandboxProvider(
@@ -159,6 +180,13 @@ async def test_an_operation_against_a_replaced_sandbox_does_not_hit_the_new_one(
     first = await service.ensure(sandbox.id)
 
     await provider.destroy(first.provider_id, deadline_at=_far_future())
+    # Losing the container behind the service's back is exactly what `forget`
+    # is for. `ensure` answers from a five-second handle cache, so without this
+    # the second call returns the handle to the container just destroyed and no
+    # new epoch is ever minted -- which is what this assertion caught the first
+    # time it ran. Production reaches `forget` on `ProviderGone`; a test that
+    # destroys through the provider has to say so itself.
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
 
     assert second.epoch > first.epoch

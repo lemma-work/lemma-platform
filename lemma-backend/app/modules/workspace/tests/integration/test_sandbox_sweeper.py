@@ -81,6 +81,27 @@ async def _workspace(service: SandboxService):
     )
 
 
+async def _reclaimable(
+    service: SandboxService, provider: SweepableProvider
+) -> ProviderObject:
+    """A provider object the sweep is genuinely allowed to destroy.
+
+    Which now means one this database asked to be rid of. Tests about *how* the
+    sweep destroys -- dry runs, failure isolation, confirming the destroy landed
+    -- used to reach for an id with no row at all, because that was the easiest
+    reclaimable thing to make. It is no longer reclaimable at any confidence
+    (see `test_a_container_with_no_row_is_reported_not_reclaimed`), so they
+    build a deleted sandbox instead and keep testing what they were about.
+    """
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    await service.destroy(sandbox.id)
+    provider.destroyed.clear()
+    return _object(
+        name=handle.provider_id, sandbox_id=sandbox.id, epoch=handle.epoch
+    )
+
+
 async def test_unidentifiable_containers_are_left_alone(
     sweeper: SandboxSweeper, provider: SweepableProvider
 ) -> None:
@@ -92,19 +113,110 @@ async def test_unidentifiable_containers_are_left_alone(
     assert provider.destroyed == []
 
 
-async def test_a_container_with_no_row_is_reclaimed(
-    sweeper: SandboxSweeper, provider: SweepableProvider
+async def test_a_container_with_no_row_is_reported_not_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider, caplog
 ) -> None:
-    """This is the one that costs money: compute the control plane forgot."""
+    """The rule this replaces read "no row" as "ours and forgotten", and it cost
+    a user their files five times inside one conversation.
+
+    A sandbox this environment created always has a row: nothing hard-deletes
+    one -- `destroy` sets `desired_state=DELETED` and keeps it -- and
+    `begin_instance` commits before the provider is asked to create anything.
+    So "no row" can only mean the object belongs to another database, which is
+    what `lemma-dev` and `lemma-prod` were to each other while two API keys
+    resolved to one E2B team.
+
+    Reporting it costs money. Destroying it costs work nobody can get back, so
+    this is the direction the uncertainty has to resolve.
+    """
     orphan = uuid4()
     provider.objects = [
         _object(name=f"lemma-ws-{orphan.hex}-1", sandbox_id=orphan, epoch=1)
     ]
 
+    with caplog.at_level("INFO"):
+        reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == ()
+    assert provider.destroyed == []
+    assert "workspace.sandbox_sweeper.unattributed_objects" in caplog.text
+
+
+async def test_unattributed_objects_are_reported_once_per_sweep(
+    sweeper: SandboxSweeper, provider: SweepableProvider, caplog
+) -> None:
+    """A shared account can hold hundreds. One line per object would bury the
+    signal the report exists to raise."""
+    orphans = [uuid4() for _ in range(4)]
+    provider.objects = [
+        _object(name=f"lemma-ws-{orphan.hex}-1", sandbox_id=orphan, epoch=1)
+        for orphan in orphans
+    ]
+
+    with caplog.at_level("INFO"):
+        await sweeper.reclaim_orphans()
+
+    reports = [
+        record
+        for record in caplog.records
+        if "unattributed_objects" in record.getMessage()
+    ]
+    assert len(reports) == 1
+    assert provider.destroyed == []
+
+
+async def test_a_deleted_row_still_being_provisioned_is_not_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService,
+    sandbox_uow_factory,
+) -> None:
+    """`destroy` sets DELETED and only the `_provision` after it sets PRESENT.
+
+    Between the two the row reads DELETED while a live create is in flight, and
+    a sweep landing there destroys the sandbox the caller is waiting on. CREATING
+    is the whole window: `mark_instance_ready` and `set_desired_state(PRESENT)`
+    commit together, so READY is never visible while the row still says DELETED.
+    """
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    async with sandbox_uow_factory() as uow:
+        repository = SandboxRepository(uow)
+        await repository.set_desired_state(sandbox.id, SandboxDesiredState.DELETED)
+        instance = await repository.current_instance(sandbox.id)
+        await repository.begin_instance(
+            sandbox_id=sandbox.id,
+            provider=instance.provider,
+            provider_id=instance.provider_id,
+            provider_volume_id=None,
+            epoch=instance.epoch + 1,
+        )
+        await repository.bump_epoch(sandbox.id)
+        await uow.commit()
+    provider.objects = [
+        _object(name=handle.provider_id, sandbox_id=sandbox.id, epoch=handle.epoch)
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed == []
+
+
+async def test_a_deleted_row_with_no_provision_in_flight_is_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService,
+    sandbox_uow_factory,
+) -> None:
+    """The sweep has to stay useful, not merely safe: a sandbox this database
+    genuinely asked to be rid of is still reclaimed."""
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    await service.destroy(sandbox.id)
+    provider.destroyed.clear()
+    provider.objects = [
+        _object(name=handle.provider_id, sandbox_id=sandbox.id, epoch=handle.epoch)
+    ]
+
     reclaimed = await sweeper.reclaim_orphans()
 
-    assert reclaimed == (f"lemma-ws-{orphan.hex}-1",)
-    assert provider.destroyed == [f"lemma-ws-{orphan.hex}-1"]
+    assert reclaimed == (handle.provider_id,)
+    assert provider.destroyed == [handle.provider_id]
 
 
 async def test_the_current_container_is_never_reclaimed(
@@ -184,26 +296,23 @@ async def test_a_legacy_container_is_reclaimed_once_superseded(
 
 
 async def test_a_dry_run_reports_without_destroying(
-    sweeper: SandboxSweeper, provider: SweepableProvider
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
 ) -> None:
-    orphan = uuid4()
-    provider.objects = [
-        _object(name=f"lemma-ws-{orphan.hex}-1", sandbox_id=orphan, epoch=1)
-    ]
+    target = await _reclaimable(service, provider)
+    provider.objects = [target]
 
     reclaimed = await sweeper.reclaim_orphans(dry_run=True)
 
-    assert reclaimed == (f"lemma-ws-{orphan.hex}-1",)
+    assert reclaimed == (target.name,)
     assert provider.destroyed == []
 
 
 async def test_one_failure_does_not_stop_the_sweep(
-    sweeper: SandboxSweeper, provider: SweepableProvider
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
 ) -> None:
-    first, second = uuid4(), uuid4()
     provider.objects = [
-        _object(name=f"lemma-ws-{first.hex}-1", sandbox_id=first, epoch=1),
-        _object(name=f"lemma-ws-{second.hex}-1", sandbox_id=second, epoch=1),
+        await _reclaimable(service, provider),
+        await _reclaimable(service, provider),
     ]
     original = provider.destroy
     calls: list[str] = []
@@ -292,7 +401,7 @@ async def test_a_sandbox_that_cannot_be_probed_is_left_alone(
 
 
 async def test_an_object_the_provider_cannot_reap_is_not_reported_as_reclaimed(
-    sweeper: SandboxSweeper, provider: SweepableProvider
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
 ) -> None:
     """A destroy that returns is not a destroy that happened.
 
@@ -302,9 +411,9 @@ async def test_an_object_the_provider_cannot_reap_is_not_reported_as_reclaimed(
     count never moved. Silence about that is worse than the leak: the sweep
     looks like it is working.
     """
-    orphan = uuid4()
-    name = f"lemma-ws-{orphan.hex}-1"
-    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    target = await _reclaimable(service, provider)
+    name = target.name
+    provider.objects = [target]
     # Accepts the call, keeps the object -- what killing a paused sandbox does.
     provider.containers[name] = ProviderInstance(
         provider_id=name, name=name, running=False
@@ -323,12 +432,12 @@ async def test_an_object_the_provider_cannot_reap_is_not_reported_as_reclaimed(
 
 
 async def test_a_destroy_that_works_is_still_reported(
-    sweeper: SandboxSweeper, provider: SweepableProvider
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
 ) -> None:
     """The confirmation must not turn every real reclaim into a warning."""
-    orphan = uuid4()
-    name = f"lemma-ws-{orphan.hex}-1"
-    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    target = await _reclaimable(service, provider)
+    name = target.name
+    provider.objects = [target]
     provider.containers[name] = ProviderInstance(
         provider_id=name, name=name, running=True
     )

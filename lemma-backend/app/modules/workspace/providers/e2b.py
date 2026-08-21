@@ -50,7 +50,6 @@ from app.modules.workspace.providers.base import (
     ProviderStorageKind,
 )
 from app.modules.workspace.providers.e2b_common import (
-    DEFAULT_METADATA_NAMESPACE,
     ensure_serving,
     meta_epoch,
     meta_profile_digest,
@@ -74,15 +73,17 @@ class E2BProviderConfig:
     api_key: str
     workspace_template: str
     function_template: str
+    # Namespaces every metadata key this provider writes and queries, making a
+    # provider blind to sandboxes labelled by another namespace. Required, not
+    # defaulted: a shared default is what let two deployments on one E2B team
+    # read each other's sandboxes as unowned orphans and destroy them. See
+    # `provider_factory.resolve_metadata_namespace`.
+    metadata_namespace: str
     # How long E2B keeps a sandbox alive without contact. The service touches
     # activity on use, so this is a backstop against leaking compute when the
     # backend dies, not the primary idle policy.
     sandbox_timeout_seconds: int = 60 * 30
     domain: str | None = None
-    # Namespaces every metadata key this provider writes and queries. Changing
-    # it makes a provider blind to sandboxes labelled by another namespace,
-    # which is exactly what a conformance run against a shared account needs.
-    metadata_namespace: str = DEFAULT_METADATA_NAMESPACE
 
 
 class E2BSandboxProvider(E2BOpsMixin):
@@ -401,7 +402,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors():
-            await sandbox.beta_pause(keep_memory=keep_memory, **self._api())
+            await sandbox.pause(keep_memory=keep_memory, **self._api())
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         """Kill a sandbox, addressed either by container name or by E2B id.
@@ -593,7 +594,3 @@ class E2BSandboxProvider(E2BOpsMixin):
                 timeout=self._config.sandbox_timeout_seconds,
                 **self._api(),
             )
-
-
-
-

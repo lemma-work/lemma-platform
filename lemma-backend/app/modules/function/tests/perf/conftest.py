@@ -441,7 +441,9 @@ async def function_benchmark_runtime(
             "add_host_gateway": workspace_settings.add_host_gateway,
             "host_alias": workspace_settings.host_alias,
             "runtime_credential_key": workspace_settings.runtime_credential_key,
+            "e2b_metadata_namespace": workspace_settings.e2b_metadata_namespace,
         }
+        original_namespace_env = os.environ.get("E2B_METADATA_NAMESPACE")
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
         try:
@@ -455,6 +457,30 @@ async def function_benchmark_runtime(
             # through the environment before the interpreter starts; a bare
             # pytest run, which is how CI invokes the suite, does not.
             workspace_settings.runtime_credential_key = _RUNTIME_CREDENTIAL_KEY
+            if provider == "e2b":
+                # Never the namespace anything real is using. This benchmark
+                # provisions in-process against a throwaway database, so every
+                # sandbox in the account that is not its own looks to the orphan
+                # sweep like something identifiable as ours with no row -- which
+                # is how one deployment came to delete another's workspaces.
+                # A per-run value makes this run's sandboxes invisible to
+                # everyone else's sweep, and everyone else's invisible to it.
+                #
+                # `E2E_SANDBOX_MODE`'s runtime fixture has generated one of
+                # these for a while; this suite reached the same provider
+                # without it, and so ran under the bare production namespace.
+                benchmark_namespace = (
+                    os.getenv("E2B_METADATA_NAMESPACE")
+                    or f"lemma-fn-bench-{uuid4().hex[:12]}"
+                )
+                workspace_settings.e2b_metadata_namespace = benchmark_namespace
+                # Into the environment as well, because the worker that runs
+                # JOB functions is a separate process. It builds its own
+                # provider from env, so a namespace set only on this process's
+                # settings leaves the worker looking for the sandbox under a
+                # different one -- which is every JOB case failing while every
+                # API case passes.
+                os.environ["E2B_METADATA_NAMESPACE"] = benchmark_namespace
             if provider == "docker":
                 # The benchmark images are content-addressed tags, not digests,
                 # and the sandboxes have to reach this process to fetch their
@@ -561,6 +587,10 @@ async def function_benchmark_runtime(
                 setattr(settings, name, value)
             for name, value in original_workspace.items():
                 setattr(workspace_settings, name, value)
+            if original_namespace_env is None:
+                os.environ.pop("E2B_METADATA_NAMESPACE", None)
+            else:
+                os.environ["E2B_METADATA_NAMESPACE"] = original_namespace_env
 
 
 @asynccontextmanager
