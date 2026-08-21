@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -165,6 +166,13 @@ def agent_run_telemetry_context(
     attributes = {
         "lemma.conversation_id": str(conversation_id),
         "lemma.agent_run_id": str(agent_run_id),
+        # A conversation is many runs, and each run is its own trace. Phoenix
+        # joins those traces back into one session by exactly one attribute --
+        # `session.id`, the OpenInference name -- and by nothing else. Our own
+        # `lemma.conversation_id` is filterable but not groupable, so without
+        # this line the Sessions view is empty and every turn of a conversation
+        # is an unrelated trace.
+        SpanAttributes.SESSION_ID: str(conversation_id),
     }
     optional_attributes = {
         "lemma.agent_id": agent_id,
@@ -174,16 +182,81 @@ def agent_run_telemetry_context(
         "lemma.agent_name": agent_name,
         "lemma.harness_kind": harness_kind,
         "lemma.model_name": model_name,
+        # Same story one level down: "show me this person's sessions" is a
+        # first-class Phoenix filter keyed on `user.id`.
+        SpanAttributes.USER_ID: user_id,
     }
     for key, value in optional_attributes.items():
         if value is not None:
             attributes[key] = str(value)
+    # Everything else the run knows, in the one attribute Phoenix renders as a
+    # filterable object rather than as an opaque string. Built from the same
+    # values so the two can't disagree, and JSON because that is the encoding
+    # Phoenix parses -- a bare dict is dropped by the OTel attribute types.
+    metadata = {
+        key.removeprefix("lemma."): value
+        for key, value in attributes.items()
+        if key.startswith("lemma.")
+    }
+    attributes[SpanAttributes.METADATA] = json.dumps(metadata, separators=(",", ":"))
 
     token = _agent_run_context.set(attributes)
     try:
         yield attributes
     finally:
         _agent_run_context.reset(token)
+
+
+# Phoenix renders these in full, so the cap is about what a span is allowed to
+# weigh on the wire rather than about what is readable. A run's transcript can
+# be megabytes; the OTLP batch it would ride in is not the place to find that
+# out.
+_MAX_SPAN_CONTENT_CHARS = 8_192
+
+
+def record_span_input(span: Any, value: Any) -> None:
+    """Record what went in, in the attribute a trace UI reads as the input."""
+    _record_span_content(
+        span,
+        value,
+        value_key=SpanAttributes.INPUT_VALUE,
+        mime_key=SpanAttributes.INPUT_MIME_TYPE,
+    )
+
+
+def record_span_output(span: Any, value: Any) -> None:
+    """Record what came out, in the attribute a trace UI reads as the output."""
+    _record_span_content(
+        span,
+        value,
+        value_key=SpanAttributes.OUTPUT_VALUE,
+        mime_key=SpanAttributes.OUTPUT_MIME_TYPE,
+    )
+
+
+def _record_span_content(
+    span: Any,
+    value: Any,
+    *,
+    value_key: str,
+    mime_key: str,
+) -> None:
+    if value is None:
+        return
+    if isinstance(value, str):
+        rendered, mime_type = value, "text/plain"
+    else:
+        try:
+            rendered, mime_type = (
+                json.dumps(value, default=str, separators=(",", ":")),
+                "application/json",
+            )
+        except TypeError, ValueError:
+            rendered, mime_type = str(value), "text/plain"
+    if not rendered:
+        return
+    span.set_attribute(value_key, rendered[:_MAX_SPAN_CONTENT_CHARS])
+    span.set_attribute(mime_key, mime_type)
 
 
 def _get_settings():
@@ -470,8 +543,59 @@ def _setup_tracing(service_name: str) -> TracerProvider | None:
             )
         )
     )
+    llm_fanout = _build_llm_fanout_processor()
+    if llm_fanout is not None:
+        provider.add_span_processor(llm_fanout)
     trace.set_tracer_provider(provider)
     return provider
+
+
+def _build_llm_fanout_processor() -> SpanProcessor | None:
+    """Send this provider's OpenInference spans to the LLM backend as well.
+
+    The agent run's root span -- the AGENT-kind `agent.run` that carries the
+    conversation, the session id and the run's input and output -- is created on
+    the *general* tracer, because everything below it (SQL, HTTP, the run phase
+    spans) belongs in the infrastructure pipeline. The model spans underneath it
+    are created on the LLM tracer instead, which is a separate provider with a
+    separate exporter.
+
+    Nothing joined those two halves. The pipelines share a trace id, because
+    context propagation is provider-independent, so Phoenix received the model
+    spans with a `parent_span_id` pointing at a span it was never sent: every
+    agent run arrived as a headless fragment, with no AGENT root, no session,
+    and no input or output to show in a session list. The claim that "the
+    OpenInference pipeline already carries the whole AGENT -> LLM -> TOOL
+    hierarchy" was true of every level except the top one.
+
+    This is the join, and it is deliberately a filter and not a fan-out of
+    everything: only spans that already carry an OpenInference kind cross over,
+    which today is the one root span per run. Fanning out the rest is what
+    filled Phoenix with `db.operation` noise the last time this was tried.
+    Unsanitized, like the LLM pipeline it feeds -- prompts and outputs are the
+    point of that backend, and the general exporter's allowlist would strip
+    exactly the attributes being sent.
+
+    One thing to keep true: the two pipelines sample independently
+    (`OTEL_TRACES_SAMPLER_ARG` here, `LLM_OTEL_TRACES_SAMPLER_ARG` there). Set
+    the general ratio below the LLM one and the root is dropped while its
+    children are kept, which is the headless-fragment failure again. Both are
+    1.0 wherever this backend is enabled.
+    """
+    settings = _get_settings()
+    endpoint = settings.llm_otel_exporter_otlp_endpoint
+    if not settings.llm_otel_enabled or not endpoint:
+        return None
+    return BatchSpanProcessor(
+        FilteringSpanExporter(
+            _build_span_exporter(
+                endpoint,
+                protocol=settings.llm_otel_exporter_otlp_protocol,
+                headers=_llm_otlp_headers(),
+            ),
+            _is_llm_span,
+        )
+    )
 
 
 def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
