@@ -20,6 +20,10 @@ import {
     type DisplayResourceRequest,
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
+import {
+    ASSISTANT_PREFILL_EVENT,
+    parseAssistantPrefillDetail,
+} from '@/lib/assistant/prefill';
 import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
 import {
     projectConversationMetadata,
@@ -71,6 +75,12 @@ interface AIAssistantContextType {
     // the way from pod home into the conversation it creates.
     pendingProject: ProjectSelection | null;
     setPendingProject: (project: ProjectSelection | null) => void;
+    // Text waiting to be dropped into the next composer to mount. It lives here
+    // for the same reason `pendingProject` does — the composer is unmounted
+    // whenever the assistant is closed, and the things that hand it a starting
+    // message (an app's element picker, a resource view) fire while it is.
+    pendingDraft: string | null;
+    setPendingDraft: (draft: string | null) => void;
     isOpenedConversationRunning: boolean;
     isActiveConversationRunning: boolean;
     openConversation: (conversationId: string) => void;
@@ -192,6 +202,7 @@ export function AIAssistantProvider({
         pendingProjectRef.current = project;
         setPendingProjectState(project);
     }, []);
+    const [pendingDraft, setPendingDraft] = useState<string | null>(null);
     const isOpenRef = useRef(isOpen);
     const seenAutoNavigationToolCallIds = useRef<Set<string>>(new Set());
     const allowAutoNavigationRef = useRef(false);
@@ -550,6 +561,24 @@ export function AIAssistantProvider({
         controllerRef.current.clearPendingFiles();
     }, []);
 
+    // Something elsewhere in the pod wants the assistant opened with a message
+    // already written. The listener lives here, on the provider, because the
+    // provider is mounted for the whole pod while the composer only exists once
+    // the panel is open — a listener inside the panel cannot hear the event that
+    // is supposed to open it.
+    useEffect(() => {
+        const onPrefill = (event: Event) => {
+            const detail = parseAssistantPrefillDetail((event as CustomEvent<unknown>).detail);
+            if (!detail) return;
+            if (detail.forceNewConversation) clearMessages();
+            setPendingDraft(detail.content);
+            openAssistant();
+        };
+
+        window.addEventListener(ASSISTANT_PREFILL_EVENT, onPrefill);
+        return () => window.removeEventListener(ASSISTANT_PREFILL_EVENT, onPrefill);
+    }, [clearMessages, openAssistant]);
+
     const openConversation = useCallback((conversationId: string) => {
         setHasActivatedController(true);
         controllerRef.current.openConversation(conversationId);
@@ -646,6 +675,8 @@ export function AIAssistantProvider({
         setConversationModel: controller.setConversationModel as (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>,
         pendingProject,
         setPendingProject,
+        pendingDraft,
+        setPendingDraft,
         isOpenedConversationRunning: controller.isOpenedConversationRunning,
         isActiveConversationRunning: controller.isOpenedConversationRunning,
         openConversation,
@@ -683,6 +714,8 @@ export function AIAssistantProvider({
         closeConversation,
         pendingProject,
         setPendingProject,
+        pendingDraft,
+        setPendingDraft,
         controller.openedConversationId,
         controller.availableModels,
         controller.canRetryFailedMessage,

@@ -17,6 +17,11 @@ from pathlib import PurePosixPath
 from urllib.parse import urlencode
 from uuid import UUID
 
+from app.core.app_editor import (
+    EDITOR_BRIDGE_SENTINEL,
+    editor_bridge_fingerprint,
+    editor_bridge_script,
+)
 from app.core.auth_urls import auth_ui_url
 from app.core.config import settings
 
@@ -223,13 +228,17 @@ def runtime_config_token(
     app: dict[str, str] | None = None,
     branding: dict[str, str] | None = None,
 ) -> str:
-    """Short, stable hash of the runtime config, for cache busting (ETags)."""
+    """Short, stable hash of everything injected, for cache busting (ETags)."""
     config = build_runtime_config(pod_id, app=app)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
     )
     payload = json.dumps(token_payload, sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(payload.encode("utf-8"))
+    # The editor bridge is injected into the same document, so a change to it
+    # (or to who may drive it) has to move the ETag too.
+    digest.update(editor_bridge_fingerprint().encode("utf-8"))
+    return digest.hexdigest()[:12]
 
 
 def inject_runtime_config(
@@ -269,6 +278,10 @@ def inject_runtime_config(
         injection += _public_app_social_metadata(app)
     if APP_BRANDING_SENTINEL not in text:
         injection += _public_app_branding_script(branding)
+    # Apps only. A widget is a fragment inside a conversation, with no source
+    # tree of its own to point an edit at, so it carries no picker.
+    if app_id and EDITOR_BRIDGE_SENTINEL not in text:
+        injection += editor_bridge_script()
     if not injection:
         return text.encode("utf-8")
 

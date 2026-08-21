@@ -63,22 +63,28 @@ export function AppFrameHost({
 
     return (
         <div aria-hidden={!visible} className={cn('absolute inset-0 z-20', visible ? 'block' : 'hidden')}>
-            {livePages.map((page) => (
-                <div
-                    key={page.slug}
-                    className={cn('absolute inset-0', page.slug === activeSlug ? 'block' : 'hidden')}
-                >
-                    <AppFrame
-                        podId={podId}
-                        appId={page.id}
-                        appName={page.title}
-                        title={page.title}
-                        url={page.url as string}
-                        visibility={page.visibility}
-                        canShare={resourceAllows(page, 'app.update', canUpdateApp)}
-                    />
-                </div>
-            ))}
+            {livePages.map((page) => {
+                // One permission answers both: changing how the app is shared and
+                // changing what it renders are the same right over the same app.
+                const canUpdate = resourceAllows(page, 'app.update', canUpdateApp);
+                return (
+                    <div
+                        key={page.slug}
+                        className={cn('absolute inset-0', page.slug === activeSlug ? 'block' : 'hidden')}
+                    >
+                        <AppFrame
+                            podId={podId}
+                            appId={page.id}
+                            appName={page.title}
+                            title={page.title}
+                            url={page.url as string}
+                            visibility={page.visibility}
+                            canShare={canUpdate}
+                            canEdit={canUpdate}
+                        />
+                    </div>
+                );
+            })}
 
             {loading ? (
                 <div className="absolute inset-0 flex items-center justify-center">

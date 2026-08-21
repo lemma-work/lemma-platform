@@ -108,6 +108,36 @@ panel · action row), **workflow inbox** (assigned forms + run context + agent
 output), **document review** (doc queue · preview + extracted data · validation
 form), **team ops** (records by owner/status/SLA · members · linked runs).
 
+## Editing what someone pointed at
+
+Someone viewing an app in the pod can switch on the element picker and click a piece
+of the interface. That arrives in the conversation as a block naming what they picked:
+
+```
+Editing the "support-app" app — I selected this element:
+
+- Source: src/components/TicketRow.tsx:42:5
+- Component: TicketRow
+- Inside: TicketList → QueuePage
+- Route: /queue
+- DOM path: #root > main > div > div:nth-of-type(3)
+- Text: SEV-2 · Payments API · 4h
+```
+
+Treat the source line as the answer to *where*, not as the whole request — read the
+file before changing it, and change the component, not the one rendered instance.
+A row clicked inside a `.map()` reports the single source site that renders every
+row: styling it changes all of them, which is usually what was meant. When only that
+one row should change, the fix is in the data or the condition, not in the markup.
+
+`- Source:` is absent for a single-file HTML app, and for a Vite build made before
+source stamping. Then the DOM path and the markup are the handle: find that element
+in `index.html` (HTML apps are their own source) or search the components for the
+class names and text in the block.
+
+The loop from there is the ordinary one — `lemma apps pull` if you don't have the
+source, edit, `lemma apps deploy`, then reload the app to see it.
+
 ## Scaffold, develop, deploy (Vite)
 
 ```bash
@@ -140,6 +170,18 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   `lemma-typescript` checkout / `--sdk-path` is present). Start every new app with `init` —
   don't hand-write `package.json` or copy an old app's stale SDK pin.
 - `deploy` builds with the project env, zips `dist/` + source, uploads, serves.
+- **Every host element carries where it was written.** The template's Vite config
+  stamps `data-lemma-loc="src/File.tsx:12:4"` and `data-lemma-component="Name"` onto
+  each JSX host element (`<div>`, `<span>`, …; components are skipped — an attribute
+  on `<TicketRow />` would be a prop, not markup). That is what makes the element
+  picker resolve a click to a file and a line in a minified build. It survives
+  `vite build` by design; set `LEMMA_APP_SOURCE_LOC=0` to build without it, at the
+  cost of the picker only being able to report DOM.
+- `pull` is the inverse: `lemma apps pull <app> [dir]` downloads that uploaded source
+  into `./<app>` (or `dir`), so an app can be edited from a machine or sandbox that
+  never held the original checkout. It refuses a non-empty directory unless you pass
+  `--force`, and Vite apps arrive without `node_modules` — install before building.
+  **Start here when asked to change an existing app you have no source for.**
 - **Auth/testing — one bearer.** The dev server's dev-only plugin resolves the
   current token via `lemma auth print-token` and seeds `localStorage["lemma_token"]`
   before the app boots, so opening the dev URL in **any** browser (or the agent

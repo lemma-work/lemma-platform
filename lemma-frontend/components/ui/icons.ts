@@ -36,6 +36,7 @@ export {
     Code,
     Copy,
     Cpu,
+    CursorClick,
     Database,
     Download,
     Eye,
