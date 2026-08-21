@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Maximize2, PanelRightClose } from '@/components/ui/icons';
+import { ArrowUpRight, X } from '@/components/ui/icons';
 import { useEffect, useRef, type ReactNode } from 'react';
 
 import { useApp } from '@/components/app/app-context';
@@ -48,7 +48,7 @@ function presentationTitle(resourceHref: string): string {
 
 /**
  * The app itself, in the pane — no workspace around it. The stage's own header
- * already names the app and holds the close and full-view controls, so the frame
+ * already names the app and holds the close and open-in-tab controls, so the frame
  * draws without the context bar it would otherwise claim from the conversation.
  */
 function StageAppBody({
@@ -165,10 +165,10 @@ export function ConversationPresentationStage({
                         size="icon"
                         onClick={onClose}
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
-                        aria-label="Back to conversation"
-                        title="Back to conversation"
+                        aria-label="Close"
+                        title="Close"
                     >
-                        <PanelRightClose className="h-4 w-4" strokeWidth={1.8} />
+                        <X className="h-4 w-4" strokeWidth={1.8} />
                     </Button>
                     <div className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
                         {title}
@@ -179,8 +179,8 @@ export function ConversationPresentationStage({
                         size="icon"
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
                     >
-                        <Link href={standaloneHref} aria-label="Open full view" title="Open full view">
-                            <Maximize2 className="h-4 w-4" strokeWidth={1.8} />
+                        <Link href={standaloneHref} aria-label="Open in new tab" title="Open in new tab">
+                            <ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
                         </Link>
                     </Button>
                 </header>
