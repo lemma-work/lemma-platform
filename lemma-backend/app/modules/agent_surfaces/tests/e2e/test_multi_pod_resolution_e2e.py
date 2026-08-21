@@ -153,16 +153,16 @@ async def _two_orgs_with_system_surfaces(
     *,
     platform: str,
 ):
-    # NOTE: org_a/org_b creation and their surface creation stay sequential
-    # here, unlike the signup/invite/add-member stages elsewhere in this
-    # change. Concurrent org creation was tried and reverted: the first org
-    # created in a fresh DB triggers AuthorizationDataService.seed_permissions()
-    # (app/core/authorization/service.py), a check-then-insert against the
-    # global auth_permissions table with no ON CONFLICT handling. Two
-    # concurrent org creations both see the table empty and both try to
-    # insert the same permission ids, so the second commit fails with
-    # `UniqueViolationError: auth_permissions_pkey`. That's a real product
-    # race, not a test-isolation issue, and out of scope to fix here.
+    # NOTE: org_a/org_b creation stays sequential here, but the reason it was
+    # written that way is gone. It used to be that the first org created in a
+    # fresh DB triggered AuthorizationDataService.seed_permissions() as a
+    # check-then-insert with no ON CONFLICT, so two concurrent org creations
+    # both saw the table empty and the second lost to `UniqueViolationError:
+    # auth_permissions_pkey`. That was a real product race, and it has since
+    # been closed: seed_permissions() is now a single bulk upsert with
+    # on_conflict_do_nothing (app/core/authorization/service.py). Parallelising
+    # these two is therefore available if this test ever needs to be faster --
+    # it is left sequential only because nothing has re-measured it.
     org_a = E2EScenario(
         owner_client=authenticated_client,
         async_client=async_client,
