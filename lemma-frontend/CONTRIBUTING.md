@@ -5,7 +5,7 @@ and what we expect in a pull request.
 
 ## Getting set up
 
-1. Make sure you have the [prerequisites](README.md#prerequisites): Node.js 20+
+1. Make sure you have the [prerequisites](README.md#prerequisites): Node.js 24 (the version in `.nvmrc`, which `engines` also pins)
    and the `../lemma-typescript` SDK checked out (this package builds it
    automatically).
 2. Install and run:

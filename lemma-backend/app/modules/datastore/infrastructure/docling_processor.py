@@ -104,9 +104,7 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             if markdown.strip()
             else []
         )
-        pages = await run_blocking(
-            self._pdf_pages, content, mime_type, filename
-        )
+        pages = await run_blocking(self._pdf_pages, content, mime_type, filename)
         return DocumentExtraction(
             markdown=markdown,
             chunks=chunks,

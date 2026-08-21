@@ -223,7 +223,7 @@ class PodBundleStateStore:
             legacy = await self._get_cache(kind, job_id, model_type)
         except RedisError, ValidationError:
             logger.debug(
-                'pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic',
+                "pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic",
                 job_kind=kind.value,
                 job_id=str(job_id),
             )
@@ -269,7 +269,7 @@ class PodBundleStateStore:
             )
         except RedisError:
             logger.debug(
-                'pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic',
+                "pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic",
                 job_kind=kind.value,
                 job_id=str(job_id),
                 status=str(state.status),
@@ -559,7 +559,7 @@ class PodBundleStateStore:
                 await self._save_cache(kind, job_id, state)
             except RedisError:
                 logger.debug(
-                    'pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic',
+                    "pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic",
                     job_kind=kind.value,
                     job_id=str(job_id),
                 )

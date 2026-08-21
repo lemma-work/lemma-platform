@@ -13,7 +13,7 @@ description: Lockfile, editable install, and the offline suites for lemma-python
 runs:
   using: composite
   steps:
-    - uses: astral-sh/setup-uv@v5
+    - uses: astral-sh/setup-uv@v6
 
     # Every path below is repository-relative, and the working directory is
     # pinned to the workspace rather than inherited: release-lemma-python.yml

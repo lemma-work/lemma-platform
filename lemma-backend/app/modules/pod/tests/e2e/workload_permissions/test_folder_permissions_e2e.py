@@ -70,10 +70,16 @@ async def _seed_tree(owner: DatastoreApi, index_datastore_file) -> dict:
     await index_datastore_file(UUID(leaf["pod_id"]), UUID(leaf["id"]))
 
     other = await owner.upload_file(
-        "other.md", b"sibling under library", directory_path=LIBRARY, search_enabled=False
+        "other.md",
+        b"sibling under library",
+        directory_path=LIBRARY,
+        search_enabled=False,
     )
     sibling = await owner.upload_file(
-        "secret.md", b"private not granted", directory_path=PRIVATE, search_enabled=False
+        "secret.md",
+        b"private not granted",
+        directory_path=PRIVATE,
+        search_enabled=False,
     )
     revision = await owner.get_file(REVISION)
     return {"leaf": leaf, "other": other, "sibling": sibling, "revision": revision}
@@ -99,7 +105,11 @@ async def test_folder_read_grant_cascades_read_list_search(
     name = f"reader_{workload_type}_{uuid4().hex[:8]}"
     workload = await create_workload(authenticated_client, pod_id, workload_type, name)
     await replace_workload_grants(
-        authenticated_client, pod_id, workload_type, name, [_folder_grant(LIBRARY, "folder.read")]
+        authenticated_client,
+        pod_id,
+        workload_type,
+        name,
+        [_folder_grant(LIBRARY, "folder.read")],
     )
 
     client = await mint_workload_client(
@@ -119,14 +129,20 @@ async def test_folder_read_grant_cascades_read_list_search(
         assert NEEDLE.encode() in await api.download_file(LEAF)
 
         # LIST the granted folder and its subfolder.
-        lib_items = {i["id"] for i in (await api.list_files(directory_path=LIBRARY))["items"]}
+        lib_items = {
+            i["id"] for i in (await api.list_files(directory_path=LIBRARY))["items"]
+        }
         assert tree["revision"]["id"] in lib_items
         assert tree["other"]["id"] in lib_items
-        rev_items = {i["id"] for i in (await api.list_files(directory_path=REVISION))["items"]}
+        rev_items = {
+            i["id"] for i in (await api.list_files(directory_path=REVISION))["items"]
+        }
         assert tree["leaf"]["id"] in rev_items
 
         # SEARCH within the granted scope reaches the descendant.
-        scoped = await api.search_files(NEEDLE, search_method="TEXT", scope_path=LIBRARY)
+        scoped = await api.search_files(
+            NEEDLE, search_method="TEXT", scope_path=LIBRARY
+        )
         assert tree["leaf"]["id"] in {r["file_id"] for r in scoped["items"]}
 
         # READ-only grant must NOT allow writing into the folder.
@@ -140,7 +156,9 @@ async def test_folder_read_grant_cascades_read_list_search(
 
         # No over-reach onto the ungranted sibling.
         await api.get_file(PRIVATE_FILE, expected_status=status.HTTP_403_FORBIDDEN)
-        await api.list_files(directory_path=PRIVATE, expected_status=status.HTTP_403_FORBIDDEN)
+        await api.list_files(
+            directory_path=PRIVATE, expected_status=status.HTTP_403_FORBIDDEN
+        )
     finally:
         await client.aclose()
 
@@ -165,7 +183,11 @@ async def test_folder_write_grant_cascades_write_and_read(
     name = f"writer_{workload_type}_{uuid4().hex[:8]}"
     workload = await create_workload(authenticated_client, pod_id, workload_type, name)
     await replace_workload_grants(
-        authenticated_client, pod_id, workload_type, name, [_folder_grant(LIBRARY, "folder.write")]
+        authenticated_client,
+        pod_id,
+        workload_type,
+        name,
+        [_folder_grant(LIBRARY, "folder.write")],
     )
 
     client = await mint_workload_client(
@@ -246,7 +268,9 @@ async def test_no_grant_search_and_read_are_gated(
 
         # Direct read/list are denied too.
         await api.get_file(LEAF, expected_status=status.HTTP_403_FORBIDDEN)
-        await api.list_files(directory_path=LIBRARY, expected_status=status.HTTP_403_FORBIDDEN)
+        await api.list_files(
+            directory_path=LIBRARY, expected_status=status.HTTP_403_FORBIDDEN
+        )
     finally:
         await client.aclose()
 
@@ -270,7 +294,11 @@ async def test_child_folder_grant_does_not_cascade_up(
     workload = await create_workload(authenticated_client, pod_id, AGENT, name)
     # Grant only the CHILD folder /library/revision.
     await replace_workload_grants(
-        authenticated_client, pod_id, AGENT, name, [_folder_grant(REVISION, "folder.read")]
+        authenticated_client,
+        pod_id,
+        AGENT,
+        name,
+        [_folder_grant(REVISION, "folder.read")],
     )
 
     client = await mint_workload_client(
@@ -288,7 +316,9 @@ async def test_child_folder_grant_does_not_cascade_up(
         # NOT reachable: a file directly under the PARENT (outside the grant).
         await api.get_file(LIBRARY_OTHER, expected_status=status.HTTP_403_FORBIDDEN)
         # NOT reachable: listing the parent folder itself.
-        await api.list_files(directory_path=LIBRARY, expected_status=status.HTTP_403_FORBIDDEN)
+        await api.list_files(
+            directory_path=LIBRARY, expected_status=status.HTTP_403_FORBIDDEN
+        )
     finally:
         await client.aclose()
 
@@ -316,9 +346,13 @@ async def test_default_pod_agent_reaches_pod_files_without_grant(
         # Mirrors the invoking user (pod owner): read/list/search all pod files
         # with NO per-resource workload grant.
         assert tree["leaf"]["id"] == (await api.get_file(LEAF))["id"]
-        lib_items = {i["id"] for i in (await api.list_files(directory_path=LIBRARY))["items"]}
+        lib_items = {
+            i["id"] for i in (await api.list_files(directory_path=LIBRARY))["items"]
+        }
         assert {tree["revision"]["id"], tree["other"]["id"]} <= lib_items
-        scoped = await api.search_files(NEEDLE, search_method="TEXT", scope_path=LIBRARY)
+        scoped = await api.search_files(
+            NEEDLE, search_method="TEXT", scope_path=LIBRARY
+        )
         assert tree["leaf"]["id"] in {r["file_id"] for r in scoped["items"]}
         # And, as the owner, it can also reach the "private" sibling.
         assert (await api.get_file(PRIVATE_FILE))["id"] == tree["sibling"]["id"]

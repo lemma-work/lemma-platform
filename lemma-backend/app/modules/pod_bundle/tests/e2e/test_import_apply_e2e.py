@@ -48,7 +48,10 @@ def _make_bundle(
         if rows_csv is not None:
             _write(root / "tables" / tname / "data.csv", rows_csv)
     for aname in agents or []:
-        _write(root / "agents" / aname / f"{aname}.json", {"name": aname, "instruction": "Hi."})
+        _write(
+            root / "agents" / aname / f"{aname}.json",
+            {"name": aname, "instruction": "Hi."},
+        )
     return pack_bundle(root)
 
 
@@ -117,19 +120,25 @@ async def test_apply_creates_resources_and_records_recipe(
         agents=["assistant"],
     )
     import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-    await _wait(authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"})
+    await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
 
     apply = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
     )
     assert apply.status_code == status.HTTP_202_ACCEPTED, apply.text
-    final = await _wait(authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+    final = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
     assert final["status"] == "COMPLETED", final
 
     # Table created + seeded.
     tbl = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/leads")
     assert tbl.status_code == status.HTTP_200_OK, tbl.text
-    recs = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/leads/records")
+    recs = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/leads/records"
+    )
     titles = {r["title"] for r in recs.json()["items"]}
     assert {"Acme", "Globex"} <= titles
 
@@ -143,17 +152,23 @@ async def test_apply_creates_resources_and_records_recipe(
     assert any(r["kind"] == "URL" for r in recipes), pod.json()["config"]
 
 
-async def test_apply_idempotent_on_reapply(authenticated_client, test_pod, worker, tmp_path):
+async def test_apply_idempotent_on_reapply(
+    authenticated_client, test_pod, worker, tmp_path
+):
     pod_id = test_pod["id"]
     zip_bytes = _make_bundle(tmp_path, table=("clients", _COLS), agents=["helper"])
 
     for _ in range(2):
         import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-        await _wait(authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"})
+        await _wait(
+            authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+        )
         await authenticated_client.post(
             f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
         )
-        final = await _wait(authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+        final = await _wait(
+            authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+        )
         assert final["status"] == "COMPLETED", final
 
     # Second import saw the resources as UPDATE, not CREATE — no duplication.
@@ -239,7 +254,9 @@ async def test_apply_destructive_requires_confirmation(
 
     zip_bytes = _make_bundle(tmp_path, table=("leads", _COLS))
     import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-    await _wait(authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"})
+    await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
 
     # Unconfirmed destructive apply is rejected.
     rej = await authenticated_client.post(
@@ -254,7 +271,9 @@ async def test_apply_destructive_requires_confirmation(
         json={"confirm_destructive": True},
     )
     assert ok.status_code == status.HTTP_202_ACCEPTED, ok.text
-    final = await _wait(authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+    final = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
     assert final["status"] == "COMPLETED", final
 
     tbl = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/leads")
@@ -268,9 +287,13 @@ async def test_cancel_persists_terminal_tombstone(
     pod_id = test_pod["id"]
     zip_bytes = _make_bundle(tmp_path, table=("temp", _COLS))
     import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-    await _wait(authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"})
+    await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
 
-    cancel = await authenticated_client.delete(f"/pods/{pod_id}/bundle/imports/{import_id}")
+    cancel = await authenticated_client.delete(
+        f"/pods/{pod_id}/bundle/imports/{import_id}"
+    )
     assert cancel.status_code == status.HTTP_202_ACCEPTED, cancel.text
     assert cancel.json()["status"] == "CANCELLING"
 
@@ -338,11 +361,15 @@ async def test_export_then_import_apply_roundtrip(
     )
     assert res.status_code == status.HTTP_202_ACCEPTED, res.text
     import_id = res.json()["import_id"]
-    await _wait(authenticated_client, target_id, import_id, until={"AWAITING_CONFIRMATION"})
+    await _wait(
+        authenticated_client, target_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
     await authenticated_client.post(
         f"/pods/{target_id}/bundle/imports/{import_id}/apply", json={}
     )
-    final = await _wait(authenticated_client, target_id, import_id, until={"COMPLETED", "FAILED"})
+    final = await _wait(
+        authenticated_client, target_id, import_id, until={"COMPLETED", "FAILED"}
+    )
     assert final["status"] == "COMPLETED", final
 
     got = await authenticated_client.get(f"/pods/{target_id}/functions/{func_name}")

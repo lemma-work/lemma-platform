@@ -26,7 +26,10 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.observability import connection_scope
-from app.core.observability.connection_scope import ConnectionHold, ConnectionScopeMonitor
+from app.core.observability.connection_scope import (
+    ConnectionHold,
+    ConnectionScopeMonitor,
+)
 
 # Tighter than the production default: a test should not hold a connection for
 # a fifth of a second, and a tight threshold is what makes the gate useful on a
@@ -120,7 +123,9 @@ def write_sweep_report() -> str | None:
     by_site: Counter[str] = Counter()
     worst: dict[str, ConnectionHold] = {}
     for hold in monitor.violations:
-        site = hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        site = (
+            hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        )
         by_site[site] += 1
         if site not in worst or hold.gap_seconds > worst[site].gap_seconds:
             worst[site] = hold
@@ -161,9 +166,56 @@ def write_sweep_report() -> str | None:
 # many queries ran or how long they took.
 
 
+# How often the loop watchdog wants to be woken while the guard is armed.
+#
+# Fine enough to attribute a stall against a 200ms threshold, coarse enough that
+# the task itself is not the load.
+LOOP_LAG_INTERVAL_SECONDS = 0.02
+
+
+async def _watch_loop_lag(lag: list[float]) -> None:
+    """Record how late this task's wakeups were, worst first.
+
+    The monitor measures a hold in wall-clock, which is the right unit for the
+    thing it protects — a connection is checked out for as long as the clock
+    says, whatever the process was doing. It is the wrong unit for *blame*.
+    A CI runner that deschedules the whole process for half a second produces a
+    half-second gap on whichever connection happened to be open, and the path
+    that opened it did nothing wrong.
+
+    This is how the two are told apart. An `await` that hands control back —
+    an HTTP call, a Redis round trip, `asyncio.sleep` — leaves this task on
+    time, so its gap is real and stays reported. A stalled process makes this
+    task late by the same amount it made everything else late, and that much of
+    the gap is subtracted before the threshold is applied.
+
+    What it deliberately does not catch: a *blocking* call inside a session,
+    which stalls the loop and so would be excused here. That is a different
+    defect with its own gate — `make lint-async` — and asking one detector to
+    cover both is what would make this one unable to say anything precisely.
+    """
+    import asyncio
+    import time
+
+    while True:
+        before = time.monotonic()
+        await asyncio.sleep(LOOP_LAG_INTERVAL_SECONDS)
+        lag.append(max(0.0, time.monotonic() - before - LOOP_LAG_INTERVAL_SECONDS))
+
+
+def attributable_violations(
+    violations: list[ConnectionHold], *, worst_lag_seconds: float, threshold: float
+) -> list[ConnectionHold]:
+    """The holds still over the threshold once the process stall is removed."""
+    return [
+        hold for hold in violations if hold.gap_seconds - worst_lag_seconds >= threshold
+    ]
+
+
 @pytest.fixture
 def scoped_connection_guard():
     """Arm the strict connection-scope monitor around one block of a test."""
+    import asyncio
     from contextlib import asynccontextmanager
 
     from app.core.infrastructure.db.session import get_engine
@@ -182,15 +234,38 @@ def scoped_connection_guard():
             monitor.attach(get_datastore_engine())
         except Exception:  # pragma: no cover - datastore is optional
             pass
+        lag: list[float] = []
+        watchdog = asyncio.create_task(_watch_loop_lag(lag))
         try:
             yield monitor
         finally:
+            watchdog.cancel()
+            try:
+                await watchdog
+            except asyncio.CancelledError:
+                # The cancellation this block just requested, arriving. Awaiting
+                # is what makes the task actually finish before the readings are
+                # totted up; the exception it raises on the way out is the
+                # acknowledgement, not a failure.
+                pass
             connection_scope.stop_connection_scope_monitor()
-        if monitor.violations:
-            report = "\n\n".join(hold.render() for hold in monitor.violations)
+        worst_lag = max(lag, default=0.0)
+        blamed = attributable_violations(
+            monitor.violations,
+            worst_lag_seconds=worst_lag,
+            threshold=idle_hold_seconds,
+        )
+        if blamed:
+            report = "\n\n".join(hold.render() for hold in blamed)
+            stall = (
+                f" (the loop itself stalled for up to {worst_lag * 1000:.0f}ms "
+                "during this block, which is already subtracted)"
+                if worst_lag >= idle_hold_seconds / 4
+                else ""
+            )
             pytest.fail(
-                f"{len(monitor.violations)} pooled connection(s) held across "
-                f"non-database work inside the guarded block:\n\n{report}",
+                f"{len(blamed)} pooled connection(s) held across "
+                f"non-database work inside the guarded block{stall}:\n\n{report}",
                 pytrace=False,
             )
 

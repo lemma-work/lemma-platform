@@ -144,7 +144,9 @@ class TestPersonalFileIsolation:
         assert grant.status_code == status.HTTP_200_OK, grant.text
 
         # The pod-wide grant DOES reach RESTRICTED pod documents...
-        assert (await other.get_file(restricted_doc["path"]))["id"] == restricted_doc["id"]
+        assert (await other.get_file(restricted_doc["path"]))["id"] == restricted_doc[
+            "id"
+        ]
 
         # ...but it must NOT reach another user's PERSONAL files, by any route.
         await other.get_file(internal_path, expected_status=status.HTTP_403_FORBIDDEN)

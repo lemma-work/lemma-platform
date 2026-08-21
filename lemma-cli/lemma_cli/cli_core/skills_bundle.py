@@ -5,6 +5,7 @@ The published wheel ships a copy of the repo-root ``lemma-skills/`` under
 prefer that packaged copy; in a dev checkout where a build has not populated it
 we fall back to the canonical repo source so ``lemma skills`` still works.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

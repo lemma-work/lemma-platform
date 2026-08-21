@@ -1,5 +1,3 @@
-
-
 def test_an_oversized_query_is_refused_before_it_is_parsed():
     """Parsing is CPU on the event loop and the query is tenant-supplied.
 
@@ -24,4 +22,6 @@ def test_an_oversized_query_is_refused_before_it_is_parsed():
     assert excinfo.value.details.get("reason") == "query_too_long"
 
     # And an ordinary query is untouched.
-    _ensure_read_only("SELECT id FROM users WHERE created_at > now() - interval '1 day'")
+    _ensure_read_only(
+        "SELECT id FROM users WHERE created_at > now() - interval '1 day'"
+    )

@@ -48,7 +48,9 @@ async def agent_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
 
     async def probe() -> None:

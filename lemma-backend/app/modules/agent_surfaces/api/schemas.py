@@ -103,10 +103,14 @@ class SurfaceSlackConfigResponse(BaseModel):
 
 
 class SurfaceBehaviorConfigInput(BaseModel):
-    identity: SurfaceIdentityConfigInput = Field(default_factory=SurfaceIdentityConfigInput)
+    identity: SurfaceIdentityConfigInput = Field(
+        default_factory=SurfaceIdentityConfigInput
+    )
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
-    send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    send_policy: SurfaceSendPolicyConfig = Field(
+        default_factory=SurfaceSendPolicyConfig
+    )
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
@@ -147,7 +151,9 @@ class SurfaceConfigResponse(BaseModel):
     )
     channels: list[SurfaceChannelRouteResponse] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
-    send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    send_policy: SurfaceSendPolicyConfig = Field(
+        default_factory=SurfaceSendPolicyConfig
+    )
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
@@ -203,7 +209,9 @@ class SurfaceCreateRequest(BaseModel):
     default_agent_name: str | None = None
     account_id: UUID | None = None
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool = True
 
     model_config = ConfigDict(extra="forbid")
@@ -220,7 +228,9 @@ class SurfaceUpdateRequest(BaseModel):
     default_agent_name: str | None = None
     account_id: UUID | None = None
     credential_mode: SurfaceCredentialMode | None = None
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -232,7 +242,9 @@ class TelegramManagedBotSetupRequest(BaseModel):
         description="Pod-unique surface name. Defaults to telegram.",
     )
     default_agent_name: str | None = None
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool = True
 
     model_config = ConfigDict(extra="forbid")

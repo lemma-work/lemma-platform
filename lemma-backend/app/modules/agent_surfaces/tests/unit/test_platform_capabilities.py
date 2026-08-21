@@ -29,9 +29,7 @@ def test_attachment_cap_reused_from_limits(platform):
 
 
 def test_native_choices_platforms():
-    native = {
-        p for p, c in PLATFORM_CAPABILITIES.items() if c.supports_native_choices
-    }
+    native = {p for p, c in PLATFORM_CAPABILITIES.items() if c.supports_native_choices}
     # All chat surfaces render native choices; only email surfaces don't.
     assert native == {"SLACK", "TEAMS", "TELEGRAM", "WHATSAPP"}
 

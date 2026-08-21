@@ -827,13 +827,14 @@ async def test_cron_schedule_fires_workflow(
     authenticated_client: AsyncClient,
     fixed_test_org,
     worker,
+    db_session: AsyncSession,
     monkeypatch,
 ):
     """A recurring CRON schedule fires its workflow live via the scheduler."""
     _ = worker
-    # The product floor is 15 minutes, which no test can wait out. Lower it so
-    # this can watch a real fire at the next minute boundary; the floor itself is
-    # covered by test_time_schedule_policy.
+    # The product floor is 15 minutes, which no test can wait out. Lower it so a
+    # once-a-minute cron is accepted at all; the floor itself is covered by
+    # test_time_schedule_policy.
     monkeypatch.setattr(
         "app.modules.schedule.services.time_schedule_policy."
         "schedule_settings.schedule_minimum_interval_minutes",
@@ -851,17 +852,27 @@ async def test_cron_schedule_fires_workflow(
         pod_id,
         schedule_type=ScheduleType.TIME.value,
         workflow_name=workflow["name"],
-        # Every minute — fires at the next minute boundary (<= ~60s).
         config={"cron": "* * * * *", "payload": {"source": "cron-workflow"}},
     )
     assert schedule["config"]["cron"] == "* * * * *"
+
+    # This used to wait for the real next minute boundary, which cost up to 60
+    # seconds of doing nothing and made it the third-slowest test in the whole
+    # e2e suite. What is under test is that the poller claims a due cron row and
+    # fires its workflow -- not that wall-clock advances. So make the occurrence
+    # due now: claim_due_schedules selects on `next_fire_at <= now()`, and the
+    # poller ticks every DEFAULT_POLL_INTERVAL_SECONDS.
+    row = await db_session.get(Schedule, UUID(schedule["id"]))
+    assert row is not None, "the schedule API returned an id with no row behind it"
+    row.next_fire_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
 
     run = await _wait_for_workflow_run(
         authenticated_client,
         pod_id,
         workflow["name"],
         source="cron-workflow",
-        timeout_seconds=120,
+        timeout_seconds=60,
     )
     assert run["start_type"] == "SCHEDULED"
 
@@ -1021,22 +1032,22 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
         "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
         _returns_async(
             lambda self, payload_text, headers: {
-            "version": "V3",
-            "payload": {
-                "id": provider_id,
-                "user_id": payload["metadata"]["user_id"],
-                "toolkit_slug": payload["metadata"]["toolkit_slug"],
-                "trigger_slug": payload["type"],
-                "metadata": {
-                    "connected_account": {
-                        "id": payload["metadata"]["connected_account_id"],
-                        "auth_config_id": payload["metadata"]["auth_config_id"],
-                    }
+                "version": "V3",
+                "payload": {
+                    "id": provider_id,
+                    "user_id": payload["metadata"]["user_id"],
+                    "toolkit_slug": payload["metadata"]["toolkit_slug"],
+                    "trigger_slug": payload["type"],
+                    "metadata": {
+                        "connected_account": {
+                            "id": payload["metadata"]["connected_account_id"],
+                            "auth_config_id": payload["metadata"]["auth_config_id"],
+                        }
+                    },
+                    "payload": {**payload["data"], "source": "composio-log"},
                 },
-                "payload": {**payload["data"], "source": "composio-log"},
-            },
-            "raw_payload": payload,
-        }
+                "raw_payload": payload,
+            }
         ),
     )
     webhook = await authenticated_client.post("/webhooks/composio", json=payload)
@@ -1343,9 +1354,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
         source_run.target_outcome = ScheduleRunStatus.TARGET_FAILED.value
         source_run.completed_at = datetime.now(timezone.utc)
 
-    retry_path = (
-        f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
-    )
+    retry_path = f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
     hidden_retry = await async_client.post(
         retry_path,
         headers=auth_headers(peer),

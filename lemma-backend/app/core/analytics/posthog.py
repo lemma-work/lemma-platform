@@ -118,9 +118,7 @@ class PostHogSink:
                 # Without this the task dies on the first escape and every
                 # later event is silently dropped for the life of the process,
                 # with one overflow log at shutdown to show for it.
-                logger.warning(
-                    "analytics.flush.failed", error_type=type(exc).__name__
-                )
+                logger.warning("analytics.flush.failed", error_type=type(exc).__name__)
 
     async def _drain_once(self) -> None:
         while self._buffer:
@@ -177,9 +175,7 @@ class PostHogSink:
                 # there is nothing left to do but proceed to the final drain.
                 pass
             except Exception as exc:  # noqa: BLE001 - a dead flusher still owes us a drain
-                logger.warning(
-                    "analytics.flush.failed", error_type=type(exc).__name__
-                )
+                logger.warning("analytics.flush.failed", error_type=type(exc).__name__)
         try:
             await asyncio.wait_for(
                 self._drain_once(), timeout=_FINAL_DRAIN_TIMEOUT_SECONDS

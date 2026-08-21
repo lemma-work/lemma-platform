@@ -176,8 +176,7 @@ async def cancel_already_queued(
                 select(AgentHostCommandModel.id)
                 .where(
                     AgentHostCommandModel.run_id == run_id,
-                    AgentHostCommandModel.kind
-                    == AgentHostCommandKind.CANCEL_RUN.value,
+                    AgentHostCommandModel.kind == AgentHostCommandKind.CANCEL_RUN.value,
                     AgentHostCommandModel.lease_epoch == lease_epoch,
                     AgentHostCommandModel.state.in_(_LIVE_COMMAND_STATES),
                 )
@@ -239,8 +238,7 @@ async def cancel_abandoned_host_runs(
                 lease_epoch=lease.lease_epoch,
                 payload={"agent_run_id": str(lease.run_id)},
                 state=AgentHostCommandState.QUEUED.value,
-                expires_at=timestamp
-                + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+                expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
             )
         )
         host_ids.append(lease.host_id)

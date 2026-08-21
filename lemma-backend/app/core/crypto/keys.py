@@ -142,7 +142,7 @@ def legacy_candidate_secrets() -> list[bytes]:
                 add(material.secret)
         except RuntimeError:
             logger.debug(
-                'crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic'
+                "crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic"
             )
 
     if settings.secret_encryption_key:

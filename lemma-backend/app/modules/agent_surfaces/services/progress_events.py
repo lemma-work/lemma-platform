@@ -38,7 +38,9 @@ def _surface_platform(conversation: Conversation) -> str | None:
 
 def _safe_run_error_text(event: AgentEvent) -> str:
     del event
-    return "I couldn’t finish that request. Try it again without resending your message."
+    return (
+        "I couldn’t finish that request. Try it again without resending your message."
+    )
 
 
 def _email_reply_tool_called(event: AgentEvent) -> bool:

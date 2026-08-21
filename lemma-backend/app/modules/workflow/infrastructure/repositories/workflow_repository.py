@@ -14,7 +14,11 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.workflow.domain.workflow import WorkflowEntity, WorkflowSummaryEntity, WorkflowMode
+from app.modules.workflow.domain.workflow import (
+    WorkflowEntity,
+    WorkflowSummaryEntity,
+    WorkflowMode,
+)
 from app.modules.workflow.domain.events import WorkflowCreatedEvent
 from app.modules.workflow.domain.graph import WorkflowEdge
 from app.modules.workflow.domain.nodes import WORKFLOW_NODE_ADAPTER
@@ -93,7 +97,9 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         )
         return self._to_entity(model)
 
-    async def get(self, flow_id: UUID, ctx: Context | None = None) -> Optional[WorkflowEntity]:
+    async def get(
+        self, flow_id: UUID, ctx: Context | None = None
+    ) -> Optional[WorkflowEntity]:
         if ctx is None:
             stmt = select(WorkflowModel).where(WorkflowModel.id == flow_id)
             result = await self.session.execute(stmt)
@@ -113,7 +119,9 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         return self._to_entity(row[0], row[1]) if row else None
 
     async def get_for_update(self, flow_id: UUID) -> Optional[WorkflowEntity]:
-        stmt = select(WorkflowModel).where(WorkflowModel.id == flow_id).with_for_update()
+        stmt = (
+            select(WorkflowModel).where(WorkflowModel.id == flow_id).with_for_update()
+        )
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
@@ -167,7 +175,9 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
                 resource_type=ResourceType.WORKFLOW,
                 resource_id=flow.id,
             )
-        stmt = update(WorkflowModel).where(WorkflowModel.id == flow.id).values(**payload)
+        stmt = (
+            update(WorkflowModel).where(WorkflowModel.id == flow.id).values(**payload)
+        )
         await self.session.execute(stmt)
         return await self.get(flow.id)
 
@@ -219,7 +229,10 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
                 if isinstance(n, dict)
                 for config in [n.get("config") or {}]
                 if isinstance(config, dict)
-                for kind, key in (("agent", "agent_name"), ("function", "function_name"))
+                for kind, key in (
+                    ("agent", "agent_name"),
+                    ("function", "function_name"),
+                )
                 if config.get(key)
             }
         )
@@ -272,7 +285,9 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             next_cursor = rows[limit - 1][0].id
             rows = rows[:limit]
 
-        return [self._to_summary(model, actions) for model, actions in rows], next_cursor
+        return [
+            self._to_summary(model, actions) for model, actions in rows
+        ], next_cursor
 
     async def list_visible_by_pod(
         self,

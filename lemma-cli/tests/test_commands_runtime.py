@@ -94,13 +94,22 @@ def test_runtime_profiles_create_dispatches_api(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "runtime", "profiles", "create", "OPENAI_COMPATIBLE",
-            "--name", "Fireworks",
-            "--base-url", "https://api.fireworks.ai",
-            "--api-key", "fw-xxx",
-            "--default-model", "accounts/fireworks/models/glm-5p2",
-            "--model", "m1",
-            "--model", "m2",
+            "runtime",
+            "profiles",
+            "create",
+            "OPENAI_COMPATIBLE",
+            "--name",
+            "Fireworks",
+            "--base-url",
+            "https://api.fireworks.ai",
+            "--api-key",
+            "fw-xxx",
+            "--default-model",
+            "accounts/fireworks/models/glm-5p2",
+            "--model",
+            "m1",
+            "--model",
+            "m2",
         ],
     )
 
@@ -121,9 +130,14 @@ def test_runtime_profiles_create_binds_an_agent_host_harness(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "runtime", "profiles", "create", "agent_host",
-            "--name", "OpenCode on my laptop",
-            "--harness-id", "0199aa11-2233-7444-8555-666677778888",
+            "runtime",
+            "profiles",
+            "create",
+            "agent_host",
+            "--name",
+            "OpenCode on my laptop",
+            "--harness-id",
+            "0199aa11-2233-7444-8555-666677778888",
         ],
     )
 

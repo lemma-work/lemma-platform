@@ -75,7 +75,9 @@ def test_customizer_remaps_provider_and_vision(openai_env):
     def customizer(entries):
         out = []
         for entry in entries:
-            provider, vision = mapping.get(entry.name, (entry.provider_model_name, False))
+            provider, vision = mapping.get(
+                entry.name, (entry.provider_model_name, False)
+            )
             caps = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
             if vision:
                 caps.append(RuntimeModelCapability.VISION)
@@ -122,7 +124,8 @@ def test_public_dict_masks_remapped_provider_id(openai_env):
 def test_clear_customizer_restores_default(openai_env):
     register_system_openai_catalog_customizer(
         lambda entries: [
-            e.model_copy(update={"provider_model_name": "accounts/x/y"}) for e in entries
+            e.model_copy(update={"provider_model_name": "accounts/x/y"})
+            for e in entries
         ]
     )
     register_system_openai_catalog_customizer(None)

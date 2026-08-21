@@ -369,7 +369,10 @@ def app_home_view(
                         {
                             "type": "button",
                             "action_id": SURFACE_SELECT_ACTION_ID,
-                            "text": {"type": "plain_text", "text": _truncate(label, 74)},
+                            "text": {
+                                "type": "plain_text",
+                                "text": _truncate(label, 74),
+                            },
                             "value": surface_id,
                         }
                         for label, surface_id in choices[:5]
@@ -480,9 +483,7 @@ def app_home_view(
 
     if apps:
         blocks.append({"type": "divider"})
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "*Apps*"}}
-        )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Apps*"}})
         for name, url in apps[:6]:
             blocks.append(
                 {
@@ -526,7 +527,10 @@ def app_home_view(
             for channel_id, agent in list(channel_routes)[:20]
         )
         blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Channels*\n{lines}"}}
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Channels*\n{lines}"},
+            }
         )
     else:
         blocks.append(

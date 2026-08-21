@@ -206,9 +206,9 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
             id="surface.connected",
         ),
         pytest.param(
-            SurfaceMessageAnsweredEvent(
-                surface_id=uuid4(), pod_id=uuid4()
-            ).model_dump(mode="json"),
+            SurfaceMessageAnsweredEvent(surface_id=uuid4(), pod_id=uuid4()).model_dump(
+                mode="json"
+            ),
             id="surface.message.answered",
         ),
     ],

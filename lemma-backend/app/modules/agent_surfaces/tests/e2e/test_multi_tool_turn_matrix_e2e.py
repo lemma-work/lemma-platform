@@ -133,8 +133,7 @@ async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
     assert uploads
     finals = [i for i, text in enumerate(delivered) if "All done." in text]
     assert len(finals) == 1, (
-        f"final answer must be delivered exactly once, got {len(finals)} "
-        f"in {delivered}"
+        f"final answer must be delivered exactly once, got {len(finals)} in {delivered}"
     )
     widget_index = next(
         i for i, text in enumerate(delivered) if "A widget is ready." in text

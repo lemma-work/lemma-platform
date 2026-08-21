@@ -43,7 +43,6 @@ class KreuzbergCompatibilityError(RuntimeError):
     """The extractor rejected the request schema and a legacy config may work."""
 
 
-
 class KreuzbergHelper:
     def __init__(self):
         self.base_url = (
@@ -403,7 +402,7 @@ class KreuzbergHelper:
                 last_error = exc
                 if candidate == config:
                     logger.debug(
-                        'datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic'
+                        "datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic"
                     )
                 continue
 
@@ -509,7 +508,7 @@ class KreuzbergHelper:
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2**attempt)
                     logger.debug(
-                        'datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic',
+                        "datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic",
                         max_attempts=max_attempts,
                     )
                     await asyncio.sleep(delay)
@@ -594,7 +593,7 @@ class KreuzbergHelper:
             )
         except Exception:
             logger.debug(
-                'datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic',
+                "datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic",
                 chunker_type=chunker_type,
                 exc_info=True,
             )

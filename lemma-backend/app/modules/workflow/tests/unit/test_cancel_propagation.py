@@ -84,7 +84,9 @@ async def test_cancelling_a_function_wait_cancels_the_run():
     )
 
     engine.function_adapter.cancel_run.assert_awaited_once()
-    assert str(engine.function_adapter.cancel_run.await_args.args[0]) == wait.external_ref
+    assert (
+        str(engine.function_adapter.cancel_run.await_args.args[0]) == wait.external_ref
+    )
     engine.agent_adapter.stop_conversation.assert_not_awaited()
 
 

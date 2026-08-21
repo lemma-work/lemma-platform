@@ -60,7 +60,7 @@ class GracefulToolset(WrapperToolset[Any]):
             if is_control_flow_exception(exc):
                 raise
             logger.debug(
-                'agent.graceful_toolset.tool_r_returning_model_instead.diagnostic',
+                "agent.graceful_toolset.tool_r_returning_model_instead.diagnostic",
                 exc_info=True,
             )
             return format_tool_error(name, exc)

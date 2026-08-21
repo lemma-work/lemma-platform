@@ -28,6 +28,7 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
     DurableScheduleEventPublisher,
 )
 
+
 @pytest.mark.asyncio
 async def test_llm_filter_task_requires_stable_source_event_id() -> None:
     with pytest.raises(ValueError, match="schedule_id is required"):
@@ -35,6 +36,7 @@ async def test_llm_filter_task_requires_stable_source_event_id() -> None:
 
     with pytest.raises(ValueError, match="source_event_id is required"):
         await handle_llm_filter_task({}, {}, schedule_id=str(uuid4()))
+
 
 def test_schedule_fired_requires_canonical_source_event_id() -> None:
     with pytest.raises(ValidationError):
@@ -46,6 +48,7 @@ def test_schedule_fired_requires_canonical_source_event_id() -> None:
                 "payload": {},
             }
         )
+
 
 @pytest.mark.asyncio
 async def test_durable_schedule_publisher_stages_versioned_event(monkeypatch) -> None:

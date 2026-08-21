@@ -221,7 +221,9 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
         print(f"VIEW_IMAGE_EMERGENT_PATH={out}")
 
 
-async def _create_enum_table(authenticated_client, pod_id: str, table_name: str) -> None:
+async def _create_enum_table(
+    authenticated_client, pod_id: str, table_name: str
+) -> None:
     response = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={

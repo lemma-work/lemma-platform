@@ -148,7 +148,11 @@ class DuckDuckGoHTMLParser(HTMLParser):
             )
             self._depth -= 1
             if at_body_close:
-                if self._current and self._current.get("title") and self._current.get("url"):
+                if (
+                    self._current
+                    and self._current.get("title")
+                    and self._current.get("url")
+                ):
                     self.results.append(self._current)
                 self._current = None
                 self._body_depth = None
@@ -351,9 +355,7 @@ class BraveSearchClient(BaseSearchClient):
             if vertical is SearchVertical.WEB
             else payload.get("results", [])
         )
-        return [
-            self._to_result(item, vertical) for item in raw_results[:max_results]
-        ]
+        return [self._to_result(item, vertical) for item in raw_results[:max_results]]
 
     def _to_result(self, item: dict, vertical: SearchVertical) -> SearchResult:
         thumbnail = item.get("thumbnail")
@@ -361,9 +363,7 @@ class BraveSearchClient(BaseSearchClient):
             thumbnail.get("src") if isinstance(thumbnail, dict) else thumbnail
         )
         properties = item.get("properties")
-        image_url = (
-            properties.get("url") if isinstance(properties, dict) else None
-        )
+        image_url = properties.get("url") if isinstance(properties, dict) else None
         meta = item.get("meta_url")
         publisher = meta.get("netloc") if isinstance(meta, dict) else None
         return SearchResult(
@@ -375,7 +375,9 @@ class BraveSearchClient(BaseSearchClient):
             publisher=publisher,
             thumbnail_url=str(thumbnail_url) if thumbnail_url else None,
             image_url=str(image_url) if image_url else None,
-            duration=item.get("duration") if vertical is SearchVertical.VIDEOS else None,
+            duration=item.get("duration")
+            if vertical is SearchVertical.VIDEOS
+            else None,
         )
 
 
@@ -397,9 +399,7 @@ class SearchClient:
         self._pinned = search_engine
         self.search_engine = self._get_client(search_engine)
 
-    def _get_client(
-        self, engine: AvailableSearchEngines | None
-    ) -> BaseSearchClient:
+    def _get_client(self, engine: AvailableSearchEngines | None) -> BaseSearchClient:
         if engine is not None:
             return _CLIENTS[engine]()
         configured_provider = settings.web_search_provider.strip().lower()

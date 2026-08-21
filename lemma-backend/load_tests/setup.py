@@ -69,7 +69,9 @@ def _create_pod(client: httpx.Client, token: str, org_id: str) -> str:
     return resp.json()["id"]
 
 
-def _create_table(client: httpx.Client, token: str, pod_id: str, table_name: str) -> None:
+def _create_table(
+    client: httpx.Client, token: str, pod_id: str, table_name: str
+) -> None:
     resp = client.post(
         f"/pods/{pod_id}/datastore/tables",
         headers={"Authorization": f"Bearer {token}"},

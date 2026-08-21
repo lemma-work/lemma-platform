@@ -202,7 +202,9 @@ def _terminal_request() -> RuntimeTerminalRequest:
 
 @pytest.mark.asyncio
 async def test_report_terminal_maps_credential_rejected_to_401() -> None:
-    gateway = SimpleNamespace(terminal=AsyncMock(side_effect=RuntimeCredentialRejected()))
+    gateway = SimpleNamespace(
+        terminal=AsyncMock(side_effect=RuntimeCredentialRejected())
+    )
 
     with pytest.raises(HTTPException) as excinfo:
         await report_terminal(
@@ -227,7 +229,9 @@ async def test_report_terminal_maps_state_rejected_to_409() -> None:
 @pytest.mark.asyncio
 async def test_report_terminal_returns_the_gateway_response_on_success() -> None:
     gateway = SimpleNamespace(
-        terminal=AsyncMock(return_value=RuntimeEventResponse(accepted=True, duplicate=False))
+        terminal=AsyncMock(
+            return_value=RuntimeEventResponse(accepted=True, duplicate=False)
+        )
     )
 
     response = await report_terminal(

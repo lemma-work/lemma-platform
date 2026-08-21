@@ -181,7 +181,10 @@ async def test_fetch_account_profile_routes_http_kind_through_kind_dispatcher():
 
     fake_dispatcher = AsyncMock()
     fake_dispatcher.build_request.return_value = "resolved-request"
-    fake_dispatcher.execute.return_value = {"login": "octocat", "email": "octocat@github.com"}
+    fake_dispatcher.execute.return_value = {
+        "login": "octocat",
+        "email": "octocat@github.com",
+    }
 
     unused_gateway = AsyncMock()
     service = _service(
@@ -209,7 +212,10 @@ async def test_initiate_connect_request_allowed_when_account_exists():
     user_id = uuid4()
     auth_config = _auth_config()
     auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     uow = AsyncMock()
@@ -240,7 +246,10 @@ async def test_initiate_connect_request_allowed_when_account_exists():
 async def test_initiate_connect_request_success():
     user_id = uuid4()
     auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     uow = AsyncMock()
@@ -274,9 +283,7 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     user_id = uuid4()
     app = ConnectorEntity(
         id="dropbox",
-        provider_capabilities=[
-            ComposioProviderCapability(toolkit_slug="dropbox")
-        ],
+        provider_capabilities=[ComposioProviderCapability(toolkit_slug="dropbox")],
     )
     auth_config_repo = AsyncMock(
         get_active_by_org_and_app=AsyncMock(return_value=None),
@@ -399,7 +406,10 @@ async def test_initiate_connect_request_allows_reauth_for_unusable_account():
     unusable.status = AccountStatus.REAUTH_REQUIRED
 
     auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
@@ -690,7 +700,9 @@ async def test_handle_oauth_callback_resets_status_to_connected():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-reauth&code=abc",
             state="state-reauth",
@@ -912,7 +924,9 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-1&code=abc",
             state="state-1",
@@ -1049,7 +1063,9 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-2&code=abc",
             state="state-2",
@@ -1070,9 +1086,7 @@ def _composio_auth_config(connector_id: str) -> AuthConfigEntity:
     )
 
 
-def _profile_operation(
-    connector_id: str, name: str
-) -> ConnectorOperationEntity:
+def _profile_operation(connector_id: str, name: str) -> ConnectorOperationEntity:
     return ConnectorOperationEntity(
         id=f"{connector_id}:{name.lower()}",
         connector_id=connector_id,
@@ -1249,9 +1263,7 @@ async def test_fetch_account_profile_does_not_unwrap_for_lemma_provider():
 async def test_fetch_account_profile_skips_when_provider_unsupported():
     """capability_for raises for a provider the connector doesn't support --
     must be swallowed, not propagated, since this is a best-effort lookup."""
-    service = _service(
-        operation_gateway=AsyncMock(), operation_repository=AsyncMock()
-    )
+    service = _service(operation_gateway=AsyncMock(), operation_repository=AsyncMock())
     result = await service._fetch_account_profile(
         _connector("slack"), "COMPOSIO", OAuthCredentials(access_token="tok")
     )
@@ -1376,7 +1388,9 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-clobber&code=abc",
             state="state-clobber",
@@ -1399,7 +1413,9 @@ async def test_delete_default_account_promotes_next_default():
     account_repo = AsyncMock()
     service = _service(
         account_repository=account_repo,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("telegram"))),
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("telegram"))
+        ),
     )
     service.get_account = AsyncMock(return_value=default_account)
     service._resolve_auth_config = AsyncMock(return_value=_auth_config("telegram"))
@@ -1423,7 +1439,9 @@ async def test_delete_non_default_account_does_not_promote():
     account_repo = AsyncMock()
     service = _service(
         account_repository=account_repo,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("telegram"))),
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("telegram"))
+        ),
     )
     service.get_account = AsyncMock(return_value=account)
     service._resolve_auth_config = AsyncMock(return_value=_auth_config("telegram"))
@@ -1492,7 +1510,9 @@ async def test_create_account_allows_when_existing_identity_unhealthy():
     user_id = uuid4()
     existing = _account(user_id, "airtable")
     existing.status = AccountStatus.REAUTH_REQUIRED
-    service, auth_config, account_repo = _airtable_service(existing_by_identity=existing)
+    service, auth_config, account_repo = _airtable_service(
+        existing_by_identity=existing
+    )
 
     account = await service.create_account(
         user_id=user_id,

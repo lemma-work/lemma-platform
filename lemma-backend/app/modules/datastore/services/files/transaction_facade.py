@@ -57,9 +57,7 @@ class FileTransactionFacade:
     ) -> None:
         await self._writer.write_create_file(plan, file_content)
 
-    async def finalize_create_file(
-        self, plan: CreateFilePlan
-    ) -> DatastoreFileEntity:
+    async def finalize_create_file(self, plan: CreateFilePlan) -> DatastoreFileEntity:
         return await self._writer.finalize_create_file(plan)
 
     async def rollback_create_file(self, plan: CreateFilePlan) -> None:

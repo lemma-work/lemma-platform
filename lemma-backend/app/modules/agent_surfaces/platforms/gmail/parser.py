@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.agent_surfaces.domain.entities import ConversationType, ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+)
 from app.modules.agent_surfaces.platforms.email_common import (
     decode_base64_bytes,
     parse_email_identity,
@@ -124,17 +127,13 @@ def _normalize_attachment(
     )
     size = raw.get("size") or body_data.get("size")
     content_bytes_base64 = (
-        raw.get("content_bytes_base64")
-        or raw.get("data")
-        or body_data.get("data")
+        raw.get("content_bytes_base64") or raw.get("data") or body_data.get("data")
     )
     if not any([attachment_id, name, content_bytes_base64]):
         return None
     return {
         "id": (
-            str(attachment_id).strip() or None
-            if attachment_id is not None
-            else None
+            str(attachment_id).strip() or None if attachment_id is not None else None
         ),
         "name": str(name).strip() or None if name is not None else None,
         "mime_type": str(mime_type).strip() or None if mime_type is not None else None,
@@ -186,10 +185,7 @@ class GmailMessageParser:
             or ""
         ).strip()
         message_id = str(
-            data.get("message_id")
-            or data.get("messageId")
-            or data.get("id")
-            or ""
+            data.get("message_id") or data.get("messageId") or data.get("id") or ""
         ).strip()
         sender_identity = parse_email_identity(
             data.get("sender") or data.get("from") or headers.get("from"),
@@ -222,14 +218,18 @@ class GmailMessageParser:
         # Drop the quoted original. Without this every reply carries the whole
         # thread forward, so by the fourth exchange most of the prompt is the
         # agent re-reading its own earlier messages.
-        message_text = f"Email subject: {subject}\n\n{strip_quoted_reply(body, subject)}".strip()
+        message_text = (
+            f"Email subject: {subject}\n\n{strip_quoted_reply(body, subject)}".strip()
+        )
 
         attachment_candidates = [
             normalized
             for collection in (
                 list(data.get("attachments") or []),
                 list(data.get("attachment_list") or []),
-                _walk_parts(data.get("payload") if isinstance(data.get("payload"), dict) else {}),
+                _walk_parts(
+                    data.get("payload") if isinstance(data.get("payload"), dict) else {}
+                ),
             )
             for item in collection
             if isinstance(item, dict)
@@ -244,9 +244,7 @@ class GmailMessageParser:
             if ref.strip()
         ]
         references = [
-            str(ref)
-            for ref in list(data.get("references") or header_references)
-            if ref
+            str(ref) for ref in list(data.get("references") or header_references) if ref
         ]
         internet_message_id = str(headers.get("message-id") or "").strip() or None
         in_reply_to = (

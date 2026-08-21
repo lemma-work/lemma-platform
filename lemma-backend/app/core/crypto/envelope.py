@@ -89,7 +89,7 @@ def encode_str(envelope: dict[str, Any]) -> str:
 
 def decode_str(value: str) -> dict[str, Any]:
     """Unpack a compact string envelope back into its v2 dict."""
-    raw = b64d(value[len(STR_PREFIX):])
+    raw = b64d(value[len(STR_PREFIX) :])
     envelope = json.loads(raw.decode("utf-8"))
     if not is_v2(envelope):
         raise ValueError("Decoded string envelope is not a lemma-secret-v2 object")

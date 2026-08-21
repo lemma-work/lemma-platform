@@ -11,8 +11,19 @@ from typing import Literal
 from pydantic import BaseModel
 
 TEXT_FILE_EXTENSIONS = [
-    ".txt", ".md", ".html", ".json", ".csv", ".py", ".js", ".css",
-    ".svg", ".xml", ".ts", ".tsx", ".jsx",
+    ".txt",
+    ".md",
+    ".html",
+    ".json",
+    ".csv",
+    ".py",
+    ".js",
+    ".css",
+    ".svg",
+    ".xml",
+    ".ts",
+    ".tsx",
+    ".jsx",
 ]
 
 
@@ -95,8 +106,10 @@ EXTENSION_MIME_MAP = {
 
 def get_content_type(path: str) -> str:
     extension = os.path.splitext(path)[1].lower()
-    return EXTENSION_MIME_MAP.get(extension) or mimetypes.guess_type(path)[0] or (
-        "application/octet-stream"
+    return (
+        EXTENSION_MIME_MAP.get(extension)
+        or mimetypes.guess_type(path)[0]
+        or ("application/octet-stream")
     )
 
 

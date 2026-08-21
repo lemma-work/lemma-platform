@@ -210,13 +210,22 @@ async def test_feedback_api_attributes_user_agent_and_non_agent_workloads(
         UUID(function_response.json()["feedback_id"]),
     }
     persisted = (
-        await db_session.execute(
-            select(AgentFeedbackModel).where(AgentFeedbackModel.id.in_(feedback_ids))
+        (
+            await db_session.execute(
+                select(AgentFeedbackModel).where(
+                    AgentFeedbackModel.id.in_(feedback_ids)
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(persisted) == 3
     by_subject = {feedback.subject: feedback for feedback in persisted}
     assert by_subject["User feedback"].agent_id is None
     assert by_subject["Agent feedback"].agent_id == UUID(agent_id)
     assert by_subject["Function feedback"].agent_id is None
-    assert all(feedback.issue_encountered == "The tool encountered a deterministic issue." for feedback in persisted)
+    assert all(
+        feedback.issue_encountered == "The tool encountered a deterministic issue."
+        for feedback in persisted
+    )

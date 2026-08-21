@@ -57,7 +57,11 @@ def test_strip_jsonc_block_comment_with_star_and_quote():
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "raw,expected",
-    [("Lead Qualifier!!", "lead-qualifier"), ("triage_agent", "triage-agent"), ("A B C", "a-b-c")],
+    [
+        ("Lead Qualifier!!", "lead-qualifier"),
+        ("triage_agent", "triage-agent"),
+        ("A B C", "a-b-c"),
+    ],
 )
 def test_slugify(raw, expected):
     assert slugify(raw) == expected
@@ -90,7 +94,14 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
     result = init_pod(tmp_path / "demo", "Demo Ops")
     assert result.name == "demo-ops"
     names = {p.name for p in result.files}
-    assert {"pod.json", "items.json", "hello.json", "instruction.md", "README.md", "AGENTS.md"} <= names
+    assert {
+        "pod.json",
+        "items.json",
+        "hello.json",
+        "instruction.md",
+        "README.md",
+        "AGENTS.md",
+    } <= names
 
     # Every scaffolded JSON parses as JSONC and matches the folder==name rule.
     root = tmp_path / "demo"
@@ -131,7 +142,9 @@ def test_init_table_shared_flag(tmp_path: Path):
     assert shared["enable_rls"] is False
 
     init_resource("table", "secrets", root=tmp_path)  # default = RLS on
-    private = loads_jsonc((tmp_path / "tables" / "secrets" / "secrets.json").read_text())
+    private = loads_jsonc(
+        (tmp_path / "tables" / "secrets" / "secrets.json").read_text()
+    )
     assert private["enable_rls"] is True
 
 
@@ -250,8 +263,20 @@ def test_parse_grant_spec_rejects_bad_input():
 
 
 def test_merge_grants_unions_permission_ids():
-    existing = [{"resource_type": "datastore_table", "resource_name": "t", "permission_ids": ["a"]}]
-    new = [{"resource_type": "datastore_table", "resource_name": "t", "permission_ids": ["a", "b"]}]
+    existing = [
+        {
+            "resource_type": "datastore_table",
+            "resource_name": "t",
+            "permission_ids": ["a"],
+        }
+    ]
+    new = [
+        {
+            "resource_type": "datastore_table",
+            "resource_name": "t",
+            "permission_ids": ["a", "b"],
+        }
+    ]
     merged = merge_grants(existing, new)
     assert len(merged) == 1
     assert merged[0]["permission_ids"] == ["a", "b"]
@@ -259,7 +284,9 @@ def test_merge_grants_unions_permission_ids():
 
 def test_grant_in_bundle_merges_into_file(tmp_path: Path):
     init_resource("agent", "triage", root=tmp_path)
-    path, perms = grant_in_bundle("agent", "triage", ["tickets:read", "/kb:read"], root=tmp_path)
+    path, perms = grant_in_bundle(
+        "agent", "triage", ["tickets:read", "/kb:read"], root=tmp_path
+    )
     names = {g["resource_name"] for g in perms["grants"]}
     assert {"tickets", "/kb"} <= names
     # second call unions, not duplicates
@@ -304,60 +331,75 @@ def test_validate_workflow_accepts_scaffold(tmp_path: Path):
 def test_validate_workflow_flags_problems():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
-    issues = validate_workflow({
-        "nodes": [{"id": "a", "type": "FORM"}, {"id": "b", "type": "AGENT", "config": {}}],
-        "edges": [{"source": "a", "target": "ZZZ"}],
-    })
+    issues = validate_workflow(
+        {
+            "nodes": [
+                {"id": "a", "type": "FORM"},
+                {"id": "b", "type": "AGENT", "config": {}},
+            ],
+            "edges": [{"source": "a", "target": "ZZZ"}],
+        }
+    )
     joined = " ".join(issues)
-    assert "ZZZ" in joined          # bad edge target
-    assert "END" in joined          # missing END
-    assert "agent_name" in joined   # AGENT node without target
+    assert "ZZZ" in joined  # bad edge target
+    assert "END" in joined  # missing END
+    assert "agent_name" in joined  # AGENT node without target
 
 
 def test_validate_workflow_flags_unknown_start_namespace():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
-    issues = validate_workflow({
-        "nodes": [
-            {
-                "id": "load",
-                "type": "FUNCTION",
-                "config": {
-                    "function_name": "f",
-                    "input_mapping": {
-                        "x": {"type": "expression", "value": "start.inputs.item_id || start.id"}
+    issues = validate_workflow(
+        {
+            "nodes": [
+                {
+                    "id": "load",
+                    "type": "FUNCTION",
+                    "config": {
+                        "function_name": "f",
+                        "input_mapping": {
+                            "x": {
+                                "type": "expression",
+                                "value": "start.inputs.item_id || start.id",
+                            }
+                        },
                     },
                 },
-            },
-            {"id": "end", "type": "END"},
-        ],
-        "edges": [{"source": "load", "target": "end"}],
-    })
+                {"id": "end", "type": "END"},
+            ],
+            "edges": [{"source": "load", "target": "end"}],
+        }
+    )
     joined = " ".join(issues)
     assert "start.inputs" in joined  # the classic footgun
-    assert "start.id" in joined      # invented bare key
-    assert "payload" in joined       # names the valid namespaces
+    assert "start.id" in joined  # invented bare key
+    assert "payload" in joined  # names the valid namespaces
 
 
 def test_validate_workflow_accepts_valid_start_namespaces():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
-    issues = validate_workflow({
-        "nodes": [
-            {
-                "id": "load",
-                "type": "FUNCTION",
-                "config": {
-                    "function_name": "f",
-                    "input_mapping": {
-                        "x": {"type": "expression", "value": "start.payload.item_id || start.metadata.id"}
+    issues = validate_workflow(
+        {
+            "nodes": [
+                {
+                    "id": "load",
+                    "type": "FUNCTION",
+                    "config": {
+                        "function_name": "f",
+                        "input_mapping": {
+                            "x": {
+                                "type": "expression",
+                                "value": "start.payload.item_id || start.metadata.id",
+                            }
+                        },
                     },
                 },
-            },
-            {"id": "end", "type": "END"},
-        ],
-        "edges": [{"source": "load", "target": "end"}],
-    })
+                {"id": "end", "type": "END"},
+            ],
+            "edges": [{"source": "load", "target": "end"}],
+        }
+    )
     assert not [i for i in issues if "start" in i]
 
 
@@ -392,9 +434,7 @@ def test_validate_workflow_flags_scheduled_start_missing_inner_field():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
     # config present but missing schedule_type -> server 422s on the inner field.
-    issues = validate_workflow(
-        _triggered_workflow({"type": "SCHEDULED", "config": {}})
-    )
+    issues = validate_workflow(_triggered_workflow({"type": "SCHEDULED", "config": {}}))
     joined = " ".join(issues)
     assert "SCHEDULED" in joined
     assert "schedule_type" in joined
@@ -404,9 +444,7 @@ def test_validate_workflow_flags_event_start_missing_fields():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
     issues = validate_workflow(
-        _triggered_workflow(
-            {"type": "EVENT", "config": {"connector_id": "gmail"}}
-        )
+        _triggered_workflow({"type": "EVENT", "config": {"connector_id": "gmail"}})
     )
     # connector_id is supplied; only connector_trigger_id is missing.
     assert any("connector_trigger_id" in i and "missing" in i for i in issues)
@@ -433,7 +471,10 @@ def test_validate_workflow_flags_bad_datastore_operation():
         _triggered_workflow(
             {
                 "type": "DATASTORE_EVENT",
-                "config": {"table_name": "expenses", "operations": ["INSERT", "UPSERT"]},
+                "config": {
+                    "table_name": "expenses",
+                    "operations": ["INSERT", "UPSERT"],
+                },
             }
         )
     )
@@ -474,28 +515,41 @@ def test_validate_workflow_flags_decision_silent_misroute():
     # The dogfood footgun: a rejection (no rule match) falls through to the
     # first outgoing edge, which points at the SAME node the 'approve' rule
     # targets -> a rejection is silently treated as an approval.
-    issues = validate_workflow({
-        "start": {"type": "MANUAL"},
-        "nodes": [
-            {"id": "intake", "type": "FORM",
-             "config": {"input_schema": {"type": "object"}}},
-            {"id": "decide", "type": "DECISION",
-             "config": {"rules": [
-                 {"condition": "intake.decision == 'approved'", "next_node_id": "approve"},
-             ]}},
-            {"id": "approve", "type": "END"},
-            {"id": "reject", "type": "END"},
-        ],
-        "edges": [
-            {"id": "e0", "source": "intake", "target": "decide"},
-            # First outgoing edge from the decision is the implicit default and
-            # points at 'approve' — the same target as the approve rule.
-            {"id": "e1", "source": "decide", "target": "approve"},
-        ],
-    })
+    issues = validate_workflow(
+        {
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "intake",
+                    "type": "FORM",
+                    "config": {"input_schema": {"type": "object"}},
+                },
+                {
+                    "id": "decide",
+                    "type": "DECISION",
+                    "config": {
+                        "rules": [
+                            {
+                                "condition": "intake.decision == 'approved'",
+                                "next_node_id": "approve",
+                            },
+                        ]
+                    },
+                },
+                {"id": "approve", "type": "END"},
+                {"id": "reject", "type": "END"},
+            ],
+            "edges": [
+                {"id": "e0", "source": "intake", "target": "decide"},
+                # First outgoing edge from the decision is the implicit default and
+                # points at 'approve' — the same target as the approve rule.
+                {"id": "e1", "source": "decide", "target": "approve"},
+            ],
+        }
+    )
     joined = " ".join(issues)
     assert "decide" in joined
-    assert "approve" in joined          # names the mis-routed default target
+    assert "approve" in joined  # names the mis-routed default target
     assert "intake.decision == 'approved'" in joined  # names the culprit rule
 
 
@@ -504,25 +558,41 @@ def test_validate_workflow_accepts_decision_with_explicit_branches():
 
     # Every case has its own rule; the default edge is a distinct catch-all
     # handler no rule targets -> no silent same-target misroute.
-    issues = validate_workflow({
-        "start": {"type": "MANUAL"},
-        "nodes": [
-            {"id": "intake", "type": "FORM",
-             "config": {"input_schema": {"type": "object"}}},
-            {"id": "decide", "type": "DECISION",
-             "config": {"rules": [
-                 {"condition": "intake.decision == 'approved'", "next_node_id": "approve"},
-                 {"condition": "intake.decision == 'rejected'", "next_node_id": "reject"},
-             ]}},
-            {"id": "approve", "type": "END"},
-            {"id": "reject", "type": "END"},
-            {"id": "needs_review", "type": "END"},
-        ],
-        "edges": [
-            {"id": "e0", "source": "intake", "target": "decide"},
-            {"id": "e1", "source": "decide", "target": "needs_review"},
-        ],
-    })
+    issues = validate_workflow(
+        {
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "intake",
+                    "type": "FORM",
+                    "config": {"input_schema": {"type": "object"}},
+                },
+                {
+                    "id": "decide",
+                    "type": "DECISION",
+                    "config": {
+                        "rules": [
+                            {
+                                "condition": "intake.decision == 'approved'",
+                                "next_node_id": "approve",
+                            },
+                            {
+                                "condition": "intake.decision == 'rejected'",
+                                "next_node_id": "reject",
+                            },
+                        ]
+                    },
+                },
+                {"id": "approve", "type": "END"},
+                {"id": "reject", "type": "END"},
+                {"id": "needs_review", "type": "END"},
+            ],
+            "edges": [
+                {"id": "e0", "source": "intake", "target": "decide"},
+                {"id": "e1", "source": "decide", "target": "needs_review"},
+            ],
+        }
+    )
     # The default edge points at a distinct catch-all -> no same-target misroute.
     assert not [i for i in issues if "silently routes" in i]
 
@@ -530,14 +600,16 @@ def test_validate_workflow_accepts_decision_with_explicit_branches():
 def test_validate_workflow_flags_decision_with_no_rules():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
-    issues = validate_workflow({
-        "start": {"type": "MANUAL"},
-        "nodes": [
-            {"id": "decide", "type": "DECISION", "config": {"rules": []}},
-            {"id": "end", "type": "END"},
-        ],
-        "edges": [{"id": "e1", "source": "decide", "target": "end"}],
-    })
+    issues = validate_workflow(
+        {
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {"id": "decide", "type": "DECISION", "config": {"rules": []}},
+                {"id": "end", "type": "END"},
+            ],
+            "edges": [{"id": "e1", "source": "decide", "target": "end"}],
+        }
+    )
     joined = " ".join(issues)
     assert "decide" in joined
     assert "no rules" in joined
@@ -557,7 +629,9 @@ def test_extract_portable_variables_tokenizes_assignee_member_id(tmp_path: Path)
             {
                 "id": "ask",
                 "type": "FORM",
-                "config": {"assignee_pod_member_id": "019ebadc-d86a-7424-9221-e3424f05b1a6"},
+                "config": {
+                    "assignee_pod_member_id": "019ebadc-d86a-7424-9221-e3424f05b1a6"
+                },
             }
         ]
     }
@@ -585,7 +659,10 @@ def test_extract_portable_variables_tokenizes_assignee_member_id(tmp_path: Path)
 def test_humanize_error_keyerror():
     from lemma_cli.cli_core.state import humanize_error
 
-    assert humanize_error(KeyError("instruction")) == "Missing required field: instruction."
+    assert (
+        humanize_error(KeyError("instruction"))
+        == "Missing required field: instruction."
+    )
 
 
 def test_humanize_error_api_validation():

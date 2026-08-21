@@ -859,6 +859,123 @@ def test_workspace_agent_prompt_states_working_directory():
     assert "uv venv" in prompt
 
 
+def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
+    """A plan written in turn one has to still be visible in turn five.
+
+    The list lives in conversation metadata; the only place a later run could
+    have seen it was the `write_todos` tool return, an old message that history
+    trimming eventually drops. An agent that cannot see its own checklist cannot
+    check anything off it -- which is how a plan gets written once and never
+    updated again.
+
+    Both harnesses get this: the section is added outside the
+    `include_toolset_prompts` guard, like the working-directory one.
+    """
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={
+            "todos": [
+                {"content": "Fetch the Q3 report", "done": True},
+                {"content": "Summarize findings", "done": False},
+            ]
+        },
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    for include_fragments in (True, False):
+        prompt = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=SimpleNamespace(surface_platform=None),
+            include_toolset_prompts=include_fragments,
+        )
+        assert "# Task list" in prompt
+        assert "- [x] Fetch the Q3 report" in prompt
+        assert "- [ ] Summarize findings" in prompt
+        assert "1 of 2 done" in prompt
+        # Named, so picking up mid-plan needs no inference.
+        assert "Summarize findings**" in prompt
+
+
+def test_a_conversation_that_never_planned_is_not_nagged_about_a_task_list():
+    """An agent with no list should decide whether the work needs one."""
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(surface_platform=None),
+    )
+
+    assert "This conversation already has a task list" not in prompt
+
+
+def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
+    """A list it cannot edit is noise: there is no `write_todos` on this run."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="builder",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.WORKSPACE_CLI],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(workspace_cwd="/workspace/c/x/y", surface_platform=None),
+    )
+
+    assert "# Task list" not in prompt
+
+
+def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
+    """All-done is not "nothing to do": the next request replaces the plan."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Ship it", "done": True}]},
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(surface_platform=None),
+    )
+
+    assert "Every item on this conversation's list is finished" in prompt
+    assert "replaces the old one" in prompt
+
+
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     """On a repo, the scratchpad orientation is not just unhelpful but wrong:
     there is no sibling `/workspace/c/<date>/<slug>` holding earlier work, and
@@ -1021,9 +1138,7 @@ def test_inline_schema_resolves_a_local_ref_and_drops_the_defs_bucket():
     inlined = _inline_schema(schema)
 
     assert "$ref" not in str(inlined)
-    assert inlined["properties"]["address"]["properties"]["city"] == {
-        "type": "string"
-    }
+    assert inlined["properties"]["address"]["properties"]["city"] == {"type": "string"}
 
 
 def test_inline_schema_is_a_no_op_for_a_schema_with_no_refs():
@@ -1044,7 +1159,9 @@ def test_schema_preview_is_empty_for_absent_or_malformed_schema(schema):
 
 
 def test_schema_preview_renders_compact_normalized_json():
-    preview = _schema_preview({"type": "object", "properties": {"ok": {"type": "boolean"}}})
+    preview = _schema_preview(
+        {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    )
 
     # Compact separators (no spaces) and normalized (additionalProperties filled
     # in), so the description does not silently double the token cost of the
@@ -2152,7 +2269,12 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
     pause contract: the answer still comes back through the same resume path."""
     request = _one_question(
         options=[
-            {"label": "OAuth", "description": "Use OAuth", "recommended": True, "icon": "🔐"},
+            {
+                "label": "OAuth",
+                "description": "Use OAuth",
+                "recommended": True,
+                "icon": "🔐",
+            },
             {"label": "API key", "description": "Use an API key", "icon": "🔑"},
         ]
     )

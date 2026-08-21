@@ -68,8 +68,13 @@ def test_extract_portable_variables_rewrites_and_records(tmp_path: Path):
     assert variables["slack_account"]["connector_kind"] == "composio"
 
     # Resource files now hold ${name} placeholders in place of the raw ids.
-    workflow = json.loads((root / "workflows" / "approval" / "approval.json").read_text())
-    assert workflow["nodes"][0]["config"]["assignee_pod_member_id"] == "${approval_assignee}"
+    workflow = json.loads(
+        (root / "workflows" / "approval" / "approval.json").read_text()
+    )
+    assert (
+        workflow["nodes"][0]["config"]["assignee_pod_member_id"]
+        == "${approval_assignee}"
+    )
     schedule = json.loads((root / "schedules" / "daily" / "daily.json").read_text())
     assert schedule["account_id"] == "${daily_account}"
 
@@ -83,8 +88,13 @@ def test_extract_portable_variables_is_idempotent(tmp_path: Path):
     first = _extract_portable_variables(root)
     second = _extract_portable_variables(root)
     assert second == first
-    workflow = json.loads((root / "workflows" / "approval" / "approval.json").read_text())
-    assert workflow["nodes"][0]["config"]["assignee_pod_member_id"] == "${approval_assignee}"
+    workflow = json.loads(
+        (root / "workflows" / "approval" / "approval.json").read_text()
+    )
+    assert (
+        workflow["nodes"][0]["config"]["assignee_pod_member_id"]
+        == "${approval_assignee}"
+    )
 
 
 def test_extract_portable_variables_no_manifest(tmp_path: Path):

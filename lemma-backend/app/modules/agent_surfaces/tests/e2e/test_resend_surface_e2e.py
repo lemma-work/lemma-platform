@@ -34,7 +34,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
@@ -90,9 +92,7 @@ async def test_resend_webhook_ignores_unmatched_address(
     ignored (200 OK, no surface/agent involvement) — proves address routing
     fails closed rather than guessing a destination. The Svix signature is valid;
     only the destination is unknown."""
-    monkeypatch.setattr(
-        core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
-    )
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     envelope = _raw_resend_envelope(
         sender_email=fixed_test_user["email"],
@@ -119,9 +119,7 @@ async def test_resend_webhook_rejects_invalid_signature(
 ):
     """An inbound envelope with a bad/absent Svix signature is rejected (401)
     before any address routing — proves inbound is authenticated."""
-    monkeypatch.setattr(
-        core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
-    )
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     envelope = _raw_resend_envelope(
         sender_email="attacker@evil.test",
@@ -155,9 +153,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(
-        core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
-    )
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(

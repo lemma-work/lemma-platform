@@ -87,7 +87,6 @@ ENTRY_RE = re.compile(r"^\| `([a-z_][a-z0-9_.]*)` \|", re.M)
 #: more so, since events have no OpenAPI to fall back on.
 
 
-
 def module_of(operation: dict) -> str:
     tags = operation.get("tags") or []
     if not tags:
@@ -217,7 +216,9 @@ def write_skeletons(grouped) -> list[str]:
             if GENERATED_START in existing and GENERATED_END in existing:
                 head = existing.split(GENERATED_START)[0]
                 tail = existing.split(GENERATED_END, 1)[1]
-                body = generated.split(GENERATED_START, 1)[1].rsplit(GENERATED_END, 1)[0]
+                body = generated.split(GENERATED_START, 1)[1].rsplit(GENERATED_END, 1)[
+                    0
+                ]
                 target.write_text(
                     f"{head}{GENERATED_START}{body}{GENERATED_END}{tail}",
                     encoding="utf-8",

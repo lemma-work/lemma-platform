@@ -29,7 +29,7 @@ class WebhookScheduleMatcher:
             provider_id = metadata.get("provider_id")
             if not provider_id:
                 logger.debug(
-                    'schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic'
+                    "schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic"
                 )
                 return []
 

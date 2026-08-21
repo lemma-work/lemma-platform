@@ -50,7 +50,7 @@ async def _redis_available() -> bool:
         await client.ping()
         await client.aclose()
         return True
-    except (RedisError, OSError):
+    except RedisError, OSError:
         return False
 
 

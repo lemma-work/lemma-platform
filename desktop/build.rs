@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "control_snapshot",
     "agent_host_action",
     "agent_host_status",
+    "sandbox_image_status",
     "agent_host_start",
     "agent_host_pair",
     "agent_host_refresh",

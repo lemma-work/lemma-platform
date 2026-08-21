@@ -307,7 +307,7 @@ async def test_resend_ingest_resolves_surface_by_address_and_publishes(monkeypat
     monkeypatch.setattr(
         resend_polling_receiver,
         "SessionUnitOfWorkFactory",
-        lambda *a, **k: (lambda: _FakeUow()),
+        lambda *a, **k: lambda: _FakeUow(),
     )
 
     runner = ResendPollingReceiverRunner(_resend_candidate())
@@ -358,7 +358,7 @@ async def test_resend_ingest_skips_when_no_surface_matches(monkeypatch):
     monkeypatch.setattr(
         resend_polling_receiver,
         "SessionUnitOfWorkFactory",
-        lambda *a, **k: (lambda: _FakeUow()),
+        lambda *a, **k: lambda: _FakeUow(),
     )
 
     runner = ResendPollingReceiverRunner(_resend_candidate())

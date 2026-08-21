@@ -34,7 +34,9 @@ class PodBundleJob(UUIDAuditBase):
         DateTime(timezone=True), nullable=True
     )
     current_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    committed_steps: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
+    committed_steps: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     error_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

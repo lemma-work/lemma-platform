@@ -96,7 +96,9 @@ def test_decision_rule_targets_and_conditions_validated():
         [_edge("e1", "intake", "route"), _edge("e2", "route", "end")],
     )
     assert any("targets missing node 'missing'" in issue for issue in issues)
-    assert any("condition" in issue and "Invalid expression" in issue for issue in issues)
+    assert any(
+        "condition" in issue and "Invalid expression" in issue for issue in issues
+    )
 
 
 def test_loop_body_must_exist_and_not_self_reference():
@@ -129,11 +131,18 @@ def test_end_node_must_not_branch_and_only_decisions_branch():
     ]
     issues = _issues(nodes, edges)
     assert any("only decision nodes may branch" in issue for issue in issues)
-    assert any("end node 'end' must not have outgoing edges" in issue for issue in issues)
+    assert any(
+        "end node 'end' must not have outgoing edges" in issue for issue in issues
+    )
 
 
 def test_unreachable_nodes_rejected():
-    nodes = [_form(), EndNode(id="end"), _function("orphan_target"), _function("orphan_src")]
+    nodes = [
+        _form(),
+        EndNode(id="end"),
+        _function("orphan_target"),
+        _function("orphan_src"),
+    ]
     edges = [
         _edge("e1", "intake", "end"),
         _edge("e2", "orphan_src", "orphan_target"),

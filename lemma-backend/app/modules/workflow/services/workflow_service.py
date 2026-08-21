@@ -24,7 +24,9 @@ from app.modules.workflow.domain.errors import (
     WorkflowValidationError,
 )
 from app.modules.workflow.domain.start import WorkflowStart
-from app.modules.workflow.infrastructure.repositories import SqlAlchemyWorkflowRepository
+from app.modules.workflow.infrastructure.repositories import (
+    SqlAlchemyWorkflowRepository,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 
@@ -54,7 +56,9 @@ class WorkflowService:
             await ctx.require(
                 action,
                 ResourceRef(
-                    resource_type=ResourceType.WORKFLOW if flow_id else ResourceType.POD,
+                    resource_type=ResourceType.WORKFLOW
+                    if flow_id
+                    else ResourceType.POD,
                     resource_id=flow_id or pod_id,
                     pod_id=pod_id,
                 ),
@@ -172,7 +176,9 @@ class WorkflowService:
         if "start" in update_data.model_fields_set:
             flow.start = update_data.start
         if "visibility" in update_data.model_fields_set:
-            flow.visibility = self._normalize_workflow_visibility(update_data.visibility)
+            flow.visibility = self._normalize_workflow_visibility(
+                update_data.visibility
+            )
 
         updated = await self.flow_repo.update(flow)
         if self.icon_service and old_icon_url != updated.icon_url:

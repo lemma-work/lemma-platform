@@ -135,7 +135,9 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             return sandbox.id
         return logical_id
 
-    async def _instance(self, logical_id: UUID) -> tuple[SandboxHandle, ProviderInstance]:
+    async def _instance(
+        self, logical_id: UUID
+    ) -> tuple[SandboxHandle, ProviderInstance]:
         handle = await self._service.ensure(logical_id)
         return handle, ProviderInstance(
             provider_id=handle.provider_id, name=handle.provider_id, running=True
@@ -380,9 +382,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             ),
             url=url.rstrip("/") + "/",
             request_headers=(),
-            expires_at=max(
-                required_valid_until, datetime.now(timezone.utc)
-            )
+            expires_at=max(required_valid_until, datetime.now(timezone.utc))
             + timedelta(seconds=_LEASE_HEADROOM_SECONDS),
         )
 
@@ -461,9 +461,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         )
         _, instance = await self._instance(sandbox_id)
         try:
-            await self._provider.wait_ready(
-                instance, kind=kind, deadline_at=deadline
-            )
+            await self._provider.wait_ready(instance, kind=kind, deadline_at=deadline)
             return handle
         except (ProviderNotReady, ProviderRejected, ProviderFailed) as exc:
             logger.warning(

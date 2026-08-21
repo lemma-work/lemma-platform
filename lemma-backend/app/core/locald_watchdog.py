@@ -29,7 +29,7 @@ def install_locald_parent_watchdog() -> None:
 
     try:
         file_descriptor = sys.stdin.fileno()
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         return
 
     threading.Thread(

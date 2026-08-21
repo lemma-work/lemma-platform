@@ -154,9 +154,7 @@ class WorkspaceRuntimeClient:
         client on every call, so anything it remembered locally would be
         empty, and a second replica would answer differently from the first.
         """
-        response = await self._request(
-            "GET", "/processes", deadline_at=deadline_at
-        )
+        response = await self._request("GET", "/processes", deadline_at=deadline_at)
         return RuntimeProcessListResponse.model_validate(response.json()).processes
 
     async def read_output(

@@ -85,7 +85,8 @@ def _capture_events():
     setup("development", service_name="lemma-test", json_logs=True, log_level="DEBUG")
     buf = io.StringIO()
     handler = next(
-        h for h in logging.getLogger().handlers
+        h
+        for h in logging.getLogger().handlers
         if isinstance(h.formatter, structlog.stdlib.ProcessorFormatter)
     )
     handler.stream = buf
@@ -94,6 +95,7 @@ def _capture_events():
 
 def _events(buf):
     import json
+
     return [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
 
 

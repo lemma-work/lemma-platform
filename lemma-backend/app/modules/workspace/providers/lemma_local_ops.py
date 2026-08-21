@@ -50,8 +50,13 @@ class LemmaLocalOpsMixin:
             return str(started.operation_id)
 
     async def read_process_output(
-        self, instance: ProviderInstance, *, process_id: str, after_sequence: int,
-        wait_seconds: float, deadline_at: datetime,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        after_sequence: int,
+        wait_seconds: float,
+        deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
         async with self._ops(instance, deadline_at) as client:
             return await client.read_output(
@@ -62,22 +67,34 @@ class LemmaLocalOpsMixin:
             )
 
     async def send_process_input(
-        self, instance: ProviderInstance, *, process_id: str, data: bytes,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        data: bytes,
         deadline_at: datetime,
     ) -> None:
         async with self._ops(instance, deadline_at) as client:
             await client.send_input(process_id, data, deadline_at=deadline_at)
 
     async def resize_process(
-        self, instance: ProviderInstance, *, process_id: str, size: TerminalSize,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        size: TerminalSize,
         deadline_at: datetime,
     ) -> None:
         async with self._ops(instance, deadline_at) as client:
             await client.resize(process_id, size, deadline_at=deadline_at)
 
     async def terminate_process(
-        self, instance: ProviderInstance, *, process_id: str,
-        grace_seconds: float, deadline_at: datetime,
+        self,
+        instance: ProviderInstance,
+        *,
+        process_id: str,
+        grace_seconds: float,
+        deadline_at: datetime,
     ) -> None:
         async with self._ops(instance, deadline_at) as client:
             await client.terminate(
@@ -118,42 +135,56 @@ class LemmaLocalOpsMixin:
             await client.create_directory(path, deadline_at=deadline_at)
 
     async def open_file(
-        self, instance: ProviderInstance, *, path: str, byte_range: ByteRange,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        byte_range: ByteRange,
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         async with self._ops(instance, deadline_at) as client:
-            stream = await client.open_file(
-                path, byte_range, deadline_at=deadline_at
-            )
+            stream = await client.open_file(path, byte_range, deadline_at=deadline_at)
             async for chunk in stream:
                 yield chunk
 
     async def write_file(
-        self, instance: ProviderInstance, *, path: str,
-        data: AsyncIterable[bytes], expected_sha256: str | None,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        data: AsyncIterable[bytes],
+        expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
         async with self._ops(instance, deadline_at) as client:
             return await client.write_file(
-                path, data, expected_sha256=expected_sha256,
+                path,
+                data,
+                expected_sha256=expected_sha256,
                 deadline_at=deadline_at,
             )
 
     async def move_file(
-        self, instance: ProviderInstance, *, source: str, destination: str,
+        self,
+        instance: ProviderInstance,
+        *,
+        source: str,
+        destination: str,
         deadline_at: datetime,
     ) -> None:
         async with self._ops(instance, deadline_at) as client:
             await client.move_file(source, destination, deadline_at=deadline_at)
 
     async def delete_file(
-        self, instance: ProviderInstance, *, path: str, recursive: bool,
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        recursive: bool,
         deadline_at: datetime,
     ) -> bool:
         async with self._ops(instance, deadline_at) as client:
-            await client.delete_file(
-                path, recursive=recursive, deadline_at=deadline_at
-            )
+            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
             return True
 
     async def ensure_python_session(
@@ -163,7 +194,9 @@ class LemmaLocalOpsMixin:
             await client.create_python_session(request)
 
     async def execute_python(
-        self, instance: ProviderInstance, session: PythonSessionRef,
+        self,
+        instance: ProviderInstance,
+        session: PythonSessionRef,
         request: ExecutePythonRequest,
     ) -> PythonResult:
         async with self._ops(instance, request.deadline_at) as client:

@@ -10,8 +10,12 @@ import { OrganizationProvider } from '@/components/dashboard/org-context';
 import { AnalyticsProvider } from '@/components/analytics/analytics-provider';
 import { AnalyticsIdentity } from '@/components/analytics/analytics-identity';
 import { ConsentBanner } from '@/components/analytics/consent-banner';
+import { useSandboxImageToasts } from '@/lib/desktop/sandbox-images';
 
 export function Providers({ children }: { children: ReactNode }) {
+    // Desktop only, and only while there is an answer that can still change.
+    // A no-op in a browser, and on a warm install it never shows anything.
+    useSandboxImageToasts();
     const [queryClient] = useState(
         () =>
             new QueryClient({

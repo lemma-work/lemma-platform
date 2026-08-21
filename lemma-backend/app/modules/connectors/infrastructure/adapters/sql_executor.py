@@ -39,14 +39,32 @@ logger = get_logger(__name__)
 
 # Reuse the datastore read-only policy (mutation/DDL nodes forbidden anywhere).
 _FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
-    exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Create, exp.Drop,
-    exp.Alter, exp.TruncateTable, exp.Grant, exp.Revoke, exp.Copy, exp.Command,
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Merge,
+    exp.Create,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Grant,
+    exp.Revoke,
+    exp.Copy,
+    exp.Command,
 )
 _ALLOWED_ROOTS: tuple[type[exp.Expression], ...] = (
-    exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery, exp.With,
+    exp.Select,
+    exp.Union,
+    exp.Intersect,
+    exp.Except,
+    exp.Subquery,
+    exp.With,
 )
 
-_DIALECT_DRIVERS = {"postgresql": "postgresql+asyncpg", "postgres": "postgresql+asyncpg"}
+_DIALECT_DRIVERS = {
+    "postgresql": "postgresql+asyncpg",
+    "postgres": "postgresql+asyncpg",
+}
 _DEFAULT_ROW_CAP = 1000
 _MAX_ROW_CAP = 10_000
 _DEFAULT_STATEMENT_TIMEOUT_MS = 30_000
@@ -64,16 +82,24 @@ def _ensure_read_only(sql: str) -> None:
             details={"reason": "query_too_long"},
         )
     try:
-        statements = [s for s in sqlglot.parse(sql, dialect="postgres") if s is not None]
+        statements = [
+            s for s in sqlglot.parse(sql, dialect="postgres") if s is not None
+        ]
     except SqlglotError as exc:
-        raise OperationExecutionValidationError(f"Could not parse SQL query: {exc}") from exc
+        raise OperationExecutionValidationError(
+            f"Could not parse SQL query: {exc}"
+        ) from exc
     if not statements:
         raise OperationExecutionValidationError("Empty SQL query.")
     if len(statements) > 1:
-        raise OperationExecutionValidationError("Only a single SQL statement is allowed.")
+        raise OperationExecutionValidationError(
+            "Only a single SQL statement is allowed."
+        )
     statement = statements[0]
     if not isinstance(statement, _ALLOWED_ROOTS) or statement.find(*_FORBIDDEN_NODES):
-        raise OperationExecutionValidationError("Only read-only SELECT queries are allowed.")
+        raise OperationExecutionValidationError(
+            "Only read-only SELECT queries are allowed."
+        )
 
 
 def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
@@ -89,7 +115,7 @@ def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
         return _DEFAULT_ROW_CAP
     try:
         requested = int(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         raise OperationExecutionValidationError(
             "SQL connection 'row_cap' must be an integer.",
             details={"reason": "row_cap_not_an_integer"},
@@ -161,7 +187,9 @@ class SqlExecutor:
         return sql, None
 
     @staticmethod
-    def _build_list_tables(payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    def _build_list_tables(
+        payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any] | None]:
         schema = payload.get("schema")
         sql = (
             "SELECT table_schema, table_name FROM information_schema.tables "
@@ -240,7 +268,9 @@ class SqlExecutor:
             del self._engines[cache_key]
             await engine.dispose()
 
-        engine = create_async_engine(dsn, pool_size=2, max_overflow=2, pool_pre_ping=True)
+        engine = create_async_engine(
+            dsn, pool_size=2, max_overflow=2, pool_pre_ping=True
+        )
         self._engines[cache_key] = (engine, secret)
         self._engines.move_to_end(cache_key)
         while len(self._engines) > connector_settings.connector_sql_engine_cache_size:
@@ -270,7 +300,9 @@ class SqlExecutor:
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SET TRANSACTION READ ONLY"))
-                await conn.execute(text(f"SET statement_timeout = {_DEFAULT_STATEMENT_TIMEOUT_MS}"))
+                await conn.execute(
+                    text(f"SET statement_timeout = {_DEFAULT_STATEMENT_TIMEOUT_MS}")
+                )
                 if params is None:
                     # The tenant's own SQL goes to the driver verbatim.
                     # `text()` would scan it for ``:name`` bind parameters, so a

@@ -70,7 +70,9 @@ def _parts(url: str) -> dict:
 async def tenant_database(test_database_url, worker_id):
     """A real database standing in for the customer's, seeded with real rows."""
     tenant_db = _tenant_db_name(worker_id)
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
         await conn.execute(text(f'CREATE DATABASE "{tenant_db}"'))
@@ -90,7 +92,9 @@ async def tenant_database(test_database_url, worker_id):
             )
         )
         await conn.execute(text("CREATE SCHEMA reporting"))
-        await conn.execute(text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)"))
+        await conn.execute(
+            text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)")
+        )
         await conn.execute(
             text(
                 "INSERT INTO invoices (id, customer, amount_cents, paid) "
@@ -102,7 +106,9 @@ async def tenant_database(test_database_url, worker_id):
 
     yield {"url": tenant_url, **_parts(test_database_url)}
 
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
     await admin.dispose()
@@ -156,7 +162,9 @@ class TestReadPath:
     async def test_list_tables_sees_both_schemas_and_hides_the_catalog(
         self, connection_config, credentials
     ):
-        result = await _run(SqlExecutor(), "list_tables", {}, connection_config, credentials)
+        result = await _run(
+            SqlExecutor(), "list_tables", {}, connection_config, credentials
+        )
         found = {(row["table_schema"], row["table_name"]) for row in result["rows"]}
         assert ("public", "invoices") in found
         assert ("reporting", "invoices") in found
@@ -166,7 +174,11 @@ class TestReadPath:
         self, connection_config, credentials
     ):
         result = await _run(
-            SqlExecutor(), "list_tables", {"schema": "reporting"}, connection_config, credentials
+            SqlExecutor(),
+            "list_tables",
+            {"schema": "reporting"},
+            connection_config,
+            credentials,
         )
         assert {row["table_schema"] for row in result["rows"]} == {"reporting"}
 
@@ -228,7 +240,9 @@ class TestTheServerEnforcesReadOnly:
     )
     async def test_writes_are_rejected(self, sql, connection_config, credentials):
         with pytest.raises(OperationExecutionValidationError):
-            await _run(SqlExecutor(), "query", {"query": sql}, connection_config, credentials)
+            await _run(
+                SqlExecutor(), "query", {"query": sql}, connection_config, credentials
+            )
 
     async def test_a_write_smuggled_past_the_parser_still_fails_on_the_server(
         self, connection_config, credentials
@@ -282,21 +296,33 @@ class TestFailureHandling:
             )
 
     async def test_statement_timeout_stops_a_runaway_query(
-        self, connection_config, credentials
+        self, connection_config, credentials, monkeypatch
     ):
-        # pg_sleep well past the 30s statement_timeout would hang the worker if
-        # the timeout were not actually applied to the connection.
+        # What is under test is that a statement_timeout is applied to the
+        # connection at all -- a runaway tenant query has to be stopped by
+        # Postgres rather than by hanging a worker. Which number it is set to
+        # is configuration, and waiting out the real 30s default made this the
+        # fifth-slowest test in the e2e suite for no extra proof. Shrink the
+        # timeout and sleep past the small one instead.
+        monkeypatch.setattr(
+            "app.modules.connectors.infrastructure.adapters.sql_executor."
+            "_DEFAULT_STATEMENT_TIMEOUT_MS",
+            1_000,
+        )
         executor = SqlExecutor()
         with pytest.raises(OperationExecutionInfrastructureError):
             await asyncio.wait_for(
                 _run(
                     executor,
                     "query",
-                    {"query": "SELECT pg_sleep(45)"},
+                    {"query": "SELECT pg_sleep(30)"},
                     connection_config,
                     credentials,
                 ),
-                timeout=40,
+                # Comfortably longer than the patched timeout and far shorter
+                # than the pg_sleep: if this deadline is what fires, the
+                # statement_timeout did not.
+                timeout=15,
             )
         await executor.dispose_all()
 

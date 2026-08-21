@@ -58,7 +58,9 @@ async def _two_user_pod(authenticated_client, async_client, fixed_test_org):
 async def test_personal_me_is_isolated_between_users(
     authenticated_client, async_client, fixed_test_org, fixed_test_user
 ):
-    pod_id, bob = await _two_user_pod(authenticated_client, async_client, fixed_test_org)
+    pod_id, bob = await _two_user_pod(
+        authenticated_client, async_client, fixed_test_org
+    )
     owner = DatastoreApi(authenticated_client, pod_id)
     bob_api = DatastoreApi(async_client, pod_id, user=bob)
     owner_id, bob_id = fixed_test_user["id"], bob["id"]
@@ -98,7 +100,9 @@ async def test_personal_me_is_isolated_between_users(
     )
 
     # Listing the root never surfaces another user's personal files.
-    owner_root = {i["id"] for i in (await owner.list_files(directory_path="/"))["items"]}
+    owner_root = {
+        i["id"] for i in (await owner.list_files(directory_path="/"))["items"]
+    }
     assert bob_file["id"] not in owner_root
 
 
@@ -115,7 +119,9 @@ async def test_agents_scope_to_invoking_users_me_only(
     fixed_test_user,
     agent_kind,
 ):
-    pod_id, bob = await _two_user_pod(authenticated_client, async_client, fixed_test_org)
+    pod_id, bob = await _two_user_pod(
+        authenticated_client, async_client, fixed_test_org
+    )
     owner = DatastoreApi(authenticated_client, pod_id)
     bob_api = DatastoreApi(async_client, pod_id, user=bob)
     owner_id, bob_id = fixed_test_user["id"], bob["id"]
@@ -207,7 +213,13 @@ async def test_default_agent_inherits_user_perms_named_agent_starts_at_zero(
             pod_id,
             AGENT,
             name,
-            [{"resource_type": "folder", "resource_name": "/shared", "permission_ids": ["folder.read"]}],
+            [
+                {
+                    "resource_type": "folder",
+                    "resource_name": "/shared",
+                    "permission_ids": ["folder.read"],
+                }
+            ],
         )
         assert (await named_api.get_file("/shared/doc.md"))["id"] == shared["id"]
     finally:

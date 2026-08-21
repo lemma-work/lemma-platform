@@ -7,7 +7,11 @@ from uuid import UUID
 from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.infrastructure.db.base import StringAuditBase, UUIDAuditBase, UUIDCreatedBase
+from app.core.infrastructure.db.base import (
+    StringAuditBase,
+    UUIDAuditBase,
+    UUIDCreatedBase,
+)
 
 
 class AuthPermissionModel(StringAuditBase):
@@ -88,7 +92,9 @@ class RolePermissionModel(UUIDCreatedBase):
     role: Mapped[RoleModel] = relationship("RoleModel", back_populates="permissions")
 
     __table_args__ = (
-        UniqueConstraint("role_id", "permission_id", name="uq_role_permissions_role_permission"),
+        UniqueConstraint(
+            "role_id", "permission_id", name="uq_role_permissions_role_permission"
+        ),
         Index("ix_role_permissions_permission", "permission_id"),
     )
 
@@ -151,7 +157,12 @@ class ResourcePermissionGrantModel(UUIDCreatedBase):
             "permission_id",
             name="uq_resource_permission_grants_scope",
         ),
-        Index("ix_resource_permission_grants_resource", "pod_id", "resource_type", "resource_id"),
+        Index(
+            "ix_resource_permission_grants_resource",
+            "pod_id",
+            "resource_type",
+            "resource_id",
+        ),
         Index(
             "ix_resource_permission_grants_grantee",
             "pod_id",

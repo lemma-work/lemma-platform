@@ -55,7 +55,9 @@ async def list_notifications(
     user: CurrentUser,
     ctx: PodContextDep,
     service: NotificationServiceDep,
-    status_filter: list[NotificationStatus] | None = Query(default=None, alias="status"),
+    status_filter: list[NotificationStatus] | None = Query(
+        default=None, alias="status"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     page_token: str | None = None,
 ) -> NotificationListResponse:

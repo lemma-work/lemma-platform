@@ -509,13 +509,11 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
             except SQLAlchemyError:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_thread_title_set.diagnostic',
+                    "agent_surfaces.ingress_service.surface_thread_title_set.diagnostic",
                     conversation_id=context.conversation_id,
                 )
 
-        run_result = await self._commit_inbound_message(
-            context, message_text, metadata
-        )
+        run_result = await self._commit_inbound_message(context, message_text, metadata)
         if run_result is not None and not run_result.started_new_run:
             await adapter.send_message(
                 credentials=credentials,
@@ -611,7 +609,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic',
+                "agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic",
                 conversation_id=context.conversation_id,
             )
             return []
@@ -720,7 +718,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         )
         if link is None:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_egress_skipped_no_conversation.diagnostic',
+                "agent_surfaces.ingress_service.surface_egress_skipped_no_conversation.diagnostic",
                 conversation_id=conversation_id,
             )
             return None
@@ -728,7 +726,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         surface = await self.surface_repository.get(link.surface_id)
         if surface is None or not surface.is_active:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_egress_skipped_surface_missing.diagnostic',
+                "agent_surfaces.ingress_service.surface_egress_skipped_surface_missing.diagnostic",
                 conversation_id=conversation_id,
                 surface_id=link.surface_id,
             )
@@ -737,7 +735,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         adapter = self.adapter_registry.get(surface.surface_type)
         if adapter is None:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_egress_skipped_no_adapter.diagnostic',
+                "agent_surfaces.ingress_service.surface_egress_skipped_no_adapter.diagnostic",
                 surface_type=surface.surface_type,
                 conversation_id=conversation_id,
             )
@@ -745,7 +743,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
 
         if not link.last_event:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_egress_skipped_missing_last.diagnostic',
+                "agent_surfaces.ingress_service.surface_egress_skipped_missing_last.diagnostic",
                 conversation_id=conversation_id,
             )
             return None
@@ -753,7 +751,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             parsed_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_egress_skipped_invalid_last.diagnostic',
+                "agent_surfaces.ingress_service.surface_egress_skipped_invalid_last.diagnostic",
                 conversation_id=conversation_id,
             )
             return None
@@ -800,17 +798,13 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         channel left every pod-assistant DM wearing the default agent's name.
         """
         if target.surface.surface_type is SurfacePlatform.SLACK:
-            external_user_id = str(
-                getattr(target.link, "external_user_id", "") or ""
-            )
+            external_user_id = str(getattr(target.link, "external_user_id", "") or "")
             if target.surface.config.slack.chose_pod_assistant(external_user_id):
                 return True
         channel_id = str(getattr(target.link, "external_channel_id", "") or "")
         if not channel_id:
             return False
-        route = target.surface.channel_route_for(
-            channel_id=channel_id, channel_name=""
-        )
+        route = target.surface.channel_route_for(channel_id=channel_id, channel_name="")
         return bool(route is not None and route.use_pod_assistant)
 
     async def send_to_member(
@@ -992,7 +986,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1008,7 +1002,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         )
         if not isinstance(pending, dict):
             logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1016,7 +1010,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if raw_request is None:
             pending.get("tool_args")
             logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1024,13 +1018,13 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             request = AskUserRequest.model_validate(raw_request)
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic',
+                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
         if not request.questions:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1052,7 +1046,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     return True
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic',
+                    "agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic",
                     conversation_id=conversation_id,
                 )
             # Fallback: a well-formatted text message; the user replies in chat and the
@@ -1069,7 +1063,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic',
+                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic",
                     conversation_id=conversation_id,
                 )
                 return False
@@ -1093,7 +1087,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1111,7 +1105,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         )
         if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
             logger.debug(
-                'agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic',
+                "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1142,7 +1136,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     return True
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic',
+                    "agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic",
                     conversation_id=conversation_id,
                 )
             # Fallback: a text prompt; the user replies "approve"/"deny" and the
@@ -1157,7 +1151,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic',
+                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic",
                     conversation_id=conversation_id,
                 )
                 return False
@@ -1203,7 +1197,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 reset_current_context(token)
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic',
+                "agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1223,7 +1217,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     return True
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic',
+                    "agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic",
                     conversation_id=conversation_id,
                 )
             # Fallback: native file attachment (audio player), then a link card.
@@ -1236,7 +1230,9 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 return True
             return await self.send_display_resource_for_conversation(
                 conversation_id=conversation_id,
-                request=DisplayResourceRequest(type=DisplayResourceType.FILE, path=path),
+                request=DisplayResourceRequest(
+                    type=DisplayResourceType.FILE, path=path
+                ),
             )
 
     async def _try_send_file_attachment(
@@ -1280,7 +1276,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 reset_current_context(token)
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_native_file_attach_skipped.diagnostic',
+                "agent_surfaces.ingress_service.surface_native_file_attach_skipped.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -1402,7 +1398,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             # the answer that was shown to them.
             if not interaction_sender_matches(link, parsed):
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic',
+                    "agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic",
                     external_user_id=parsed.external_user_id,
                     conversation_id=conversation_id,
                 )
@@ -1413,7 +1409,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             )
             if conversation is None:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic',
+                    "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic",
                     conversation_id=conversation_id,
                 )
                 return
@@ -1508,7 +1504,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
 
         try:
             last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return link, conversation, False
         route = await self._resolve_route(surface=surface, parsed=last_event)
         if route is None:
@@ -1656,7 +1652,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 # Stale default: it points at a surface the user is no longer a
                 # member of. Clear it so routing stops silently honoring it.
                 logger.debug(
-                    'agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic',
+                    "agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic",
                     user_id=user_id,
                     default_id=default_id,
                 )
@@ -1668,7 +1664,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                         await clear_default(user_id, platform)
                     except Exception:
                         logger.debug(
-                            'agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic',
+                            "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic",
                             user_id=user_id,
                         )
 
@@ -1836,7 +1832,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             agent_display_name=agent_display_name,
             event_dedup_store=self.event_dedup_store,
         )
-
 
     async def _prepare_surface_context(
         self,
@@ -2007,7 +2002,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             if agent is not None:
                 return agent.id, agent.name
             logger.debug(
-                'agent_surfaces.ingress_service.surface_channel_route_agent_s.diagnostic',
+                "agent_surfaces.ingress_service.surface_channel_route_agent_s.diagnostic",
                 pod_id=surface.pod_id,
             )
         agent_id = surface.agent_id
@@ -2075,7 +2070,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                         # A renamed or deleted agent must not strand the person
                         # with a dead DM — fall back to the surface default.
                         logger.debug(
-                            'agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic',
+                            "agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic",
                             pod_id=surface.pod_id,
                         )
             return ResolvedSurfaceRoute(
@@ -2338,8 +2333,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             "route_key": route_key,
             "conversation_kind": conversation_kind,
             "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            "agent_display_name": await self.agent_name_for_surface(surface)
-            or "Lemma",
+            "agent_display_name": await self.agent_name_for_surface(surface) or "Lemma",
             "surface_event_metadata": (
                 surface_event_metadata.model_dump(mode="json")
                 if surface_event_metadata
@@ -2413,4 +2407,3 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if len(title) <= _CONVERSATION_TITLE_MAX_LENGTH:
             return title
         return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."
-

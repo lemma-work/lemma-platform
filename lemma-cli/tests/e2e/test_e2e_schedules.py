@@ -17,17 +17,27 @@ def pod_id(test_pod):
 @pytest.fixture
 def test_agent(backend_server, test_user, pod_id):
     payload = json.dumps({"name": "sched-agent", "instruction": "Test."})
-    cli(["agents", "create", "--data", payload],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    cli(
+        ["agents", "create", "--data", payload],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
     yield "sched-agent"
 
 
 def test_schedule_create_cron_and_list(backend_server, test_user, pod_id, test_agent):
     create = cli(
-        ["schedules", "create",
-         "--name", "daily-cron",
-         "--agent", test_agent,
-         "--cron", "0 9 * * 1"],
+        [
+            "schedules",
+            "create",
+            "--name",
+            "daily-cron",
+            "--agent",
+            test_agent,
+            "--cron",
+            "0 9 * * 1",
+        ],
         base_url=backend_server["base_url"],
         token=test_user["token"],
         pod=pod_id,
@@ -45,9 +55,21 @@ def test_schedule_create_cron_and_list(backend_server, test_user, pod_id, test_a
 
 
 def test_schedule_delete(backend_server, test_user, pod_id, test_agent):
-    cli(["schedules", "create",
-         "--name", "to-delete-sched", "--agent", test_agent, "--cron", "0 8 * * *"],
-        base_url=backend_server["base_url"], token=test_user["token"], pod=pod_id)
+    cli(
+        [
+            "schedules",
+            "create",
+            "--name",
+            "to-delete-sched",
+            "--agent",
+            test_agent,
+            "--cron",
+            "0 8 * * *",
+        ],
+        base_url=backend_server["base_url"],
+        token=test_user["token"],
+        pod=pod_id,
+    )
 
     delete = cli(
         ["schedules", "delete", "to-delete-sched", "--yes"],

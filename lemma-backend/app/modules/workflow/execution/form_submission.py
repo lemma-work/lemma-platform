@@ -60,9 +60,9 @@ def validate_form_inputs(
     if error is not None:
         field = ".".join(str(part) for part in error.absolute_path) or "input"
         raise FormValidationError(
-            f"Form input for node '{node_id}' is invalid at '{field}': "
-            f"{error.message}"
+            f"Form input for node '{node_id}' is invalid at '{field}': {error.message}"
         )
+
 
 async def check_assignee(
     uow,

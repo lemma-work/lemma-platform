@@ -377,9 +377,7 @@ async def poll_agent_host_commands(
             protocol_version=negotiated_protocol,
             host_status=host_status,
             commands=commands,
-            poll_after_ms=(
-                _CONTROL_UPDATE_BACKOFF_MS if commands.progressed else 0
-            ),
+            poll_after_ms=(_CONTROL_UPDATE_BACKOFF_MS if commands.progressed else 0),
         )
 
     return AgentHostPollResponse(

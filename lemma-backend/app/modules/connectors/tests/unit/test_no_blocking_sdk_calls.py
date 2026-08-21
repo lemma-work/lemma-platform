@@ -123,27 +123,34 @@ def test_the_guard_catches_a_bare_call_in_a_coroutine() -> None:
 
 
 def test_the_guard_accepts_a_lambda_handed_to_run_blocking() -> None:
-    assert _violations(
-        "async def refresh(composio):\n"
-        "    return await run_blocking(\n"
-        "        lambda: composio.connected_accounts.get('abc'),\n"
-        "        limiter='external_http',\n"
-        "    )\n"
-    ) == []
+    assert (
+        _violations(
+            "async def refresh(composio):\n"
+            "    return await run_blocking(\n"
+            "        lambda: composio.connected_accounts.get('abc'),\n"
+            "        limiter='external_http',\n"
+            "    )\n"
+        )
+        == []
+    )
 
 
 def test_the_guard_accepts_a_nested_sync_def_handed_to_run_blocking() -> None:
     # The shape the operation gateway uses: a sync closure passed by name. It is
     # lexically inside the coroutine but runs on the offload thread.
-    assert _violations(
-        "async def execute(composio):\n"
-        "    def _execute():\n"
-        "        return composio.tools.execute('SLUG', {})\n"
-        "    return await run_blocking(_execute, limiter='external_http')\n"
-    ) == []
+    assert (
+        _violations(
+            "async def execute(composio):\n"
+            "    def _execute():\n"
+            "        return composio.tools.execute('SLUG', {})\n"
+            "    return await run_blocking(_execute, limiter='external_http')\n"
+        )
+        == []
+    )
 
 
 def test_the_guard_ignores_calls_in_plain_synchronous_functions() -> None:
-    assert _violations(
-        "def build(composio):\n    return composio.auth_configs.create()\n"
-    ) == []
+    assert (
+        _violations("def build(composio):\n    return composio.auth_configs.create()\n")
+        == []
+    )

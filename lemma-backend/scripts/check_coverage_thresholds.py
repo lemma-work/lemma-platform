@@ -60,9 +60,7 @@ def main() -> int:
         statements, covered = modules[name]
         percentage = _percentage(covered, statements)
         if percentage < floor:
-            failures.append(
-                f"{name} coverage {percentage:.2f}% is below {floor:.2f}%"
-            )
+            failures.append(f"{name} coverage {percentage:.2f}% is below {floor:.2f}%")
 
     if failures:
         print("Coverage gate failed:")

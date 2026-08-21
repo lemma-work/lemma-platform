@@ -40,13 +40,22 @@ def test_backend_changes_do_not_trigger_committed_spec_codegen() -> None:
 
 
 def test_opt_in_workflows_do_not_run_on_every_pr_sync() -> None:
+    """An opt-in lane stays opt-in: reachable by label, not by every push.
+
+    This used to also cover windows-cli-smoke.yml. That workflow is gone --
+    ci.yml's `windows-cli` job was a strict superset of it, so it ran a second
+    Windows runner to assert things the first one already had -- and the lane
+    it guarded is now an ordinary path-filtered CI job rather than an opt-in
+    one. surface-live is the remaining label-gated lane here.
+    """
     e2e = _read(".github/workflows/e2e.yml")
-    windows = _read(".github/workflows/windows-cli-smoke.yml")
+    scenarios = _read(".github/workflows/scenarios.yml")
 
     assert "types: [labeled, synchronize" not in e2e
-    assert "types: [labeled, synchronize" not in windows
     assert "github.event.label.name == 'surface-live'" in e2e
-    assert "github.event.label.name == 'windows-ci'" in windows
+    # The scenario lanes that boot a full stack are the other opt-in shape:
+    # nightly, dispatch, or the run-scenarios label -- never every PR push.
+    assert "run-scenarios" in scenarios
 
 
 def test_backend_e2e_triggers_directly_without_a_label() -> None:
@@ -63,7 +72,7 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     the workflows still meant to have one.
     """
     e2e = _read(".github/workflows/e2e.yml")
-    job = e2e.split("\n  backend-e2e:\n", 1)[1].split("\n  aggregate-coverage:", 1)[0]
+    job = e2e.split("\n  backend-e2e:\n", 1)[1].split("\n  e2e-passed:", 1)[0]
     # Just the gate, not the whole job body -- the checkout step's ref:
     # fallback and its comment mention workflow_run harmlessly (it's simply
     # empty on any other trigger), which isn't the invariant this checks.
@@ -77,9 +86,7 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     assert "== 'labeled'" not in condition
     assert "workflow_run" not in condition
     assert (
-        "opened" in condition
-        and "synchronize" in condition
-        and "reopened" in condition
+        "opened" in condition and "synchronize" in condition and "reopened" in condition
     )
 
 
@@ -103,7 +110,12 @@ def _nightly_prune_step() -> dict:
 
     workflow = yaml.safe_load(_read(".github/workflows/release-local-images.yml"))
     steps = workflow["jobs"]["share-desktop-dmg"]["steps"]
-    return next(s for s in steps if s["name"] == "Prune superseded nightly prereleases")
+    # `.get`, not `[]`: a step is allowed to be a bare `uses:` with no name,
+    # and indexing made this helper raise KeyError on the first such step
+    # rather than skipping it.
+    return next(
+        s for s in steps if s.get("name") == "Prune superseded nightly prereleases"
+    )
 
 
 def _run_prune(tmp_path, releases: list[str], *, keep: str = "3") -> tuple[int, str]:

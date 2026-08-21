@@ -47,7 +47,9 @@ class PodWorkflows(BoundResource):
     def get(self, name: str) -> WorkflowDetailResponse:
         return self._call(workflow_get, self._pod_uuid(), name)
 
-    def update(self, name: str, request: WorkflowUpdateRequest) -> WorkflowDetailResponse:
+    def update(
+        self, name: str, request: WorkflowUpdateRequest
+    ) -> WorkflowDetailResponse:
         return self._call(workflow_update, self._pod_uuid(), name, body=request)
 
     def update_graph(
@@ -142,7 +144,9 @@ class PodWorkflows(BoundResource):
     def cancel_run(self, run_id: str) -> WorkflowRunResponse:
         return self._call(workflow_run_cancel, self._pod_uuid(), as_uuid(run_id))
 
-    def list_my_waits(self, *, limit: int = 100) -> WorkflowRunWaitAssignmentListResponse:
+    def list_my_waits(
+        self, *, limit: int = 100
+    ) -> WorkflowRunWaitAssignmentListResponse:
         """Active form waits assigned to the current user (approval queue)."""
         return self._call(
             workflow_run_waiting_assigned_to_me, self._pod_uuid(), limit=limit

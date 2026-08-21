@@ -33,7 +33,9 @@ def run_phase(name: str):
     return _tracer.start_as_current_span(f"lemma.agent.{name}")
 
 
-def record_history_size(span, *, runs: Sequence[object], sent: Sequence[object]) -> None:
+def record_history_size(
+    span, *, runs: Sequence[object], sent: Sequence[object]
+) -> None:
     """Record how much transcript a run read against how much it sent.
 
     Both numbers, because they diverge: the loader reads every run and every

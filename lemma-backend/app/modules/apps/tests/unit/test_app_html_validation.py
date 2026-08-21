@@ -161,9 +161,7 @@ def test_widget_contract_accepts_portable_sdk_fragment():
 
 
 def test_widget_contract_accepts_direct_runtime_config_api_url():
-    html = UNIFIED_OK.replace(
-        "cfg.apiUrl", "window.__LEMMA_CONFIG__.apiUrl"
-    )
+    html = UNIFIED_OK.replace("cfg.apiUrl", "window.__LEMMA_CONFIG__.apiUrl")
     assert validate_widget_html(html) == []
 
 

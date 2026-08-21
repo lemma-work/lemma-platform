@@ -194,9 +194,7 @@ async def lifespan(app: FastAPI):
         # would otherwise land on whichever request first enqueues a job.
         # The composed list, not OSS: lemma-cloud installs more modules, and a
         # cloud-only task missing here would be enqueued to the wrong lane.
-        ensure_task_lanes_registered(
-            getattr(app.state, "lemma_modules", OSS_MODULES)
-        )
+        ensure_task_lanes_registered(getattr(app.state, "lemma_modules", OSS_MODULES))
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()

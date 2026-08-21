@@ -162,7 +162,7 @@ class DatastoreFileProcessingService:
             file_entity = await files.get_model(file_id)
             if file_entity is None:
                 logger.debug(
-                    'datastore.file_processing_service.file_s_not_found_processing.diagnostic',
+                    "datastore.file_processing_service.file_s_not_found_processing.diagnostic",
                     file_id=file_id,
                 )
                 return
@@ -186,7 +186,7 @@ class DatastoreFileProcessingService:
                 await self.search_service.remove_file(file_id)
             except Exception:
                 logger.debug(
-                    'datastore.file_processing_service.removing_search_projection_s.diagnostic',
+                    "datastore.file_processing_service.removing_search_projection_s.diagnostic",
                     file_id=file_id,
                     exc_info=True,
                 )
@@ -201,7 +201,7 @@ class DatastoreFileProcessingService:
         size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
         if self._exceeds_size_limit(size_bytes, max_file_bytes):
             logger.debug(
-                'datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic',
+                "datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic",
                 file_id=file_id,
                 size_bytes=size_bytes,
                 max_file_bytes=max_file_bytes,
@@ -326,10 +326,10 @@ class DatastoreFileProcessingService:
             raise
         except Exception as exc:
             logger.debug(
-                'datastore.file_processing_service.search_processing_s.propagated',
+                "datastore.file_processing_service.search_processing_s.propagated",
                 file_id=file_id,
-            exc_info=True,
-        )
+                exc_info=True,
+            )
             async with self._file_repo() as files:
                 missing_original = isinstance(
                     exc, (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError)

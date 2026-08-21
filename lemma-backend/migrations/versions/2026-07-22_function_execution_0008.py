@@ -47,6 +47,7 @@ def upgrade() -> None:
         sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=True),
     )
 
+
 def downgrade() -> None:
     op.drop_column("function_runs", "deadline_at")
     op.drop_column("function_runs", "revision_hash")

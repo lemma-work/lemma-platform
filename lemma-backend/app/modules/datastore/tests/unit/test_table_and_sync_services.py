@@ -73,7 +73,10 @@ async def test_create_table_success_collects_event(
     assert {"id", "created_at", "updated_at", "user_id", "name"} <= created_column_names
     assert "created_by" not in created_column_names
     assert "updated_by" not in created_column_names
-    assert next(column for column in arg.columns if column.name == "user_id").system is True
+    assert (
+        next(column for column in arg.columns if column.name == "user_id").system
+        is True
+    )
     events = arg.collect_events()
     assert events[0].event_type == "datastore.table.created"
     schema_manager_mock.create_table.assert_awaited_once()

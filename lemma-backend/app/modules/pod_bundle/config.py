@@ -16,7 +16,10 @@ from app.core.settings_env import dotenv_path
 
 class PodBundleSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     pod_bundle_state_ttl_seconds: int = Field(

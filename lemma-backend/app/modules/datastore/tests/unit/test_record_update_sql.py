@@ -49,9 +49,7 @@ def test_alias_avoids_a_column_that_would_shadow_it():
     plain = previous_image_alias(_context("status"))
     assert plain == "__lemma_previous"
 
-    colliding = previous_image_alias(
-        _context("status", "__lemma_previous")
-    )
+    colliding = previous_image_alias(_context("status", "__lemma_previous"))
     assert colliding != "__lemma_previous"
     assert colliding not in {"status", "__lemma_previous"}
 
@@ -72,9 +70,7 @@ def test_previous_image_is_narrowed_to_the_written_columns():
 
 def test_previous_image_accepts_an_already_decoded_row():
     """Whether jsonb arrives as text or a dict depends on the driver's codecs."""
-    previous = extract_previous_image(
-        {"status": "pending"}, ["status"]
-    )
+    previous = extract_previous_image({"status": "pending"}, ["status"])
     assert previous == {"status": "pending"}
 
 
@@ -88,9 +84,7 @@ def test_a_written_column_missing_from_the_prior_row_reads_as_null():
 
 def test_unusable_pre_image_degrades_to_none_rather_than_raising():
     assert extract_previous_image(None, ["status"]) is None
-    assert (
-        extract_previous_image("not json", ["status"]) is None
-    )
+    assert extract_previous_image("not json", ["status"]) is None
 
 
 def test_chunking_keeps_every_statement_under_the_parameter_limit():
@@ -142,7 +136,9 @@ def test_the_conflict_clause_lands_before_returning():
     assert sql.index("ON CONFLICT") < sql.index("RETURNING")
 
 
-def _order_bulk_keys_as_it_was_inline(primary_key: str, all_keys: set[str]) -> list[str]:
+def _order_bulk_keys_as_it_was_inline(
+    primary_key: str, all_keys: set[str]
+) -> list[str]:
     """The loop `order_bulk_keys` replaced, kept verbatim as the oracle."""
     ordered_keys: list[str] = []
     if primary_key in all_keys:

@@ -65,10 +65,7 @@ async def test_builder_writes_deterministic_typed_artifact_before_ready() -> Non
         assert set(archive.namelist()) == {"function.py", "manifest.json"}
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["entrypoint"] == "increment"
-        assert (
-            manifest["runtime_abi"]
-            == "lemma-function-python-3.14-linux-x86_64-1"
-        )
+        assert manifest["runtime_abi"] == "lemma-function-python-3.14-linux-x86_64-1"
         assert manifest["dependency_lock"] == []
         assert archive.read("function.py").decode() == source()
 

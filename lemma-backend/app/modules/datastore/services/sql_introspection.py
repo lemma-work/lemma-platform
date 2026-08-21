@@ -74,9 +74,7 @@ def analyze_query(sql: str) -> QueryAnalysis:
     """
     try:
         statements = [
-            stmt
-            for stmt in sqlglot.parse(sql, dialect="postgres")
-            if stmt is not None
+            stmt for stmt in sqlglot.parse(sql, dialect="postgres") if stmt is not None
         ]
     except SqlglotError as exc:
         raise DatastoreQueryError(f"Could not parse SQL query: {exc}") from exc
@@ -101,9 +99,7 @@ def analyze_query(sql: str) -> QueryAnalysis:
             else function.sql_name()
         )
         if name.lower() in _FORBIDDEN_FUNCTIONS:
-            raise DatastoreQueryError(
-                f"{name}() is not allowed in datastore queries"
-            )
+            raise DatastoreQueryError(f"{name}() is not allowed in datastore queries")
 
     cte_aliases = {cte.alias for cte in statement.find_all(exp.CTE) if cte.alias}
 

@@ -65,9 +65,6 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-
-
-
 class E2BOpsMixin:
     """The `SandboxOpsProvider` half of the E2B provider.
 
@@ -161,6 +158,7 @@ class E2BOpsMixin:
 
         with sdk_errors():
             if request.tty is not None:
+
                 async def on_pty(data: bytes) -> None:
                     await self._output.append(
                         process_id, channel=ProcessOutputChannel.PTY, data=data
@@ -455,6 +453,12 @@ class E2BOpsMixin:
         E2B has no resident-interpreter concept to reserve, so there is nothing
         to allocate ahead of time and pretending otherwise would mean tracking
         state with no backing.
+
+        The request's ``cwd`` is deliberately not remembered here either. It
+        arrives again on every ``execute_python`` through the session reference,
+        which is the only form of it that survives this backend running in more
+        than one process -- remembering it in this one would work until the next
+        call landed on another worker.
         """
         return None
 
@@ -480,6 +484,14 @@ class E2BOpsMixin:
         code is split with `ast` and the last node evaluated separately when it
         is an expression. Without this, `x = 6 * 7` followed by `x` returns
         nothing and an agent cannot see what it computed.
+
+        *A working directory* -- the interpreter starts in the session's `cwd`,
+        the very same one `start_process` gives a shell command. A fresh process
+        per call means there is no shell to inherit it from, and without this it
+        started in whatever directory the image defaults to: `execute_python`
+        reported `/workspace` while `exec_command` reported the conversation's
+        own directory, so a file one tool wrote by relative path was invisible
+        to the other.
         """
         sandbox = await self._connect(instance.provider_id)
         state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
@@ -499,6 +511,7 @@ class E2BOpsMixin:
             )
             outcome = await sandbox.commands.run(
                 f"python3 {runner_path}",
+                cwd=session.cwd,
                 envs={item.name: item.value for item in request.environment},
                 # `None` here meant unbounded, so `execute_python`'s
                 # `timeout_seconds` bounded only how long the backend waited --
@@ -559,7 +572,6 @@ def _decode_pid(raw) -> tuple[int, bool]:
     return int(pid), flag == "1"
 
 
-
 def _to_stat(entry) -> FileStat:
     is_dir = str(getattr(entry, "type", "")).lower().endswith("dir")
     modified = getattr(entry, "modified_time", None)
@@ -572,5 +584,3 @@ def _to_stat(entry) -> FileStat:
         # 0o644/0o755 is the honest default rather than inventing a number.
         mode=int(getattr(entry, "mode", 0) or (0o755 if is_dir else 0o644)),
     )
-
-

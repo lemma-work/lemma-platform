@@ -88,7 +88,7 @@ def _stringify(value: object) -> str:
         return ""
     try:
         return json.dumps(value, default=str)
-    except (TypeError, ValueError):  # pragma: no cover - defensive
+    except TypeError, ValueError:  # pragma: no cover - defensive
         return str(value)
 
 

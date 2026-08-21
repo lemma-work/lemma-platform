@@ -25,7 +25,6 @@ class DatastoreAuthorization:
     def __init__(self, authorization_service: object):
         self.authorization_service = authorization_service
 
-
     async def _release_application_connection(self) -> None:
         """Give the application connection back once the check is done.
 
@@ -383,7 +382,7 @@ class DatastoreAuthorization:
                     )
         except Exception:
             logger.debug(
-                'datastore.authorization.authorization_check_document_admin_user.diagnostic',
+                "datastore.authorization.authorization_check_document_admin_user.diagnostic",
                 user_id=user_id,
                 pod_id=pod_id,
                 exc_info=True,

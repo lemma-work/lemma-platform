@@ -247,8 +247,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             await self._kill_quietly(existing.provider_id)
             existing = None
         drifted = (
-            existing is not None
-            and existing.profile_digest != spec.profile_digest
+            existing is not None and existing.profile_digest != spec.profile_digest
         )
         if drifted and spec.kind is SandboxKind.FUNCTION:
             # A function sandbox owns no durable disk, so replacing it to adopt
@@ -367,8 +366,10 @@ class E2BSandboxProvider(E2BOpsMixin):
         """
         sandbox = await self._connect(instance.provider_id)
         await ensure_serving(
-            sandbox, instance.provider_id,
-            kind=kind, runtime_port=profile_for(kind).runtime_port,
+            sandbox,
+            instance.provider_id,
+            kind=kind,
+            runtime_port=profile_for(kind).runtime_port,
         )
 
     async def release(
@@ -534,9 +535,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         Paused sandboxes count as found. Pausing is how storage persists here.
         """
         namespace = self._config.metadata_namespace
-        queries: list[dict[str, str]] = [
-            {meta_sandbox_id(namespace): str(sandbox_id)}
-        ]
+        queries: list[dict[str, str]] = [{meta_sandbox_id(namespace): str(sandbox_id)}]
         for query in queries:
             match = await self._first_matching(query)
             if match is not None:
@@ -568,9 +567,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 profile_digest=metadata.get(
                     meta_profile_digest(self._config.metadata_namespace)
                 ),
-                template=metadata.get(
-                    meta_template(self._config.metadata_namespace)
-                ),
+                template=metadata.get(meta_template(self._config.metadata_namespace)),
             )
         return None
 

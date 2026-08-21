@@ -21,10 +21,7 @@ CLIENT_EMITTED = frozenset({"share_link.viewed", "import.started"})
 #: Designed, not yet raised by anything. Each needs a domain event the platform
 #: does not currently publish, or a lookup the consumer does not yet do.
 #: Shrinking this set is the Phase 1 follow-up.
-KNOWN_GAPS = frozenset(
-    {
-    }
-)
+KNOWN_GAPS = frozenset({})
 
 
 def test_every_catalog_event_is_wired_client_emitted_or_a_named_gap() -> None:
@@ -42,7 +39,9 @@ def test_the_gap_lists_do_not_claim_events_that_left_the_catalog() -> None:
 
 def test_wired_events_are_all_real_catalog_entries() -> None:
     unknown = WIRED_EVENTS - set(ANALYTICS_CATALOG)
-    assert not unknown, f"consumer claims events absent from the catalog: {sorted(unknown)}"
+    assert not unknown, (
+        f"consumer claims events absent from the catalog: {sorted(unknown)}"
+    )
 
 
 def test_the_worker_configures_the_sink_it_emits_through() -> None:
@@ -68,8 +67,11 @@ def test_the_worker_configures_the_sink_it_emits_through() -> None:
         "the worker never configures the analytics sink, so the consumer emits "
         "into a NullSink no matter what ANALYTICS_WRITE_KEY says"
     )
-    stop = source.index('_safe_shutdown_step("stop_analytics"')
-    close_http = source.index('_safe_shutdown_step(\n            "close_shared_http_client"')
+    # Matched on the step names alone. Spelling out the call with its exact
+    # indentation made this test an assertion about source layout, so running a
+    # formatter over the file broke it without changing what the worker does.
+    stop = source.index('"stop_analytics"')
+    close_http = source.index('"close_shared_http_client"')
     assert stop < close_http, (
         "stop_analytics must drain before the shared HTTP client it posts through "
         "is closed"

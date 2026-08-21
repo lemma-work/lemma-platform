@@ -57,6 +57,7 @@ class AgentInputRequired(Exception):
         self.kind = kind
         super().__init__(f"Agent run paused for user input ({kind}:{tool_call_id})")
 
+
 # Exceptions that are control flow, not tool failures: they carry meaning for the
 # pydantic-ai run loop (retry / deferral / approval / usage limit / unexpected
 # behaviour) or signal cancellation/shutdown. Never swallow these.

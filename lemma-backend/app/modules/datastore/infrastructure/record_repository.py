@@ -23,7 +23,9 @@ from app.modules.datastore.infrastructure.record_errors import (
     raise_record_read_error,
     raise_record_write_error,
 )
-from app.modules.datastore.infrastructure.record_filter_sql import build_filter_predicate
+from app.modules.datastore.infrastructure.record_filter_sql import (
+    build_filter_predicate,
+)
 from app.modules.datastore.infrastructure.record_page import rows_and_total
 from app.modules.datastore.infrastructure.record_update_sql import (
     build_assignments,
@@ -316,7 +318,11 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.execute(text("SET TRANSACTION READ ONLY"))
                 await session.execute(
                     text("SELECT set_config('statement_timeout', :ms, true)"),
-                    {"ms": str(datastore_settings.datastore_query_statement_timeout_ms)},
+                    {
+                        "ms": str(
+                            datastore_settings.datastore_query_statement_timeout_ms
+                        )
+                    },
                 )
 
                 schema_name = self.schema_manager.get_schema_name(pod_id)
@@ -348,7 +354,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if len(rows) > max_rows:
                     rows = rows[:max_rows]
                 if enable_rls:
-                    await verify_rls_context(session, user_id, is_pod_admin=is_pod_admin)
+                    await verify_rls_context(
+                        session, user_id, is_pod_admin=is_pod_admin
+                    )
                 return rows, len(rows)
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)
@@ -440,7 +448,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     offset=offset,
                 )
 
-                return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
+                return [
+                    self._row_to_entity(dict(row._mapping), ctx) for row in rows
+                ], total
         except DBAPIError as exc:
             logger.debug("datastore.record.list.propagated", exc_info=True)
             raise_record_read_error(
@@ -504,7 +514,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 result = await session.execute(text(sql), params)
                 row = result.fetchone()
                 if not row:
-                    raise DatastoreRecordNotFoundError("Record not found or update failed")
+                    raise DatastoreRecordNotFoundError(
+                        "Record not found or update failed"
+                    )
 
                 row_mapping = dict(row._mapping)
                 previous = split_previous_image(

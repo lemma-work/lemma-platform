@@ -20,6 +20,7 @@ from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.user_interaction.models import AskUserRequest
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+
 logger = get_logger(__name__)
 
 
@@ -185,8 +186,7 @@ async def maybe_resume_pending_interaction(
         return True
     except Exception:
         logger.debug(
-            'agent_surfaces.ingress_service.surface_interaction_typed_reply_resume.diagnostic',
+            "agent_surfaces.ingress_service.surface_interaction_typed_reply_resume.diagnostic",
             conversation_id=context.conversation_id,
         )
         return False
-

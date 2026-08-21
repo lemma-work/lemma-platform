@@ -180,7 +180,9 @@ def _assistant(draft: MessageDraft) -> AgentEvent:
 async def test_progress_observer_buffers_text_and_sends_final_answer_on_finish():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_event(
         _assistant(MessageDraft.of_text("Final answer.")),
@@ -298,7 +300,10 @@ async def test_progress_observer_email_suppresses_final_text_when_reply_tool_cal
             data=MessageDraft.of_tool_call(
                 tool_name="gmail_reply_email",
                 tool_call_id="reply-1",
-                tool_args={"content": "Here is the report.", "attachment_paths": ["/me/report.pdf"]},
+                tool_args={
+                    "content": "Here is the report.",
+                    "attachment_paths": ["/me/report.pdf"],
+                },
             ),
         ),
         conversation,
@@ -472,7 +477,9 @@ async def test_progress_observer_strips_inline_thinking_tags_from_text():
     must strip them so they never get buffered or delivered to a surface."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     # Build the message with literal thinking tags (constructed programmatically
     # so the tags survive in source without being stripped as markup).
@@ -616,7 +623,9 @@ async def test_progress_observer_renders_waiting_tool_call_once():
     the same native surface prompt several times."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
     waiting = AgentEvent(
         type=AgentEventType.WAITING,
         data={"kind": "ask_user", "tool_call_id": "ask-1"},
@@ -730,7 +739,9 @@ async def _run_with_progress_then_answer(service, platform: str):
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
     if platform == "SLACK":
         await observer.on_event(
-            AgentEvent(type=AgentEventType.TOKEN, data={"kind": "text", "data": "x" * 300}),
+            AgentEvent(
+                type=AgentEventType.TOKEN, data={"kind": "text", "data": "x" * 300}
+            ),
             conversation,
             SimpleNamespace(),
         )
@@ -863,7 +874,9 @@ async def test_telegram_ignores_token_events():
     """Only platforms that can show a live stream consume tokens."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_event(_token("text", "z" * 500), conversation, SimpleNamespace())
 
@@ -881,7 +894,12 @@ async def test_reasoning_split_across_deltas_never_reaches_slack():
     observer = _observer(service)
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
 
-    for delta in ["Here is the plan. <thi", "nk>secret plotting</thi", "nk>", "x" * 300]:
+    for delta in [
+        "Here is the plan. <thi",
+        "nk>secret plotting</thi",
+        "nk>",
+        "x" * 300,
+    ]:
         await observer.on_event(_token("text", delta), conversation, SimpleNamespace())
 
     streamed = "".join(c["text"] for c in service.streamed)
@@ -941,9 +959,7 @@ async def test_failed_token_append_stays_buffered_until_confirmed():
         nonlocal attempts
         attempts += 1
         service.streamed.append(kwargs)
-        return StreamAppendResult(
-            handle={"message_id": 1}, appended=attempts > 1
-        )
+        return StreamAppendResult(handle={"message_id": 1}, appended=attempts > 1)
 
     service.append_stream_text_for_conversation = append
     observer._token_buffer = "must survive"
@@ -968,9 +984,7 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
 
     async def reject_append(**kwargs):
         service.streamed.append(kwargs)
-        return StreamAppendResult(
-            handle={"message_id": 1}, appended=False
-        )
+        return StreamAppendResult(handle={"message_id": 1}, appended=False)
 
     service.append_stream_text_for_conversation = reject_append
     observer._progress_handle = {"message_id": 1}
@@ -985,7 +999,9 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
 async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_run_started(conversation, SimpleNamespace())
 

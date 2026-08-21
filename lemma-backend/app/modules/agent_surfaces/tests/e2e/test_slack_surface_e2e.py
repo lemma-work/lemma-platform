@@ -13,7 +13,9 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.platforms.slack.blocks import DEFAULT_RESPONDER_NAME
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
@@ -552,7 +554,9 @@ async def test_slack_dm_agent_modal_open_then_submit_routes_dm(
     assert submitted is True
 
     # Submitting also republishes the Home tab for this viewer.
-    publishes = await wait_for_messages(message_store, "SLACK_VIEWS_PUBLISH", min_count=1)
+    publishes = await wait_for_messages(
+        message_store, "SLACK_VIEWS_PUBLISH", min_count=1
+    )
     assert specialist["name"] in str(publishes[-1]["view"])
 
     dm_payload = _load_slack_dm_fixture(
@@ -610,7 +614,9 @@ async def test_slack_home_tab_publishes_pod_and_agents(
     )
     assert handled is True
 
-    publishes = await wait_for_messages(message_store, "SLACK_VIEWS_PUBLISH", min_count=1)
+    publishes = await wait_for_messages(
+        message_store, "SLACK_VIEWS_PUBLISH", min_count=1
+    )
     assert publishes[-1]["user_id"] == "U0123456"
     view_repr = str(publishes[-1]["view"])
     assert test_pod["name"] in view_repr
@@ -703,9 +709,7 @@ def test_slack_parser_parse_rejects_non_message_and_filtered_events():
 
     assert parser.parse({"type": "url_verification"}) is None
     assert (
-        parser.parse(
-            {"type": "event_callback", "event": {"type": "reaction_added"}}
-        )
+        parser.parse({"type": "event_callback", "event": {"type": "reaction_added"}})
         is None
     )
     assert (
@@ -853,9 +857,7 @@ def test_slack_parser_parse_interaction_edge_cases():
         parser.parse_interaction(
             {
                 "type": "block_actions",
-                "actions": [
-                    {"action_id": SLACK_FORM_SUBMIT_ACTION_ID, "value": ""}
-                ],
+                "actions": [{"action_id": SLACK_FORM_SUBMIT_ACTION_ID, "value": ""}],
             }
         )
         is None
@@ -887,13 +889,9 @@ def test_slack_parser_normalize_context_message_edge_cases():
     # shared]") even for a blank message with no attachments, so the
     # `if not text: return None` guard below it can never actually fire via
     # this path -- it is dead code, not a case this test can reach.
-    assert parser.normalize_context_message({"text": ""}) == {
-        "text": "[File shared]"
-    }
+    assert parser.normalize_context_message({"text": ""}) == {"text": "[File shared]"}
     with pytest.raises(AttributeError):
-        parser.normalize_context_message(
-            {"text": "hi", "user_profile": "not-a-dict"}
-        )
+        parser.normalize_context_message({"text": "hi", "user_profile": "not-a-dict"})
 
 
 def test_slack_parser_extract_file_attachments_edge_cases():
@@ -985,9 +983,7 @@ def test_slack_parser_extract_input_value_and_flatten_state():
     assert _extract_slack_input_value(
         {"selected_options": [{"value": "a"}, "not-a-dict", {"value": "b"}]}
     ) == ["a", "b"]
-    assert (
-        _extract_slack_input_value({"selected_date": "2024-01-01"}) == "2024-01-01"
-    )
+    assert _extract_slack_input_value({"selected_date": "2024-01-01"}) == "2024-01-01"
     assert _extract_slack_input_value({}) is None
 
     flattened = _flatten_block_state_values(

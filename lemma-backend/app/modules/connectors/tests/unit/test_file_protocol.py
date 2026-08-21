@@ -56,7 +56,10 @@ class TestFindingFileFieldsInAPayload:
     def test_a_top_level_file_field_is_found(self):
         schema = {
             "type": "object",
-            "properties": {"attachment": {FILE_MARKER: True}, "subject": {"type": "string"}},
+            "properties": {
+                "attachment": {FILE_MARKER: True},
+                "subject": {"type": "string"},
+            },
         }
         payload = {"attachment": {"pod_path": "/me/x.pdf"}, "subject": "hi"}
         found = list(iter_file_fields(schema, payload))
@@ -153,7 +156,11 @@ class TestRecognisingBinaryResults:
             "successful": True,
             "data": {
                 "response_data": {
-                    "file": {"name": "q4.pdf", "mimetype": "application/pdf", "s3url": "https://x"}
+                    "file": {
+                        "name": "q4.pdf",
+                        "mimetype": "application/pdf",
+                        "s3url": "https://x",
+                    }
                 }
             },
         }
@@ -162,7 +169,11 @@ class TestRecognisingBinaryResults:
         assert found.path == ["data", "response_data", "file"]
 
     def test_a_file_inside_a_list_is_found(self):
-        result = {"attachments": [{"name": "a.pdf", "mimetype": "application/pdf", "s3url": "https://x"}]}
+        result = {
+            "attachments": [
+                {"name": "a.pdf", "mimetype": "application/pdf", "s3url": "https://x"}
+            ]
+        }
         found = find_binary(result)
         assert found.path == ["attachments", 0]
 
@@ -170,9 +181,12 @@ class TestRecognisingBinaryResults:
         assert find_binary({"files": [{"id": "1", "name": "notes"}]}) is None
 
     def test_malformed_base64_is_not_treated_as_binary(self):
-        assert classify_binary(
-            {"type": "binary_content", "content_base64": "!!!not base64!!!"}
-        ) is None
+        assert (
+            classify_binary(
+                {"type": "binary_content", "content_base64": "!!!not base64!!!"}
+            )
+            is None
+        )
 
     def test_the_walk_is_depth_limited(self):
         # A provider response is data; a pathological one must not drive
@@ -183,7 +197,15 @@ class TestRecognisingBinaryResults:
         assert find_binary(deep) is None
 
     def test_a_found_file_can_be_replaced_with_a_reference(self):
-        result = {"data": {"file": {"name": "q4.pdf", "mimetype": "application/pdf", "s3url": "https://x"}}}
+        result = {
+            "data": {
+                "file": {
+                    "name": "q4.pdf",
+                    "mimetype": "application/pdf",
+                    "s3url": "https://x",
+                }
+            }
+        }
         found = find_binary(result)
         replace_at(result, found.path, {"type": "pod_file", "pod_path": "/me/q4.pdf"})
         assert result["data"]["file"]["pod_path"] == "/me/q4.pdf"
@@ -204,7 +226,9 @@ class TestWhatTheCallerReceives:
         def __init__(self):
             self.written = []
 
-        async def write_bytes(self, *, pod_id, directory, name, content, media_type, ctx):
+        async def write_bytes(
+            self, *, pod_id, directory, name, content, media_type, ctx
+        ):
             self.written.append(
                 {"directory": directory, "name": name, "size": len(content)}
             )
@@ -219,7 +243,12 @@ class TestWhatTheCallerReceives:
     async def test_a_small_result_stays_inline(self):
         from uuid import uuid4
 
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(PNG).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(PNG).decode(),
+            }
+        }
         out = await self._writer().capture(
             result, connector_id="gmail", pod_id=uuid4(), ctx=None
         )
@@ -236,7 +265,12 @@ class TestWhatTheCallerReceives:
         monkeypatch.setattr(connector_settings, "connector_inline_result_max_bytes", 16)
         gateway = self._Gateway()
         big = b"x" * 128
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(big).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(big).decode(),
+            }
+        }
 
         out = await self._writer(gateway).capture(
             result, connector_id="google_drive", pod_id=uuid4(), ctx=None
@@ -244,7 +278,9 @@ class TestWhatTheCallerReceives:
         # No base64 in the response, and nothing held in memory to serialize.
         assert out["file"]["type"] == "pod_file"
         assert gateway.written[0]["size"] == 128
-        assert gateway.written[0]["directory"].startswith("/me/connector-downloads/google_drive/")
+        assert gateway.written[0]["directory"].startswith(
+            "/me/connector-downloads/google_drive/"
+        )
 
     @pytest.mark.asyncio
     async def test_output_path_chooses_the_destination(self, monkeypatch):
@@ -254,7 +290,12 @@ class TestWhatTheCallerReceives:
 
         monkeypatch.setattr(connector_settings, "connector_inline_result_max_bytes", 16)
         gateway = self._Gateway()
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(b"y" * 64).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(b"y" * 64).decode(),
+            }
+        }
 
         await self._writer(gateway).capture(
             result,
@@ -263,16 +304,29 @@ class TestWhatTheCallerReceives:
             ctx=None,
             output_path="/me/reports/q4.pdf",
         )
-        assert gateway.written[0] == {"directory": "/me/reports", "name": "q4.pdf", "size": 64}
+        assert gateway.written[0] == {
+            "directory": "/me/reports",
+            "name": "q4.pdf",
+            "size": 64,
+        }
 
     @pytest.mark.asyncio
     async def test_output_path_persists_even_a_small_file(self):
         from uuid import uuid4
 
         gateway = self._Gateway()
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(PNG).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(PNG).decode(),
+            }
+        }
         out = await self._writer(gateway).capture(
-            result, connector_id="gmail", pod_id=uuid4(), ctx=None, output_path="/me/a.png"
+            result,
+            connector_id="gmail",
+            pod_id=uuid4(),
+            ctx=None,
+            output_path="/me/a.png",
         )
         assert out["file"]["type"] == "pod_file"
 
@@ -286,7 +340,12 @@ class TestWhatTheCallerReceives:
         )
 
         monkeypatch.setattr(connector_settings, "connector_response_max_bytes", 8)
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(b"z" * 64).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(b"z" * 64).decode(),
+            }
+        }
         with pytest.raises(OperationExecutionValidationError):
             await self._writer().capture(
                 result, connector_id="gmail", pod_id=uuid4(), ctx=None
@@ -297,15 +356,23 @@ class TestWhatTheCallerReceives:
         from uuid import uuid4
 
         result = {"files": [{"id": "1", "name": "notes"}]}
-        assert await self._writer().capture(
-            result, connector_id="gmail", pod_id=uuid4(), ctx=None
-        ) == result
+        assert (
+            await self._writer().capture(
+                result, connector_id="gmail", pod_id=uuid4(), ctx=None
+            )
+            == result
+        )
 
     @pytest.mark.asyncio
     async def test_without_pod_context_it_falls_back_to_inline(self):
         # A function running outside a pod still gets usable bytes rather than a
         # reference it could not resolve.
-        result = {"file": {"type": "binary_content", "content_base64": base64.b64encode(PNG).decode()}}
+        result = {
+            "file": {
+                "type": "binary_content",
+                "content_base64": base64.b64encode(PNG).decode(),
+            }
+        }
         out = await self._writer(self._Gateway()).capture(
             result, connector_id="gmail", pod_id=None, ctx=None, output_path="/me/a.png"
         )

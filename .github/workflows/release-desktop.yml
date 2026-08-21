@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   build-dmg:
+    timeout-minutes: 120
     # Only version tags. `release: published` also fires for prereleases, and
     # the nightly Desktop builds publish one -- without this they would start an
     # official release build for a tag that has no version in it.
@@ -143,7 +144,7 @@ jobs:
           python-version: "3.14"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -349,6 +350,7 @@ jobs:
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
 
   build-windows:
+    timeout-minutes: 120
     # Only version tags. `release: published` also fires for prereleases, and
     # the nightly Desktop builds publish one -- without this they would start an
     # official release build for a tag that has no version in it.
@@ -442,7 +444,7 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: x86_64-pc-windows-msvc
 

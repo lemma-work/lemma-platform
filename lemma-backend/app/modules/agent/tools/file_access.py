@@ -50,7 +50,9 @@ async def read_pod_file_bytes(
         entity, content = await services.file.download_file_content_by_path(
             deps.pod_id, path, services.ctx
         )
-    mime = entity.mime_type or mimetypes.guess_type(path)[0] or sniff_image_mime(content)
+    mime = (
+        entity.mime_type or mimetypes.guess_type(path)[0] or sniff_image_mime(content)
+    )
     return content, mime
 
 

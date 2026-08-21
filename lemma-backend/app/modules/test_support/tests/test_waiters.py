@@ -54,9 +54,9 @@ async def test_fail_fast_stops_before_the_timeout() -> None:
             label="stops early",
             probe=probe,
             done=lambda value: value["status"] == "DONE",
-            fail_fast=lambda value: value["status"]
-            if value["status"] == "FAILED"
-            else None,
+            fail_fast=lambda value: (
+                value["status"] if value["status"] == "FAILED" else None
+            ),
             timeout_seconds=30,
             interval_seconds=0,
         )

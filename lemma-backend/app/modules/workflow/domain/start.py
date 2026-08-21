@@ -75,11 +75,15 @@ class WorkflowStart(BaseModel):
         ...,
         description="Workflow start mode: MANUAL, SCHEDULED, EVENT, or DATASTORE_EVENT.",
     )
-    config: Optional[Union[ScheduledWorkflowStartConfig, EventWorkflowStartConfig, DataStoreWorkflowStartConfig]] = (
-        Field(
-            default=None,
-            description=(
-                "Start mode configuration payload. Required for non-manual start types."
-            ),
-        )
+    config: Optional[
+        Union[
+            ScheduledWorkflowStartConfig,
+            EventWorkflowStartConfig,
+            DataStoreWorkflowStartConfig,
+        ]
+    ] = Field(
+        default=None,
+        description=(
+            "Start mode configuration payload. Required for non-manual start types."
+        ),
     )

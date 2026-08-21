@@ -8,6 +8,7 @@ import pytest
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
+from app.modules.agent.tools.workspace_cli import github_project
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.connectors.domain.errors import (
@@ -119,7 +120,9 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
 
     async def _credential(ctx):
         return bridge._GithubCredential(
-            access_token="gho_faketoken123", login="octocat", email="octocat@example.com"
+            access_token="gho_faketoken123",
+            login="octocat",
+            email="octocat@example.com",
         )
 
     monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
@@ -187,7 +190,9 @@ async def test_ensure_github_credentials_skips_identity_setup_without_login(
     monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
 
     async def _credential(ctx):
-        return bridge._GithubCredential(access_token="gho_faketoken123", login=None, email=None)
+        return bridge._GithubCredential(
+            access_token="gho_faketoken123", login=None, email=None
+        )
 
     monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
 
@@ -271,7 +276,7 @@ async def test_exec_command_internal_invokes_bridge_only_for_git_like_commands(
         del ctx, workspace_session
         calls.append("called")
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _fake_ensure)
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _fake_ensure)
 
     await workspace_cli.exec_command_internal(_context(), ExecCommandRequest(cmd="pwd"))
     assert calls == []
@@ -295,7 +300,9 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises(
         del ctx, workspace_session
         raise RuntimeError("redis is down")
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _broken_bridge)
+    # Patched where it is now called from: the shared preparation step both
+    # workspace tools go through.
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _broken_bridge)
 
     result = await workspace_cli.exec_command_internal(
         _context(), ExecCommandRequest(cmd="git push")
@@ -323,7 +330,9 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises(
 def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
     ctx = _context()
     if account_id is not None:
-        ctx.workspace_repo = ProjectRepo(owner="acme", repo="widgets", account_id=account_id)
+        ctx.workspace_repo = ProjectRepo(
+            owner="acme", repo="widgets", account_id=account_id
+        )
     return ctx
 
 
@@ -333,7 +342,9 @@ async def _fake_build_delegated_context(uow, ctx):
 
 
 def _patch_account_resolution(monkeypatch: pytest.MonkeyPatch, service) -> None:
-    monkeypatch.setattr(bridge, "build_delegated_context", _fake_build_delegated_context)
+    monkeypatch.setattr(
+        bridge, "build_delegated_context", _fake_build_delegated_context
+    )
     monkeypatch.setattr(
         "app.modules.connectors.api.dependencies.get_account_resolution_service",
         lambda uow: service,

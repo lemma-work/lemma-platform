@@ -61,9 +61,7 @@ class GithubOps(Protocol):
         self, *, name: str, private: bool, description: str | None
     ) -> RepoCreateResult: ...
 
-    async def get_head(
-        self, *, owner: str, repo: str, branch: str
-    ) -> str: ...
+    async def get_head(self, *, owner: str, repo: str, branch: str) -> str: ...
 
     async def get_file(
         self,

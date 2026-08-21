@@ -236,8 +236,7 @@ async def test_storage_is_the_sandbox_not_a_volume(
 
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
     with pytest.raises(ProviderRejected):
         await provider.ensure_volume(
@@ -772,9 +771,9 @@ async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
     """The E2B account may be shared with something else entirely."""
     sandbox_id = uuid4()
     await provider.create(_spec(sandbox_id))
-    world.sandboxes["someone-else"] = type(
-        next(iter(world.sandboxes.values()))
-    )(sandbox_id="someone-else", metadata={"team": "other"})
+    world.sandboxes["someone-else"] = type(next(iter(world.sandboxes.values())))(
+        sandbox_id="someone-else", metadata={"team": "other"}
+    )
 
     objects = await provider.list_objects(deadline_at=_deadline())
 
@@ -824,9 +823,7 @@ async def test_a_function_sandbox_pause_keeps_memory(
     """
     instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
 
-    await provider.release(
-        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
-    )
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
 
     assert world.pause_kept_memory == [True]
 
@@ -972,7 +969,7 @@ async def test_the_sweep_sees_every_page_of_the_account(
 async def test_the_sweep_lists_function_sandboxes_too(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """"Every sandbox carrying this platform's metadata" has to mean every kind.
+    """ "Every sandbox carrying this platform's metadata" has to mean every kind.
 
     The query was hardcoded to workspaces, so a function sandbox the control
     plane had forgotten was invisible to orphan reclamation and billed forever
@@ -1057,3 +1054,66 @@ async def test_a_workspace_whose_agent_died_is_not_ready(
         await provider.wait_ready(
             instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
         )
+
+
+async def test_python_and_the_shell_are_given_the_same_directory(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    """One conversation, one directory -- whichever tool the agent reaches for.
+
+    `start_process` was told the conversation's cwd and `execute_python` was
+    told nothing, so the interpreter started in whatever the image defaults to.
+    The two tools reported different answers for `pwd`, and a file written by
+    relative path in one was invisible to the other: the exact failure an agent
+    reads as "my files disappeared".
+    """
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
+    from sandbox_runtime.protocol import ExecutePythonRequest
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+
+    cwd = "/workspace/c/2026-08-21/0d8y15k6"
+    instance = await provider.create(_spec(uuid4()))
+    world.command_cwds.clear()
+
+    await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="pwd",
+            argv=None,
+            cwd=cwd,
+            environment=(),
+            tty=None,
+            output_limit_bytes=1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+    await provider.execute_python(
+        instance,
+        # The reference production actually hands this provider, not a
+        # stand-in shaped to whatever the assertion needs.
+        LocalPythonSessionRef(session_id=uuid4(), cwd=cwd),
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code="import os\nprint(os.getcwd())",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+
+    # The interpreter is run by a shell command of its own, so every command
+    # this provider started -- the shell's and the runner's alike -- must name
+    # the one directory. Writing the file and the runner does not count: those
+    # go to absolute paths under /tmp.
+    assert world.command_cwds, "no command reached the sandbox"
+    assert set(world.command_cwds) == {cwd}, world.command_cwds

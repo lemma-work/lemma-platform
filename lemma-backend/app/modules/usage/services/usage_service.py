@@ -180,8 +180,12 @@ class UsageService(UsagePricing):
 
         profile_id = self._profile_value(runtime_profile, "profile_id") or "unknown"
         profile_scope = self._profile_value(runtime_profile, "scope") or "ORGANIZATION"
-        model_name = self._profile_value(runtime_profile, "model_name") or usage_data.model_name
-        provider_model_name = self._profile_value(runtime_profile, "provider_model_name")
+        model_name = (
+            self._profile_value(runtime_profile, "model_name") or usage_data.model_name
+        )
+        provider_model_name = self._profile_value(
+            runtime_profile, "provider_model_name"
+        )
         cache_read_tokens = self._coerce_token_count(
             (usage_data.metadata or {}).get("cache_read_tokens")
         )
@@ -261,13 +265,9 @@ class UsageService(UsagePricing):
             "operation": usage_kind,
         }
         if input_tokens > 0:
-            token_counter.add(
-                input_tokens, {**labels, "gen_ai.token.type": "input"}
-            )
+            token_counter.add(input_tokens, {**labels, "gen_ai.token.type": "input"})
         if output_tokens > 0:
-            token_counter.add(
-                output_tokens, {**labels, "gen_ai.token.type": "output"}
-            )
+            token_counter.add(output_tokens, {**labels, "gen_ai.token.type": "output"})
         if cost_usd:
             cost_counter.add(cost_usd, labels)
 
@@ -441,9 +441,7 @@ class UsageService(UsagePricing):
             organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
-            organization_id
-            if limit_values.user_limit_scope == "organization"
-            else None
+            organization_id if limit_values.user_limit_scope == "organization" else None
         )
         excluded_organization_ids = (
             limit_values.excluded_organization_ids
@@ -671,6 +669,7 @@ class UsageService(UsagePricing):
                 )
             ]
         )
+
 
 def assert_system_pricing_covers_catalog(
     model_names: Iterable[tuple[str, str | None]],

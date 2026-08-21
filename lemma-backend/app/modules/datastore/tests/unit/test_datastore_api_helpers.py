@@ -51,9 +51,9 @@ def test_parse_record_filters_rejects_shorthand():
 
 
 def test_parse_record_sorts_accepts_json_then_none():
-    assert parse_record_sorts(
-        ['{"field":"created_at","direction":"desc"}']
-    ) == [("created_at", "desc")]
+    assert parse_record_sorts(['{"field":"created_at","direction":"desc"}']) == [
+        ("created_at", "desc")
+    ]
     assert parse_record_sorts(None) is None
 
 

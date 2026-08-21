@@ -46,7 +46,9 @@ async def engine() -> AsyncIterator[DockerEngineClient]:
         pytest.skip(f"no docker socket at {_SOCKET}")
     client = DockerEngineClient(socket_path=_SOCKET)
     try:
-        await client.list_volumes(labels={"managed-by": "probe"}, deadline_at=_deadline())
+        await client.list_volumes(
+            labels={"managed-by": "probe"}, deadline_at=_deadline()
+        )
     except Exception as exc:  # pragma: no cover - environment guard
         await client.close()
         pytest.skip(f"docker engine not reachable: {exc}")

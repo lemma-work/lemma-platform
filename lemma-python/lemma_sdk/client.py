@@ -11,6 +11,7 @@ from .transport import LemmaTransport
 if TYPE_CHECKING:
     from .pod import Pod
     from .resources import (
+        AgentHosts,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,
@@ -124,7 +125,9 @@ class Lemma:
 
         resolved_pod_id = pod_id or self.default_pod_id
         if not resolved_pod_id:
-            raise LemmaConfigError("pod_id is required. Pass pod_id or set LEMMA_POD_ID.")
+            raise LemmaConfigError(
+                "pod_id is required. Pass pod_id or set LEMMA_POD_ID."
+            )
         return Pod(
             pod_id=resolved_pod_id,
             org_id=org_id or self.org_id,

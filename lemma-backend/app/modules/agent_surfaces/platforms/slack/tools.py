@@ -32,9 +32,7 @@ def build_slack_surface_toolset(
         try:
             return await service.get_recent_channel_messages(ctx=ctx, request=request)
         except Exception:
-            logger.debug(
-                "surface.slack.history_failed", exc_info=True
-            )
+            logger.debug("surface.slack.history_failed", exc_info=True)
             return SlackRecentChannelMessagesResult(
                 success=False,
                 error="Slack channel history lookup failed unexpectedly.",

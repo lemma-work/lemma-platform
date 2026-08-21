@@ -94,8 +94,12 @@ _API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
 # Closing tags may carry whitespace and ignored attributes after the tag name
 # (</script\t\n foo> still ends the element), so the matcher allows any run of
 # non-">" characters there, bounded by "\b" to keep the name exact.
-_STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style\b[^>]*>", re.IGNORECASE | re.DOTALL)
-_SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script\b[^>]*>", re.IGNORECASE | re.DOTALL)
+_STYLE_BLOCK = re.compile(
+    r"<style\b[^>]*>.*?</style\b[^>]*>", re.IGNORECASE | re.DOTALL
+)
+_SCRIPT_BLOCK = re.compile(
+    r"<script\b[^>]*>.*?</script\b[^>]*>", re.IGNORECASE | re.DOTALL
+)
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _ANY_TAG = re.compile(r"<[^>]+>")
 _NAKED_CSS_RULE = re.compile(r"[^{}\s<>][^{}<>]*\{[^{}]*[a-zA-Z-]+\s*:[^{}]*\}")

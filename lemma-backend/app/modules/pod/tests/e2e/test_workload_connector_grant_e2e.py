@@ -164,9 +164,7 @@ async def test_workload_app_grant_allows_delegated_workload(
     hydrated = await ctx.authorizer._hydrate_connector(app_ref)
     assert hydrated.visibility == ResourceVisibility.POD
 
-    decision = await ctx.authorizer.authorize(
-        ctx, Permissions.CONNECTOR_USE, app_ref
-    )
+    decision = await ctx.authorizer.authorize(ctx, Permissions.CONNECTOR_USE, app_ref)
     assert decision.allowed, decision.reason_code
     assert decision.reason_code == "POD_VISIBLE"
 
@@ -211,9 +209,7 @@ async def test_human_app_grant_does_not_restrict_app(
     hydrated = await ctx.authorizer._hydrate_connector(app_ref)
     assert hydrated.visibility == ResourceVisibility.POD
     # ... and the workload's own capability grant carries the run.
-    decision = await ctx.authorizer.authorize(
-        ctx, Permissions.CONNECTOR_USE, app_ref
-    )
+    decision = await ctx.authorizer.authorize(ctx, Permissions.CONNECTOR_USE, app_ref)
     assert decision.allowed, decision.reason_code
     assert decision.reason_code == "POD_VISIBLE"
 
@@ -256,9 +252,7 @@ async def test_human_app_grant_without_workload_grant_denies(
     hydrated = await ctx.authorizer._hydrate_connector(app_ref)
     assert hydrated.visibility == ResourceVisibility.POD
 
-    decision = await ctx.authorizer.authorize(
-        ctx, Permissions.CONNECTOR_USE, app_ref
-    )
+    decision = await ctx.authorizer.authorize(ctx, Permissions.CONNECTOR_USE, app_ref)
     assert not decision.allowed
     assert decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT"
 
@@ -316,8 +310,6 @@ async def test_other_member_app_grant_does_not_block_delegated_workload(
     hydrated = await ctx.authorizer._hydrate_connector(app_ref)
     assert hydrated.visibility == ResourceVisibility.POD
 
-    decision = await ctx.authorizer.authorize(
-        ctx, Permissions.CONNECTOR_USE, app_ref
-    )
+    decision = await ctx.authorizer.authorize(ctx, Permissions.CONNECTOR_USE, app_ref)
     assert decision.allowed, decision.reason_code
     assert decision.reason_code == "POD_VISIBLE"

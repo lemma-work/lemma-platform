@@ -43,9 +43,7 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
         except Exception:
             return None
 
-    async def clear_user_default_surface_id(
-        self, user_id: UUID, platform: str
-    ) -> None:
+    async def clear_user_default_surface_id(self, user_id: UUID, platform: str) -> None:
         user = await self.session.get(User, user_id)
         if user is None:
             return

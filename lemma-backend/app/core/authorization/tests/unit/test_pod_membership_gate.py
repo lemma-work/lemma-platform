@@ -74,7 +74,12 @@ async def test_allows_superuser():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "actor_type",
-    [ActorType.DELEGATED_USER_WORKLOAD, ActorType.AGENT, ActorType.FUNCTION, ActorType.SYSTEM],
+    [
+        ActorType.DELEGATED_USER_WORKLOAD,
+        ActorType.AGENT,
+        ActorType.FUNCTION,
+        ActorType.SYSTEM,
+    ],
 )
 async def test_workload_actors_are_not_gated(actor_type: ActorType):
     # Workloads keep the grant-first projection this change never widened, so

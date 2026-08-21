@@ -223,7 +223,10 @@ async def test_start_import_github_bad_repo_rejected():
     uc, *_ = _use_cases()
     with pytest.raises(BundleInvalidError):
         await uc.start_import(
-            pod_id=uuid4(), user_id=uuid4(), kind=BundleSourceKind.GITHUB, url="not-a-repo!!"
+            pod_id=uuid4(),
+            user_id=uuid4(),
+            kind=BundleSourceKind.GITHUB,
+            url="not-a-repo!!",
         )
 
 
@@ -237,7 +240,9 @@ async def test_get_import_pod_mismatch_raises_expired():
     uc, store, _, _ = _use_cases()
     pod_id, user_id = uuid4(), uuid4()
     state = await uc.start_import(
-        pod_id=pod_id, user_id=user_id, kind=BundleSourceKind.GITHUB,
+        pod_id=pod_id,
+        user_id=user_id,
+        kind=BundleSourceKind.GITHUB,
         url="https://github.com/acme/crm",
     )
     with pytest.raises(BundleJobExpiredError):
@@ -250,7 +255,9 @@ async def test_duplicate_enqueue_raises_conflict():
     uc, *_ = _use_cases(duplicate=True)
     with pytest.raises(BundleJobConflictError):
         await uc.start_import(
-            pod_id=uuid4(), user_id=uuid4(), kind=BundleSourceKind.GITHUB,
+            pod_id=uuid4(),
+            user_id=uuid4(),
+            kind=BundleSourceKind.GITHUB,
             url="https://github.com/acme/crm",
         )
 
@@ -269,7 +276,11 @@ def _awaiting_state(pod_id, user_id, *, steps=None, variables=None):
     plan = ImportPlan(
         format_version=2,
         steps=steps
-        or [PlanStep(index=0, kind=StepKind.TABLE, name="leads", action=StepAction.CREATE)],
+        or [
+            PlanStep(
+                index=0, kind=StepKind.TABLE, name="leads", action=StepAction.CREATE
+            )
+        ],
         variables=variables or [],
     )
     return ImportState(
@@ -290,7 +301,9 @@ async def test_apply_enqueues_with_dedup_id():
     state = _awaiting_state(pod_id, user_id)
     await store.save_import(state)
 
-    result = await uc.apply_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
+    result = await uc.apply_import(
+        pod_id=pod_id, import_id=state.import_id, user_id=user_id
+    )
 
     assert result.status == ImportStatus.APPLYING
     assert queue.calls[0][0] == "apply_pod_import"
@@ -354,7 +367,10 @@ async def test_apply_destructive_requires_confirmation():
         await uc.apply_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
     # With confirmation it proceeds.
     ok = await uc.apply_import(
-        pod_id=pod_id, import_id=state.import_id, user_id=user_id, confirm_destructive=True
+        pod_id=pod_id,
+        import_id=state.import_id,
+        user_id=user_id,
+        confirm_destructive=True,
     )
     assert ok.status == ImportStatus.APPLYING
 
@@ -366,7 +382,9 @@ async def test_apply_missing_required_variable():
     uc, store, _, _ = _use_cases()
     pod_id, user_id = uuid4(), uuid4()
     state = _awaiting_state(
-        pod_id, user_id, variables=[VariableSpec(name="region", kind="free", required=True)]
+        pod_id,
+        user_id,
+        variables=[VariableSpec(name="region", kind="free", required=True)],
     )
     await store.save_import(state)
     with pytest.raises(BundleConfirmationRequiredError):

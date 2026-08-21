@@ -89,7 +89,7 @@ async def list_pod_members(
                 )
                 if not cursor:
                     break
-        except (PodAccessDeniedError, PodNotFoundError):
+        except PodAccessDeniedError, PodNotFoundError:
             return None
 
     total = len(matched)

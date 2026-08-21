@@ -20,16 +20,16 @@ SPEC_PATH = SDK_ROOT / "openapi_spec.json"
 # Backend operations intentionally not wrapped by a facade yet. Remove entries
 # when a facade adopts them; additions here should be deliberate.
 KNOWN_UNEXPOSED_PREFIXES = (
-    "auth.",            # CLI auth flows use lemma_sdk.auth, not generated client
-    "billing",          # filtered out of the client spec
-    "public.",          # unauthenticated public endpoints
-    "webhook",          # inbound webhooks, not client-callable
+    "auth.",  # CLI auth flows use lemma_sdk.auth, not generated client
+    "billing",  # filtered out of the client spec
+    "public.",  # unauthenticated public endpoints
+    "webhook",  # inbound webhooks, not client-callable
     "surface.webhook",  # inbound surface webhooks
-    "icon.",            # asset serving
+    "icon.",  # asset serving
     "admin",
-    "scheduler.job",    # internal scheduler ops
+    "scheduler.job",  # internal scheduler ops
     "usage.",
-    "workspace.",       # workspace runtime is driven by the backend
+    "workspace.",  # workspace runtime is driven by the backend
     "channel.",
     # Device protocol: the Agent Host binary calls these with its own
     # per-installation secret. The SDK exposes only the user-facing
@@ -41,7 +41,7 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "agent.host.poll",
     "agent.host.self_revoke",
     "app.public",
-    "health_check",     # liveness probe
+    "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client
     "connector.oauth.callback",
     "agent.surface.teams_admin_consent_callback",
@@ -59,10 +59,10 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "org.invitation.",
     "org.member.",
     "org.join_auto_join",
-    "org.update",            # owner-only join-policy/name edit
+    "org.update",  # owner-only join-policy/name edit
     "org.slug_availability",
     "org.suggested",
-    "pod.join",              # self-join + join-request governance
+    "pod.join",  # self-join + join-request governance
     "pod.join_request.",
     "pod.member.",
     "pod.permissions.",
@@ -75,7 +75,7 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # Runtime/visualization extras pending facade adoption
     "connector.skill.get",
     "connector.status.get",
-    "user.current.get",     # facade uses user.profile endpoints
+    "user.current.get",  # facade uses user.profile endpoints
     "workflow.visualize",
     "workflow.run.visualize",
     "workflow.run.waiting_assigned_to_me",
@@ -105,7 +105,11 @@ def _facade_imported_functions() -> set[str]:
     for path in RESOURCES_DIR.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and "openapi_client.api" in node.module:
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and "openapi_client.api" in node.module
+            ):
                 for alias in node.names:
                     imported.add(alias.name)
     return imported

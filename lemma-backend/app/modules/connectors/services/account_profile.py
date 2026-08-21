@@ -64,6 +64,7 @@ async def load_native_account_profile(
             return profile_dict
     return None
 
+
 async def _load_slack_account_profile(
     connector: ConnectorEntity,
     credentials: OAuthCredentials,
@@ -98,16 +99,18 @@ async def _load_slack_account_profile(
                 if user_info:
                     profile["user_info"] = user_info
             except Exception:
-                logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
+                logger.debug(
+                    "connectors.connector_service.enrich_slack_user_profile_s.diagnostic",
+                    user_id=user_id,
+                )
         return profile
     return None
+
 
 def profile_to_dict(profile: object) -> dict | None:
     if isinstance(profile, dict):
         return profile
     if hasattr(profile, "model_dump"):
-        data = profile.model_dump(
-            exclude_none=True, exclude_unset=True, mode="json"
-        )
+        data = profile.model_dump(exclude_none=True, exclude_unset=True, mode="json")
         return data if isinstance(data, dict) else None
     return None

@@ -3,7 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, status
 
 from app.modules.identity.api.dependencies import UserServiceDep
-from app.modules.identity.api.schemas.user_schemas import UserProfileRequest, UserResponse
+from app.modules.identity.api.schemas.user_schemas import (
+    UserProfileRequest,
+    UserResponse,
+)
 from app.modules.identity.domain.user_entities import UserEntity
 
 router = APIRouter(

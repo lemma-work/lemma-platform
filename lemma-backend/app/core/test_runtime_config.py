@@ -35,9 +35,16 @@ def test_injects_after_head_and_is_idempotent():
     out = inject_runtime_config(html, pod_id).decode()
     assert "data-lemma-runtime-config" in out
     assert str(pod_id) in out
-    assert out.index("<head") < out.index("data-lemma-runtime-config") < out.index("<body")
+    assert (
+        out.index("<head") < out.index("data-lemma-runtime-config") < out.index("<body")
+    )
     # idempotent on the sentinel
-    assert inject_runtime_config(out.encode(), pod_id).decode().count("data-lemma-runtime-config") == 1
+    assert (
+        inject_runtime_config(out.encode(), pod_id)
+        .decode()
+        .count("data-lemma-runtime-config")
+        == 1
+    )
 
 
 def test_injects_at_top_when_no_head():
@@ -62,5 +69,7 @@ def test_injects_sanitized_app_identity():
             "private": "not-exposed",
         },
     ).decode()
-    assert '"app": {"name": "Support Triage", "description": "Route urgent work"}' in out
+    assert (
+        '"app": {"name": "Support Triage", "description": "Route urgent work"}' in out
+    )
     assert "not-exposed" not in out

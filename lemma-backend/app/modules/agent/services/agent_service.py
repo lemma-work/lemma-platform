@@ -28,6 +28,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.ports import AgentRepository
 
 _UNSET = object()
+
+
 def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     if value is None:
         return ResourceVisibility.POD.value

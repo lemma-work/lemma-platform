@@ -71,7 +71,9 @@ def test_required_binding_missing_raises():
 
 def test_optional_binding_missing_resolves_to_none():
     reader = _reader(src={"labels": ["x"]})
-    resolved = resolve_schema_template({"default": _expr("src.nope", optional=True)}, reader)
+    resolved = resolve_schema_template(
+        {"default": _expr("src.nope", optional=True)}, reader
+    )
     assert resolved == {"default": None}
 
 

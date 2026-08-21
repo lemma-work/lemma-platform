@@ -359,6 +359,36 @@ async def test_relative_initial_cwd_is_canonicalized_under_workspace() -> None:
 
 
 @pytest.mark.asyncio
+async def test_every_execution_carries_the_directory_the_shell_uses() -> None:
+    """The session holds one cwd, and both surfaces are told it every time.
+
+    Creating the session with a cwd is not enough. A provider without a
+    resident interpreter (E2B) starts a fresh process per execution, so it can
+    only learn the directory from the execution itself -- and it was never
+    given one, which is how `execute_python` ran in `/workspace` while
+    `exec_command` ran in the conversation's own directory.
+    """
+    client = _CanonicalClient()
+    session = SandboxWorkspaceSession(
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        session_id="conversation-1",
+        initial_cwd="/workspace/c/2026-08-21/0d8y15k6",
+    )
+
+    await session.exec_command(cmd="pwd")
+    await session.execute_code("import os; os.getcwd()")
+    # A second execution: the create round trip is skipped once the interpreter
+    # is known to exist, so anything carried only on create would be lost here.
+    await session.execute_code("import os; os.getcwd()")
+
+    shell_cwd = client.started[0]["cwd"]
+    assert shell_cwd == "/workspace/c/2026-08-21/0d8y15k6"
+    assert [call["cwd"] for call in client.python_executes] == [shell_cwd, shell_cwd]
+    assert client.python_creates[0]["cwd"] == shell_cwd
+
+
+@pytest.mark.asyncio
 async def test_workspace_paths_cannot_escape_runtime_roots() -> None:
     client = _CanonicalClient()
     session = _session(client)
@@ -408,9 +438,7 @@ async def test_a_short_yield_still_waits_long_enough_to_see_the_exit(
     client = _CanonicalClient()
     session = _session(client)
 
-    result = await session.exec_command(
-        cmd="printf done", yield_time_ms=yield_time_ms
-    )
+    result = await session.exec_command(cmd="printf done", yield_time_ms=yield_time_ms)
 
     assert result["completed"] is True, result
     assert result["exit_code"] == 0

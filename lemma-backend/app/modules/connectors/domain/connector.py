@@ -119,7 +119,11 @@ class SystemOAuthCredentialRef(BaseModel):
     client_secret_env: str | list[str]
 
     def client_id_env_names(self) -> list[str]:
-        return self.client_id_env if isinstance(self.client_id_env, list) else [self.client_id_env]
+        return (
+            self.client_id_env
+            if isinstance(self.client_id_env, list)
+            else [self.client_id_env]
+        )
 
     def client_secret_env_names(self) -> list[str]:
         return (

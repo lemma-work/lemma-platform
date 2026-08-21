@@ -119,9 +119,7 @@ class _FakeRedis:
         if "completed_user_id" in script:
             user_id = str(args[0])
             if record["status"] == "complete":
-                return [
-                    "complete" if record.get("user_id") == user_id else "conflict"
-                ]
+                return ["complete" if record.get("user_id") == user_id else "conflict"]
             if record["status"] != "pending":
                 return ["conflict"]
             record.update(status="complete", user_id=user_id)

@@ -46,7 +46,9 @@ class PodFunctions(BoundResource):
     def get(self, name: str) -> FunctionDetailResponse:
         return self._call(function_get, self._pod_uuid(), name)
 
-    def update(self, name: str, request: UpdateFunctionRequest) -> FunctionDetailResponse:
+    def update(
+        self, name: str, request: UpdateFunctionRequest
+    ) -> FunctionDetailResponse:
         return self._call(function_update, self._pod_uuid(), name, body=request)
 
     def delete(self, name: str) -> None:

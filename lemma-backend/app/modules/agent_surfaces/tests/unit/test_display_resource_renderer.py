@@ -111,7 +111,9 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
         pod_id=pod_id,
         conversation_id=conversation_id,
         tool_call_id="tool-widget-inline",
-        request=DisplayResourceRequest.model_validate({"type": "WIDGET", "content": "<div>Ready</div>"}),
+        request=DisplayResourceRequest.model_validate(
+            {"type": "WIDGET", "content": "<div>Ready</div>"}
+        ),
     )
 
     assert plan.primary_action is not None

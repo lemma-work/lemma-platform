@@ -6,7 +6,9 @@ from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationS
 
 
 def enum_status_values_for_db(statuses: object, enum_type: type[Enum]) -> list[str]:
-    normalized = [statuses] if isinstance(statuses, (enum_type, str)) else list(statuses)
+    normalized = (
+        [statuses] if isinstance(statuses, (enum_type, str)) else list(statuses)
+    )
     values: list[str] = []
     for status in normalized:
         member = enum_type(status)

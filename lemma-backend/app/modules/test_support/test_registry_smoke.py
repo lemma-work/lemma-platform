@@ -40,4 +40,8 @@ def test_oss_module_event_and_streaq_thunks_import() -> None:
             module.register_streaq()
         if module.event_routers is not None:
             for router in module.event_routers():
-                assert hasattr(router, "subscriber") or hasattr(router, "_handlers") or router is not None
+                assert (
+                    hasattr(router, "subscriber")
+                    or hasattr(router, "_handlers")
+                    or router is not None
+                )

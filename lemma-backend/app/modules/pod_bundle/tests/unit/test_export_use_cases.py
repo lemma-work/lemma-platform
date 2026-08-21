@@ -60,7 +60,9 @@ class _FakeQueue:
         self._return_none = return_none
 
     async def enqueue(self, job_name, *, context=None, _job_id=None):
-        self.calls.append({"job_name": job_name, "context": context, "_job_id": _job_id})
+        self.calls.append(
+            {"job_name": job_name, "context": context, "_job_id": _job_id}
+        )
         if self._return_none:
             return None
         return SimpleNamespace(id=_job_id)
@@ -172,9 +174,7 @@ async def test_get_export_returns_state():
 async def test_get_export_missing_raises_expired():
     use_cases = _use_cases()
     with pytest.raises(BundleJobExpiredError):
-        await use_cases.get_export(
-            pod_id=uuid4(), export_id=uuid4(), user_id=uuid4()
-        )
+        await use_cases.get_export(pod_id=uuid4(), export_id=uuid4(), user_id=uuid4())
 
 
 async def test_get_export_wrong_pod_raises_expired():
@@ -199,9 +199,15 @@ async def test_start_export_clamps_ttl_to_max():
 
     huge = pod_bundle_settings.pod_bundle_export_url_max_ttl_seconds + 10_000
     state = await use_cases.start_export(
-        pod_id=uuid4(), user_id=uuid4(), data_tables=["settings"], include=None, ttl_seconds=huge
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        data_tables=["settings"],
+        include=None,
+        ttl_seconds=huge,
     )
-    assert state.ttl_seconds == pod_bundle_settings.pod_bundle_export_url_max_ttl_seconds
+    assert (
+        state.ttl_seconds == pod_bundle_settings.pod_bundle_export_url_max_ttl_seconds
+    )
 
 
 async def test_start_export_default_ttl_when_omitted():
@@ -226,8 +232,11 @@ async def test_open_download_by_token_streams_archive():
     use_cases = _use_cases(store=store, staging=_FakeStaging(iterator=sentinel))
     export_id = uuid4()
     state = ExportState(
-        export_id=export_id, pod_id=uuid4(), user_id=uuid4(),
-        status=ExportStatus.READY, bundle_filename="crm.zip",
+        export_id=export_id,
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        status=ExportStatus.READY,
+        bundle_filename="crm.zip",
     )
     await store.save_export(state)
 

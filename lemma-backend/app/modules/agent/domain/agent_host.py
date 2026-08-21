@@ -49,10 +49,8 @@ def effective_agent_host_status(
     }:
         return persisted
     timestamp = now or datetime.now(timezone.utc)
-    if (
-        last_seen_at is None
-        or last_seen_at
-        < timestamp - timedelta(seconds=AGENT_HOST_OFFLINE_AFTER_SECONDS)
+    if last_seen_at is None or last_seen_at < timestamp - timedelta(
+        seconds=AGENT_HOST_OFFLINE_AFTER_SECONDS
     ):
         return AgentHostStatus.OFFLINE
     return persisted
@@ -259,10 +257,14 @@ def run_state_progresses(
 
     if current in PRE_DISPATCH_AGENT_HOST_RUN_STATES:
         return reported not in PRE_DISPATCH_AGENT_HOST_RUN_STATES
-    if current in {
-        AgentHostRunState.RECOVERING,
-        AgentHostRunState.WAITING_INPUT,
-    } and reported is AgentHostRunState.RUNNING:
+    if (
+        current
+        in {
+            AgentHostRunState.RECOVERING,
+            AgentHostRunState.WAITING_INPUT,
+        }
+        and reported is AgentHostRunState.RUNNING
+    ):
         return True
     return _RUN_STATE_ORDER[reported] >= _RUN_STATE_ORDER[current]
 

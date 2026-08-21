@@ -26,7 +26,9 @@ class _FileService:
             "ctx",
             "/exports",
         )
-        return SimpleNamespace(path="/exports/report.txt", size_bytes=6, mime_type="text/plain")
+        return SimpleNamespace(
+            path="/exports/report.txt", size_bytes=6, mime_type="text/plain"
+        )
 
 
 @pytest.mark.asyncio

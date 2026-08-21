@@ -90,6 +90,14 @@ class FakeE2B:
     paused: list[str] = field(default_factory=list)
     files: dict[str, bytes] = field(default_factory=dict)
     commands: list[str] = field(default_factory=list)
+    # The directory each command was started in, in the order they started.
+    # Recorded because E2B answers a `cwd=None` by starting the process in the
+    # image's own default -- a real directory, so the command succeeds and a
+    # fake that dropped the argument could not tell "the provider said where"
+    # from "the provider said nothing". It said nothing for `execute_python`,
+    # and that is precisely how the interpreter ended up in `/workspace` while
+    # the shell was in the conversation's directory.
+    command_cwds: list[str | None] = field(default_factory=list)
     pause_kept_memory: list[bool] = field(default_factory=list)
     #: What the runtime port answers. 404 is a healthy runtime -- route absent,
     #: port listening -- and 502 is the sandbox whose runtime process has died
@@ -173,6 +181,7 @@ class FakeE2B:
                 if not world.agent_answers:
                     raise FakeE2BError("the sandbox agent is not answering")
                 world.commands.append(cmd)
+                world.command_cwds.append(cwd)
                 world.process_timeouts.append(timeout)
                 if on_stdout is not None:
                     await on_stdout(f"ran: {cmd}")
@@ -242,6 +251,7 @@ class FakeE2B:
                 **_kwargs,
             ):
                 world._next += 1
+                world.command_cwds.append(cwd)
                 world.process_timeouts.append(timeout)
                 if on_data is not None:
                     await on_data(b"$ ")
@@ -304,14 +314,13 @@ class FakeE2B:
             @staticmethod
             def list(query=None, **_kwargs):
                 wanted = dict(getattr(query, "metadata", None) or {})
-                return _Paginator(page_size=world.list_page_size, items=
-                    [
+                return _Paginator(
+                    page_size=world.list_page_size,
+                    items=[
                         info
                         for info in world.sandboxes.values()
-                        if all(
-                            info.metadata.get(k) == v for k, v in wanted.items()
-                        )
-                    ]
+                        if all(info.metadata.get(k) == v for k, v in wanted.items())
+                    ],
                 )
 
             async def is_running(self, **_kwargs):

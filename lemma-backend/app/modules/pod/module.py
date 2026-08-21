@@ -41,7 +41,5 @@ module = LemmaModule(
     name="pod",
     routers=_routers,
     event_routers=_event_routers,
-    stream_groups=(
-        ("pod_events", "pod-join-request-events"),
-    ),
+    stream_groups=(("pod_events", "pod-join-request-events"),),
 )

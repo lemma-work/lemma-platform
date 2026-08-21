@@ -89,7 +89,6 @@ class AppService:
                 "pod and won't show up in your `apps list`. Choose a different slug."
             )
 
-
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Storage phase: read the asset bytes — delegated to the repo-free
         ``AppStoragePhase`` (holds no DB connection)."""
@@ -396,9 +395,7 @@ class AppService:
             # docstring calls this phase "DB only", which it was not.
             async with connection_released(getattr(self.repository, "session", None)):
                 await run_blocking(load_app_dist_bundle, dist_archive_bytes)
-                version = await run_blocking(
-                    upload_source_sha256, dist_archive_bytes
-                )
+                version = await run_blocking(upload_source_sha256, dist_archive_bytes)
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
@@ -553,7 +550,10 @@ class AppService:
         # guesses the slug". An unrecognized stored value is not PUBLIC either.
         # Report it as missing rather than forbidden: a 403 would confirm the
         # slug exists to a caller who only guessed it.
-        if normalize_resource_visibility(app.visibility) is not ResourceVisibility.PUBLIC:
+        if (
+            normalize_resource_visibility(app.visibility)
+            is not ResourceVisibility.PUBLIC
+        ):
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
         return await self._asset_resolver.resolve(
             app,

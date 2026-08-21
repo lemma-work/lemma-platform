@@ -184,9 +184,7 @@ async def mint_widget_embed_url(
     Per-view (not baked into the persisted tool result) so the token stays
     ephemeral and membership is re-checked each time the widget is opened.
     """
-    artifact = await WidgetAssetService(uow).get_widget(
-        conversation_id, tool_call_id
-    )
+    artifact = await WidgetAssetService(uow).get_widget(conversation_id, tool_call_id)
     if artifact is None or artifact.pod_id != pod_id:
         raise HTTPException(status_code=404, detail="Widget not found")
     await ctx.require(Permissions.CONVERSATION_READ, ResourceRef.pod(pod_id))

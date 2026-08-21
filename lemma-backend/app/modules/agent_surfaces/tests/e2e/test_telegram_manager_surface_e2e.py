@@ -32,7 +32,9 @@ pytestmark = pytest.mark.e2e
 
 
 def _wire_telegram_manager(monkeypatch, *, username: str, secret: str) -> None:
-    monkeypatch.setattr(surface_settings, "telegram_manager_bot_token", "manager-bot-token")
+    monkeypatch.setattr(
+        surface_settings, "telegram_manager_bot_token", "manager-bot-token"
+    )
     monkeypatch.setattr(surface_settings, "telegram_manager_bot_username", username)
     monkeypatch.setattr(surface_settings, "telegram_manager_webhook_secret", secret)
 
@@ -49,7 +51,9 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     """PENDING -> WAITING_FOR_TELEGRAM -> PROVISIONING -> COMPLETE, driven by
     real HTTP: the setup API, then the two updates the manager bot delivers
     (``/start`` and ``managed_bot_created``)."""
-    _wire_telegram_manager(monkeypatch, username="lemma_manager_bot", secret="manager-secret")
+    _wire_telegram_manager(
+        monkeypatch, username="lemma_manager_bot", secret="manager-secret"
+    )
     await _ensure_connector(db_session, "telegram")
     # Provisioning persists through its own uow_factory() connection, not
     # db_session's -- flush() alone is invisible to it. Same pattern as
@@ -66,7 +70,10 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     setup = start.json()
     assert setup["status"] == "PENDING"
     setup_id = setup["setup_id"]
-    assert setup["launch_url"] == f"https://t.me/lemma_manager_bot?start=surface_{setup_id}"
+    assert (
+        setup["launch_url"]
+        == f"https://t.me/lemma_manager_bot?start=surface_{setup_id}"
+    )
     assert setup["manager_bot_username"] == "lemma_manager_bot"
 
     telegram_user_id = 900555001
@@ -166,7 +173,9 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     assert photo_call["filename"] == "lemma-agent.jpg"
 
     success_texts = [msg.get("text") for msg in message_store.get_all("TELEGRAM")]
-    assert any("connected to Lemma and ready to use" in (t or "") for t in success_texts)
+    assert any(
+        "connected to Lemma and ready to use" in (t or "") for t in success_texts
+    )
 
 
 async def test_telegram_managed_bot_provisioning_failure_marks_setup_failed(
@@ -245,9 +254,9 @@ async def test_telegram_managed_bot_provisioning_failure_marks_setup_failed(
     assert body["surface_id"] is None
 
     failure_texts = [msg.get("text") for msg in message_store.get_all("TELEGRAM")]
-    assert any(
-        "could not finish connecting" in (t or "") for t in failure_texts
-    ), failure_texts
+    assert any("could not finish connecting" in (t or "") for t in failure_texts), (
+        failure_texts
+    )
 
     # A fresh setup for the SAME target is allowed again -- FAILED released
     # its target/telegram-user reservations rather than leaving them stuck.

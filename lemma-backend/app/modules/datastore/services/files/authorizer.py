@@ -135,7 +135,9 @@ class FileAuthorizer:
         if self.paths._is_personal_file(file_entity):
             if file_entity.owner_user_id == requester_user_id:
                 return
-            raise DatastoreAccessDeniedError("You don't have access to this private file")
+            raise DatastoreAccessDeniedError(
+                "You don't have access to this private file"
+            )
         await self._ensure_pod_document_path_access(
             file_entity,
             requester_user_id,

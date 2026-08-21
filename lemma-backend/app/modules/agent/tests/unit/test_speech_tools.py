@@ -24,7 +24,11 @@ class _StubProvider:
         self.synthesize_args: dict = {}
 
     async def transcribe(self, audio_bytes, *, mime, language=None):
-        self.transcribe_args = {"bytes": audio_bytes, "mime": mime, "language": language}
+        self.transcribe_args = {
+            "bytes": audio_bytes,
+            "mime": mime,
+            "language": language,
+        }
         return TranscriptionResult(
             text=self._transcript, detected_language="en", duration_seconds=2.0
         )
@@ -38,8 +42,17 @@ class _FakeFileService:
     def __init__(self):
         self.created: dict = {}
 
-    async def create_file(self, *, pod_id, name, file_content, ctx, directory_path,
-                          search_enabled=True, **kwargs):
+    async def create_file(
+        self,
+        *,
+        pod_id,
+        name,
+        file_content,
+        ctx,
+        directory_path,
+        search_enabled=True,
+        **kwargs,
+    ):
         self.created = {
             "pod_id": pod_id,
             "name": name,

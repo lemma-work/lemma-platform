@@ -466,7 +466,9 @@ class ConversationAgentSelection(Generic[ConversationAgentValue]):
         if self.scope is ConversationAgentScope.NAMED and not has_value:
             raise ValueError("NAMED conversation selection requires a value")
         if self.scope is not ConversationAgentScope.NAMED and has_value:
-            raise ValueError(f"{self.scope.value} conversation selection cannot have a value")
+            raise ValueError(
+                f"{self.scope.value} conversation selection cannot have a value"
+            )
 
     @property
     def named_value(self) -> ConversationAgentValue:
@@ -480,10 +482,14 @@ class ConversationAgentSelection(Generic[ConversationAgentValue]):
     ) -> ConversationAgentSelection[ResolvedConversationAgentValue]:
         if self.scope is ConversationAgentScope.NAMED:
             if value is None:
-                raise ValueError("NAMED conversation selection requires a resolved value")
+                raise ValueError(
+                    "NAMED conversation selection requires a resolved value"
+                )
             return ConversationAgentSelection.named(value)
         if value is not None:
-            raise ValueError(f"{self.scope.value} conversation selection cannot resolve a value")
+            raise ValueError(
+                f"{self.scope.value} conversation selection cannot resolve a value"
+            )
         return ConversationAgentSelection(scope=self.scope)
 
     @classmethod

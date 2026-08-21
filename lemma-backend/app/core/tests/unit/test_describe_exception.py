@@ -29,7 +29,9 @@ def test_an_exception_with_a_message_keeps_both() -> None:
     assert describe_exception(ValueError("bad port")) == "ValueError: bad port"
 
 
-def test_the_cause_is_appended_because_it_is_the_part_that_identifies_the_event() -> None:
+def test_the_cause_is_appended_because_it_is_the_part_that_identifies_the_event() -> (
+    None
+):
     """A wrapped transport failure's own message is usually generic; the cause
     is where the host, port or timeout lives."""
     try:

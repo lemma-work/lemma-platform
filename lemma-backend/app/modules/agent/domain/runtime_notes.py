@@ -22,11 +22,7 @@ def build_runtime_notes(*, now: datetime | None = None) -> str:
     current = now or datetime.now(timezone.utc)
     current_utc = current.astimezone(timezone.utc)
     timestamp = current_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return (
-        "<notes>\n"
-        f"Current date and time: {timestamp} (UTC).\n"
-        "</notes>"
-    )
+    return f"<notes>\nCurrent date and time: {timestamp} (UTC).\n</notes>"
 
 
 def prepend_runtime_notes(text: str, *, now: datetime | None = None) -> str:

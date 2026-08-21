@@ -23,9 +23,7 @@ _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
 def _ctx(vision_mode: AgentVisionMode = AgentVisionMode.DIRECT) -> SimpleNamespace:
-    return SimpleNamespace(
-        pod_id=uuid4(), user_id=uuid4(), vision_mode=vision_mode
-    )
+    return SimpleNamespace(pod_id=uuid4(), user_id=uuid4(), vision_mode=vision_mode)
 
 
 def _patch_readers(monkeypatch, *, pod=None, workspace=None) -> None:

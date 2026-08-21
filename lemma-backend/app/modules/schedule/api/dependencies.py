@@ -8,7 +8,9 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_service import ScheduleService
-from app.modules.schedule.services.webhook_schedule_matcher import WebhookScheduleMatcher
+from app.modules.schedule.services.webhook_schedule_matcher import (
+    WebhookScheduleMatcher,
+)
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.domain.interfaces import WebhookVerifier
 
@@ -16,6 +18,7 @@ from app.modules.schedule.domain.interfaces import WebhookVerifier
 def get_schedule_service(uow: UoWDep) -> ScheduleService:
     """Provide schedule service."""
     return ScheduleService(uow=uow)
+
 
 def get_webhook_handler(
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),

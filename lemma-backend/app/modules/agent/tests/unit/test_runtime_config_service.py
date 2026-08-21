@@ -332,7 +332,9 @@ def test_credentials_survive_persist_load_round_trip():
         scope=RuntimeProfileScope.ORGANIZATION,
         organization_id=uuid4(),
         name="org-default",
-    ).model_copy(update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")})
+    ).model_copy(
+        update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")}
+    )
 
     # Persist side: what the repository hands to encrypt_json.
     stored = reveal_credentials(profile.credentials)
@@ -480,8 +482,7 @@ def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatc
     assert lemma_profile.credentials is not None
     # The system profile uses model names verbatim — public name == provider name.
     system_catalog = [
-        (model.name, model.provider_model_name)
-        for model in lemma_profile.model_catalog
+        (model.name, model.provider_model_name) for model in lemma_profile.model_catalog
     ]
     assert system_catalog == [
         ("model-fast", "model-fast"),
@@ -833,9 +834,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
 
     org_id = uuid4()
     user_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=user_id, organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=user_id, organization_id=org_id)
     host = next(iter(host_repo.hosts.values()))
     host.last_seen_at = datetime.now(timezone.utc) - timedelta(hours=1)
     service = AgentRuntimeProfileService(
@@ -855,9 +854,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
 async def test_create_agent_host_profile_rejects_unhealthy_harness():
     org_id = uuid4()
     user_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=user_id, organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=user_id, organization_id=org_id)
     host_repo.harnesses[harness_id].health = "AUTH_REQUIRED"
     service = AgentRuntimeProfileService(
         _ProfileRepository([]), host_repository=host_repo
@@ -905,9 +902,7 @@ async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offe
 @pytest.mark.asyncio
 async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else():
     org_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=uuid4(), organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=uuid4(), organization_id=org_id)
     service = AgentRuntimeProfileService(
         _ProfileRepository([]), host_repository=host_repo
     )
@@ -919,7 +914,6 @@ async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else
             harness_id=harness_id,
             name="Someone else's laptop",
         )
-
 
 
 @pytest.mark.asyncio
@@ -1253,7 +1247,9 @@ def _no_discovery(monkeypatch):
         )
 
 
-async def test_renaming_a_provider_keeps_its_stored_key_and_skips_discovery(monkeypatch):
+async def test_renaming_a_provider_keeps_its_stored_key_and_skips_discovery(
+    monkeypatch,
+):
     # The credential never leaves the server, so a rename that quietly replaced
     # it with the SecretStr mask would only surface as auth failures later.
     _no_discovery(monkeypatch)
@@ -1584,9 +1580,7 @@ def _harness_repository_with(*, harness, host):
             }
 
         async def get_many(self, host_ids):
-            return {
-                key: value for key, value in self.hosts.items() if key in host_ids
-            }
+            return {key: value for key, value in self.hosts.items() if key in host_ids}
 
     harnesses = {harness.id: harness} if harness is not None else {}
     hosts = {host.id: host} if host is not None else {}
@@ -1770,6 +1764,7 @@ async def test_a_config_edit_still_needs_the_computer_awake():
             user_id=user_id,
             config_selections={"approval": "always"},
         )
+
 
 async def test_one_unreadable_row_does_not_blank_the_whole_listing():
     """Drives the real repository, not a stand-in.

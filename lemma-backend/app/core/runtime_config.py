@@ -162,11 +162,11 @@ def _public_app_branding_script(branding: dict[str, str] | None) -> str:
         ":host{all:initial;position:fixed;right:max(12px,env(safe-area-inset-right));"
         "bottom:max(12px,env(safe-area-inset-bottom));z-index:2147483647;"
         "display:inline-flex;align-items:center;gap:6px;"
-        "font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}"
+        'font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}'
         "a{box-sizing:border-box;display:inline-flex;height:32px;align-items:center;gap:8px;"
         "padding:0 12px 0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;"
         "background:rgba(20,20,19,.94);color:#fff;text-decoration:none;"
-        "font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;"
+        'font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
         "letter-spacing:-.01em;box-shadow:0 8px 28px rgba(0,0,0,.22);"
         "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);"
         "transition:transform 140ms ease,background 140ms ease,box-shadow 140ms ease}"
@@ -190,13 +190,13 @@ def _public_app_branding_script(branding: dict[str, str] | None) -> str:
         "bottom:max(8px,env(safe-area-inset-bottom))}a{height:30px;padding:0 10px 0 9px}}"
         "@media(prefers-reduced-motion:reduce){a{transition:none}}"
         "</style>"
-        "<a target=\"_blank\" rel=\"noopener noreferrer\">"
-        "<span class=\"mark\" aria-hidden=\"true\"><i></i><i></i><i></i></span>"
-        "<span class=\"label\"></span></a>"
-        "<button type=\"button\" aria-label=\"Dismiss\">"
-        "<svg viewBox=\"0 0 10 10\" fill=\"none\" aria-hidden=\"true\">"
-        "<path d=\"M1 1L9 9M9 1L1 9\" stroke=\"currentColor\" stroke-width=\"1.4\" "
-        "stroke-linecap=\"round\"/></svg></button>';"
+        '<a target="_blank" rel="noopener noreferrer">'
+        '<span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>'
+        '<span class="label"></span></a>'
+        '<button type="button" aria-label="Dismiss">'
+        '<svg viewBox="0 0 10 10" fill="none" aria-hidden="true">'
+        '<path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.4" '
+        'stroke-linecap="round"/></svg></button>\';'
         "const link=root.querySelector('a');"
         "link.href=config.url;"
         "link.setAttribute('aria-label',config.label);"
@@ -257,9 +257,7 @@ def inject_runtime_config(
     if RUNTIME_CONFIG_SENTINEL not in text:
         payload = json.dumps(
             build_runtime_config(pod_id, app=app, app_id=app_id)
-        ).replace(
-            "<", "\\u003c"
-        )
+        ).replace("<", "\\u003c")
         injection += (
             f"<script {RUNTIME_CONFIG_SENTINEL}>"
             f"window.__LEMMA_CONFIG__={payload};</script>"

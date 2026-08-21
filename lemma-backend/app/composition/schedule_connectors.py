@@ -95,7 +95,7 @@ class ComposioScheduleManager:
             response = await run_blocking(create_trigger, limiter="external_http")
         except Exception as exc:
             logger.debug(
-                'runtime.schedule_connectors.composio_trigger_creation.diagnostic',
+                "runtime.schedule_connectors.composio_trigger_creation.diagnostic",
                 error_type=type(exc).__name__,
             )
             raise ScheduleInfrastructureError(
@@ -111,7 +111,7 @@ class ComposioScheduleManager:
             )
         except Exception as exc:
             logger.debug(
-                'runtime.schedule_connectors.composio_trigger_deletion.diagnostic',
+                "runtime.schedule_connectors.composio_trigger_deletion.diagnostic",
                 error_type=type(exc).__name__,
             )
             raise ScheduleInfrastructureError(

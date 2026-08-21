@@ -230,7 +230,9 @@ def open_app(
 @app.command("create")
 def create_app(
     ctx: typer.Context,
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -253,7 +255,9 @@ def create_app(
 def update_app(
     ctx: typer.Context,
     app: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),

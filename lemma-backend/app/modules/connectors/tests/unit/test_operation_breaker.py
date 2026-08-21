@@ -273,7 +273,7 @@ def test_only_provider_faults_are_breaker_worthy() -> None:
 
 
 def test_the_open_error_is_distinguishable_from_a_provider_failure() -> None:
-    """"We stopped asking" and "it failed" want different responses."""
+    """ "We stopped asking" and "it failed" want different responses."""
     opened = OperationExecutionCircuitOpenError("x")
     failed = OperationExecutionInfrastructureError("x")
 
@@ -304,8 +304,17 @@ def _classify(status: int | None, error: str = "boom"):
 @pytest.mark.parametrize(
     "status",
     [400, 404, 409, 413, 422, 429, 402, 451, 418],
-    ids=["bad-request", "not-found", "conflict", "payload-too-large",
-         "unprocessable", "rate-limited", "payment-required", "legal", "unknown-4xx"],
+    ids=[
+        "bad-request",
+        "not-found",
+        "conflict",
+        "payload-too-large",
+        "unprocessable",
+        "rate-limited",
+        "payment-required",
+        "legal",
+        "unknown-4xx",
+    ],
 )
 def test_a_provider_4xx_never_opens_the_breaker(status):
     """Whatever the provider rejected, it answered — so it is up, and this is

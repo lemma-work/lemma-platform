@@ -19,6 +19,7 @@ plan rather than extending completed history.
 
 from __future__ import annotations
 
+import difflib
 import re
 from uuid import UUID
 
@@ -48,9 +49,7 @@ class WriteTodosRequest(BaseModel):
 # or "[x]"/"[X]"/"[*]" (done). The remainder is the task text.
 _CHECKBOX_RE = re.compile(r"^\s*(?:[-*]\s+)?\[(?P<mark>[ xX*])\]\s*(?P<text>.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+")
-_DUPLICATE_CHECKBOX_PREFIX_RE = re.compile(
-    r"^\s*(?:(?:[-*]\s*)?\[[ xX*]\]\s*){2,}"
-)
+_DUPLICATE_CHECKBOX_PREFIX_RE = re.compile(r"^\s*(?:(?:[-*]\s*)?\[[ xX*]\]\s*){2,}")
 _PLAN_XML_TAG_RE = re.compile(
     r"</?\s*(?:todos?|item)\b[^>]*>"
     r"|</\s*td\s*>(?=\s*(?:<\s*(?:item|/?todos?)\b|$))",
@@ -88,7 +87,7 @@ def _remove_duplicate_checkbox_prefix(line: str) -> str:
     marks = re.findall(r"\[([ xX*])\]", prefix.group(0))
     if not marks:
         return line
-    return f"[{marks[-1]}] {line[prefix.end():].lstrip()}"
+    return f"[{marks[-1]}] {line[prefix.end() :].lstrip()}"
 
 
 def _text_status(text: str, *, infer_status: bool) -> tuple[str, bool | None]:
@@ -100,11 +99,7 @@ def _text_status(text: str, *, infer_status: bool) -> tuple[str, bool | None]:
     # Accept normal prose only when it came from a flattened plan. For untagged
     # calls, require an explicit separator ("— done") or an all-caps status label
     # such as "RESEARCH DONE", both shapes seen from XML-oriented tool parsers.
-    if (
-        not infer_status
-        and match.group("separator") is None
-        and text != text.upper()
-    ):
+    if not infer_status and match.group("separator") is None and text != text.upper():
         return text, None
     status = match.group("status").lower().replace("_", " ").replace("-", " ")
     return match.group("text").strip(), status in {"done", "complete", "completed"}
@@ -202,6 +197,74 @@ def _normalize_stored(stored: list[JsonObject]) -> list[JsonObject]:
     return todos
 
 
+def _close_open_match(content: str, todos: list[JsonObject]) -> JsonObject | None:
+    """The open task a reworded check-off almost certainly meant.
+
+    Exact text is how a single line finds its task, and a model that finishes
+    "Fetch the Q3 report" and reports "- [x] Fetch Q3 report" used to *add* a
+    second, completed item -- leaving the planned one open forever while the
+    list quietly grew. Matched conservatively: only when one open task is close
+    enough that nothing else competes, so "add a task I forgot" still adds.
+    """
+    open_by_key = {
+        _norm(str(item["content"])): item for item in todos if not item.get("done")
+    }
+    if not open_by_key:
+        return None
+    matches = difflib.get_close_matches(
+        _norm(content), list(open_by_key), n=2, cutoff=0.85
+    )
+    if len(matches) != 1:
+        return None
+    return open_by_key[matches[0]]
+
+
+def _merge_todos(
+    parsed: list[tuple[str, bool]], todos: list[JsonObject]
+) -> list[JsonObject]:
+    """Upsert parsed lines into the stored list, in place."""
+    index = {_norm(str(item["content"])): item for item in todos}
+    single_check_off = len(parsed) == 1 and parsed[0][1]
+    for content, done in parsed:
+        existing = index.get(_norm(content))
+        if existing is None and single_check_off:
+            existing = _close_open_match(content, todos)
+        if existing is not None:
+            existing["done"] = done
+            continue
+        entry: JsonObject = {"content": content, "done": done}
+        todos.append(entry)
+        index[_norm(content)] = entry
+    return todos
+
+
+def _todo_result(todos: list[JsonObject]) -> JsonObject:
+    """The list, plus the one instruction that keeps it honest.
+
+    The usage prompt says to check items off as they finish, and it is many tool
+    calls away by the time one does. This rides back on every call, so the next
+    step is stated where the model is actually looking.
+    """
+    result: JsonObject = {"success": True, "todos": [_render(item) for item in todos]}
+    open_items = [item for item in todos if not item.get("done")]
+    if not todos:
+        return result
+    if not open_items:
+        result["reminder"] = (
+            "Every item is checked off. Report what you produced rather than "
+            "extending a finished plan."
+        )
+        return result
+    next_item = str(open_items[0].get("content", ""))
+    result["next"] = next_item
+    result["reminder"] = (
+        f"{len(todos) - len(open_items)} of {len(todos)} done. Next: {next_item}. "
+        f'Call write_todos(["- [x] {next_item}"]) the moment it is finished and '
+        "before starting the one after it -- not in a batch at the end."
+    )
+    return result
+
+
 class TodoCapability(AbstractCapability[object]):
     """The todo tool plus its usage instructions."""
 
@@ -252,17 +315,16 @@ def build_todo_toolset(
         # A finished task list is historical. The first unchecked item after all
         # stored items are complete starts a fresh plan instead of appending new
         # work to an ever-growing conversation-wide archive.
-        if todos and all(bool(item.get("done")) for item in todos) and any(
-            not done for _, done in parsed
+        if (
+            todos
+            and all(bool(item.get("done")) for item in todos)
+            and any(not done for _, done in parsed)
         ):
             todos = []
 
         if not parsed:
             # Nothing real to merge: return the current list rather than wiping it.
-            result: JsonObject = {
-                "success": True,
-                "todos": [_render(t) for t in todos],
-            }
+            result = _todo_result(todos)
             if not todos:
                 result["note"] = (
                     "No tasks provided. Only use write_todos for real, multi-step "
@@ -276,18 +338,9 @@ def build_todo_toolset(
         if len(parsed) > 1:
             todos = []
 
-        index = {_norm(t["content"]): t for t in todos}
-        for content, done in parsed:
-            existing = index.get(_norm(content))
-            if existing is not None:
-                existing["done"] = done
-            else:
-                entry = {"content": content, "done": done}
-                todos.append(entry)
-                index[_norm(content)] = entry
-
+        todos = _merge_todos(parsed, todos)
         await store.write(todos)
-        return {"success": True, "todos": [_render(t) for t in todos]}
+        return _todo_result(todos)
 
     return FunctionToolset[BaseAgentContext](tools=[write_todos], id=TODO_TOOLSET_ID)
 

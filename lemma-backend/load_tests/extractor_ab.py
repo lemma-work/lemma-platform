@@ -24,7 +24,6 @@ from pathlib import Path
 import httpx
 
 
-
 def default_corpus_dir() -> Path:
     """Where the benchmark PDFs live.
 
@@ -39,7 +38,9 @@ def default_corpus_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "benchmark-corpus" / "arxiv"
 
 
-def build_config(strategy: str, *, layout: bool = True, table_model: str = "tatr") -> dict:
+def build_config(
+    strategy: str, *, layout: bool = True, table_model: str = "tatr"
+) -> dict:
     """The exact config the backend sends (kreuzberg_helper._build_extract_config)."""
     config: dict = {
         "enable_quality_processing": True,

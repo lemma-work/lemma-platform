@@ -68,7 +68,9 @@ class AgentSurface(UUIDAuditBase):
     )
 
     surface_type: Mapped[str] = mapped_column(String(50), index=True)
-    mode: Mapped[str] = mapped_column(String(50), default="DM", server_default="DM", index=True)
+    mode: Mapped[str] = mapped_column(
+        String(50), default="DM", server_default="DM", index=True
+    )
     event_mode: Mapped[str] = mapped_column(
         String(50), default="WEBHOOK", server_default="WEBHOOK", index=True
     )
@@ -81,14 +83,24 @@ class AgentSurface(UUIDAuditBase):
         nullable=True,
         index=True,
     )
-    external_workspace_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    external_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    surface_identity_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    external_workspace_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    external_tenant_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    external_channel_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    surface_identity_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     surface_identity_username: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
-    status: Mapped[str] = mapped_column(String(50), default="ACTIVE", server_default="ACTIVE")
+    status: Mapped[str] = mapped_column(
+        String(50), default="ACTIVE", server_default="ACTIVE"
+    )
     schedule_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("schedules.id", ondelete="SET NULL"),
         nullable=True,
@@ -115,7 +127,9 @@ class AgentSurface(UUIDAuditBase):
             agent_id=self.agent_id,
             surface_type=SurfacePlatform(surface_type_raw.upper()),
             mode=SurfaceMode(self.mode or SurfaceMode.DM.value),
-            event_mode=SurfaceEventMode(self.event_mode or SurfaceEventMode.WEBHOOK.value),
+            event_mode=SurfaceEventMode(
+                self.event_mode or SurfaceEventMode.WEBHOOK.value
+            ),
             credential_mode=SurfaceCredentialMode(
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),
@@ -190,9 +204,7 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
         nullable=False,
     )
     platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    external_channel_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     routed_agent_id: Mapped[UUID | None] = mapped_column(
@@ -201,7 +213,9 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
     conversation_kind: Mapped[str] = mapped_column(
         String(50), default="DM", server_default="DM", nullable=False
     )
-    route_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    route_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Nullable, and it stays nullable: the backfill sets it from ``updated_at``
@@ -252,7 +266,11 @@ class NotificationModel(UUIDAuditBase):
         ),
         # The reply path: does the conversation this inbound landed in have
         # anything open addressed to its owner?
-        Index("ix_notifications_delivery_conversation", "delivery_conversation_id", "status"),
+        Index(
+            "ix_notifications_delivery_conversation",
+            "delivery_conversation_id",
+            "status",
+        ),
         Index("ix_notifications_origin", "origin_kind", "origin_id"),
         # The expiry sweep only ever scans OPEN rows with a deadline.
         Index(
@@ -263,7 +281,9 @@ class NotificationModel(UUIDAuditBase):
         # Pod-scoped rather than global: the key encodes a run/node id, and two
         # pods can legitimately never collide, but a global unique index would
         # make one pod's retry key a landmine for another's.
-        UniqueConstraint("pod_id", "idempotency_key", name="uq_notifications_idempotency"),
+        UniqueConstraint(
+            "pod_id", "idempotency_key", name="uq_notifications_idempotency"
+        ),
     )
 
     pod_id: Mapped[UUID] = mapped_column(

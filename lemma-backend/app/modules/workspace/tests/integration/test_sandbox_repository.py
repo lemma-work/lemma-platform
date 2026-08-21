@@ -52,11 +52,16 @@ async def test_ensure_row_is_idempotent_per_owner_and_slug(
     )
 
     assert first.id == second.id == user_id
-    assert len(await sandbox_repository.list_for_owner(
-        kind=SandboxKind.WORKSPACE,
-        owner_kind=SandboxOwnerKind.USER,
-        owner_id=user_id,
-    )) == 1
+    assert (
+        len(
+            await sandbox_repository.list_for_owner(
+                kind=SandboxKind.WORKSPACE,
+                owner_kind=SandboxOwnerKind.USER,
+                owner_id=user_id,
+            )
+        )
+        == 1
+    )
 
 
 async def test_a_user_can_hold_several_named_workspaces(

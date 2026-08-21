@@ -58,7 +58,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             return event
 
         if event.is_dm:
-            logger.debug('agent_surfaces.adapter.teams_inbound_dm_event_has.diagnostic')
+            logger.debug("agent_surfaces.adapter.teams_inbound_dm_event_has.diagnostic")
             return event
 
         tenant_id = event.tenant_id
@@ -67,7 +67,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         message_id = event.external_message_id
         if not tenant_id or not team_id or not channel_id or not message_id:
             logger.debug(
-                'agent_surfaces.adapter.teams_inbound_event_cannot_be.diagnostic',
+                "agent_surfaces.adapter.teams_inbound_event_cannot_be.diagnostic",
                 tenant_id=tenant_id,
                 team_id=team_id,
                 channel_id=channel_id,
@@ -77,7 +77,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         token = await self._get_graph_token(tenant_id)
         if not token:
             logger.debug(
-                'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic',
+                "agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic",
                 tenant_id=tenant_id,
             )
             return event
@@ -89,7 +89,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         )
         if not graph_team_id:
             logger.debug(
-                'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic',
+                "agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic",
                 team_id=team_id,
             )
             return event
@@ -111,14 +111,14 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         item = await client.get_json(url, token)
         if not isinstance(item, dict):
             logger.debug(
-                'agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic'
+                "agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic"
             )
             return event
 
         graph_attachments = extract_graph_message_attachments(item)
         if not graph_attachments:
             logger.debug(
-                'agent_surfaces.adapter.teams_inbound_event_enrichment_found.diagnostic'
+                "agent_surfaces.adapter.teams_inbound_event_enrichment_found.diagnostic"
             )
             return event
 
@@ -148,12 +148,12 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
 
         if not tenant_id:
             logger.debug(
-                'agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic'
+                "agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic"
             )
             return None
         if not aad_id and not bf_user_id:
             logger.debug(
-                'agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic'
+                "agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic"
             )
             return None
 
@@ -182,13 +182,13 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                         )
                     await response.text()
                     logger.debug(
-                        'agent_surfaces.adapter.teams_fetch_sender_profile_graph.diagnostic',
+                        "agent_surfaces.adapter.teams_fetch_sender_profile_graph.diagnostic",
                         status=response.status,
                         tenant_id=tenant_id,
                     )
         else:
             logger.debug(
-                'agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic',
+                "agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic",
                 tenant_id=tenant_id,
             )
 
@@ -206,7 +206,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
 
         # Return partial profile (no email) so at least display_name is captured.
         logger.debug(
-            'agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic',
+            "agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic",
             tenant_id=tenant_id,
         )
         return SurfaceSenderProfile(

@@ -72,7 +72,8 @@ class ResendPlatformService:
         await self._send_email(
             recipient_email=str(event.reply_target.get("recipient_email") or ""),
             subject=event.reply_target.get("subject"),
-            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip() or None,
+            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip()
+            or None,
             references=[str(r) for r in (event.reply_target.get("references") or [])],
             content=message,
             content_type="markdown",
@@ -241,7 +242,8 @@ class ResendPlatformService:
         await self._send_email(
             recipient_email=str(event.reply_target.get("recipient_email") or ""),
             subject=event.reply_target.get("subject"),
-            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip() or None,
+            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip()
+            or None,
             references=[str(r) for r in (event.reply_target.get("references") or [])],
             content="",
             content_type="markdown",
@@ -293,7 +295,9 @@ class ResendPlatformService:
                 attachments=attachments,
             )
         except Exception as exc:
-            return ResendReplyEmailResult(success=False, error=f"Email reply failed: {exc}")
+            return ResendReplyEmailResult(
+                success=False, error=f"Email reply failed: {exc}"
+            )
 
         return ResendReplyEmailResult(
             success=True,

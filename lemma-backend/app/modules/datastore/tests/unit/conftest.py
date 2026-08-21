@@ -10,6 +10,7 @@ from app.modules.datastore.services.table_service import TableService
 
 pytestmark = pytest.mark.unit
 
+
 @pytest.fixture
 def table_repository_mock() -> AsyncMock:
     return AsyncMock()
