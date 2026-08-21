@@ -138,7 +138,7 @@ Show a user-facing resource or a rich interaction instead of prose. One tool, ma
 | `name` | string? | resource types | unique pod resource name; omit to show all of that type |
 | `path` | string? | FILE | full pod-visible path (e.g. `/me/reports/q3.pdf`); never a private workspace path (`/tmp`, `/private`, `/Users`) |
 | `public_url` | string? | WIDGET | URL to embed/open — exactly one of `public_url`/`content` |
-| `content` | string? | WIDGET | inline HTML fragment, raw markup only — no base64, no `<!doctype>`/`<html>`/`<head>`/`<body>`; a standalone SVG is a pod file shown with `type=FILE` |
+| `content` | string? | WIDGET | inline HTML fragment: raw markup, body-level tags only; a standalone SVG is a pod file shown with `type=FILE` |
 | `loading_messages` | string[]? | WIDGET | ≤4, shown while the widget renders |
 | `filters` | RecordFilter[]? | TABLE | `[{ field, op, value }]` — record-API shape |
 | `query` | string? | TABLE | read-only SQL, RLS-disabled tables only; mutually exclusive with `filters` |

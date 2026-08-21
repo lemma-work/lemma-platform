@@ -3,8 +3,9 @@
 ``lint_app_html`` remains advisory for app uploads: callers log common authoring
 mistakes without rejecting a bundle. ``validate_widget_html`` promotes those same
 mistakes plus fragment/starter/loader checks to blocking errors before an inline
-widget is persisted and rendered. A widget is an HTML fragment: encoded content
-and standalone SVG images are rejected there rather than rendered as-is.
+widget is persisted and rendered. A widget is an HTML fragment: encoded content,
+standalone SVG images, and markup that would not parse as authored are rejected
+there rather than rendered as-is.
 
 The browser SDK is served only from the API origin, so widgets and apps must build
 its URL from the injected ``window.__LEMMA_CONFIG__.apiUrl`` and boot their code
@@ -102,7 +103,49 @@ _SCRIPT_BLOCK = re.compile(
 )
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _ANY_TAG = re.compile(r"<[^>]+>")
-_NAKED_CSS_RULE = re.compile(r"[^{}\s<>][^{}<>]*\{[^{}]*[a-zA-Z-]+\s*:[^{}]*\}")
+# The rule shape is walked brace-first rather than matched by one regex. As a
+# single pattern (`[^{}\s<>][^{}<>]*\{[^{}]*[a-zA-Z-]+\s*:[^{}]*\}`) the selector
+# run has to be retried from every offset in the text, which is quadratic: 32KB
+# of brace-free prose took 4.7s and 128KB took 75s, on content the agent writes.
+# Anchoring on "{" makes each candidate block O(1) to reach.
+_CSS_DECLARATION = re.compile(r"[a-zA-Z-]\s*:")
+
+# A tag that lost its opening "<" survives as a text node: the element never
+# exists, so its styling never applies and its own markup renders as literal
+# text. `_NAKED_CSS_RULE` cannot see this, because the styling that goes missing
+# sits in an inline style="" attribute and carries no braces to match on. The
+# signature is an element name followed by a quoted attribute; prose and code
+# samples reach `= "` with no element name in front of it. Content that escaped
+# its markup on purpose spells the bracket `&lt;`, so that spelling is excluded.
+_LEAKED_TAG_TEXT = re.compile(
+    r"(?<!&lt;)\b(?:a|article|aside|button|canvas|code|div|em|footer|form|h[1-6]"
+    r"|header|img|input|label|li|main|nav|ol|p|path|pre|section|small|span"
+    r"|strong|svg|table|tbody|td|th|thead|tr|ul)"
+    r"\s+[a-zA-Z][a-zA-Z0-9-]*\s*=\s*[\"']"
+)
+# The mirror of the same mistake: the end tag whose start tag became text closes
+# nothing. End tags are matched against the open stack by name rather than by
+# exact nesting, because `<ul><li>a<li>b</ul>` is valid HTML and its implied end
+# tags would make a strict stack report a phantom error.
+_TAG_TOKEN = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>")
+_VOID_ELEMENTS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
 
 
 def _without_leading_comments(content: str) -> str:
@@ -130,13 +173,77 @@ def lint_app_html(html: str) -> list[str]:
     return warnings
 
 
-def _naked_css_error(html: str) -> str | None:
-    """An error when CSS rules sit outside any ``<style>`` element, else None."""
+def _stripped_blocks(html: str) -> str:
+    """``html`` with <style>/<script> elements and comments removed."""
     text = _STYLE_BLOCK.sub("", html)
     text = _SCRIPT_BLOCK.sub("", text)
-    text = _HTML_COMMENT.sub("", text)
-    text = _ANY_TAG.sub(" ", text)
-    if _NAKED_CSS_RULE.search(text):
+    return _HTML_COMMENT.sub("", text)
+
+
+def _stray_end_tag(html: str) -> str | None:
+    """Name of the first end tag that closes nothing, else None."""
+    open_tags: list[str] = []
+    for closing, raw_name, attributes in _TAG_TOKEN.findall(_stripped_blocks(html)):
+        name = raw_name.lower()
+        if not closing:
+            if name not in _VOID_ELEMENTS and not attributes.rstrip().endswith("/"):
+                open_tags.append(name)
+        elif name in open_tags:
+            while open_tags.pop() != name:
+                pass
+        else:
+            return name
+    return None
+
+
+def _malformed_markup_error(html: str) -> str | None:
+    """An error when the fragment parses as something other than it reads, else None."""
+    if _LEAKED_TAG_TEXT.search(_ANY_TAG.sub(" ", _stripped_blocks(html))):
+        return (
+            "A tag is missing its opening '<', so it renders as literal text and "
+            "the element it should have opened never exists — everything that tag "
+            "styled is left unstyled. Check the fragment's markup."
+        )
+    stray = _stray_end_tag(html)
+    if stray is not None:
+        return (
+            f"</{stray}> closes an element that was never opened, so the fragment "
+            "does not nest the way it reads. Check for a tag with a missing '<'."
+        )
+    return None
+
+
+def _next_brace(text: str, start: int) -> int:
+    """Index of the next "{" or "}" at or after ``start``, or -1."""
+    opened, closed = text.find("{", start), text.find("}", start)
+    if opened == -1:
+        return closed
+    return opened if closed == -1 else min(opened, closed)
+
+
+def _has_naked_css_rule(text: str) -> bool:
+    """True when ``text`` holds a ``selector { property: value }`` rule."""
+    start = 0
+    while (open_brace := text.find("{", start)) != -1:
+        end = _next_brace(text, open_brace + 1)
+        if end == -1:
+            return False
+        if text[end] == "}" and _CSS_DECLARATION.search(text[open_brace + 1 : end]):
+            # The selector is the run of plain text ending at "{": whatever
+            # follows the last brace or angle bracket before it. Whitespace
+            # alone is a bare block (a script's object literal), not a rule.
+            cut = max(text.rfind(char, 0, open_brace) for char in "<>{}")
+            if text[cut + 1 : open_brace].strip():
+                return True
+        # An inner "{" opens a fresh candidate; a closed block is consumed.
+        start = end if text[end] == "{" else end + 1
+    return False
+
+
+def _naked_css_error(html: str) -> str | None:
+    """An error when CSS rules sit outside any ``<style>`` element, else None."""
+    text = _ANY_TAG.sub(" ", _stripped_blocks(html))
+    if _has_naked_css_rule(text):
         return (
             "CSS rules appear outside any <style> tag, so they would render as "
             "plain text. Wrap the widget's stylesheet in a <style>...</style> "
@@ -169,6 +276,9 @@ def validate_widget_html(html: str) -> list[str]:
         errors.append(
             "Widget content must be an HTML fragment without doctype, html, head, or body tags."
         )
+    malformed = _malformed_markup_error(content)
+    if malformed:
+        errors.append(malformed)
     naked_css = _naked_css_error(content)
     if naked_css:
         errors.append(naked_css)

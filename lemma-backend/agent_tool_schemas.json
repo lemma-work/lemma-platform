@@ -306,7 +306,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET instead of being described. After creating or changing a pod resource,\ndisplay it rather than only saying it was created.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first and never pass a workspace path. WIDGET takes\nexactly one of `content` or `public_url`; load the `lemma-widget` skill before\nyour first widget, and build an app instead when the UI needs React, routing,\nor real state.\n\nThis tool only displays. Use `ask_user` for choices and `request_approval` for\npermission.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `content` or `public_url`; load the `lemma-widget` skill before\nyour first widget. React, routing, or real state means an app.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -415,7 +415,7 @@
             }
           ],
           "default": null,
-          "description": "Inline HTML fragment, for WIDGET. Raw markup only \u2014 never base64. No DOCTYPE/<html>/<head>/<body>. A standalone SVG image is a pod file shown with type=FILE, not a widget."
+          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. An SVG image is a pod file, shown with type=FILE."
         },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",

@@ -21,12 +21,12 @@ answer, display that resource directly instead of recreating it as a widget.
 - **Vite app:** React, routing, multiple screens, reusable components, substantial
   interaction/state, or a UI people will return to as a product.
 
-Do not load React, ReactDOM, Tailwind, or the agent web-component bundle inside a
-widget. Lemma already has full Vite app support for that class of UI. A widget may be
-saved as an HTML app later, but it should remain lightweight.
+React, ReactDOM, Tailwind, and the agent web-component bundle belong in a Vite
+app — Lemma has full app support for that class of UI. A widget stays lightweight,
+and can be saved as an HTML app later.
 
-Widgets are display surfaces. They do not submit values into the conversation. Use
-`ask_user` for fixed choices or ask for free-form input in prose.
+Widgets are display surfaces. `ask_user` collects fixed choices; prose collects
+free-form input.
 
 ## Build one
 
@@ -53,9 +53,10 @@ Widgets are display surfaces. They do not submit values into the conversation. U
    `[{"label":"Owner","field":"owner"}]`.
 
 4. Adapt the content and styling, then call `display_resource` with `type="WIDGET"`.
-   Do not rebuild the SDK loader or loading/empty/error scaffolding from scratch.
+   The starter's SDK loader and loading/empty/error scaffolding carry over as-is.
 
-The backend rejects unresolved placeholders and broken SDK loaders before display.
+The backend rejects unresolved placeholders, broken SDK loaders, and malformed
+markup before display.
 
 ## The `display_resource` call
 
@@ -64,26 +65,29 @@ The backend rejects unresolved placeholders and broken SDK loaders before displa
 - `content` — your inline HTML fragment (the usual case), or
 - `public_url` — a URL to embed instead.
 
-Passing both, or neither, is rejected. Two more WIDGET-only fields:
+Passing both, or neither, is rejected. One more WIDGET-only field:
 
 - `loading_messages` — up to **4** short lines shown while the widget renders.
-  They are WIDGET-only; setting them on any other resource type is rejected.
-- `name` / `path` / `filters` / `query` belong to other types and don't apply.
+  Setting them on any other resource type is rejected.
+
+`name`, `path`, `filters`, and `query` belong to other types.
 
 ## Fixed contract
 
-- Send an HTML **fragment**, never `<!doctype>`, `<html>`, `<head>`, or `<body>`.
-- Send raw markup. Base64 or any other encoded form is rejected, and an
-  encoded blob that slips through renders as literal text.
-- A standalone SVG image is not a widget. Save it as a pod file (`lemma files
-  upload`) and show it with `display_resource(type="FILE", path=...)`. Inline
-  `<svg>` icons *inside* an HTML fragment are fine.
-- Keep all CSS local. The widget runs in its own iframe and inherits no frontend CSS.
-- Use plain browser JavaScript. No build step, JSX, React, or framework runtime.
-- Never put secrets, credentials, a pod id, or an environment hostname in the HTML.
-- Show deliberate loading, empty, error, and narrow-screen states.
-- Escape values before inserting them with `innerHTML`; prefer `textContent`.
-- Keep the view compact: no fixed positioning or nested scrolling.
+- `content` is an HTML **fragment**: raw markup, body-level tags only. A doctype,
+  `<html>`, `<head>`, `<body>`, or an encoded blob is rejected before display.
+- The markup parses as what it reads. A tag that lost its `<` becomes a text node:
+  the element never exists, everything it styled renders plain, and the tag shows
+  up as text. That, and a close tag with nothing open, is rejected.
+- A standalone SVG image is a pod file: `lemma files upload`, then
+  `display_resource(type="FILE", path=...)`. Inline `<svg>` icons *inside* an HTML
+  fragment are part of the fragment.
+- All CSS is local. The widget runs in its own iframe and inherits no frontend CSS.
+- JavaScript is plain browser JS — no build step, JSX, React, or framework runtime.
+- Secrets, credentials, pod ids, and environment hostnames stay out of the HTML.
+- Loading, empty, error, and narrow-screen states are all deliberate.
+- Values reach the DOM through `textContent`, or escaped before `innerHTML`.
+- The view stays compact: no fixed positioning, no nested scrolling.
 - **Height is capped.** The inline view clips at **480px** with a fade and an
   Expand control, and a self-reported height above 2400px is ignored. Design for
   the fold: put the answer at the top, not below a long table.
@@ -91,18 +95,24 @@ Passing both, or neither, is rejected. Two more WIDGET-only fields:
   conversation. The host accepts one message from the frame, a height report.
   Use `ask_user` when you need an answer.
 
-The starters are platform-themed and system-aware by default. Preserve their
-`prefers-color-scheme: dark` rules and semantic fallbacks. They consume the
-public token layer — `--lemma-widget-bg`, `surface`, `subtle`, `text`, `muted`,
-`border`, `accent`, `danger`, `danger-soft`, `radius`, `font`, and `color-scheme`
-(each with the full `--lemma-widget-` prefix). Chart starters also expose
-`chart-1` through `chart-5`.
+The starters are platform-themed and system-aware: their
+`prefers-color-scheme: dark` rules and semantic fallbacks carry over intact. They
+consume the public token layer — `--lemma-widget-bg`, `surface`, `subtle`, `text`,
+`muted`, `border`, `accent`, `danger`, `danger-soft`, `radius`, `font`, and
+`color-scheme` (each with the full `--lemma-widget-` prefix). Chart starters also
+expose `chart-1` through `chart-5`.
 
 That list is **exhaustive** — the host injects only these. The frontend posts a
-larger palette (`success`, `warning`, `info`, `accent-hover`, …), but anything
-outside the published set is filtered out before it reaches your iframe, so a
-reference to `--lemma-widget-success` silently falls back. Use only the tokens
-above, and never reference frontend-only variables such as `--text-primary`.
+larger palette (`success`, `warning`, `info`, `accent-hover`, …), and anything
+outside the published set is filtered out before it reaches your iframe, so
+`--lemma-widget-success` resolves to nothing. Frontend variables such as
+`--text-primary` never cross the iframe boundary either.
+
+**Every token reference carries a fallback** — `var(--lemma-widget-surface, #fff)`,
+not `var(--lemma-widget-surface)`. The host delivers the palette by `postMessage`,
+so it arrives after first paint, and it never arrives at all when the widget is
+opened outside the conversation frame. A bare reference resolves to nothing there
+and the widget renders colorless.
 
 For a data-backed widget, preserve the starter's browser SDK loader:
 
@@ -116,7 +126,7 @@ For a data-backed widget, preserve the starter's browser SDK loader:
   local HTTP setups withhold. So write that branch as "this view can't load your
   data here", not "sign in to Lemma" — the user usually *is* signed in. Keep the
   widget useful without data where you can.
-- Shared files use `/…`; personal files use `/me`; never use `/pod/...`.
+- Shared files use `/…`, personal files use `/me`. There is no `/pod/...` prefix.
 
 Common calls:
 
@@ -133,8 +143,8 @@ await client.files.children.content(
 );
 ```
 
-Prefer `datastore.query` for aggregates. Never poll with `setInterval` — if a
-widget must stay live, open the change stream:
+Prefer `datastore.query` for aggregates. A widget that stays live opens the change
+stream rather than polling with `setInterval`:
 
 ```js
 const handle = client.datastore.watchChanges({
@@ -166,7 +176,9 @@ constraint as `initialize()` above — always keep the non-live render working.
 
 - The chosen view is genuinely more useful than short prose.
 - The closest versioned starter was used and all placeholders were replaced.
-- The fragment contains no full-document tags, secrets, hardcoded hosts, or pod ids.
+- Every tag opens with `<` and closes once; the fragment carries no full-document
+  tags, secrets, hardcoded hosts, or pod ids.
+- Every `--lemma-widget-*` reference has a fallback value.
 - SDK code uses injected config and boots from the script load handler.
 - Loading, empty, error, and mobile states are present.
 

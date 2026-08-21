@@ -128,9 +128,7 @@ def test_widget_contract_rejects_svg_root_behind_a_comment():
 
 def test_widget_contract_rejects_base64_content():
     """A base64 blob trips no markup rule, so it needs its own check."""
-    errors = validate_widget_html(
-        "PGRpdiBzdHlsZT0iY29sb3I6cmVkIj5oaTwvZGl2Pg=="
-    )
+    errors = validate_widget_html("PGRpdiBzdHlsZT0iY29sb3I6cmVkIj5oaTwvZGl2Pg==")
     assert any("no element tag found" in e for e in errors)
     assert any("base64" in e for e in errors)
 
@@ -213,6 +211,22 @@ def test_widget_contract_accepts_inline_style_attribute():
     assert validate_widget_html('<div style="color:red">hi</div>') == []
 
 
+def test_widget_contract_scans_brace_free_text_in_linear_time():
+    """The naked-CSS rule must not be retried from every offset in the text.
+
+    Written as one pattern, its selector run restarts at each character and
+    finds no ``{`` to stop at, which is quadratic in the length of brace-free
+    text: 32KB took 4.7s and 128KB took 75s. Widget content is written by the
+    agent, so a widget that long is ordinary, not adversarial.
+    """
+    import time
+
+    html = "<p>" + "a = 1 and b = 2. " * 8_000 + "</p>"
+    started = time.perf_counter()
+    assert validate_widget_html(html) == []
+    assert time.perf_counter() - started < 1.0
+
+
 def test_widget_contract_accepts_media_query_inside_style_tag():
     html = (
         "<style>@media(prefers-color-scheme:dark){.a{color:#fff}}</style>"
@@ -230,6 +244,61 @@ def test_widget_contract_accepts_block_close_tags_with_attributes():
         "<script src='x.js' defer>\nvar x = {a: 1, b: 2};\n</script\t\n foo>"
         "<style type='text/css'>.a{color:red}</style >"
         '<div class="a">x</div>'
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_rejects_tag_missing_its_opening_bracket():
+    # Regression: a widget shipped with the wrapper's "<" gone. The browser read
+    # `div style="..."` as a text node, so the card element never existed and
+    # every rule it carried — background, border, radius, padding, font — was
+    # lost. No other rule sees this: the styling is in an inline style=""
+    # attribute, which has no braces for the naked-CSS matcher to catch.
+    html = (
+        'div style="background:var(--lemma-widget-surface);padding:24px">\n'
+        '  <div style="font-size:26px">Good afternoon</div>\n'
+        "</div>"
+    )
+    issues = validate_widget_html(html)
+    assert any("missing its opening '<'" in issue for issue in issues)
+
+
+def test_widget_contract_rejects_stray_end_tag():
+    """The mirror of the same mistake: the orphaned close outlives its start."""
+    issues = validate_widget_html("<div>counts</div></section>")
+    assert any(
+        "</section> closes an element that was never opened" in i for i in issues
+    )
+
+
+def test_widget_contract_accepts_implied_end_tags():
+    # `</li>`, `</td>` and `</tr>` are optional in HTML, so the open-tag stack is
+    # matched by name rather than by exact nesting.
+    assert validate_widget_html("<ul><li>open<li>closed</ul>") == []
+    assert (
+        validate_widget_html("<table><tbody><tr><td>a<td>b</tr></tbody></table>") == []
+    )
+
+
+def test_widget_contract_accepts_void_and_self_closing_elements():
+    html = (
+        '<div><img src="chart.png"><br><input type="text">'
+        '<svg viewBox="0 0 8 8"><path d="M0 0h8"/></svg></div>'
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_escaped_markup_rendered_as_text():
+    """A widget showing a code sample spells the bracket `&lt;` deliberately."""
+    html = '<pre>&lt;div class="card"&gt;text&lt;/div&gt;</pre>'
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_markup_built_inside_a_script():
+    html = (
+        '<div id="a"></div>'
+        "<script>if (1 < 2) { document.getElementById('a').innerHTML = "
+        "'<span class=\"pill\">y</span>'; }</script>"
     )
     assert validate_widget_html(html) == []
 
