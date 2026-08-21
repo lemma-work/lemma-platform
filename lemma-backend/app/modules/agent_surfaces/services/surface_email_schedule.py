@@ -126,7 +126,7 @@ class SurfaceEmailScheduleMixin:
         surface: AgentSurfaceEntity,
         account: SurfaceAccountInfo,
         *,
-        schedule_service: "ScheduleService",
+        schedule_service: ScheduleService,
         ctx: Context | None,
     ) -> UUID:
         """Create the polling schedule that feeds this email surface."""

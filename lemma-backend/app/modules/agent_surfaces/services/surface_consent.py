@@ -219,6 +219,9 @@ class SurfaceConsentMixin:
                     try:
                         await cache.set_json(cache_key, False, ttl_seconds=10)
                     except Exception:
+                        # The cache is an optimisation over a Graph round-trip.
+                        # Not being able to write it costs the next caller that
+                        # round-trip, which is not worth failing the check over.
                         pass
                     return False
                 token = token_response.json().get("access_token")
@@ -241,5 +244,7 @@ class SurfaceConsentMixin:
         try:
             await cache.set_json(cache_key, granted, ttl_seconds=60 if granted else 10)
         except Exception:
+            # Same again: a consent answer we could not cache is still a correct
+            # answer, and the next call simply asks Graph rather than failing.
             pass
         return granted
