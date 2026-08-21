@@ -4,7 +4,6 @@ import sys
 import warnings
 from pathlib import Path
 
-import pytest
 from pydantic.json_schema import PydanticJsonSchemaWarning
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))

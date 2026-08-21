@@ -5,6 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pytest
+
+from lemma_connectors.core.errors import OperationNotFoundError, ToolNotFoundError
 from lemma_connectors.gmail.client import GmailInfoClient
 from lemma_connectors.jira.client import JiraInfoClient
 from lemma_connectors.google_calendar.client import GoogleCalendarInfoClient
@@ -73,3 +76,22 @@ def test_jira_info_client_lists_generated_tools_and_operations():
     assert "get_attachment_content" in operation_names
     assert "add_comment" in operation_names
     assert hasattr(client.resources, "attachment_content")
+
+
+def test_get_tool_raises_tool_not_found_for_an_unknown_name():
+    # The miss path used to raise NameError: LazyToolMap.get_tool referenced
+    # ToolNotFoundError without importing it, so every caller asking for a tool
+    # that does not exist got an interpreter error instead of the domain error
+    # they catch. Nothing caught it because this tree is not linted and its
+    # tests were not run by any CI gate.
+    client = GmailInfoClient()
+
+    with pytest.raises(ToolNotFoundError):
+        client.get_tool("gmail_this_tool_does_not_exist")
+
+
+def test_get_operation_raises_operation_not_found_for_an_unknown_name():
+    client = GmailInfoClient()
+
+    with pytest.raises(OperationNotFoundError):
+        client.get_operation("this_operation_does_not_exist")

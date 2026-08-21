@@ -2040,6 +2040,9 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.14.8,<0.16" }]
+
 [[package]]
 name = "license-expression"
 version = "30.4.4"
