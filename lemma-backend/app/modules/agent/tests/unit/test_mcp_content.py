@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pydantic_ai import BinaryContent, ToolReturn
 
 from app.modules.agent.services.mcp_content import (
+    tool_call_result,
     MAX_MCP_IMAGE_BYTES,
     MAX_MCP_IMAGE_BYTES_TOTAL,
     image_contents,
@@ -102,12 +103,18 @@ def test_plain_result_is_serialized_as_is() -> None:
 
 
 def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
-    """End-to-end at the real `_mcp_result`: the picture rides the image channel,
-    and neither the text block nor the structured payload carries its bytes."""
-    from app.modules.agent.services.conversation_mcp_service import (
-        conversation_mcp_service,
-    )
-    from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+    """The picture rides the image channel; neither the text block nor the
+    structured payload carries its bytes.
+
+    Both bridges used to own a copy of this builder and the two could drift.
+    They call `tool_call_result` now, so testing it once tests both — the import
+    below is what proves they still route through it.
+    """
+    from app.modules.agent.services import conversation_mcp_service as conversation
+    from app.modules.agent.services import pod_mcp_service as pod
+
+    assert conversation.tool_call_result is tool_call_result
+    assert pod.tool_call_result is tool_call_result
 
     picture = b"\x89PNG\r\n" + b"ABCDEFG" * 1024
     tool_return = ToolReturn(
@@ -115,18 +122,17 @@ def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
         content=[BinaryContent(data=picture, media_type="image/png")],
     )
 
-    for service in (conversation_mcp_service, pod_mcp_service):
-        result = service._mcp_result(tool_return)
+    result = tool_call_result(tool_return)
 
-        image_parts = [c for c in result.content if getattr(c, "type", None) == "image"]
-        text_parts = [c for c in result.content if getattr(c, "type", None) == "text"]
-        assert len(image_parts) == 1, "the image must reach the agent"
+    image_parts = [c for c in result.content if getattr(c, "type", None) == "image"]
+    text_parts = [c for c in result.content if getattr(c, "type", None) == "text"]
+    assert len(image_parts) == 1, "the image must reach the agent"
 
-        text_blob = "".join(c.text for c in text_parts)
-        assert "PNG" not in text_blob and "ABCDEFG" not in text_blob
-        assert "\\x89" not in text_blob
-        assert result.structuredContent == {
-            "success": True,
-            "path": "/me/shot.png",
-            "bytes": len(picture),
-        }
+    text_blob = "".join(c.text for c in text_parts)
+    assert "PNG" not in text_blob and "ABCDEFG" not in text_blob
+    assert "\\x89" not in text_blob
+    assert result.structuredContent == {
+        "success": True,
+        "path": "/me/shot.png",
+        "bytes": len(picture),
+    }

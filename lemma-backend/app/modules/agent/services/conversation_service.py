@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from functools import partial
-from contextvars import ContextVar
 from uuid import UUID
 
 
+from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.services.conversation_access import (
+    resolve_agent,
+    validate_conversation_access,
+)
 from app.modules.agent.domain.entities import (
     Agent,
     AgentRun,
@@ -89,38 +89,10 @@ from app.modules.agent.tools.snooze.models import (
     elapsed_seconds,
 )
 
-_POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
 # Defined with the primitive that consumes it, so the list and the resume path
 # that depends on it cannot drift apart.
 _PAUSING_TOOL_NAMES = PAUSING_TOOL_NAMES
-
-
-# When set, starting a new agent run does NOT publish the AgentRunStartedEvent
-# that hands execution to the streaq worker. The caller takes responsibility for
-# executing the run itself. Used by the surface e2e suite, which runs the agent
-# in-process (to deliver via the in-test fake platform servers) and would
-# otherwise double-run it with the shared session worker.
-_SUPPRESS_RUN_ENQUEUE: ContextVar[bool] = ContextVar(
-    "suppress_agent_run_enqueue", default=False
-)
-
-
-@contextmanager
-def suppress_agent_run_enqueue() -> Iterator[None]:
-    """Run agent-run starts inline: skip the worker-dispatch event publish."""
-    token = _SUPPRESS_RUN_ENQUEUE.set(True)
-    try:
-        yield
-    finally:
-        _SUPPRESS_RUN_ENQUEUE.reset(token)
-
-
-class _Unset:
-    pass
-
-
-_UNSET = _Unset()
 
 
 class ConversationService(PauseResumeMixin):
@@ -282,7 +254,7 @@ class ConversationService(PauseResumeMixin):
             conversation_id,
             include_runs=True,
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -324,10 +296,10 @@ class ConversationService(PauseResumeMixin):
         user_id: UUID,
         pod_id: UUID,
         agent_name: str | None = None,
-        title: str | None | _Unset = _UNSET,
-        instructions: str | None | _Unset = _UNSET,
-        agent_runtime: AgentRuntimeConfig | None | _Unset = _UNSET,
-        metadata: dict[str, object] | None | _Unset = _UNSET,
+        title: str | None | UnsetType = UNSET,
+        instructions: str | None | UnsetType = UNSET,
+        agent_runtime: AgentRuntimeConfig | None | UnsetType = UNSET,
+        metadata: dict[str, object] | None | UnsetType = UNSET,
     ) -> Conversation:
         expected_agent_id = await self._expected_agent_id(
             pod_id=pod_id,
@@ -336,7 +308,7 @@ class ConversationService(PauseResumeMixin):
         conversation = await self.conversation_repository.get_conversation(
             conversation_id
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -351,13 +323,13 @@ class ConversationService(PauseResumeMixin):
             action=Permissions.AGENT_EXECUTE,
         )
 
-        if not isinstance(title, _Unset):
+        if not isinstance(title, UnsetType):
             conversation.title = title
-        if not isinstance(instructions, _Unset):
+        if not isinstance(instructions, UnsetType):
             conversation.instructions = instructions
-        if not isinstance(agent_runtime, _Unset):
+        if not isinstance(agent_runtime, UnsetType):
             conversation.agent_runtime = agent_runtime
-        if not isinstance(metadata, _Unset):
+        if not isinstance(metadata, UnsetType):
             conversation.metadata = metadata
 
         return await self.conversation_repository.update_conversation(conversation)
@@ -380,7 +352,7 @@ class ConversationService(PauseResumeMixin):
         conversation = await self.conversation_repository.get_conversation(
             conversation_id
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -414,7 +386,7 @@ class ConversationService(PauseResumeMixin):
         conversation = await self.conversation_repository.get_conversation(
             conversation_id
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -889,7 +861,11 @@ class ConversationService(PauseResumeMixin):
         from app.modules.agent.services.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
-        agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
+        agent = await resolve_agent(
+            conversation,
+            user_id=user_id,
+            agent_repository=self.agent_repository,
+        )
         selected_runtime = (
             conversation.agent_runtime
             or agent.agent_runtime
@@ -1160,7 +1136,7 @@ class ConversationService(PauseResumeMixin):
         )
         # _get_or_create_conversation_for_message already returned a fully loaded,
         # access-checked conversation — no need to re-fetch it.
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -1176,7 +1152,11 @@ class ConversationService(PauseResumeMixin):
             )
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.
-        agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
+        agent = await resolve_agent(
+            conversation,
+            user_id=user_id,
+            agent_repository=self.agent_repository,
+        )
 
         await self.conversation_repository.lock_conversation(conversation.id)
         active_run = await self.conversation_repository.get_active_agent_run_for_update(
@@ -1230,7 +1210,7 @@ class ConversationService(PauseResumeMixin):
             ),
         )
 
-        if started_new_run and not _SUPPRESS_RUN_ENQUEUE.get():
+        if started_new_run and not run_enqueue_suppressed():
             self.uow.collect_events(
                 [
                     AgentRunStartedEvent(
@@ -1282,7 +1262,7 @@ class ConversationService(PauseResumeMixin):
         conversation = await self.conversation_repository.get_conversation(
             conversation_id
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -1387,31 +1367,6 @@ class ConversationService(PauseResumeMixin):
             user_id=user_id,
         )
 
-    async def _resolve_agent(
-        self,
-        *,
-        conversation: Conversation,
-        user_id: UUID,
-    ) -> Agent:
-        if conversation.agent_id is None:
-            # Lazy import: registry imports the subagents toolset, which imports
-            # this service — importing it at module load would cycle.
-            from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
-
-            return Agent(
-                id=_POD_ASSISTANT_AGENT_ID,
-                pod_id=conversation.pod_id,
-                user_id=user_id,
-                name=DEFAULT_POD_AGENT_NAME,
-                instruction="",
-                agent_runtime=conversation.agent_runtime,
-                toolsets=list(POD_DEFAULT_AGENT_TOOLSETS),
-            )
-        agent = await self.agent_repository.get(conversation.agent_id)
-        if agent is None:
-            raise AgentNotFoundError(str(conversation.agent_id))
-        return agent
-
     async def _resolve_agent_for_path(
         self,
         *,
@@ -1489,7 +1444,7 @@ class ConversationService(PauseResumeMixin):
         conversation = await self.conversation_repository.get_conversation(
             conversation_id
         )
-        self._validate_conversation_access(
+        validate_conversation_access(
             conversation,
             user_id=user_id,
             pod_id=pod_id,
@@ -1538,20 +1493,3 @@ class ConversationService(PauseResumeMixin):
             pod_id=pod_id,
         )
         await ctx.require_all([(action, resource) for action in actions])
-
-    def _validate_conversation_access(
-        self,
-        conversation: Conversation | None,
-        *,
-        user_id: UUID,
-        pod_id: UUID,
-        agent_id: UUID | None,
-    ) -> None:
-        if conversation is None:
-            raise ConversationNotFoundError()
-        if conversation.user_id != user_id:
-            raise ConversationNotFoundError()
-        if conversation.pod_id != pod_id:
-            raise ConversationNotFoundError()
-        if agent_id is not None and conversation.agent_id != agent_id:
-            raise ConversationNotFoundError()

@@ -30,9 +30,16 @@ from app.modules.agent.infrastructure.transport_errors import (
 )
 from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.agent.services.surface_context import (
+    surface_context_from_conversation,
+)
+from app.modules.agent.services.conversation_access import (
+    POD_ASSISTANT_AGENT_ID,
+    resolve_agent,
+    validate_conversation_access,
+)
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import (
-    AgentNotFoundError,
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.events import AgentRunCompletedEvent
@@ -65,9 +72,6 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
-)
-from app.modules.agent.services.conversation_service import (
-    _POD_ASSISTANT_AGENT_ID,
 )
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.realtime import (
@@ -106,10 +110,8 @@ from app.modules.agent.services.workspace_location import (
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
-from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 
 logger = get_logger(__name__)
 
@@ -295,7 +297,7 @@ class AgentRunnerService:
             final_status: ConversationStatus | None = None
             final_error: str | None = None
             usage_data: AgentRunUsage | None = None
-            surface_context = self._surface_context_from_conversation(conversation)
+            surface_context = surface_context_from_conversation(conversation)
             runtime_profile_snapshot = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
             workspace_location = resolve_workspace_location(conversation)
@@ -340,7 +342,7 @@ class AgentRunnerService:
                 supports_pause_signal=(
                     resolved_runtime.harness_kind == HarnessKind.LEMMA
                 ),
-                is_pod_default_agent=(agent.id == _POD_ASSISTANT_AGENT_ID),
+                is_pod_default_agent=(agent.id == POD_ASSISTANT_AGENT_ID),
                 **surface_context,
             )
             with suppress(Exception):
@@ -703,15 +705,15 @@ class AgentRunnerService:
                 runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
                 agent_run = self._find_agent_run(runs, agent_run_id)
                 conversation = await repo.get_conversation(agent_run.conversation_id)
-                self._validate_conversation_access(
+                validate_conversation_access(
                     conversation,
                     user_id=user_id,
                     pod_id=pod_id,
                 )
-                agent = await self._resolve_agent(
-                    uow=uow,
-                    conversation=conversation,
+                agent = await resolve_agent(
+                    conversation,
                     user_id=user_id,
+                    agent_repository=AgentRepository(uow),
                     agent_name=agent_name,
                 )
                 # Which runs survive the trim decides which need every message,
@@ -1006,45 +1008,6 @@ class AgentRunnerService:
             reservation=usage_reservation,
         )
 
-    async def _resolve_agent(
-        self,
-        *,
-        uow,
-        conversation: Conversation,
-        user_id: UUID,
-        agent_name: str | None,
-    ) -> Agent:
-        if conversation.agent_id is None:
-            return Agent(
-                id=_POD_ASSISTANT_AGENT_ID,
-                pod_id=conversation.pod_id,
-                user_id=user_id,
-                name=DEFAULT_POD_AGENT_NAME,
-                instruction="",
-                agent_runtime=conversation.agent_runtime,
-                toolsets=list(POD_DEFAULT_AGENT_TOOLSETS),
-            )
-        agent = await AgentRepository(uow).get(conversation.agent_id)
-        if agent is None:
-            raise AgentNotFoundError(str(conversation.agent_id))
-        if agent_name is not None and agent.name != agent_name:
-            raise AgentNotFoundError(agent_name)
-        return agent
-
-    def _validate_conversation_access(
-        self,
-        conversation: Conversation | None,
-        *,
-        user_id: UUID,
-        pod_id: UUID,
-    ) -> None:
-        if conversation is None:
-            raise ConversationNotFoundError()
-        if conversation.user_id != user_id:
-            raise ConversationNotFoundError()
-        if conversation.pod_id != pod_id:
-            raise ConversationNotFoundError()
-
     def _find_agent_run(self, runs: list[AgentRun], agent_run_id: UUID) -> AgentRun:
         for run in runs:
             if run.id == agent_run_id:
@@ -1060,36 +1023,6 @@ class AgentRunnerService:
         self, runs: list[AgentRun], conversation: Conversation | None = None
     ) -> list[Message]:
         return select_runtime_history(runs, conversation)
-
-    def _surface_context_from_conversation(
-        self,
-        conversation: Conversation,
-    ) -> JsonObject:
-        metadata = conversation.metadata or {}
-        surface_id = metadata.get("surface_id")
-        surface_metadata_payload = metadata.get("surface_event_metadata")
-        surface_metadata = None
-        if isinstance(surface_metadata_payload, dict):
-            try:
-                from app.composition.agent_surface_runtime import (
-                    parse_surface_event_metadata,
-                )
-
-                surface_metadata = parse_surface_event_metadata(
-                    surface_metadata_payload
-                )
-            except Exception:
-                surface_metadata = surface_metadata_payload
-        return {
-            "surface_id": UUID(str(surface_id)) if surface_id else None,
-            "surface_platform": metadata.get("surface_platform"),
-            "surface_metadata": surface_metadata,
-            "external_channel_id": metadata.get("external_channel_id"),
-            "external_thread_id": metadata.get("external_thread_id"),
-            "external_user_id": metadata.get("external_user_id"),
-            "external_message_id": metadata.get("external_message_id"),
-            "agent_display_name": metadata.get("agent_display_name"),
-        }
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

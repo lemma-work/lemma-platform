@@ -13,7 +13,6 @@ from fastapi import HTTPException
 import app.modules.agent.api.controllers.widget_controller as ctrl
 from app.core.domain.errors import DomainError
 from app.core.ports.widget_content import WidgetArtifact
-from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.services.widget_token import verify_widget_token
 
 
@@ -40,8 +39,14 @@ def _fake_authz(ctx):
 
 
 def _fake_conv_service(owner_id, pod_id):
-    """A conversation service whose ownership check passes only for ``owner_id``
-    in ``pod_id`` — mirrors ConversationService._validate_conversation_access."""
+    """A conversation service that returns one conversation owned by ``owner_id``.
+
+    It deliberately does NOT reimplement the ownership check. It used to, and
+    that copy is why this file stayed green while the controller was calling a
+    method that no longer existed — the double answered for the thing under
+    test. The controller calls the real `validate_conversation_access` now, so
+    the check this exercises is the shipped one.
+    """
 
     class _Repo:
         async def get_conversation(self, conversation_id, **_kw):
@@ -49,16 +54,6 @@ def _fake_conv_service(owner_id, pod_id):
 
     class _Svc:
         conversation_repository = _Repo()
-
-        def _validate_conversation_access(
-            self, conversation, *, user_id, pod_id, agent_id
-        ):
-            if (
-                conversation is None
-                or conversation.user_id != user_id
-                or conversation.pod_id != pod_id
-            ):
-                raise ConversationNotFoundError()
 
     return lambda _uow: _Svc()
 

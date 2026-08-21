@@ -167,7 +167,7 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
     from PIL import Image
 
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+    from app.modules.agent.services.mcp_content import tool_call_result
     from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
     from app.modules.agent.tools.workspace_cli.workspace_cli import view_image_internal
 
@@ -196,7 +196,7 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
     )
 
     # The real serialization the Agent Host consumes.
-    result = pod_mcp_service._mcp_result(tool_return)
+    result = tool_call_result(tool_return)
     images = [c for c in result.content if getattr(c, "type", None) == "image"]
     texts = [c for c in result.content if getattr(c, "type", None) == "text"]
     assert len(images) == 1, "exactly one image must reach the harness"

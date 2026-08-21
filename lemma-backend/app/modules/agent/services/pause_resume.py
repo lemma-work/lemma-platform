@@ -17,6 +17,9 @@ from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
+from app.modules.agent.services.conversation_access import (
+    resolve_agent,
+)
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.pausing_tools import (
@@ -142,7 +145,11 @@ class PauseResumeMixin:
             # live); it will replay the now-complete tool returns. Nothing to do.
             await self.uow.commit()
             return
-        agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
+        agent = await resolve_agent(
+            conversation,
+            user_id=user_id,
+            agent_repository=self.agent_repository,
+        )
         selected_agent_runtime = (
             conversation.agent_runtime
             or agent.agent_runtime

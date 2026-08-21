@@ -36,6 +36,9 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
 from app.core.config import settings
+from app.modules.agent.services.conversation_access import (
+    validate_conversation_access,
+)
 from app.modules.agent.config import agent_settings
 from app.core.html_document import wrap_html_fragment
 from app.modules.agent.api.dependencies import get_conversation_service
@@ -107,9 +110,7 @@ async def _require_conversation_owner(
         conversation_id
     )
     try:
-        conversation_service._validate_conversation_access(
-            conversation, user_id=viewer_id, pod_id=pod_id, agent_id=None
-        )
+        validate_conversation_access(conversation, user_id=viewer_id, pod_id=pod_id)
     except ConversationNotFoundError:
         raise HTTPException(status_code=404, detail="Widget not found")
 

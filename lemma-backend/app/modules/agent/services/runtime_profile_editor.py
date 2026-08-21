@@ -17,6 +17,7 @@ from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     AnthropicCompatibleRuntimeConfig,
@@ -26,8 +27,6 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
-    UNSET,
-    _UnsetType,
     reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import JsonObject
@@ -113,11 +112,11 @@ class AgentRuntimeProfileEditor:
         profile_id: str,
         organization_id: UUID,
         user_id: UUID,
-        name: str | _UnsetType = UNSET,
-        description: str | None | _UnsetType = UNSET,
-        default_model_name: str | None | _UnsetType = UNSET,
-        config_selections: JsonObject | _UnsetType = UNSET,
-        host_wait_timeout_seconds: int | _UnsetType = UNSET,
+        name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        default_model_name: str | None | UnsetType = UNSET,
+        config_selections: JsonObject | UnsetType = UNSET,
+        host_wait_timeout_seconds: int | UnsetType = UNSET,
     ) -> AgentRuntimeProfile:
         """Edit a harness profile, contacting the harness only when needed.
 
@@ -135,14 +134,14 @@ class AgentRuntimeProfileEditor:
         assert self._service.repository is not None
 
         changes: dict[str, object] = {}
-        if not isinstance(name, _UnsetType):
+        if not isinstance(name, UnsetType):
             changes["name"] = _normalize_profile_name(name)
-        if not isinstance(description, _UnsetType):
+        if not isinstance(description, UnsetType):
             changes["description"] = description.strip() if description else None
 
         touches_configuration = not isinstance(
-            default_model_name, _UnsetType
-        ) or not isinstance(config_selections, _UnsetType)
+            default_model_name, UnsetType
+        ) or not isinstance(config_selections, UnsetType)
 
         if touches_configuration:
             if self._service.host_repository is None:
@@ -164,7 +163,7 @@ class AgentRuntimeProfileEditor:
             # every future edit with no way to drop it.
             selections = (
                 stored.config_selections
-                if isinstance(config_selections, _UnsetType)
+                if isinstance(config_selections, UnsetType)
                 else config_selections
             )
             selections = validate_agent_host_selections(
@@ -178,7 +177,7 @@ class AgentRuntimeProfileEditor:
                     (harness.capabilities or {}).get("images") is True
                 ),
             )
-            if isinstance(default_model_name, _UnsetType):
+            if isinstance(default_model_name, UnsetType):
                 # The caller did not ask to change the model, so a stored one
                 # that the harness has since dropped is cleared rather than
                 # failing an unrelated edit. An unpinned harness profile is
@@ -205,11 +204,11 @@ class AgentRuntimeProfileEditor:
                 config_selections=selections,
                 host_wait_timeout_seconds=(
                     stored.host_wait_timeout_seconds
-                    if isinstance(host_wait_timeout_seconds, _UnsetType)
+                    if isinstance(host_wait_timeout_seconds, UnsetType)
                     else host_wait_timeout_seconds
                 ),
             )
-        elif not isinstance(host_wait_timeout_seconds, _UnsetType):
+        elif not isinstance(host_wait_timeout_seconds, UnsetType):
             stored = _harness_config(profile)
             changes["config"] = stored.model_copy(
                 update={"host_wait_timeout_seconds": host_wait_timeout_seconds}
@@ -225,14 +224,14 @@ class AgentRuntimeProfileEditor:
         profile_id: str,
         organization_id: UUID,
         user_id: UUID,
-        name: str | _UnsetType = UNSET,
-        description: str | None | _UnsetType = UNSET,
-        base_url: str | HttpUrl | _UnsetType = UNSET,
-        api_key: str | None | _UnsetType = UNSET,
-        default_model_name: str | None | _UnsetType = UNSET,
-        model_names: list[str] | _UnsetType = UNSET,
-        headers: dict[str, str] | _UnsetType = UNSET,
-        model_settings: dict[str, object] | _UnsetType = UNSET,
+        name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        base_url: str | HttpUrl | UnsetType = UNSET,
+        api_key: str | None | UnsetType = UNSET,
+        default_model_name: str | None | UnsetType = UNSET,
+        model_names: list[str] | UnsetType = UNSET,
+        headers: dict[str, str] | UnsetType = UNSET,
+        model_settings: dict[str, object] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -257,14 +256,14 @@ class AgentRuntimeProfileEditor:
         profile_id: str,
         organization_id: UUID,
         user_id: UUID,
-        name: str | _UnsetType = UNSET,
-        description: str | None | _UnsetType = UNSET,
-        base_url: str | HttpUrl | None | _UnsetType = UNSET,
-        api_key: str | _UnsetType = UNSET,
-        default_model_name: str | None | _UnsetType = UNSET,
-        model_names: list[str] | _UnsetType = UNSET,
-        headers: dict[str, str] | _UnsetType = UNSET,
-        model_settings: dict[str, object] | _UnsetType = UNSET,
+        name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        base_url: str | HttpUrl | None | UnsetType = UNSET,
+        api_key: str | UnsetType = UNSET,
+        default_model_name: str | None | UnsetType = UNSET,
+        model_names: list[str] | UnsetType = UNSET,
+        headers: dict[str, str] | UnsetType = UNSET,
+        model_settings: dict[str, object] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -290,14 +289,14 @@ class AgentRuntimeProfileEditor:
         profile_id: str,
         organization_id: UUID,
         user_id: UUID,
-        name: str | _UnsetType,
-        description: str | None | _UnsetType,
-        base_url: str | HttpUrl | None | _UnsetType,
-        api_key: str | None | _UnsetType,
-        default_model_name: str | None | _UnsetType,
-        model_names: list[str] | _UnsetType,
-        headers: dict[str, str] | _UnsetType,
-        model_settings: dict[str, object] | _UnsetType,
+        name: str | UnsetType,
+        description: str | None | UnsetType,
+        base_url: str | HttpUrl | None | UnsetType,
+        api_key: str | None | UnsetType,
+        default_model_name: str | None | UnsetType,
+        model_names: list[str] | UnsetType,
+        headers: dict[str, str] | UnsetType,
+        model_settings: dict[str, object] | UnsetType,
         refresh_models: bool,
     ) -> AgentRuntimeProfile:
         profile = await self._load_editable(
@@ -312,12 +311,12 @@ class AgentRuntimeProfileEditor:
         stored = _provider_config(profile)
 
         changes: dict[str, object] = {}
-        if not isinstance(name, _UnsetType):
+        if not isinstance(name, UnsetType):
             changes["name"] = _normalize_profile_name(name)
-        if not isinstance(description, _UnsetType):
+        if not isinstance(description, UnsetType):
             changes["description"] = description.strip() if description else None
 
-        if isinstance(base_url, _UnsetType):
+        if isinstance(base_url, UnsetType):
             next_base_url = stored.base_url
         elif base_url is None:
             if not is_anthropic:
@@ -325,7 +324,7 @@ class AgentRuntimeProfileEditor:
             next_base_url = None
         else:
             next_base_url = base_url
-        base_url_changed = not isinstance(base_url, _UnsetType) and str(
+        base_url_changed = not isinstance(base_url, UnsetType) and str(
             next_base_url
         ) != str(stored.base_url)
 
@@ -340,19 +339,19 @@ class AgentRuntimeProfileEditor:
 
         next_headers = (
             stored.headers
-            if isinstance(headers, _UnsetType)
+            if isinstance(headers, UnsetType)
             else _normalized_headers(headers)
         )
         next_settings = (
             stored.model_settings
-            if isinstance(model_settings, _UnsetType)
+            if isinstance(model_settings, UnsetType)
             else (model_settings or {})
         )
 
         # Credentials have three states: absent keeps, a string rotates, an
         # explicit null clears.
         next_credentials = profile.credentials
-        if not isinstance(api_key, _UnsetType):
+        if not isinstance(api_key, UnsetType):
             if api_key is None or not str(api_key).strip():
                 if is_anthropic:
                     raise ValueError(
@@ -364,7 +363,7 @@ class AgentRuntimeProfileEditor:
                     api_key=str(api_key).strip()
                 )
         if (
-            not isinstance(api_key, _UnsetType)
+            not isinstance(api_key, UnsetType)
             or next_credentials is not profile.credentials
         ):
             changes["credentials"] = next_credentials
@@ -372,8 +371,8 @@ class AgentRuntimeProfileEditor:
         rediscover = (
             refresh_models
             or base_url_changed
-            or not isinstance(api_key, _UnsetType)
-            or not isinstance(model_names, _UnsetType)
+            or not isinstance(api_key, UnsetType)
+            or not isinstance(model_names, UnsetType)
         )
         if rediscover:
             revealed = reveal_credentials(next_credentials) or {}
@@ -397,7 +396,7 @@ class AgentRuntimeProfileEditor:
                         headers=next_headers,
                     )
                 )
-            if not isinstance(model_names, _UnsetType):
+            if not isinstance(model_names, UnsetType):
                 fallback_names = list(model_names)
             elif discovered:
                 # _provider_model_catalog unions its fallback with what it
@@ -423,7 +422,7 @@ class AgentRuntimeProfileEditor:
             catalog = list(profile.model_catalog)
 
         catalog_names = {entry.name for entry in catalog}
-        if not isinstance(default_model_name, _UnsetType):
+        if not isinstance(default_model_name, UnsetType):
             changes["default_model_name"] = discovery._select_provider_default_model(
                 requested_model_name=default_model_name,
                 catalog=catalog,
@@ -435,8 +434,8 @@ class AgentRuntimeProfileEditor:
 
         if (
             base_url_changed
-            or not isinstance(headers, _UnsetType)
-            or not isinstance(model_settings, _UnsetType)
+            or not isinstance(headers, UnsetType)
+            or not isinstance(model_settings, UnsetType)
         ):
             config_type = (
                 AnthropicCompatibleRuntimeConfig
