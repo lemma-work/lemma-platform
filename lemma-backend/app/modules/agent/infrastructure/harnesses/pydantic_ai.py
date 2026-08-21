@@ -54,12 +54,13 @@ from pydantic_ai.capabilities import ProcessHistory
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
-    parse_tool_call_args,
 )
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
     log_model_http_error,
 )
-from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffer
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_stream_parts import (
+    StreamingParts,
+)
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
     retry_after_seconds,
@@ -762,102 +763,20 @@ class PydanticAIHarness:
         malformed_tool_call_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
-        token_buffers = {
-            "text": CharStreamBuffer(max_chars=50),
-            "thinking": CharStreamBuffer(max_chars=50),
-            "tool": CharStreamBuffer(max_chars=50),
-        }
-        part_kinds: dict[int, str] = {}
-        part_contents: dict[int, str] = {}
-        part_objects: dict[int, object] = {}
-        tool_names: dict[int, str] = {}
-        tool_stream_started: set[int] = set()
-        tool_stream_has_args: set[int] = set()
-
-        def token_delta(kind: str, chunk: str) -> dict[str, str]:
-            return {"kind": kind, "data": chunk}
-
-        def append_token_text(kind: str, text: str) -> list[dict[str, str]]:
-            if not self.emit_tokens:
-                return []
-            return [
-                token_delta(kind, chunk) for chunk in token_buffers[kind].append(text)
-            ]
-
-        def drain_token_buffer(
-            kind: str,
-            *,
-            force: bool = False,
-        ) -> list[dict[str, str]]:
-            if not self.emit_tokens:
-                return []
-            return [
-                token_delta(kind, chunk)
-                for chunk in token_buffers[kind].drain(force=force)
-            ]
-
-        def drain_all_token_buffers(*, force: bool = False) -> list[dict[str, str]]:
-            chunks: list[dict[str, str]] = []
-            for kind in ("text", "thinking", "tool"):
-                chunks.extend(drain_token_buffer(kind, force=force))
-            return chunks
-
-        def start_tool_stream(index: int, tool_name: str) -> list[dict[str, str]]:
-            if index in tool_stream_started:
-                return []
-            tool_stream_started.add(index)
-            return append_token_text(
-                "tool",
-                f'{{"tool_name":{json.dumps(tool_name)},"args":',
-            )
-
-        def completed_part_message(
-            *,
-            part: object,
-            part_kind: str | None,
-            part_content: str | None,
-        ) -> MessageDraft | None:
-            if isinstance(part, TextPart) or part_kind == "text":
-                final_text = part_content if part_content is not None else part.content
-                if not final_text:
-                    return None
-                return MessageDraft.of_text(final_text)
-
-            if isinstance(part, ThinkingPart) or part_kind == "thinking":
-                final_thinking = (
-                    part_content if part_content is not None else part.content
-                )
-                if not final_thinking:
-                    return None
-                return MessageDraft.of_thinking(final_thinking)
-
-            if isinstance(part, ToolCallPart) or part_kind == "tool_call":
-                tool_args = parse_tool_call_args(part.args)
-                if tool_args is None:
-                    malformed_tool_call_ids.add(part.tool_call_id)
-                    logger.debug(
-                        "agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic",
-                        tool_call_id=part.tool_call_id,
-                    )
-                    return None
-                return MessageDraft.of_tool_call(
-                    tool_name=part.tool_name,
-                    tool_call_id=part.tool_call_id,
-                    tool_args=tool_args,
-                    metadata={"tool_name": part.tool_name},
-                )
-
-            return None
+        parts = StreamingParts(
+            emit_tokens=self.emit_tokens,
+            malformed_tool_call_ids=malformed_tool_call_ids,
+        )
 
         async with node.stream(run.ctx) as request_stream:
             async for event in request_stream:
                 if isinstance(event, PartStartEvent):
-                    part_objects[event.index] = event.part
+                    parts.objects[event.index] = event.part
                     if isinstance(event.part, TextPart):
-                        part_kinds[event.index] = "text"
+                        parts.kinds[event.index] = "text"
                         content = event.part.content or ""
-                        part_contents[event.index] = content
-                        for token_chunk in append_token_text("text", content):
+                        parts.contents[event.index] = content
+                        for token_chunk in parts.append_token_text("text", content):
                             yield AgentEvent(
                                 type=AgentEventType.TOKEN,
                                 data=token_chunk,
@@ -867,10 +786,10 @@ class PydanticAIHarness:
                                 yield self._stopped_event(agent_run_id)
                                 return
                     elif isinstance(event.part, ThinkingPart):
-                        part_kinds[event.index] = "thinking"
+                        parts.kinds[event.index] = "thinking"
                         content = event.part.content or ""
-                        part_contents[event.index] = content
-                        for token_chunk in append_token_text("thinking", content):
+                        parts.contents[event.index] = content
+                        for token_chunk in parts.append_token_text("thinking", content):
                             yield AgentEvent(
                                 type=AgentEventType.TOKEN,
                                 data=token_chunk,
@@ -880,9 +799,9 @@ class PydanticAIHarness:
                                 yield self._stopped_event(agent_run_id)
                                 return
                     elif isinstance(event.part, ToolCallPart):
-                        part_kinds[event.index] = "tool_call"
-                        tool_names[event.index] = event.part.tool_name
-                        for token_chunk in start_tool_stream(
+                        parts.kinds[event.index] = "tool_call"
+                        parts.tool_names[event.index] = event.part.tool_name
+                        for token_chunk in parts.start_tool_stream(
                             event.index,
                             event.part.tool_name,
                         ):
@@ -896,8 +815,10 @@ class PydanticAIHarness:
                                 return
                         initial_args = _tool_call_args_text(event.part.args)
                         if initial_args:
-                            tool_stream_has_args.add(event.index)
-                            for token_chunk in append_token_text("tool", initial_args):
+                            parts.tool_stream_has_args.add(event.index)
+                            for token_chunk in parts.append_token_text(
+                                "tool", initial_args
+                            ):
                                 yield AgentEvent(
                                     type=AgentEventType.TOKEN,
                                     data=token_chunk,
@@ -909,12 +830,14 @@ class PydanticAIHarness:
 
                 elif isinstance(event, PartDeltaEvent):
                     if isinstance(event.delta, TextPartDelta):
-                        part_kinds[event.index] = "text"
+                        parts.kinds[event.index] = "text"
                         content_delta = event.delta.content_delta or ""
-                        part_contents[event.index] = (
-                            part_contents.get(event.index, "") + content_delta
+                        parts.contents[event.index] = (
+                            parts.contents.get(event.index, "") + content_delta
                         )
-                        for token_chunk in append_token_text("text", content_delta):
+                        for token_chunk in parts.append_token_text(
+                            "text", content_delta
+                        ):
                             yield AgentEvent(
                                 type=AgentEventType.TOKEN,
                                 data=token_chunk,
@@ -924,13 +847,13 @@ class PydanticAIHarness:
                                 yield self._stopped_event(agent_run_id)
                                 return
                     elif isinstance(event.delta, ThinkingPartDelta):
-                        part_kinds.setdefault(event.index, "thinking")
+                        parts.kinds.setdefault(event.index, "thinking")
                         content_delta = getattr(event.delta, "content_delta", "") or ""
                         if content_delta:
-                            part_contents[event.index] = (
-                                part_contents.get(event.index, "") + content_delta
+                            parts.contents[event.index] = (
+                                parts.contents.get(event.index, "") + content_delta
                             )
-                            for token_chunk in append_token_text(
+                            for token_chunk in parts.append_token_text(
                                 "thinking",
                                 content_delta,
                             ):
@@ -943,17 +866,17 @@ class PydanticAIHarness:
                                     yield self._stopped_event(agent_run_id)
                                     return
                     elif isinstance(event.delta, ToolCallPartDelta):
-                        part_kinds.setdefault(event.index, "tool_call")
+                        parts.kinds.setdefault(event.index, "tool_call")
                         if event.delta.tool_name_delta:
-                            tool_names[event.index] = (
-                                tool_names.get(event.index, "")
+                            parts.tool_names[event.index] = (
+                                parts.tool_names.get(event.index, "")
                                 + event.delta.tool_name_delta
                             )
                         tool_delta = _tool_call_delta_text(event.delta)
                         if tool_delta:
-                            for token_chunk in start_tool_stream(
+                            for token_chunk in parts.start_tool_stream(
                                 event.index,
-                                tool_names.get(event.index, ""),
+                                parts.tool_names.get(event.index, ""),
                             ):
                                 yield AgentEvent(
                                     type=AgentEventType.TOKEN,
@@ -963,8 +886,10 @@ class PydanticAIHarness:
                                 if await self._should_stop(should_stop):
                                     yield self._stopped_event(agent_run_id)
                                     return
-                            tool_stream_has_args.add(event.index)
-                            for token_chunk in append_token_text("tool", tool_delta):
+                            parts.tool_stream_has_args.add(event.index)
+                            for token_chunk in parts.append_token_text(
+                                "tool", tool_delta
+                            ):
                                 yield AgentEvent(
                                     type=AgentEventType.TOKEN,
                                     data=token_chunk,
@@ -975,14 +900,14 @@ class PydanticAIHarness:
                                     return
 
                 elif isinstance(event, PartEndEvent):
-                    part_kind = part_kinds.pop(event.index, None)
-                    part_content = part_contents.pop(event.index, None)
-                    part_objects.pop(event.index, None)
+                    part_kind = parts.kinds.pop(event.index, None)
+                    part_content = parts.contents.pop(event.index, None)
+                    parts.objects.pop(event.index, None)
                     if isinstance(event.part, ToolCallPart) or part_kind == "tool_call":
-                        for token_chunk in start_tool_stream(
+                        for token_chunk in parts.start_tool_stream(
                             event.index,
                             getattr(event.part, "tool_name", None)
-                            or tool_names.get(event.index, ""),
+                            or parts.tool_names.get(event.index, ""),
                         ):
                             yield AgentEvent(
                                 type=AgentEventType.TOKEN,
@@ -992,11 +917,11 @@ class PydanticAIHarness:
                             if await self._should_stop(should_stop):
                                 yield self._stopped_event(agent_run_id)
                                 return
-                        if event.index not in tool_stream_has_args:
+                        if event.index not in parts.tool_stream_has_args:
                             final_args = _tool_call_args_text(
                                 getattr(event.part, "args", None)
                             )
-                            for token_chunk in append_token_text(
+                            for token_chunk in parts.append_token_text(
                                 "tool",
                                 final_args or "{}",
                             ):
@@ -1008,7 +933,7 @@ class PydanticAIHarness:
                                 if await self._should_stop(should_stop):
                                     yield self._stopped_event(agent_run_id)
                                     return
-                        for token_chunk in append_token_text("tool", "}"):
+                        for token_chunk in parts.append_token_text("tool", "}"):
                             yield AgentEvent(
                                 type=AgentEventType.TOKEN,
                                 data=token_chunk,
@@ -1017,10 +942,8 @@ class PydanticAIHarness:
                             if await self._should_stop(should_stop):
                                 yield self._stopped_event(agent_run_id)
                                 return
-                        tool_names.pop(event.index, None)
-                        tool_stream_started.discard(event.index)
-                        tool_stream_has_args.discard(event.index)
-                    for token_chunk in drain_all_token_buffers(force=True):
+                        parts.forget_tool_part(event.index)
+                    for token_chunk in parts.drain_all_token_buffers(force=True):
                         yield AgentEvent(
                             type=AgentEventType.TOKEN,
                             data=token_chunk,
@@ -1029,7 +952,7 @@ class PydanticAIHarness:
                         if await self._should_stop(should_stop):
                             yield self._stopped_event(agent_run_id)
                             return
-                    message = completed_part_message(
+                    message = parts.completed_part_message(
                         part=event.part,
                         part_kind=part_kind,
                         part_content=part_content,
@@ -1045,7 +968,7 @@ class PydanticAIHarness:
                             return
 
                 elif isinstance(event, FinalResultEvent):
-                    for token_chunk in drain_all_token_buffers(force=True):
+                    for token_chunk in parts.drain_all_token_buffers(force=True):
                         yield AgentEvent(
                             type=AgentEventType.TOKEN,
                             data=token_chunk,
@@ -1055,7 +978,7 @@ class PydanticAIHarness:
                             yield self._stopped_event(agent_run_id)
                             return
 
-        for token_chunk in drain_all_token_buffers(force=True):
+        for token_chunk in parts.drain_all_token_buffers(force=True):
             yield AgentEvent(
                 type=AgentEventType.TOKEN,
                 data=token_chunk,
@@ -1065,14 +988,14 @@ class PydanticAIHarness:
                 yield self._stopped_event(agent_run_id)
                 return
 
-        for part_index in sorted(part_kinds):
-            part = part_objects.get(part_index)
+        for part_index in sorted(parts.kinds):
+            part = parts.objects.get(part_index)
             if part is None:
                 continue
-            message = completed_part_message(
+            message = parts.completed_part_message(
                 part=part,
-                part_kind=part_kinds[part_index],
-                part_content=part_contents.get(part_index),
+                part_kind=parts.kinds[part_index],
+                part_content=parts.contents.get(part_index),
             )
             if message is not None:
                 yield AgentEvent(
