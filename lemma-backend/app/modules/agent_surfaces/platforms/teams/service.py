@@ -517,10 +517,8 @@ async def _resolve_sharepoint_file_content_url(
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").strip()
     raw_path = parsed.path or ""
-    # `"sharepoint.com" in hostname` is true of `sharepoint.com.example.net`,
-    # which is a host an attacker can own. `is_sharepoint_url` asks the question
-    # this meant to ask -- the domain itself or a real subdomain of it -- and is
-    # what every other SharePoint check in this module already uses.
+    # A substring check accepts `sharepoint.com.example.net`, a host anyone can
+    # register. `is_sharepoint_url` asks for the domain or a real subdomain.
     if not raw_path or not is_sharepoint_url(url):
         return None
 

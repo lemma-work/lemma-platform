@@ -1056,7 +1056,6 @@ async def test_a_workspace_whose_agent_died_is_not_ready(
         )
 
 
-
 async def test_python_and_the_shell_are_given_the_same_directory(
     provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
 ) -> None:

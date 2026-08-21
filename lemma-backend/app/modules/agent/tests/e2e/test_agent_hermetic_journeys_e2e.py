@@ -1146,9 +1146,7 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
         grouped: dict[str, list[dict]] = {}
         for item in messages.json()["items"]:
             if item["kind"] == "TOOL_RETURN":
-                grouped.setdefault(item["tool_call_id"], []).append(
-                    item["tool_result"]
-                )
+                grouped.setdefault(item["tool_call_id"], []).append(item["tool_result"])
         return grouped
 
     returns = await _returns_by_id()
@@ -1161,7 +1159,9 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
     assert returns["python-write-1"][0]["success"] is True, returns["python-write-1"]
     assert "python-was-here" in str(returns["shell-read-1"][0]), returns["shell-read-1"]
     assert returns["shell-write-1"][0]["success"] is True, returns["shell-write-1"]
-    assert "shell-was-here" in str(returns["python-read-1"][0]), returns["python-read-1"]
+    assert "shell-was-here" in str(returns["python-read-1"][0]), returns[
+        "python-read-1"
+    ]
 
     # A second turn in the same conversation, because the directory is a
     # property of the conversation rather than of a run. Anything that
@@ -1292,9 +1292,9 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
     assert f"{owner}/{repo}" in python_stdout, returns["python-first-1"]
     # And still the conversation's own directory, the one the shell reports.
     assert recorded_cwd in python_stdout, returns["python-first-1"]
-    assert (returns["shell-after-1"]["stdout"] or "").strip().endswith(
-        recorded_cwd
-    ), returns["shell-after-1"]
+    assert (returns["shell-after-1"]["stdout"] or "").strip().endswith(recorded_cwd), (
+        returns["shell-after-1"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1496,7 +1496,7 @@ async def test_a_plan_is_ticked_off_and_the_tool_says_what_is_next(
     assert "0 of 2 done" in plan["reminder"]
     # The literal call to make next, so flipping it is copying rather than
     # remembering.
-    assert '- [x] Fetch the Q3 report' in plan["reminder"]
+    assert "- [x] Fetch the Q3 report" in plan["reminder"]
 
     flip = returns["todo-flip-1"]
     assert flip["todos"] == [

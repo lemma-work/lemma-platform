@@ -251,9 +251,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
 
-    capability = build_todo_capability(
-        uow_factory=_FakeUoW, conversation_id=uuid4()
-    )
+    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -385,14 +383,10 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(
-        uow_factory=_FakeUoW, conversation_id=uuid4()
-    )
+    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        ),
+        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -412,7 +406,7 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     assert planned["next"] == "Fetch the Q3 report"
     assert "0 of 2 done" in planned["reminder"]
     # The exact call to make, in the task's own words, so flipping it is copying.
-    assert '- [x] Fetch the Q3 report' in planned["reminder"]
+    assert "- [x] Fetch the Q3 report" in planned["reminder"]
 
     flipped = await call({"todos": ["- [x] Fetch the Q3 report"]})
     assert flipped["todos"] == ["- [x] Fetch the Q3 report", "- [ ] Summarize"]
@@ -443,14 +437,10 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(
-        uow_factory=_FakeUoW, conversation_id=uuid4()
-    )
+    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        ),
+        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -537,9 +527,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(
-        uow_factory=_FakeUoW, conversation_id=uuid4()
-    )
+    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),

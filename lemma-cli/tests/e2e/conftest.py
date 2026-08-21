@@ -18,7 +18,7 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3] / "lemma-backend"
 
-POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
+POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg18"
 REDIS_IMAGE = "redis:7.4-alpine"
 SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 

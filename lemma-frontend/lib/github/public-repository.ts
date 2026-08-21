@@ -160,14 +160,13 @@ function cleanReadmeBody(markdown: string): string {
         .split(/(```[\s\S]*?```)/g)
         .map((part) => {
             if (part.startsWith('```')) return part;
-            return (
-                stripUntilStable(part, /<!--[\s\S]*?-->/g, '')
-                    // A marker can outlive the comment it belonged to: an
-                    // unclosed `<!--`, or two fragments spliced into a new one
-                    // by the removal above (`<!-` + `<!-- x -->` + `-`). Either
-                    // way it is not markup anyone meant to publish.
-                    .replace(/<!--|-->/g, '')
-            )
+            // One looped alternation, in this order: a whole comment first,
+            // then any marker that outlived one. HTML ends a comment with
+            // `--!>` as well as `-->`, so both terminators count. Looping is
+            // what makes it a strip rather than a pass -- removing a marker
+            // can splice a new one out of its neighbours (`<` + `<!--` + `!--`
+            // leaves `<!--`), and one pass would publish that.
+            return stripUntilStable(part, /<!--[\s\S]*?--!?>|<!--|--!?>/g, '')
                 .replace(/<br\s*\/?>/gi, '\n')
                 .replace(
                     /<\/?(?:a|b|center|details|div|em|img|kbd|p|picture|source|span|strong|sub|summary|sup|u)\b[^>]*>/gi,

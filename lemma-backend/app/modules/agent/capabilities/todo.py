@@ -197,7 +197,6 @@ def _normalize_stored(stored: list[JsonObject]) -> list[JsonObject]:
     return todos
 
 
-
 def _close_open_match(content: str, todos: list[JsonObject]) -> JsonObject | None:
     """The open task a reworded check-off almost certainly meant.
 
@@ -207,7 +206,9 @@ def _close_open_match(content: str, todos: list[JsonObject]) -> JsonObject | Non
     list quietly grew. Matched conservatively: only when one open task is close
     enough that nothing else competes, so "add a task I forgot" still adds.
     """
-    open_by_key = {_norm(str(item["content"])): item for item in todos if not item.get("done")}
+    open_by_key = {
+        _norm(str(item["content"])): item for item in todos if not item.get("done")
+    }
     if not open_by_key:
         return None
     matches = difflib.get_close_matches(

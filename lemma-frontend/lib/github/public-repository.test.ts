@@ -108,7 +108,13 @@ Useful detail.
         const markdown = [
             '# Project',
             '<p align="center">A shared board where people and agents work together on things.</p>',
+            // Three ways a single pass leaves markup behind: removing the inner
+            // comment splices a new opener out of its neighbours; `--!>` is a
+            // comment terminator HTML accepts and a `-->`-only regex does not;
+            // and removing a marker can splice another one.
             '<!-<!-- hidden -->-',
+            '<!-- also hidden --!>',
+            '<<!--!--',
             'Visible body text that should survive the clean.',
         ].join('\n\n');
 
@@ -116,6 +122,8 @@ Useful detail.
 
         expect(result.body).not.toContain('<!--');
         expect(result.body).not.toContain('-->');
+        expect(result.body).not.toContain('--!>');
+        expect(result.body).not.toContain('hidden');
         expect(result.body).toContain('Visible body text');
     });
 });

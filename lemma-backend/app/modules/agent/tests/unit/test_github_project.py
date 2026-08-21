@@ -284,7 +284,8 @@ async def test_a_scratchpad_conversation_is_untouched_by_the_project_step(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "tool, ran", [("exec_command", "the command ran"), ("execute_python", "the code ran")]
+    "tool, ran",
+    [("exec_command", "the command ran"), ("execute_python", "the code ran")],
 )
 async def test_a_failed_checkout_reaches_the_agent_without_failing_the_work(
     tool: str, ran: str, monkeypatch: pytest.MonkeyPatch

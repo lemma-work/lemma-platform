@@ -34,7 +34,7 @@
 services:
 
   db:
-    image: docker.io/pgvector/pgvector:0.8.3-pg15
+    image: docker.io/pgvector/pgvector:0.8.3-pg18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

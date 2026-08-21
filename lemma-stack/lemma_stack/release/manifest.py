@@ -34,7 +34,15 @@ APP_IMAGE_KEYS = (
     "function",
 )
 
-# Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
+# Fresh installs get pg16. Everything else in this repo -- CI, the e2e
+# harnesses, the local dev stack -- is on pg18, which is what actually runs:
+# prod is CloudSQL POSTGRES_18_4 and the dev cluster is CloudNativePG 18.4.
+#
+# This line is the one place that cannot simply follow, because it is the
+# shipped stack. Postgres refuses to start on a data directory from an older
+# major, and `lemma-stack` has no pg_upgrade step -- so bumping this without
+# one would strand every existing self-hosted install's data on next upgrade.
+# Moving it needs a migration path first.
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
     # Plain Redis. Nothing issues a JSON.* or FT.* command -- RedisJsonCache

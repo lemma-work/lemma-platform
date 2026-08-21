@@ -49,6 +49,7 @@ concurrency:
 
 jobs:
   protected-e2e-gate:
+    timeout-minutes: 90
     name: Require fresh backend protected E2E
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +86,7 @@ jobs:
           sha: ${{ github.sha }}
 
   build:
+    timeout-minutes: 90
     name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
     needs: protected-e2e-gate
     runs-on: ${{ matrix.platform.runner }}
@@ -154,6 +156,7 @@ jobs:
           retention-days: 1
 
   merge:
+    timeout-minutes: 90
     name: Merge ${{ matrix.image }}
     runs-on: ubuntu-latest
     needs: build
@@ -266,6 +269,7 @@ jobs:
           retention-days: 1
 
   infra-digests:
+    timeout-minutes: 90
     name: Pin third-party infrastructure images
     runs-on: ubuntu-latest
     needs: protected-e2e-gate
@@ -328,6 +332,7 @@ jobs:
           retention-days: 1
 
   guest-runtimes:
+    timeout-minutes: 90
     name: Build managed guest runtime (${{ matrix.target }})
     needs: protected-e2e-gate
     runs-on: ${{ matrix.runner }}
@@ -345,6 +350,14 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # This job compiled the workspace from cold on every release, once per
+      # matrix target. Same action and keying as the desktop CI jobs.
+      - name: Cache cargo and desktop target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: guest-runtime-${{ matrix.target }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -375,6 +388,7 @@ jobs:
           retention-days: 1
 
   host-packs:
+    timeout-minutes: 90
     name: Build native host pack (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: [merge, infra-digests]
@@ -428,6 +442,10 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
+        with:
+          # Matches ci.yml. Without it this job re-downloads every wheel it
+          # resolves, on every release.
+          enable-cache: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -603,6 +621,7 @@ jobs:
           }
 
   manifest:
+    timeout-minutes: 90
     name: Publish release manifest
     runs-on: ubuntu-latest
     needs: [merge, infra-digests, guest-runtimes, host-packs]
@@ -890,6 +909,7 @@ jobs:
   # runtime artifacts this workflow already uploads. CI does not package them:
   # half a gigabyte per run, for something nobody can hand to a tester anyway.
   share-desktop-dmg:
+    timeout-minutes: 90
     name: Publish signed nightly macOS DMG
     if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
     runs-on: macos-14
@@ -908,15 +928,15 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      # Keyed on the lockfile alone, this changed only when a dependency did --
+      # so an ordinary Rust edit restored a stale `desktop/target`, recompiled
+      # anyway, and re-uploaded a multi-gigabyte cache of output it had just
+      # invalidated. Same replacement the desktop CI jobs got.
       - name: Cache cargo and desktop target
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-share-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-share-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-share
 
       - name: Resolve nightly tag
         id: tag
@@ -1161,6 +1181,7 @@ jobs:
   # tested end to end, not an oversight to tidy up later. Authenticode signing
   # already exists in release-desktop.yml for the day that changes.
   share-desktop-exe:
+    timeout-minutes: 90
     name: Build nightly Windows installer
     if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
     runs-on: windows-latest
@@ -1184,15 +1205,15 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      # Keyed on the lockfile alone, this changed only when a dependency did --
+      # so an ordinary Rust edit restored a stale `desktop/target`, recompiled
+      # anyway, and re-uploaded a multi-gigabyte cache of output it had just
+      # invalidated. Same replacement the desktop CI jobs got.
       - name: Cache cargo and desktop target
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-share-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-share-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-share
 
       - name: Resolve nightly tag
         id: tag

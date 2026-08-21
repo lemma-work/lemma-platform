@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   build-dmg:
+    timeout-minutes: 120
     # Only version tags. `release: published` also fires for prereleases, and
     # the nightly Desktop builds publish one -- without this they would start an
     # official release build for a tag that has no version in it.
@@ -349,6 +350,7 @@ jobs:
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
 
   build-windows:
+    timeout-minutes: 120
     # Only version tags. `release: published` also fires for prereleases, and
     # the nightly Desktop builds publish one -- without this they would start an
     # official release build for a tag that has no version in it.
