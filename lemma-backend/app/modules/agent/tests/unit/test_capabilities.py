@@ -254,7 +254,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     )
 
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -390,7 +390,7 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -448,7 +448,7 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -544,7 +544,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = build_todo_capability(
-        uow_factory=lambda: _FakeUoW(), conversation_id=uuid4()
+        uow_factory=_FakeUoW, conversation_id=uuid4()
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
@@ -732,7 +732,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -807,7 +807,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -860,7 +860,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         if supports_vision:
             toolsets = [*full_toolsets, view_image_toolset]
         return await build_lemma_harness_tooling(
-            uow_factory=lambda: _FakeUoW(),
+            uow_factory=_FakeUoW,
             agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
             ctx=deps,
             full_toolsets=toolsets,
@@ -936,7 +936,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
@@ -1022,7 +1022,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     )
     full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
+        uow_factory=_FakeUoW,
         agent=agent_entity,
         ctx=deps,
         full_toolsets=full_toolsets,
