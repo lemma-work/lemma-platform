@@ -23,7 +23,6 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SlackSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms.common import (
-    payload_any,
     background_channel_context_note,
     channel_author_label,
 )
@@ -93,7 +92,7 @@ class SlackPlatformService:
                 external_user_id=user.get("id") or user_id,
                 email=profile.get("email"),
                 phone=profile.get("phone"),
-                display_name=payload_any(profile, "display_name", "real_name"),
+                display_name=profile.get("display_name") or profile.get("real_name"),
                 raw_profile=user,
             )
         except Exception:
@@ -118,7 +117,7 @@ class SlackPlatformService:
             response = await client.users_info(user=user_id)
             user = response.get("user") or {}
             profile = user.get("profile") or {}
-            name = payload_any(profile, "display_name", "real_name")
+            name = profile.get("display_name") or profile.get("real_name")
             return str(name).strip() or None if name else None
         except Exception:
             logger.debug(

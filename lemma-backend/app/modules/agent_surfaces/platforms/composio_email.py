@@ -17,8 +17,6 @@ provider I/O either here (Composio) or through their native httpx path.
 
 from __future__ import annotations
 
-from app.modules.agent_surfaces.platforms.common import payload_any
-
 from typing import Any
 
 import httpx
@@ -30,6 +28,7 @@ from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
 )
+from app.modules.agent_surfaces.platforms.common import payload_any
 
 # Reserved key the surface credential resolver stamps with the account's
 # auth-config kind. Falls back to connection_id sniffing for credential

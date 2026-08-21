@@ -18,15 +18,17 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     GmailSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import inline_cap
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
-    coerce_display_resource_plans,
     decode_base64_bytes,
-    render_email_content,
-    reply_subject,
-    resolve_outbound_email_attachments,
     resolve_outbound_email_attachment_urls,
+    resolve_outbound_email_attachments,
 )
+from app.modules.agent_surfaces.platforms.email_render import (
+    coerce_display_resource_plans,
+    render_email_content,
+)
+from app.modules.agent_surfaces.platforms.email_text import reply_subject
 from app.modules.agent_surfaces.platforms.composio_email import (
     execute_composio_operation,
     fetch_composio_file_bytes,

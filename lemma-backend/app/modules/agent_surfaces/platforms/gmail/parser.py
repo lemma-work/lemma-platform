@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from app.modules.agent_surfaces.platforms.common import (
-    payload_any,
-    payload_first,
-    payload_section,
-    payload_text,
-)
-
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
+    payload_first,
+    payload_section,
+    payload_text,
+)
+from app.modules.agent_surfaces.platforms.email_attachments import decode_base64_bytes
+from app.modules.agent_surfaces.platforms.email_identity import (
     ParsedEmailIdentity,
-    decode_base64_bytes,
     parse_email_identity,
+)
+from app.modules.agent_surfaces.platforms.email_text import (
     plain_text_from_html,
     strip_quoted_reply,
 )

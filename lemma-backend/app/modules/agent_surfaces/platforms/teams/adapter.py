@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from app.modules.agent_surfaces.platforms.common import payload_any
-
 from typing import Any
 from urllib.parse import quote
 
 import aiohttp
 
 from app.core.log.log import get_logger
+from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -23,9 +22,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.common import payload_any
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
-from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.platforms.teams.parser import (
     TEAMS_APPROVAL_DECISION_KEY,
     TEAMS_FORM_CALLBACK_KEY,
@@ -631,8 +630,6 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         if not email:
             # Some tenants return email directly on the member object
             email = payload_any(data, "email", "userPrincipalName")
-        if email:
-            pass
         return email or None
 
 

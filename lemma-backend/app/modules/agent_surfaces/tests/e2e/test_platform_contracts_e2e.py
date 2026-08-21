@@ -583,14 +583,14 @@ def test_provider_failure_classifies_status_body_and_missing_response():
 
 
 # ---------------------------------------------------------------------------
-# Shared email helpers (app/modules/agent_surfaces/platforms/email_common.py).
+# Shared email helpers (app/modules/agent_surfaces/platforms/email_*.py).
 # Gmail, Outlook, and Resend all route body cleaning, reply threading, and
 # display-resource rendering through these pure functions.
 # ---------------------------------------------------------------------------
 
 
 def test_plain_text_from_html_strips_non_text_tags_and_truncates():
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_text import (
         _MAX_HTML_CHARS,
         plain_text_from_html,
     )
@@ -608,7 +608,7 @@ def test_plain_text_from_html_strips_non_text_tags_and_truncates():
 
 
 def test_reply_subject_defaults_and_preserves_existing_prefix():
-    from app.modules.agent_surfaces.platforms.email_common import reply_subject
+    from app.modules.agent_surfaces.platforms.email_text import reply_subject
 
     assert reply_subject(None) == "Reply from Lemma"
     assert reply_subject("  ") == "Reply from Lemma"
@@ -617,14 +617,14 @@ def test_reply_subject_defaults_and_preserves_existing_prefix():
 
 
 def test_looks_forwarded_detects_subject_prefix():
-    from app.modules.agent_surfaces.platforms.email_common import looks_forwarded
+    from app.modules.agent_surfaces.platforms.email_text import looks_forwarded
 
     assert looks_forwarded(None, subject="Fwd: quarterly numbers") is True
     assert looks_forwarded("no markers here", subject="just a subject") is False
 
 
 def test_strip_quoted_reply_edge_cases():
-    from app.modules.agent_surfaces.platforms.email_common import strip_quoted_reply
+    from app.modules.agent_surfaces.platforms.email_text import strip_quoted_reply
 
     assert strip_quoted_reply("") == ""
     assert strip_quoted_reply("   ") == ""
@@ -646,14 +646,14 @@ def test_strip_quoted_reply_edge_cases():
 
 
 def test_inbound_email_text_falls_back_to_html_part():
-    from app.modules.agent_surfaces.platforms.email_common import inbound_email_text
+    from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
 
     text = inbound_email_text(text=None, html="<p>Hello from HTML</p>")
     assert text == "Hello from HTML"
 
 
 def test_decode_email_html_data_uri_and_plain_passthrough():
-    from app.modules.agent_surfaces.platforms.email_common import decode_email_html
+    from app.modules.agent_surfaces.platforms.email_text import decode_email_html
 
     assert decode_email_html(None) == ""
 
@@ -675,8 +675,8 @@ def test_decode_email_html_data_uri_and_plain_passthrough():
 
 
 def test_render_email_content_html_and_markdown_fallback(monkeypatch):
-    import app.modules.agent_surfaces.platforms.email_common as email_common_module
-    from app.modules.agent_surfaces.platforms.email_common import render_email_content
+    import app.modules.agent_surfaces.platforms.email_render as email_render_module
+    from app.modules.agent_surfaces.platforms.email_render import render_email_content
 
     plain, html = render_email_content(content="<p>Hi</p>", content_type="html")
     assert plain == "Hi"
@@ -684,8 +684,8 @@ def test_render_email_content_html_and_markdown_fallback(monkeypatch):
 
     # With the optional `markdown` dependency unavailable, markdown content
     # falls back to an escaped `<pre>` block rather than rendered HTML.
-    monkeypatch.setattr(email_common_module, "markdown_lib", None)
-    plain_md, html_md = email_common_module.render_email_content(
+    monkeypatch.setattr(email_render_module, "markdown_lib", None)
+    plain_md, html_md = email_render_module.render_email_content(
         content="a < b && b > c", content_type="markdown"
     )
     assert plain_md == "a < b && b > c"
@@ -697,7 +697,7 @@ def test_render_email_content_appends_display_resource_plans():
         SurfaceDisplayAction,
         SurfaceDisplayRenderPlan,
     )
-    from app.modules.agent_surfaces.platforms.email_common import render_email_content
+    from app.modules.agent_surfaces.platforms.email_render import render_email_content
 
     plan = SurfaceDisplayRenderPlan(
         resource_type="record",
@@ -727,7 +727,7 @@ def test_coerce_display_resource_plans_normalizes_mixed_input():
     from pydantic import BaseModel
 
     from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_render import (
         coerce_display_resource_plans,
     )
 
@@ -754,7 +754,7 @@ def test_coerce_display_resource_plans_normalizes_mixed_input():
 
 
 def test_guess_content_type_decode_base64_and_file_name_helpers():
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_attachments import (
         decode_base64_bytes,
         file_name_from_path,
         guess_content_type,
@@ -777,10 +777,10 @@ async def test_resolve_outbound_email_attachments_and_urls(monkeypatch):
     from uuid import uuid4
 
     import app.composition.surface_agent as surface_agent_composition
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_attachments import (
         append_attachment_links,
-        resolve_outbound_email_attachments,
         resolve_outbound_email_attachment_urls,
+        resolve_outbound_email_attachments,
     )
 
     small_deps = SimpleNamespace(
@@ -848,7 +848,7 @@ async def test_resolve_outbound_email_attachments_and_urls(monkeypatch):
 
 
 def test_parse_email_identity_and_read_helpers_handle_unrecognized_shapes():
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_identity import (
         _read_email_name,
         parse_email_identity,
     )

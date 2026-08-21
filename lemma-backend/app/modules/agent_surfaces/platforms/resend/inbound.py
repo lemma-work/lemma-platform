@@ -10,12 +10,11 @@ it there is nothing to fetch with, and the agent sees an empty message.
 
 from __future__ import annotations
 
-from app.modules.agent_surfaces.platforms.common import payload_any
-
 import json
 from typing import Any
 
-from app.modules.agent_surfaces.platforms.email_common import parse_email_identity
+from app.modules.agent_surfaces.platforms.common import payload_any
+from app.modules.agent_surfaces.platforms.email_identity import parse_email_identity
 
 
 def email_address(value: Any) -> str | None:

@@ -14,12 +14,12 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.email_identity import (
     email_thread_root,
-    inbound_email_text,
     normalize_email_address,
     parse_email_identity,
 )
+from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     header_map,
     normalize_attachments,
