@@ -169,9 +169,17 @@ def agent_run_telemetry_context(
         # A conversation is many runs, and each run is its own trace. Phoenix
         # joins those traces back into one session by exactly one attribute --
         # `session.id`, the OpenInference name -- and by nothing else. Our own
-        # `lemma.conversation_id` is filterable but not groupable, so without
-        # this line the Sessions view is empty and every turn of a conversation
-        # is an unrelated trace.
+        # `lemma.conversation_id` is filterable but not groupable.
+        #
+        # This is the SECOND of two writers, and they must agree. The model spans
+        # get their `session.id` from the OpenInference instrumentation, which
+        # derives it from pydantic-ai's `gen_ai.conversation.id` and overwrites
+        # whatever was set at span start -- so the harness passes our
+        # conversation id into `Agent.iter(conversation_id=...)` to make that
+        # value ours. This line covers the root `agent.run` span, which is on the
+        # general provider and never sees that instrumentation. Phoenix binds a
+        # trace to a session from whichever of its spans it inserts first, so the
+        # two writers agreeing is what makes the binding deterministic.
         SpanAttributes.SESSION_ID: str(conversation_id),
     }
     optional_attributes = {
