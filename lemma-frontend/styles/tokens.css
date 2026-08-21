@@ -2306,7 +2306,7 @@
   --segmented-active-bg: var(--surface-1);
   --segmented-active-fg: var(--text-primary);
   --progress-segment-bg: color-mix(in srgb, var(--delight) 56%, var(--border-default));
-  --sidebar-active-bg: var(--surface-1);
+  --sidebar-active-bg: var(--action-primary-soft);
   --sidebar-active-accent: var(--brand-primary);
 
   /* Typography — one family, product and landing.
@@ -2607,7 +2607,7 @@
   --segmented-active-bg: var(--surface-1);
   --segmented-active-fg: var(--text-primary);
   --progress-segment-bg: color-mix(in srgb, var(--delight) 62%, var(--border-default));
-  --sidebar-active-bg: var(--surface-1);
+  --sidebar-active-bg: var(--action-primary-soft);
   --sidebar-active-accent: var(--brand-primary);
 
   /* Dark violet ramp — inverted lightness */

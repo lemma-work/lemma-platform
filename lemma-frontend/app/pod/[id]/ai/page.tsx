@@ -15,7 +15,9 @@ import {
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { LemmaMark } from '@/components/brand/logo';
+import { ResourceIdentity } from '@/components/shared/resource-identity';
+import { LEM_SEED } from '@/lib/identity/seeded-identity';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -353,14 +355,21 @@ function PodAssistantCard({ podId, reach }: {
         <div className="resource-index-card group flex min-h-40 flex-col p-4">
             <Link href={`/pod/${podId}/ai/assistant`} className="block">
                 <div className="flex items-start justify-between gap-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--card-bg)] shadow-[var(--shadow-xs)]">
-                        <LemmaMark size="sm" />
-                    </span>
+                    {/* The same being the rail and the front door draw, at the
+                        44px this card's tile used to be. No tile: a being carries
+                        its own colour and needs no ground under it. */}
+                    <ResourceIdentity
+                        seed={LEM_SEED}
+                        label={DEFAULT_RESPONDER_NAME}
+                        kind="being"
+                        size={44}
+                        className="shrink-0"
+                    />
                     <span className="chip chip-sm chip-muted shrink-0">Default</span>
                 </div>
 
                 <div className="mt-3 min-w-0">
-                    <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">Pod Assistant</h2>
+                    <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">{DEFAULT_RESPONDER_NAME}</h2>
                     <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
                         This pod&apos;s most capable agent — adds tables, builds workflows, spins up agents, and edits data directly.
                     </p>

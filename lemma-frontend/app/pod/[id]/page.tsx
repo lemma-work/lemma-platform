@@ -3,7 +3,7 @@
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
+import { ArrowRight, Check, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
@@ -44,6 +44,7 @@ import { buildScopedConversationHref } from '@/lib/assistant/conversation-compos
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { Composer } from '@/components/shared/composer';
+import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ConversationAgentPicker } from '@/components/conversations/conversation-agent-picker';
 import { ResourceCover } from '@/components/shared/resource-identity';
 import { cn } from '@/lib/utils';
@@ -399,7 +400,23 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                     times and buried the one field that takes any answer. */}
                 <div className={cn('w-full max-w-3xl', showStarterHome && 'mt-6')}>
                     {showStarterHome ? null : (
-                        <p className="pod-home-eyebrow mb-3.5">{pod?.name || 'This pod'}</p>
+                        <div className="mb-3.5 flex flex-col items-center gap-2.5">
+                            {/* The pod's own mark, big enough to breathe — the same
+                                seeded team identity the sidebar switcher carries,
+                                here at the size where its motion turns on. Home is
+                                the pod's front door; the name was a caption without
+                                the face. */}
+                            <ResourceIcon
+                                iconUrl={pod?.icon_url}
+                                alt={`${pod?.name || 'This pod'} icon`}
+                                label={pod?.name || 'This pod'}
+                                identityKind="team"
+                                identitySeed={podId}
+                                identitySize={44}
+                                className="h-11 w-11 rounded-xl"
+                            />
+                            <p className="pod-home-eyebrow">{pod?.name || 'This pod'}</p>
+                        </div>
                     )}
                     {assistant.pendingFiles.length > 0 ? (
                         <div className="mb-3 flex flex-wrap justify-center gap-2">
@@ -916,7 +933,13 @@ function PodAgentWorkflowKanban({
                             <h2 className="pod-home-work-title">Activity</h2>
                             <div className="pod-home-work-live-pill">
                                 {movingItems.length > 0 ? (
-                                    <span className="pod-home-work-live-dot" />
+                                    /* The chat status pill's ping halo: running
+                                       work breathes in action violet, matching
+                                       the live rows inside the panel. */
+                                    <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
+                                        <span className="absolute inset-0 animate-ping rounded-full bg-[var(--action-primary)] opacity-30" />
+                                        <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--action-primary)]" />
+                                    </span>
                                 ) : null}
                                 <span>
                                     {unattendedAsks.length > 0
@@ -1105,14 +1128,32 @@ function KanbanCard({ item }: { item: KanbanItem }) {
             href={item.href}
             className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-[color:color-mix(in_srgb,var(--surface-2)_50%,transparent)]"
         >
-            <span
-                className={cn(
-                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                    item.statusTone === 'live' && 'lemma-live-pulse',
-                    kanbanDotClass(item.statusTone),
-                )}
-                aria-hidden="true"
-            />
+            {item.statusTone === 'success' ? (
+                /* A finished outcome wears the chat's settled check — green is
+                   the colour of "this worked" everywhere else in the product,
+                   and a plain dot was spending that moment on a bullet. */
+                <span
+                    className="pod-home-outcome-check flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+                    aria-hidden="true"
+                >
+                    <Check className="h-3 w-3" strokeWidth={2.4} />
+                </span>
+            ) : item.statusTone === 'live' ? (
+                /* Work in flight gets the chat status pill's ping halo — violet,
+                   because live means acting, and violet carries action. */
+                <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--action-primary)] opacity-30" />
+                    <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--action-primary)]" />
+                </span>
+            ) : (
+                <span
+                    className={cn(
+                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                        kanbanDotClass(item.statusTone),
+                    )}
+                    aria-hidden="true"
+                />
+            )}
             <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
                 {item.title}
             </span>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAssistantController, useConversationMessages } from 'lemma-sdk/react';
@@ -50,6 +50,20 @@ interface AgentTestPanelProps {
      * switches between them itself.
      */
     view?: 'split' | 'conversation' | 'history';
+    /**
+     * What the conversation shows before the first message. The agent page
+     * passes its front door here — greeting, face, where else to reach it —
+     * so the introduction and the composer are one screen with nothing to keep
+     * in sync between them. Omitted, the view falls back to its own suggestions.
+     */
+    emptyState?: ReactNode;
+    /**
+     * Whether the panel draws its own header. The dock needs one — it is a panel
+     * among other panels and has to say what it is. Rendered into an agent's
+     * home it does not: the page has already introduced the agent twice by the
+     * time this appears under the greeting.
+     */
+    showHeader?: boolean;
     onToggleFullView?: () => void;
     onClose?: () => void;
 }
@@ -159,6 +173,8 @@ export function AgentTestPanel({
     openConversationRequestKey,
     isFullView,
     view = 'split',
+    emptyState,
+    showHeader = true,
     onToggleFullView,
     onClose,
 }: AgentTestPanelProps) {
@@ -557,7 +573,8 @@ export function AgentTestPanel({
                                 ) : null}
                             </>
                         )}
-                        emptyStateSuggestions={[
+                        emptyState={emptyState}
+                        emptyStateSuggestions={emptyState ? undefined : [
                             { text: 'Help me think through this pod' },
                             { text: 'Draft the next response' },
                             { text: 'Summarize what matters here' },
@@ -573,6 +590,11 @@ export function AgentTestPanel({
         <div className={cn('agent-test-panel grid h-full min-h-0 items-stretch bg-[var(--card-bg)]', isSplit ? 'surface-split-2 lg:grid-cols-[340px_minmax(0,1fr)]' : 'grid-cols-1')}>
             {isSplit ? historyPanel : null}
             <div className="flex min-h-0 min-w-0 flex-col bg-[var(--card-bg)]">
+                {/* Conditional, not `hidden`. The attribute sets `display: none`
+                    at the UA level and the `flex` class beside it overrides that
+                    — so the header stayed laid out and simply emptied, leaving
+                    3.5rem of nothing above the first field. */}
+                {showHeader ? (
                 <div className="agent-test-run-header sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between bg-[var(--card-bg)] px-3">
                     <div className="min-w-0">
                         <p className="type-eyebrow-medium">Run setup</p>
@@ -614,6 +636,7 @@ export function AgentTestPanel({
                         ) : null}
                     </div>
                 </div>
+                ) : null}
 
                 <div className="min-h-0 flex-1 overflow-hidden">
                     {hasActiveRun ? (
@@ -641,12 +664,13 @@ export function AgentTestPanel({
                     <div className="agent-test-run-start h-full overflow-y-auto">
                         <div className="agent-test-run-start-inner">
                             <div className="agent-test-start-panel">
-                                <div className="agent-test-run-form-head">
-                                    <div>
-                                        <p className="type-eyebrow-medium">New run</p>
-                                        <h4>Inputs</h4>
-                                    </div>
-                                </div>
+                                {/* No "New run / Inputs" head. It sat above a
+                                    stack of labelled fields, which is already
+                                    unmistakably a form for starting a run — two
+                                    lines of chrome restating what the thing under
+                                    them plainly is. The header above already
+                                    names the run setup where a header exists at
+                                    all. */}
 
                                 {visibleApps.length > 0 ? (
                                     <div className="agent-test-run-connections space-y-3">

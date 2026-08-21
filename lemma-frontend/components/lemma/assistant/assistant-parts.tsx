@@ -28,6 +28,9 @@ import type {
 } from "./assistant-types";
 import type { PlanSummaryState } from "./assistant-experience";
 import { useNowMs } from "./use-assistant-experience";
+import { ResourceIdentity } from "@/components/shared/resource-identity";
+import { LEM_SEED } from "@/lib/identity/seeded-identity";
+import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
 
 export function suggestionIconForTitle(title: string): ReactNode {
   const normalized = title.toLowerCase();
@@ -188,45 +191,7 @@ export const DEFAULT_EMPTY_STATE_SUGGESTIONS: EmptyStateSuggestion[] = [
   { text: "Brainstorm next steps", icon: <MoreHorizontal className="size-3.5" aria-hidden="true" /> },
 ];
 
-export function LemmaMarkIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="none"
-      className={className}
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M10 2.5 16.25 5v4.85c0 4.25-2.55 7.05-6.25 8.15-3.7-1.1-6.25-3.9-6.25-8.15V5L10 2.5Z"
-        fill="currentColor"
-        fillOpacity="0.18"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path
-        d="m7.1 10.1 1.8 1.8 4-4.1"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
-function LemmaMiniMark({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn("inline-flex items-end gap-[2px] text-[var(--delight)]", className)}
-      aria-hidden="true"
-    >
-      <span className="block h-[5px] w-[2px] rounded-sm bg-current" />
-      <span className="block h-[9px] w-[2px] rounded-sm bg-current" />
-      <span className="block h-[13px] w-[2px] rounded-sm bg-current" />
-    </span>
-  );
-}
 
 export function EmptyState({
   onSendMessage,
@@ -243,9 +208,18 @@ export function EmptyState({
       )}
     >
       <div className={cn("flex max-w-2xl flex-col items-center", isCompact ? "gap-1.5" : "gap-2")}>
+        {/* The responder names itself here, and it is the same being the rail,
+            the dock badge and the front door draw. This line said "Lemma Assist"
+            beside the brand's own bars — the product introducing itself on the
+            screen where the agent should. */}
         <div className="flex items-center gap-1.5 text-xs font-normal text-[var(--text-secondary)]">
-          <LemmaMiniMark />
-          Lemma Assist
+          <ResourceIdentity
+            seed={LEM_SEED}
+            label={DEFAULT_RESPONDER_NAME}
+            kind="being"
+            size={18}
+          />
+          {DEFAULT_RESPONDER_NAME}
         </div>
         <h4 className={cn("lemma-assistant-text-heading font-normal tracking-tight", isCompact ? "text-base" : "text-lg")}>
           What do you want to make happen?

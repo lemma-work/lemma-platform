@@ -232,6 +232,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
         model_name: (raw.model_name as Agent['model_name'] | undefined) ?? rawRuntime?.model_name,
         instruction: String(raw.instruction || ''),
         input_schema: (raw.input_schema as Record<string, unknown> | undefined) || {},
+        takes_input: typeof raw.takes_input === 'boolean' ? raw.takes_input : undefined,
         output_schema: (raw.output_schema as Record<string, unknown> | undefined) || {},
         tool_sets: (raw.toolsets as Agent['tool_sets'] | undefined) || (raw.tool_sets as Agent['tool_sets'] | undefined) || [],
         toolsets: (raw.toolsets as Agent['tool_sets'] | undefined) || (raw.tool_sets as Agent['tool_sets'] | undefined) || [],

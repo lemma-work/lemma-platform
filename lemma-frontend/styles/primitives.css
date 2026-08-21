@@ -780,11 +780,42 @@
 
 /* Icons rest one step quieter than the label beside them, then track the row
    once it is hovered or active. Without this they held `--text-tertiary` while
-   the label lit to `--text-primary`, and the row read as half-awake. */
+   the label lit to `--text-primary`, and the row read as half-awake. The
+   jewel-toned place kinds below are the deliberate exception: their colour is
+   the place's identity, so it holds in every state. */
 .lemma-sidebar-row:hover .lemma-product-icon,
 .lemma-sidebar-row:focus-visible .lemma-product-icon,
 .lemma-sidebar-row[data-active="true"] .lemma-product-icon {
   color: inherit;
+}
+
+/* The day-to-day kinds each keep their own jewel tone in every state — the
+   same accents the recipe and app tiles wear — so the nav column reads as a
+   set of named rooms, not a row of grey glyphs. The `[data-state]` in the
+   selector keeps these above the inherit-on-hover rules above on purpose:
+   colour is the kind's identity and it stays put, while the pointer is still
+   answered by motion (the glyph scale below), never by weight or fill. Setup
+   kinds (connectors, settings, …) stay ink-coloured so they recede. Agents
+   keeps its tone too, for the menus and headers that still draw the kind —
+   in the nav itself agents are a rail of faces, not a place row. */
+.lemma-product-icon[data-kind="apps"][data-state] {
+  color: var(--action-primary);
+}
+
+.lemma-product-icon[data-kind="agents"][data-state] {
+  color: var(--intelligence);
+}
+
+.lemma-product-icon[data-kind="data"][data-state] {
+  color: var(--state-success);
+}
+
+.lemma-product-icon[data-kind="docs"][data-state] {
+  color: var(--delight);
+}
+
+.lemma-product-icon[data-kind="workflows"][data-state] {
+  color: var(--collaboration);
 }
 
 /* Pointer feedback is motion, never weight or fill: every product glyph stays a
@@ -997,9 +1028,9 @@ button:focus-visible .lemma-product-icon-glyph {
   }
 }
 
-/* One scannable line per conversation: a status dot in a fixed gutter, then the
-   title. Taller and larger than the nav rows below it because this list is the
-   sidebar's body, not its chrome. */
+/* One scannable line per conversation: a leading mark, then the title. Taller
+   and larger than the nav rows below it because this list is the sidebar's
+   body, not its chrome. */
 .workspace-sidebar-conversation-row {
   cursor: pointer;
   height: 2rem;
@@ -1011,6 +1042,158 @@ button:focus-visible .lemma-product-icon-glyph {
   padding-inline: 0.625rem;
   font-size: 0.8125rem;
   line-height: 1.25rem;
+}
+
+/* A row that knows who answered draws them, and the extra 4px is the whole
+   cost. This is the fix for the sidebar's real problem: the rail was the
+   tallest band in the column and the history — the part anyone actually
+   clicks — was the shortest, so mass ran opposite to use. Raising the history
+   to meet the rail closes the gap from the end that was wrong, and the marks
+   pay for themselves: a pod whose assistant answers most runs produced a stack
+   of identical one-word titles with nothing to tell them apart.
+   The places below keep their own smaller measure. Two densities, and the line
+   between them means something — things you open, then places you browse. */
+.workspace-sidebar-conversation-row-marked {
+  height: 2.125rem;
+}
+
+.workspace-sidebar-conversation-mark {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The mark says who; the pip says what this run is doing. A resting
+   conversation gets no pip — the old gutter drew a hollow ring at 2.3:1 that
+   read as dust, and "nothing is happening" is better said with nothing. */
+.workspace-sidebar-conversation-pip {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  /* Ringed in the shell ground the sidebar sits on, so the pip reads as
+     sitting on the tile rather than punched into it, on either appearance. */
+  box-shadow: 0 0 0 1.5px var(--pod-shell-bg);
+  background: var(--delight);
+}
+
+.workspace-sidebar-conversation-pip[data-tone="warning"] {
+  background: var(--state-warning);
+}
+
+.workspace-sidebar-conversation-pip[data-tone="danger"] {
+  background: var(--state-error);
+}
+
+/* Live work breathes, and it keeps the sidebar's delight-gold rather than
+   borrowing the chat's violet: same motion, same semantics as the dot it
+   replaces. */
+.workspace-sidebar-conversation-pip[data-pulse="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--delight);
+  opacity: 0.4;
+  animation: conversation-pip-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Declared here rather than borrowing Tailwind's `ping`: that keyframe is only
+   emitted while some element still uses `animate-ping`, and this rule outlived
+   the row that did. */
+@keyframes conversation-pip-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-sidebar-conversation-pip[data-pulse="true"]::after {
+    animation: none;
+  }
+}
+
+/* A resource rail row — an app this pod shipped or an agent who works here —
+   carries the identity tile at 32px: exactly the size a being's rich motion
+   turns on (`RICH_MOTION_MIN_SIZE`), so reaching for a row wakes its face.
+   The rail leads the sidebar, and leading it is the emphasis; the row height
+   is only what a 32px tile needs to breathe, not a second helping of it.
+   Stacked emphasis is what made this rail read as unfinished — position, then
+   size, then a tinted hover, then a coloured glow, all saying the same thing
+   about the same row.
+   The `lm-identity-hue-*` class stays for one job: the active bar. A hue that
+   paints the row under the pointer identifies nothing, because every row wears
+   it in turn; a hue on the *one* active row says who you are looking at. */
+.lemma-sidebar-row.workspace-sidebar-resource-row {
+  position: relative;
+  min-height: 2.375rem;
+  gap: var(--space-3);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2-5);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.25rem;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.lemma-sidebar-row.workspace-sidebar-resource-row:active {
+  transform: scale(0.99);
+}
+
+/* The active bar keeps the nav's language — same inset, same unfurl as
+   `.lemma-product-nav-item::before` — but wears the resource's own hue: the
+   violet fill says "here", the bar says "who". */
+.workspace-sidebar-resource-row::before {
+  content: "";
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2.5px;
+  border-radius: var(--radius-full);
+  background: var(--lm-identity-tone, var(--sidebar-active-accent, var(--action-primary)));
+  opacity: 0;
+  transform: scaleY(0.36);
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.workspace-sidebar-resource-row[data-active="true"]::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+/* The tile answers the pointer the way product glyphs answer theirs — motion,
+   never weight or fill. It used to cast a coloured glow as well, which is
+   weight *and* fill wearing motion's clothes: two rules for one pointer, and
+   the loudest thing in a column whose job is to stay quiet under the work. */
+.workspace-sidebar-resource-icon {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.workspace-sidebar-resource-row:hover .workspace-sidebar-resource-icon,
+.workspace-sidebar-resource-row:focus-visible .workspace-sidebar-resource-icon {
+  transform: translateY(-1px) scale(1.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lemma-sidebar-row.workspace-sidebar-resource-row,
+  .workspace-sidebar-resource-row::before,
+  .workspace-sidebar-resource-icon {
+    transition: none;
+  }
+
+  .lemma-sidebar-row.workspace-sidebar-resource-row:active,
+  .workspace-sidebar-resource-row:hover .workspace-sidebar-resource-icon,
+  .workspace-sidebar-resource-row:focus-visible .workspace-sidebar-resource-icon {
+    transform: none;
+  }
 }
 
 .workspace-sidebar-show-more {
@@ -1052,12 +1235,18 @@ button:focus-visible .lemma-product-icon-glyph {
   opacity: 0;
 }
 
-/* The one rule in the sidebar: above it is where things live, below it is this
-   pod's history. It only has to mark the seam between two kinds of thing — the
-   change in rhythm either side already does most of that work, so the line can
-   sit well below the strength of the shell's own hairlines. */
+/* The one rule in the sidebar, and it is on the strip's *top* edge now.
+   It used to be on the bottom, back when the places sat between the agents rail
+   and the history — which meant the only line near them introduced the history
+   instead of separating them from the rail, so the strip read as the rail's
+   demoted tail. On a footer the seam belongs above: everything over the line is
+   something you open, everything under it is a place or an account. It only has
+   to mark that change, and the change in rhythm either side already does most
+   of the work, so the line sits well below the strength of the shell's own
+   hairlines. The account block below takes no second rule — one footer, one
+   seam. */
 .workspace-sidebar-places {
-  border-bottom: 1px solid
+  border-top: 1px solid
     color-mix(in srgb, var(--border-subtle) 40%, transparent);
 }
 

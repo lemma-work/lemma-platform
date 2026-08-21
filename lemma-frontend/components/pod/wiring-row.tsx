@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 /**
  * One wiring question and its one-line answer.
  *
- * Agents, workflows, and the pod assistant all answer the same shape of
+ * Agents, workflows, and Lem all answer the same shape of
  * question — what it can reach, who reaches it, when it runs — so the row lives
  * here rather than inside any one of them.
  */

@@ -298,9 +298,9 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
 
 
 async def test_pod_assistant_route_is_not_the_surface_default():
-    """Picking "Pod assistant" must not silently mean "whatever agent3 is".
+    """Picking the default responder must not silently mean "whatever agent3 is".
 
-    The pod assistant is a conversation with *no* agent. Storing it as an empty
+    It is a conversation with *no* agent. Storing it as an empty
     agent_name made it indistinguishable from an unconfigured route, so it fell
     through to ``surface.agent_id`` — and a channel set to the pod assistant
     kept answering as the surface's default agent.

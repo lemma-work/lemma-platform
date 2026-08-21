@@ -9,7 +9,7 @@ import type { AssistantSurface } from '@/lib/types';
  * Rail parts for pages that present an agent-shaped thing in a side column.
  *
  * The agent detail page no longer has a rail — it states identity and wiring
- * inline — so what remains here is what the pod assistant still builds from.
+ * inline — so what remains here is what Lem still builds from.
  */
 
 export function agentInitials(name: string): string {

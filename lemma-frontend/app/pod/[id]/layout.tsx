@@ -668,7 +668,7 @@ function PodShell({
                             </TooltipProvider>
                         </div>
                 </header>
-                {!isPodHome && !isConversationRoute && !isAppViewRoute ? (
+                {!isPodHome && !isConversationRoute && !isAppViewRoute && !topbar.hideContextBar ? (
                     <header
                         className={cn(
                             "pod-shell-topbar pod-shell-contextbar flex h-12 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4",
@@ -693,13 +693,23 @@ function PodShell({
                         ) : (
                             <>
                         <div key={`${currentHref}:topbar-title`} className="pod-shell-topbar-title-cluster flex h-7 min-w-0 flex-1 items-center gap-2">
+                            {/* The arrow always; the label only when there is room
+                                for it. This was `hidden sm:inline-flex` — the whole
+                                control, not just its text — so below 640px a
+                                resource page had no way back to the index it came
+                                from at all. The one place that needs it most is the
+                                one place it was missing: on a phone the tab strip
+                                is hidden too, which leaves the browser's own back
+                                button as the only exit. */}
                             {backTarget ? (
                                 <Link
                                     href={appendAssistantConversationParam(backTarget.href, assistantConversationId)}
-                                    className="lemma-shell-link lemma-shell-link-sm hidden sm:inline-flex"
+                                    className="lemma-shell-link lemma-shell-link-sm inline-flex shrink-0"
+                                    aria-label={`Back to ${backTarget.label}`}
+                                    title={backTarget.label}
                                 >
                                     <ArrowLeft className="h-3.5 w-3.5" />
-                                    {backTarget.label}
+                                    <span className="hidden sm:inline">{backTarget.label}</span>
                                 </Link>
                             ) : null}
                             <div

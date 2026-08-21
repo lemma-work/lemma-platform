@@ -41,7 +41,7 @@ function trimSeparators(value: string): string {
  *
  * The agent slug is the identifying half, so when the budget is tight the pod
  * slug is truncated first and the agent name is what survives. `agentName: null`
- * is the pod assistant, which gets the pod slug alone: the assistant is not one
+ * is Lem, which gets the pod slug alone: Lem is not one
  * agent among several, it is the pod answering.
  */
 export function buildLocalPart({
