@@ -82,9 +82,14 @@ jobs:
               - 'scripts/prepare_desktop_test_runtime.py'
               - 'scripts/build_local_guest_runtime.sh'
               - '.github/actions/setup-apple-signing/**'
-              - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
               - '.github/workflows/release-local-images.yml'
+              # Deliberately NOT '.github/workflows/ci.yml'. Every other filter
+              # lists it, which is right for a cheap job, but these two are the
+              # 940-second Windows check and the 476-second macOS check -- so
+              # any PR that touched this file at all, including one that only
+              # tuned CI, paid for both. If you change the desktop jobs
+              # themselves, validate them with Actions -> CI -> Run workflow.
             # What can change how the app is *packaged*, as opposed to what it
             # does. Bundling is the expensive half of the Windows check -- 255s
             # of a 707s job, for an installer that is then thrown away -- and
@@ -102,7 +107,8 @@ jobs:
               - 'desktop/scripts/build-sidecar.ps1'
               - 'desktop/scripts/tauri-cli-version.txt'
               - 'desktop/runtime/lemma-local.json'
-              - '.github/workflows/ci.yml'
+              # See the note in the `desktop` filter above: ci.yml is left out
+              # on purpose.
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -118,6 +124,14 @@ jobs:
               # not only in the Makefile that writes it.
               - 'lemma-backend/app/modules/workspace/config.py'
               - '.github/workflows/ci.yml'
+              # This job carries the two gates that watch .github itself: the
+              # aggregator/timeout check over every workflow, and the e2e shard
+              # layout. Both are cheap and neither is backend-specific, so they
+              # cannot live in the backend-gated quality job.
+              - '.github/workflows/**'
+              - '.github/e2e-shards.json'
+              - 'scripts/check_ci_aggregators.py'
+              - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
     timeout-minutes: 30
@@ -163,7 +177,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Sync deps
@@ -204,7 +218,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Sync deps
@@ -213,6 +227,15 @@ jobs:
         run: make lint
       - name: Async-safety lint
         run: make lint-async
+      # lemma-connectors is vendored under lemma-backend but sat outside every
+      # gate: not in `lint`'s paths, excluded from basedpyright, and its tests
+      # are outside pytest.ini's testpaths. A lookup miss raised NameError in
+      # shipped code for exactly that reason. Six seconds, in a job that
+      # already has the dependencies.
+      - name: Connector package lint
+        run: make lint-connectors
+      - name: Connector package tests
+        run: make test-connectors
       # The pool is sized on the promise that a connection is never held across
       # non-database work, and worker concurrency is sized on the promise that
       # blocking work is bounded. These two gates are what keep both true.
@@ -268,7 +291,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync
@@ -277,8 +300,13 @@ jobs:
         env:
           MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
 
+  # Was three jobs -- "Python SDK + CLI tests" (48s), "lemma-stack unit" (24s)
+  # and "Install experience" (50s). All three were gated on the same filter,
+  # and the last two ran the same pytest directory split in half. Three job
+  # slots and three runner boots for under two minutes of work, on a plan that
+  # allows twenty concurrent jobs and where CI alone used to define eighteen.
   python-sdk:
-    name: Python SDK + CLI tests
+    name: Python SDK, CLI, and stack tests
     timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
@@ -291,6 +319,31 @@ jobs:
       # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
       # what a release verifies cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-python-sdk
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-stack/uv.lock
+      # Deliberately here and not in verify-python-sdk: that action is shared
+      # with the release workflows, and a release should be gated on whether
+      # the distribution is correct, not on whether the source is tidy. Source
+      # quality is a pull-request concern.
+      #
+      # lemma-python had no ruff dependency at all, so the root Makefile's line
+      # for it could only ever fail to spawn -- which its `2>/dev/null || true`
+      # then swallowed as a pass. Its own dev group now pins the same ruff
+      # bound lemma-backend does; see the comment there for why the bound is
+      # load-bearing.
+      - name: Python SDK lint
+        working-directory: lemma-python
+        run: uv run ruff check .
+      # lemma-stack renders the environment the backend actually boots with, so
+      # its tests are the only thing that catches a writer drifting from the
+      # settings class that reads it. test_install_experience.py is the one
+      # that needs Docker; the runner has it, which is why it no longer needs
+      # a job of its own to say so.
+      - name: Run lemma-stack tests
+        working-directory: lemma-stack
+        run: uv run python -m pytest tests/ -q
 
   cli-packaging:
     name: lemma-terminal wheel (clean checkout)
@@ -379,13 +432,18 @@ jobs:
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
 
-  frontend-check:
-    name: Frontend lint, design audit, test
+  # Was two jobs. They were byte-identical for their first four steps -- two
+  # checkouts, two `npm ci` pairs, and the lemma-typescript build that every
+  # `pre*` hook in lemma-frontend/package.json triggers -- so the split cost a
+  # full install (~90s of the ~100s each) to gain nothing but two separate
+  # check names. One job, and the install is paid once.
+  frontend:
+    name: Frontend lint, test, build
     timeout-minutes: 30
     needs: changes
     # Also on an SDK change: the frontend typechecks against lemma-typescript,
-    # so an SDK signature change breaks `npm run check` here while only
-    # "Frontend build" was watching for it.
+    # so an SDK signature change breaks `npm run check` here while only the
+    # build step was watching for it.
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -397,6 +455,19 @@ jobs:
           cache-dependency-path: |
             lemma-typescript/package-lock.json
             lemma-frontend/package-lock.json
+      # Next keeps its own compilation cache, and without it every build here
+      # is cold. Keyed on the lockfile plus the source, restoring from any
+      # earlier build of the same dependency set.
+      - name: Cache the Next.js build
+        uses: actions/cache@v4
+        with:
+          path: lemma-frontend/.next/cache
+          key: >-
+            next-${{ hashFiles('lemma-frontend/package-lock.json') }}-${{
+              hashFiles('lemma-frontend/app/**', 'lemma-frontend/components/**',
+                        'lemma-frontend/lib/**') }}
+          restore-keys: |
+            next-${{ hashFiles('lemma-frontend/package-lock.json') }}-
       - name: Install TypeScript SDK dependencies
         working-directory: lemma-typescript
         run: npm ci
@@ -409,28 +480,6 @@ jobs:
       - name: Frontend unit tests
         working-directory: lemma-frontend
         run: npm test
-
-  frontend-build:
-    name: Frontend build (SDK integration)
-    timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: |
-            lemma-typescript/package-lock.json
-            lemma-frontend/package-lock.json
-      - name: Install TypeScript SDK dependencies
-        working-directory: lemma-typescript
-        run: npm ci
-      - name: Install frontend dependencies
-        working-directory: lemma-frontend
-        run: npm ci
       - name: Build frontend (builds the SDK via prebuild)
         working-directory: lemma-frontend
         run: npm run build
@@ -442,30 +491,11 @@ jobs:
       - name: Verify generated SDK browser bundles are committed
         run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
 
-  # lemma-stack renders the environment the backend actually boots with, so its
-  # tests are the only thing that catches a writer drifting from the settings
-  # class that reads it. They need no Docker and finish in seconds; only
-  # test_install_experience.py does, and it keeps its own job below.
-  lemma-stack-unit:
-    name: lemma-stack unit
-    timeout-minutes: 10
-    needs: changes
-    if: needs.changes.outputs.python_sdk == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Run lemma-stack unit tests
-        working-directory: lemma-stack
-        run: uv run python -m pytest tests/ --ignore=tests/test_install_experience.py -q
-
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
   # them outside `make test-dev-workflow`.
   dev-workflow:
-    name: Dev workflow
+    name: Repo tooling and .github gates
     timeout-minutes: 10
     needs: changes
     if: needs.changes.outputs.repo_tooling == 'true'
@@ -483,21 +513,17 @@ jobs:
       # installers now depend on.
       - name: Run repo tooling tests
         run: uv run --with pytest python -m pytest tests/ -q
-
-  install-experience:
-    name: Install experience (Linux Docker)
-    timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.python_sdk == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Run install experience tests
-        working-directory: lemma-stack
-        run: uv run python -m pytest tests/test_install_experience.py -v
+      # The two required checks are aggregator jobs, so their `needs:` lists
+      # are the merge gate. This asserts nothing has fallen out of one -- the
+      # failure ci.yml's own comment records -- and that every job still
+      # declares a timeout.
+      - name: CI aggregators watch every job
+        run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
+      # The e2e shard layout is generated from measured timings. This is the
+      # static half of keeping it honest: every e2e directory on disk lands in
+      # exactly one shard, so a new module's tests cannot go quietly unrun.
+      - name: E2E shard layout covers every module
+        run: python3 scripts/plan_e2e_shards.py --verify
 
   windows-cli:
     name: Windows CLI smoke test
@@ -539,9 +565,10 @@ jobs:
           $env:PATH = "$lemmaBin;$env:PATH"
           lemma doctor 2>&1
           # doctor may exit 1 if no server; just verify it doesn't crash
-      # Absorbed from windows-cli-smoke.yml, which ran a second Windows runner
-      # on every push to main to assert these two and nothing else this job did
-      # not already cover.
+      # Absorbed from the old windows-cli-smoke.yml, which spent a second
+      # Windows runner asserting these two and nothing else this job did not
+      # already cover. That workflow has since been deleted; this job is the
+      # only Windows CLI check.
       - name: lemma servers list / auth status
         run: |
           $ErrorActionPreference = "Stop"
@@ -586,6 +613,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
+          # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
+          # is re-downloaded on every run of both 90-minute desktop jobs.
+          cache: npm
+          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -618,15 +649,21 @@ jobs:
         working-directory: desktop
         run: cargo fmt --all --check
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-ci-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-ci-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-ci
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -771,15 +808,21 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-guestd-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-guestd-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-guestd
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint
         working-directory: desktop
@@ -808,21 +851,31 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
+          # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
+          # is re-downloaded on every run of both 90-minute desktop jobs.
+          cache: npm
+          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
           targets: x86_64-pc-windows-msvc
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-win-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-win-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-win
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -910,11 +963,8 @@ jobs:
       - cli-packaging
       - typescript-sdk
       - codegen-drift
-      - frontend-check
-      - frontend-build
-      - lemma-stack-unit
+      - frontend
       - dev-workflow
-      - install-experience
       - windows-cli
       - desktop
       - desktop-guestd

@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   changes:
+    timeout-minutes: 10
     name: Detect security-relevant changes
     runs-on: ubuntu-latest
     outputs:
@@ -94,6 +95,7 @@ jobs:
           fi
 
   dependency-review:
+    timeout-minutes: 15
     name: Dependency review
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.dependencies == 'true'
@@ -105,6 +107,7 @@ jobs:
           fail-on-severity: high
 
   codeql-python:
+    timeout-minutes: 30
     name: CodeQL (python)
     needs: changes
     if: needs.changes.outputs.python == 'true'
@@ -122,6 +125,7 @@ jobs:
       - uses: github/codeql-action/analyze@v4
 
   codeql-javascript:
+    timeout-minutes: 30
     name: CodeQL (javascript-typescript)
     needs: changes
     if: needs.changes.outputs.javascript == 'true'
@@ -139,6 +143,7 @@ jobs:
       - uses: github/codeql-action/analyze@v4
 
   secrets:
+    timeout-minutes: 15
     name: Gitleaks
     runs-on: ubuntu-latest
     steps:
@@ -164,6 +169,7 @@ jobs:
           detect --source=/repo --redact --no-banner --exit-code=1 --no-git
 
   python-audit:
+    timeout-minutes: 15
     name: Python dependency audit
     needs: changes
     if: needs.changes.outputs.python_dependencies == 'true'
@@ -173,7 +179,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --extra local
@@ -189,14 +195,28 @@ jobs:
           --requirement /tmp/lemma-backend-audit.txt
 
   container:
+    timeout-minutes: 30
     name: Backend image vulnerability scan
     needs: changes
     if: needs.changes.outputs.backend_image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # A plain `docker build` here meant a full cold build of the backend
+      # image on every dependency-touching PR, while release-local-images.yml
+      # builds the very same Dockerfile against a warm `type=gha` cache. Same
+      # scope name, so this now restores the layers that workflow already
+      # produced. It does not write to the cache: releases own that scope, and
+      # a scan should not be able to poison what a release builds from.
+      - uses: docker/setup-buildx-action@v3
       - name: Build backend image
-        run: docker build -f lemma-backend/Dockerfile -t lemma-backend:security .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: lemma-backend/Dockerfile
+          tags: lemma-backend:security
+          load: true
+          cache-from: type=gha,scope=lemma-backend-amd64
       - name: Scan high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
         with:
