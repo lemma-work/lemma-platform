@@ -34,5 +34,11 @@ export async function logoutToHome() {
 
     // Full-document navigation (not router.push) so all in-memory auth/query
     // state is discarded and the landing page renders from a clean slate.
+    //
+    // The rule disabled here exists to stop a soft navigation being written as
+    // a hard one by accident. This one is deliberate and is the whole point of
+    // the function: `router.push()` keeps the React Query cache and auth
+    // context alive, which is the state a sign-out has to drop.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign('/');
 }

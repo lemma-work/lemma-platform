@@ -1370,9 +1370,10 @@ lint:
 # API spec, so formatting either one would be reverted by the next generation
 # and read as codegen drift.
 #
-# `format-check` is deliberately NOT part of `quality` yet. Adding it there is
-# the one-line change that makes formatting a merge requirement, once you want
-# every open branch to have rebased through the reformat.
+# `format-check` is part of `quality`, so formatting is a merge requirement.
+# It was held back through the reformat so open branches could rebase first;
+# in the fortnight that took, main merged seven unformatted files that the next
+# branch had to re-flatten. Enforced is the only state that stays true.
 SDK_FORMAT_EXCLUDE = --exclude lemma_sdk/openapi_client
 
 
@@ -1416,6 +1417,8 @@ format-check:
 # it is an AST pass over the test tree that needs nothing running, so leaving
 # it out only meant learning about a new clock-wait from CI.
 quality:
+	@echo "→ Formatting…"
+	@$(MAKE) --no-print-directory format-check
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@echo "→ Async-safety…"
