@@ -141,6 +141,26 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # This lane runs `-m "not e2e"`, which includes the integration tests, and
+      # those skip themselves when no database answers. Without this service 57
+      # of them did -- the whole workspace integration suite: the sandbox state
+      # machine, the repository, and every one of the sweeper's decisions about
+      # what it may destroy. They passed locally and were absent here, which is
+      # how a sweep that deleted live user workspaces reached production with 24
+      # tests written about it.
+      postgres:
+        image: pgvector/pgvector:0.8.3-pg15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lemma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lemma"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
@@ -152,6 +172,7 @@ jobs:
         run: make coverage-backend-unit
         env:
           REDIS_URL: redis://localhost:6379
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
       - name: Add backend coverage to job summary
         if: always()
         run: |

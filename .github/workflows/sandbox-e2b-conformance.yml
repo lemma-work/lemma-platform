@@ -57,6 +57,11 @@ jobs:
             echo "Missing required E2B configuration:$missing" >&2
             exit 1
           fi
+      # Named explicitly rather than by directory, so a suite is only run
+      # because someone chose to run it against a real, billed account. The
+      # cost of that choice is that a new suite is invisible until it is added:
+      # `test_e2b_lifecycle_real.py` and `test_e2b_function_liveness_real.py`
+      # existed for months, nineteen tests between them, and ran nowhere.
       - name: Real E2B provider contract
         timeout-minutes: 30
         env:
@@ -68,6 +73,9 @@ jobs:
         run: >-
           uv run python -m pytest
           app/modules/workspace/tests/integration/test_e2b_provider_real.py
+          app/modules/workspace/tests/integration/test_e2b_lifecycle_real.py
+          app/modules/workspace/tests/integration/test_e2b_function_liveness_real.py
+          app/modules/workspace/tests/integration/test_e2b_cross_namespace_isolation_real.py
           sandbox_runtime/tests/test_e2b_templates.py
           sandbox_runtime/tests/test_e2b_template_build_config.py
           -m ""
