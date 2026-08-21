@@ -367,6 +367,23 @@ def payload_first(source: Any, *keys: str) -> str:
     return ""
 
 
+def payload_any(source: Any, *keys: str) -> Any:
+    """The first of these keys with a value, left as it arrived.
+
+    `payload_first` for values that are not text -- attachment bytes, sizes,
+    nested objects -- where stringifying would be wrong. Same reason it exists:
+    providers spell one field several ways, and the chain of `or`s that tries
+    each counted as a branch per spelling.
+    """
+    if not source:
+        return None
+    for key in keys:
+        value = source.get(key)
+        if value:
+            return value
+    return None
+
+
 def payload_section(source: Any, key: str) -> dict[str, Any]:
     """A nested object from a payload, or an empty one to keep reading from."""
     if not source:

@@ -11,6 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
     payload_first,
     payload_section,
     payload_text,
@@ -508,8 +509,7 @@ class TeamsMessageParser:
     def _attachment_download_url(self, att: dict[str, Any]) -> str:
         content = payload_section(att, "content")
         return str(
-            content.get("downloadUrl")
-            or content.get("contentUrl")
+            payload_any(content, "downloadUrl", "contentUrl")
             or att.get("contentUrl")
             or ""
         ).strip()

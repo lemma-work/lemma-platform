@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
 from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
     background_channel_context_note,
     channel_author_label,
 )
@@ -464,12 +465,9 @@ def _tenant_id_from_credentials(credentials: dict[str, Any]) -> str | None:
     user_data = credentials.get("user_data") or {}
     raw = credentials.get("raw_response") or {}
     return (
-        user_data.get("tenant_id")
-        or user_data.get("tid")
-        or raw.get("tenant_id")
-        or raw.get("tid")
-        or credentials.get("tenant_id")
-        or credentials.get("tid")
+        payload_any(user_data, "tenant_id", "tid")
+        or payload_any(raw, "tenant_id", "tid")
+        or payload_any(credentials, "tenant_id", "tid")
     ) or None
 
 

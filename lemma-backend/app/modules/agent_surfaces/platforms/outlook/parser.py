@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
     payload_first,
     payload_text,
 )
@@ -41,11 +42,7 @@ def _first_recipient(value: Any) -> Any:
 
 def _body_text(data: dict[str, Any]) -> str:
     body = (
-        data.get("text_body")
-        or data.get("body_text")
-        or data.get("body")
-        or data.get("snippet")
-        or ""
+        payload_any(data, "text_body", "body_text", "body") or data.get("snippet") or ""
     )
     if isinstance(body, dict):
         content = payload_first(body, "content", "text")
@@ -61,15 +58,11 @@ def _normalize_attachment(
     *,
     message_id: str | None,
 ) -> dict[str, Any] | None:
-    attachment_id = raw.get("attachment_id") or raw.get("id")
-    name = raw.get("name") or raw.get("filename") or raw.get("file_name")
-    mime_type = (
-        raw.get("contentType") or raw.get("mime_type") or raw.get("content_type")
-    )
-    content_bytes = (
-        raw.get("contentBytes")
-        or raw.get("content_bytes")
-        or raw.get("content_bytes_base64")
+    attachment_id = payload_any(raw, "attachment_id", "id")
+    name = payload_any(raw, "name", "filename", "file_name")
+    mime_type = payload_any(raw, "contentType", "mime_type", "content_type")
+    content_bytes = payload_any(
+        raw, "contentBytes", "content_bytes", "content_bytes_base64"
     )
     if not any([attachment_id, name, content_bytes]):
         return None
@@ -83,7 +76,7 @@ def _normalize_attachment(
         "content_bytes_base64": (
             str(content_bytes).strip() or None if content_bytes is not None else None
         ),
-        "is_inline": bool(raw.get("isInline") or raw.get("is_inline")),
+        "is_inline": bool(payload_any(raw, "isInline", "is_inline")),
         "content_id": payload_first(raw, "contentId", "content_id").strip() or None,
         "odata_type": payload_first(raw, "@odata.type", "odata_type").strip() or None,
     }
@@ -141,19 +134,16 @@ class OutlookMessageParser:
         ).strip()
         external_message_id = internet_message_id or provider_message_id
         sender_identity = parse_email_identity(
-            data.get("sender") or data.get("from"),
-            fallback_email=data.get("sender_email") or data.get("from_email"),
+            payload_any(data, "sender", "from"),
+            fallback_email=payload_any(data, "sender_email", "from_email"),
             fallback_name=data.get("sender_name"),
         )
         mailbox_identity = parse_email_identity(
-            data.get("mailbox")
-            or data.get("to")
+            payload_any(data, "mailbox", "to")
             or _first_recipient(data.get("toRecipients"))
             or _first_recipient(data.get("to_recipients")),
             fallback_email=(
-                data.get("mailbox_email")
-                or data.get("to_email")
-                or data.get("userPrincipalName")
+                payload_any(data, "mailbox_email", "to_email", "userPrincipalName")
             ),
         )
         reply_to_identity = parse_email_identity(

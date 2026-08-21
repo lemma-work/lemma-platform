@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
     payload_first,
     payload_section,
     payload_text,
@@ -67,11 +68,7 @@ def _decode_gmail_body(data: Any, *, content_type: str) -> str:
 
 def _read_email_body(data: dict[str, Any]) -> str:
     body = (
-        data.get("text_body")
-        or data.get("body_text")
-        or data.get("body")
-        or data.get("snippet")
-        or ""
+        payload_any(data, "text_body", "body_text", "body") or data.get("snippet") or ""
     )
     if isinstance(body, dict):
         content = payload_first(body, "content", "text")
@@ -121,23 +118,15 @@ def _normalize_attachment(
 ) -> dict[str, Any] | None:
     body = raw.get("body")
     body_data = body if isinstance(body, dict) else {}
-    attachment_id = (
-        raw.get("attachment_id")
-        or raw.get("attachmentId")
-        or raw.get("id")
-        or body_data.get("attachmentId")
-    )
-    name = raw.get("name") or raw.get("filename") or raw.get("file_name")
-    mime_type = (
-        raw.get("mime_type")
-        or raw.get("mimeType")
-        or raw.get("content_type")
-        or raw.get("contentType")
-    )
+    attachment_id = payload_any(
+        raw, "attachment_id", "attachmentId", "id"
+    ) or body_data.get("attachmentId")
+    name = payload_any(raw, "name", "filename", "file_name")
+    mime_type = payload_any(raw, "mime_type", "mimeType", "content_type", "contentType")
     size = raw.get("size") or body_data.get("size")
-    content_bytes_base64 = (
-        raw.get("content_bytes_base64") or raw.get("data") or body_data.get("data")
-    )
+    content_bytes_base64 = payload_any(
+        raw, "content_bytes_base64", "data"
+    ) or body_data.get("data")
     if not any([attachment_id, name, content_bytes_base64]):
         return None
     return {
@@ -214,8 +203,7 @@ class GmailMessageParser:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         headers = _extract_message_headers(data)
         thread_id = str(
-            data.get("thread_id")
-            or data.get("threadId")
+            payload_any(data, "thread_id", "threadId")
             or headers.get("thread-id")
             or data.get("conversation_id")
             or (payload_section(data, "payload")).get("threadId")
@@ -224,16 +212,14 @@ class GmailMessageParser:
         ).strip()
         message_id = payload_first(data, "message_id", "messageId", "id").strip()
         sender_identity = parse_email_identity(
-            data.get("sender") or data.get("from") or headers.get("from"),
-            fallback_email=data.get("sender_email") or data.get("from_email"),
+            payload_any(data, "sender", "from") or headers.get("from"),
+            fallback_email=payload_any(data, "sender_email", "from_email"),
             fallback_name=data.get("sender_name"),
         )
         mailbox_identity = parse_email_identity(
-            data.get("mailbox")
-            or data.get("to")
-            or headers.get("delivered-to")
-            or headers.get("to"),
-            fallback_email=data.get("mailbox_email") or data.get("to_email"),
+            payload_any(data, "mailbox", "to")
+            or payload_any(headers, "delivered-to", "to"),
+            fallback_email=payload_any(data, "mailbox_email", "to_email"),
         )
         return _GmailEnvelope(
             data=data,

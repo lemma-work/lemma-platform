@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import payload_any
+
 import base64
 import binascii
 import mimetypes
@@ -582,7 +584,7 @@ def _read_email_address(value: Any) -> str | None:
             nested_address = nested.get("address")
             if nested_address:
                 return str(nested_address)
-        return value.get("email") or value.get("address") or value.get("email_address")
+        return payload_any(value, "email", "address", "email_address")
     return None
 
 

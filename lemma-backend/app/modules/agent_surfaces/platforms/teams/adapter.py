@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import payload_any
+
 from typing import Any
 from urllib.parse import quote
 
@@ -171,7 +173,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 ) as response:
                     if response.status < 400:
                         data = await response.json()
-                        email = data.get("mail") or data.get("userPrincipalName")
+                        email = payload_any(data, "mail", "userPrincipalName")
                         return SurfaceSenderProfile(
                             external_user_id=str(data.get("id") or bf_user_id or ""),
                             email=email,
@@ -625,10 +627,10 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         props = data.get("properties") or data.get("userPrincipalName") or {}
         email = None
         if isinstance(props, dict):
-            email = props.get("email") or props.get("userPrincipalName")
+            email = payload_any(props, "email", "userPrincipalName")
         if not email:
             # Some tenants return email directly on the member object
-            email = data.get("email") or data.get("userPrincipalName")
+            email = payload_any(data, "email", "userPrincipalName")
         if email:
             pass
         return email or None

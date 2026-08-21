@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.modules.agent_surfaces.platforms.common import (
+    payload_any,
     payload_section,
     payload_text,
 )
@@ -22,7 +23,7 @@ class TelegramMessageParser:
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         del headers
-        message = payload.get("message") or payload.get("edited_message")
+        message = payload_any(payload, "message", "edited_message")
         if not message:
             # Inline-keyboard taps arrive as ``callback_query`` and are owned by
             # the interaction path (``parse_inbound_interaction``); they are not
