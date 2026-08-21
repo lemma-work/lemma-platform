@@ -36,7 +36,6 @@ import { cn } from "@/lib/utils";
 import { getConversationStatusView, type ConversationStatusView } from "@/lib/utils/conversations";
 import { useAIAssistant } from "./ai-assistant-context";
 
-const ASSISTANT_PREFILL_EVENT = "lemma-assistant-prefill-draft";
 const DEFAULT_DATASTORE_NAME = "default";
 
 function ConversationStatusPill({ statusView }: { statusView: ConversationStatusView }) {
@@ -67,11 +66,6 @@ function ConversationStatusPill({ statusView }: { statusView: ConversationStatus
   );
 }
 
-interface AssistantPrefillDetail {
-  content: string;
-  forceNewConversation?: boolean;
-}
-
 interface PodAssistantEmbeddedProps {
   title?: string;
   subtitle?: string;
@@ -91,23 +85,6 @@ interface PodAssistantEmbeddedProps {
   onDraftChange?: (value: string) => void;
 }
 
-function parseAssistantPrefillDetail(
-  value: unknown,
-): AssistantPrefillDetail | null {
-  if (!value || typeof value !== "object") return null;
-  const detail = value as Partial<AssistantPrefillDetail>;
-  if (
-    typeof detail.content !== "string" ||
-    detail.content.trim().length === 0
-  ) {
-    return null;
-  }
-
-  return {
-    content: detail.content.trim(),
-    forceNewConversation: detail.forceNewConversation === true,
-  };
-}
 
 function getFileMentionPath(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
@@ -172,28 +149,19 @@ function buildControllerView(
   };
 }
 
+/** Drain any draft the provider parked while this composer was unmounted.
+ *
+ * The panel only exists while the assistant is open, so it cannot be the thing
+ * that hears "open with this text" — by then it is too late. The provider takes
+ * the event and holds the text; this consumes it on the way in. */
 function useAssistantPrefillDraft(setDraft: (value: string) => void) {
-  const { clearMessages, openAssistant } = useAIAssistant();
+  const { pendingDraft, setPendingDraft } = useAIAssistant();
 
   useEffect(() => {
-    const handlePrefillEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<unknown>;
-      const detail = parseAssistantPrefillDetail(customEvent.detail);
-      if (!detail) return;
-
-      if (detail.forceNewConversation) {
-        clearMessages();
-      }
-
-      setDraft(detail.content);
-      openAssistant();
-    };
-
-    window.addEventListener(ASSISTANT_PREFILL_EVENT, handlePrefillEvent);
-    return () => {
-      window.removeEventListener(ASSISTANT_PREFILL_EVENT, handlePrefillEvent);
-    };
-  }, [clearMessages, openAssistant, setDraft]);
+    if (pendingDraft === null) return;
+    setDraft(pendingDraft);
+    setPendingDraft(null);
+  }, [pendingDraft, setDraft, setPendingDraft]);
 }
 
 function PodAssistantSurface({

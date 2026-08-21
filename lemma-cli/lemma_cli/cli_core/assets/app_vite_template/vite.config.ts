@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'node:child_process'
+import { lemmaSourceLoc } from './lemma-source-loc'
 
 // Dev-only auth: resolve the current Lemma access token from the CLI and seed it
 // into localStorage *before* the app bundle runs, so `npm run dev` is logged in
@@ -46,6 +47,7 @@ function lemmaDevAuth(env: Record<string, string>): Plugin {
 // path is '/' in dev and resolved from VITE_LEMMA_APP_BASE_PATH in prod.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  const sourceLocEnabled = (env.LEMMA_APP_SOURCE_LOC ?? '1') !== '0'
 
   // Optional same-origin dev proxy (opt in with `lemma apps init --proxy`). When
   // LEMMA_DEV_PROXY_TARGET is set, the SDK talks to a same-origin '/api' path and
@@ -66,7 +68,17 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: mode === 'production' ? env.VITE_LEMMA_APP_BASE_PATH || '/' : '/',
-    plugins: [react(), lemmaDevAuth(env)],
+    plugins: [
+      // `data-lemma-loc` / `data-lemma-component` on every host element, so the
+      // Lemma app editor's picker resolves a click to a file and a line instead
+      // of to anonymous minified markup. See ./lemma-source-loc.ts. Set
+      // LEMMA_APP_SOURCE_LOC=0 to ship without the stamps (the picker still
+      // works, but it can only report DOM, not source).
+      react(
+        sourceLocEnabled ? { babel: { plugins: [lemmaSourceLoc] } } : undefined,
+      ),
+      lemmaDevAuth(env),
+    ],
     server,
     resolve: {
       // Force a single copy of React (and friends). When the SDK is linked from a

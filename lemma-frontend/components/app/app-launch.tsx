@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
-import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
+import { Copy, CursorClick, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ResourceHeader } from '@/components/pod/resource-layout';
@@ -17,6 +17,7 @@ import { useProfile } from '@/lib/hooks/use-user';
 import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
+import { useAppEditor } from '@/components/app/use-app-editor';
 
 interface AppFrameProps {
     podId: string;
@@ -26,6 +27,8 @@ interface AppFrameProps {
     url: string;
     visibility?: string | null;
     canShare?: boolean;
+    /** Whether the viewer may change this app — the picker edits its source. */
+    canEdit?: boolean;
     /**
      * What draws around the frame. `bar` claims the shell's context bar, for a
      * pane the app owns. `none` draws the frame alone, for a pane that already
@@ -43,6 +46,7 @@ export function AppFrame({
     url,
     visibility,
     canShare = false,
+    canEdit = false,
     chrome = 'bar',
 }: AppFrameProps) {
     const queryClient = useQueryClient();
@@ -52,6 +56,13 @@ export function AppFrame({
     const [frameKey, setFrameKey] = useState(0);
     const [frameLoaded, setFrameLoaded] = useState(false);
     const [frameFailed, setFrameFailed] = useState(false);
+    const editor = useAppEditor({
+        iframeRef,
+        url,
+        appName: appName || title,
+        enabled: canEdit,
+        frameLoaded,
+    });
 
     const postAppTheme = useCallback(() => {
         const iframe = iframeRef.current;
@@ -206,6 +217,33 @@ export function AppFrame({
                                 </a>
                             </Button>
                         </section>
+                    </div>
+                ) : null}
+
+                {editor.ready ? (
+                    <div className="absolute right-3 top-3 z-30">
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant={editor.selecting ? 'primary' : 'secondary'}
+                                        size="sm"
+                                        className="h-8 gap-1.5 rounded-full px-3 text-xs shadow-[var(--shadow-sm)]"
+                                        onClick={editor.toggleSelecting}
+                                        aria-pressed={editor.selecting}
+                                    >
+                                        <CursorClick className="h-3.5 w-3.5" />
+                                        {editor.selecting ? 'Pick an element' : 'Edit'}
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="left">
+                                    {editor.selecting
+                                        ? 'Click an element in the app, or press Escape'
+                                        : 'Select an element to edit with the assistant'}
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                     </div>
                 ) : null}
 

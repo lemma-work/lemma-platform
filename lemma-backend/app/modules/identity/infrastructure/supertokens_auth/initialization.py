@@ -130,6 +130,7 @@ def initialize_supertokens():
         recipe_list=[
             session.init(
                 cookie_domain=settings.session_cookie_domain,
+                older_cookie_domain=settings.session_older_cookie_domain,
                 cookie_secure=settings.session_cookie_secure,
                 cookie_same_site=settings.session_cookie_same_site,
             ),

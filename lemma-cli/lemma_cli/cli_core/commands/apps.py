@@ -33,6 +33,7 @@ from lemma_sdk.config import resolve_auth_url, resolve_base_url, resolve_token
 from ...cli_app.app_bundle import (
     classify_app_source,
     deploy_app_bundle,
+    extract_app_source_archive,
 )
 
 app = typer.Typer(help="App commands.")
@@ -391,6 +392,53 @@ def deploy_app(
         ctx,
         run,
     )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("pull")
+def pull_app(
+    ctx: typer.Context,
+    app: str = typer.Argument(...),
+    target: Path | None = typer.Argument(
+        None,
+        file_okay=False,
+        dir_okay=True,
+        writable=True,
+        help="Directory to write the source into. Defaults to ./<app>.",
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite files in a target directory that is not empty.",
+    ),
+) -> None:
+    """Download a deployed app's source into a local directory.
+
+    The inverse of ``deploy``: ``deploy`` uploads project source alongside the
+    built dist, and this brings that source back so an app can be edited from
+    a machine (or a workspace sandbox) that never held the original checkout.
+    Vite apps arrive without ``node_modules``, so run an install before
+    building.
+    """
+    state = state_from_ctx(ctx)
+    target_dir = target if target is not None else Path(app)
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        archive = pod_client(client, s, pod).apps.download_source_archive(app)
+        try:
+            written = extract_app_source_archive(archive, target_dir, overwrite=force)
+        except ValueError as error:
+            fail(str(error))
+        return {
+            "app": app,
+            "target": str(target_dir.expanduser().resolve()),
+            "files": len(written),
+        }
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
 

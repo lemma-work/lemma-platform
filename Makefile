@@ -6,6 +6,8 @@ SHELL := /bin/bash
 #   make init          create .env files with local defaults (idempotent)
 #   make dev           start infra + backend + frontend (hot-reload)
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
+#   make dev-sslip     same, on sslip.io hostnames so apps share the API's
+#                      cookie site (embedded apps stay signed in)
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
 #   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
 #   make stop          stop backend/frontend processes
@@ -16,9 +18,9 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public dev-sslip stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
-        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
+        _prepare-dev _sync-dev-env _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
         desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
@@ -97,11 +99,30 @@ DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
 
-DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
-DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
+# The hostname the browser reaches this stack on, and the domain apps are
+# served under. They are separate knobs because they answer different
+# questions, but they have to agree on one thing: cookies are scoped by *site*,
+# not by origin, so an app whose site differs from the API's cannot send the
+# session cookie and every embedded app renders signed-out.
+#
+# `localhost` + `apps.lemma.localhost` are two different sites, which is why
+# `make dev-sslip` exists: it puts the whole stack under `sslip.io` (a public
+# DNS service that resolves any name embedding an IP back to it), so the shell,
+# the API, and every app share one site — the way they do in production, where
+# `api.lemma.work` and `<slug>.apps.lemma.work` are both `lemma.work`.
+DEV_HOST              ?= localhost
+DEV_APPS_HOST         ?= apps.lemma.localhost
+# What `make dev-sslip` switches to. sslip.io resolves any name ending in an
+# embedded IP back to that IP, including nested labels — so
+# `<slug>.apps.127-0-0-1.sslip.io` reaches this machine with no /etc/hosts
+# entry and no local DNS. It does need working internet DNS.
+DEV_SSLIP_HOST        ?= 127-0-0-1.sslip.io
+
+DEV_BACKEND_URL       := http://$(DEV_HOST):$(DEV_BACKEND_PORT)
+DEV_FRONTEND_URL      := http://$(DEV_HOST):$(DEV_FRONTEND_PORT)
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
-DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
-DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
+DEV_APP_BASE_DOMAIN   := $(DEV_APPS_HOST):$(DEV_BACKEND_PORT)
+DEV_APPS_DOMAIN_SUFFIX := $(DEV_APPS_HOST)
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
@@ -200,6 +221,11 @@ BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_APP_BASE_DOMAIN         ?= $(DEV_APP_BASE_DOMAIN)
 BACKEND_SESSION_COOKIE_DOMAIN   ?=
+# Empty, and meaningfully so: it tells SuperTokens the previous session cookies
+# were host-only, so a browser still holding cookies from a different DEV_HOST
+# gets them cleared on refresh instead of a 500 that only a manual cookie purge
+# fixes. Switching between `make dev` and `make dev-sslip` is exactly that case.
+BACKEND_SESSION_OLDER_COOKIE_DOMAIN ?=
 BACKEND_SESSION_COOKIE_SECURE   ?= false
 BACKEND_SESSION_COOKIE_SAME_SITE?= lax
 BACKEND_CORS_ORIGINS            ?= ["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
@@ -240,6 +266,7 @@ BACKEND_DEV_ENV := \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
 	SESSION_COOKIE_DOMAIN=$(BACKEND_SESSION_COOKIE_DOMAIN) \
+	SESSION_OLDER_COOKIE_DOMAIN=$(BACKEND_SESSION_OLDER_COOKIE_DOMAIN) \
 	SESSION_COOKIE_SECURE=$(BACKEND_SESSION_COOKIE_SECURE) \
 	SESSION_COOKIE_SAME_SITE=$(BACKEND_SESSION_COOKIE_SAME_SITE) \
 	CORS_ORIGINS='$(BACKEND_CORS_ORIGINS)' \
@@ -290,6 +317,7 @@ help:
 	@echo "  Dev stack"
 	@echo "    make dev                start infra + backend + frontend"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
+	@echo "    make dev-sslip          start on sslip.io hostnames (embedded apps stay signed in)"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
@@ -559,6 +587,11 @@ dev:
 		}; \
 		wait
 
+dev-sslip:
+	@$(MAKE) --no-print-directory dev \
+		DEV_HOST=$(DEV_SSLIP_HOST) \
+		DEV_APPS_HOST=apps.$(DEV_SSLIP_HOST)
+
 dev-public:
 	@echo "→ Starting Lemma dev stack with a public Cloudflare API URL…"
 	@$(MAKE) --no-print-directory _prepare-dev
@@ -591,9 +624,45 @@ dev-public:
 	}; \
 	wait
 
+# Keys whose values are derived from the host/port knobs at the top of this
+# file. `make dev` injects them as process env, and that is what the running
+# stack uses — but the generated .env files are what everything started
+# *outside* make reads: alembic, pytest, a hand-run uvicorn, the CLI. Left
+# alone they drift, so a `make dev-sslip` session and a `uv run alembic` in the
+# next terminal disagree about which host this stack is on, and a browser can
+# end up holding session cookies for two of them at once.
+#
+# So rewrite exactly those keys on every start. Every other line in the file —
+# API keys, personal overrides — is left untouched.
+_sync-dev-env:
+	@set -e; \
+	upsert() { \
+		file="$$1"; key="$$2"; value="$$3"; \
+		[ -f "$$file" ] || return 0; \
+		if grep -qE "^$$key=" "$$file"; then \
+			awk -v k="$$key" -v v="$$value" \
+				'index($$0, k "=") == 1 { print k "=" v; next } { print }' \
+				"$$file" > "$$file.tmp" && mv "$$file.tmp" "$$file"; \
+		else \
+			printf '%s=%s\n' "$$key" "$$value" >> "$$file"; \
+		fi; \
+	}; \
+	upsert $(BACKEND_DIR)/.env API_URL '$(DEV_BACKEND_URL)'; \
+	upsert $(BACKEND_DIR)/.env FRONTEND_URL '$(DEV_FRONTEND_URL)'; \
+	upsert $(BACKEND_DIR)/.env AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+	upsert $(BACKEND_DIR)/.env CLI_API_URL '$(DEV_BACKEND_URL)'; \
+	upsert $(BACKEND_DIR)/.env CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+	upsert $(BACKEND_DIR)/.env APP_BASE_DOMAIN '$(DEV_APP_BASE_DOMAIN)'; \
+	upsert $(BACKEND_DIR)/.env CORS_ORIGINS '$(BACKEND_CORS_ORIGINS)'; \
+	upsert $(FRONTEND_DIR)/.env.local NEXT_PUBLIC_API_URL '$(DEV_BACKEND_URL)'; \
+	upsert $(FRONTEND_DIR)/.env.local NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
+	upsert $(FRONTEND_DIR)/.env.local NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+	upsert $(FRONTEND_DIR)/.env.local NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'
+
 _prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true
 	@$(MAKE) --no-print-directory _ensure-init
+	@$(MAKE) --no-print-directory _sync-dev-env
 	@$(MAKE) --no-print-directory _ensure-sandbox-images
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra

@@ -12,6 +12,7 @@ from supertokens_python.recipe.session.asyncio import (
     get_session,
 )
 
+from app.core.auth_urls import cli_auth_ui_url
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
@@ -425,7 +426,7 @@ async def verify_token(
 async def cli_auth_info() -> CliAuthInfoResponse:
     return CliAuthInfoResponse(
         api_url=settings.cli_api_url or settings.api_url,
-        auth_frontend_url=settings.cli_auth_frontend_url or settings.auth_frontend_url,
+        auth_frontend_url=cli_auth_ui_url(),
     )
 
 

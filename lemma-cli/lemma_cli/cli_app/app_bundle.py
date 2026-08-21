@@ -4,7 +4,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+from io import BytesIO
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -222,3 +223,56 @@ def deploy_app_bundle(
                 os.unlink(path)
         if temp_dist_dir is not None and temp_dist_dir.exists():
             shutil.rmtree(temp_dist_dir, ignore_errors=True)
+
+
+def _safe_archive_member(name: str, target_dir: Path) -> Path | None:
+    """Where ``name`` may be written under ``target_dir``, or None to skip it.
+
+    Directory entries are skipped (their parents are created for the files that
+    need them). Absolute paths, drive letters, and ``..`` traversal are rejected
+    rather than clamped: an archive that tries to escape is a hostile archive,
+    and silently rewriting its paths would hide that.
+    """
+    if not name or name.endswith("/"):
+        return None
+    candidate = PurePosixPath(name)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ValueError(f"App source archive contains an unsafe path: {name}")
+    destination = (target_dir / Path(*candidate.parts)).resolve()
+    if not destination.is_relative_to(target_dir.resolve()):
+        raise ValueError(f"App source archive contains an unsafe path: {name}")
+    return destination
+
+
+def extract_app_source_archive(
+    archive_bytes: bytes,
+    target_dir: Path,
+    *,
+    overwrite: bool = False,
+) -> list[str]:
+    """Unpack a downloaded app source archive into ``target_dir``.
+
+    Returns the relative paths written, in archive order. Refuses to write into
+    a directory that already holds files unless ``overwrite`` is set, so a pull
+    never silently clobbers work in progress.
+    """
+    target_dir = target_dir.expanduser()
+    if target_dir.exists() and not target_dir.is_dir():
+        raise ValueError(f"App source target is not a directory: {target_dir}")
+    if target_dir.is_dir() and any(target_dir.iterdir()) and not overwrite:
+        raise ValueError(
+            f"{target_dir} is not empty. Re-run with --force to overwrite it."
+        )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_target = target_dir.resolve()
+    written: list[str] = []
+    with ZipFile(BytesIO(archive_bytes)) as archive:
+        for name in archive.namelist():
+            destination = _safe_archive_member(name, resolved_target)
+            if destination is None:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(archive.read(name))
+            written.append(destination.relative_to(resolved_target).as_posix())
+    return written

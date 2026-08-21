@@ -181,11 +181,16 @@
 }
 
 .pod-assistant-sidebar-surface .lemma-assistant-header {
-  height: 3.5rem;
-  min-height: 3.5rem;
+  /* One 48px header band across the shell: the workspace tab bar, the resource
+     context bar, and the sidebar nav header are each `h-12`, and the docked
+     assistant sits beside them, so its header has to land on the same rail or
+     the dividers step. Pinned rather than derived — without a height this
+     header is padding plus whichever control inside it is tallest, so turning
+     on the new-conversation button (size-9) or dropping the header actions
+     would move the divider on its own. */
+  height: 3rem;
+  min-height: 3rem;
   align-items: center;
-  /* Match the shell topbar + nav header border so the 56px header band reads as
-     one continuous strip across all three regions. */
   border-bottom-color: color-mix(in srgb, var(--border-subtle) 32%, transparent);
   background: var(--pod-main-bg);
   padding: 0 var(--space-4);
