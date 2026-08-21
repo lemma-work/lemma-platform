@@ -174,9 +174,7 @@ class Supervisor:
 
             manifest = release_manifest.load_pinned(self.paths)
         else:
-            manifest = orchestrate.resolve_manifest(
-                config, self.paths, prefer_pinned=True
-            )
+            manifest = orchestrate.resolve_manifest(config, self.paths, prefer_pinned=True)
 
         def progress(stage: str, detail: str) -> None:
             if stage == "pull":

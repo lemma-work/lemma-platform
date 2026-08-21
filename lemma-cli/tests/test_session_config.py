@@ -47,7 +47,12 @@ def test_legacy_default_server_migrates_to_lemma_cloud(tmp_path):
         json.dumps(
             {
                 "active_server": "default",
-                "servers": {"default": {"base_url": "http://custom", "defaults": {"pod_id": "p"}}},
+                "servers": {
+                    "default": {
+                        "base_url": "http://custom",
+                        "defaults": {"pod_id": "p"},
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -66,7 +71,10 @@ def test_migration_skips_when_lemma_cloud_already_present(tmp_path):
         json.dumps(
             {
                 "active_server": "default",
-                "servers": {"default": {"base_url": "d"}, "lemma-cloud": {"base_url": "c"}},
+                "servers": {
+                    "default": {"base_url": "d"},
+                    "lemma-cloud": {"base_url": "c"},
+                },
             }
         ),
         encoding="utf-8",
@@ -161,7 +169,7 @@ def test_session_selection_export_mode_emits_eval_safe_lines(capsys):
     )
     out = capsys.readouterr().out.strip().splitlines()
     # Export mode prints ONLY plain `export …` lines (so `eval "$(...)"` is safe).
-    assert out == ['export LEMMA_POD_ID=pod-1', 'export LEMMA_ORG_ID=org-1']
+    assert out == ["export LEMMA_POD_ID=pod-1", "export LEMMA_ORG_ID=org-1"]
 
 
 def test_session_selection_human_mode_shows_session_hint(capsys):

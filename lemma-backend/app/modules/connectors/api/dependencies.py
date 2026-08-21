@@ -164,6 +164,7 @@ def get_account_resolution_service(uow: UoWDep) -> AccountResolutionService:
         authorization_service=create_authorization_service(uow),
     )
 
+
 ConnectorServiceDep = Annotated[ConnectorService, Depends(get_connector_service)]
 ConnectorTriggerServiceDep = Annotated[
     ConnectorTriggerService, Depends(get_connector_trigger_service)

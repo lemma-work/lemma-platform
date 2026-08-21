@@ -31,9 +31,7 @@ def open_binary(path: str):
     return open(path, "rb")
 
 
-async def stream_to_tempfile(
-    chunks: AsyncIterator[bytes], *, suffix: str = ""
-) -> str:
+async def stream_to_tempfile(chunks: AsyncIterator[bytes], *, suffix: str = "") -> str:
     """Write an async byte-chunk stream to a NamedTemporaryFile; return its path.
 
     Individual ``write`` calls are buffered syscalls (fast, GIL-releasing); the

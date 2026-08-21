@@ -27,9 +27,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
 
 
 def _services(columns: list[str]):
-    table = SimpleNamespace(
-        columns=[SimpleNamespace(name=name) for name in columns]
-    )
+    table = SimpleNamespace(columns=[SimpleNamespace(name=name) for name in columns])
 
     class _Tables:
         async def get_table(self, pod_id, table_name, ctx):
@@ -42,7 +40,9 @@ def _services(columns: list[str]):
 async def test_writable_columns_exclude_platform_managed_ones():
     """Naming `id`/`created_at`/`user_id` in a write hint would invite the model
     to set columns the platform owns."""
-    services = _services(["id", "created_at", "updated_at", "user_id", "title", "status"])
+    services = _services(
+        ["id", "created_at", "updated_at", "user_id", "title", "status"]
+    )
     assert await writable_column_names(services, "tickets") == ["title", "status"]
 
 

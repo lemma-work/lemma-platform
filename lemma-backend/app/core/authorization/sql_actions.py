@@ -30,7 +30,10 @@ from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import equivalent_permission_ids
-from app.core.authorization.resource_actions import RESOURCE_ACTIONS, owner_actions_for_resource
+from app.core.authorization.resource_actions import (
+    RESOURCE_ACTIONS,
+    owner_actions_for_resource,
+)
 from app.modules.datastore.infrastructure.models.datastore_models import DatastoreFile
 
 # Resource types whose grants cascade down a path hierarchy (a grant on a
@@ -75,9 +78,7 @@ def allowed_actions_expr(
     if ctx.is_superuser:
         return _text_array(all_actions)
 
-    role_actions = [
-        action for action in resource_actions if ctx.has_permission(action)
-    ]
+    role_actions = [action for action in resource_actions if ctx.has_permission(action)]
     owner_actions = list(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
@@ -102,7 +103,10 @@ def allowed_actions_expr(
             visibility_col=visibility_col,
         )
 
-    if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD and ctx.workload_principal_refs:
+    if (
+        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        and ctx.workload_principal_refs
+    ):
         return _delegated_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -167,7 +171,9 @@ def allowed_read_filter(
         visibility_col=visibility_col,
         resource_path_col=resource_path_col,
     )
-    return allowed_actions_contains(allowed_actions, read_action_for_resource(resource_type))
+    return allowed_actions_contains(
+        allowed_actions, read_action_for_resource(resource_type)
+    )
 
 
 def allowed_actions_contains(
@@ -190,7 +196,9 @@ def _anonymous_allowed_actions_expr(
     resource_actions: Sequence[str],
     visibility_col,
 ) -> ColumnElement:
-    public_read_actions = [action for action in resource_actions if action.endswith(".read")]
+    public_read_actions = [
+        action for action in resource_actions if action.endswith(".read")
+    ]
     if visibility_col is None or not public_read_actions:
         return _text_array([])
     return case(
@@ -355,9 +363,7 @@ def _grant_exists_for_action(
                     granted.pod_id == pod_id_col,
                     or_(
                         resource_path_col == granted.path,
-                        func.left(
-                            resource_path_col, func.length(granted.path) + 1
-                        )
+                        func.left(resource_path_col, func.length(granted.path) + 1)
                         == granted.path.concat("/"),
                     ),
                 ),

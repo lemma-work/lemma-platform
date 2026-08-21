@@ -43,7 +43,7 @@ class TokenStreamMixin:
                 )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic"
             )
             return
         if result.handle is not None:
@@ -96,7 +96,7 @@ class TokenStreamMixin:
                 )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic"
             )
             return
         if result.handle is not None:

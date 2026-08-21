@@ -48,10 +48,14 @@ def _request(chunks: list[bytes], boundary: str = "lemma-boundary"):
 
 def _file_body(content: bytes, boundary: str = "lemma-boundary") -> bytes:
     return (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="file"; filename="sample.txt"\r\n'
-        "Content-Type: text/plain\r\n\r\n"
-    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="sample.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+        ).encode()
+        + content
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
 
 
 @pytest.mark.asyncio

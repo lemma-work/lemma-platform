@@ -45,7 +45,9 @@ def test_scalar_shorthand_is_equality():
 
 
 def test_equality_reads_the_row_the_write_left_behind():
-    assert match({"status": "approved"}, operation=INSERT, payload={"status": "approved"})
+    assert match(
+        {"status": "approved"}, operation=INSERT, payload={"status": "approved"}
+    )
     assert not match(
         {"status": "approved"}, operation=INSERT, payload={"status": "pending"}
     )
@@ -53,14 +55,20 @@ def test_equality_reads_the_row_the_write_left_behind():
 
 def test_conditions_on_several_columns_all_have_to_hold():
     payload = {"status": "approved", "priority": "high"}
-    assert match({"status": "approved", "priority": "high"}, operation=INSERT, payload=payload)
+    assert match(
+        {"status": "approved", "priority": "high"}, operation=INSERT, payload=payload
+    )
     assert not match(
         {"status": "approved", "priority": "low"}, operation=INSERT, payload=payload
     )
 
 
 def test_membership_operators():
-    assert match({"status": {"in": ["approved", "done"]}}, operation=INSERT, payload={"status": "done"})
+    assert match(
+        {"status": {"in": ["approved", "done"]}},
+        operation=INSERT,
+        payload={"status": "done"},
+    )
     assert not match(
         {"status": {"not_in": ["approved", "done"]}},
         operation=INSERT,
@@ -165,9 +173,13 @@ def test_from_matches_the_prior_value():
 
 
 def test_delete_matches_on_the_removed_row_but_never_on_a_transition():
-    assert match({"status": "approved"}, operation=DELETE, payload={"status": "approved"})
+    assert match(
+        {"status": "approved"}, operation=DELETE, payload={"status": "approved"}
+    )
     for undecidable in ({"to": "approved"}, {"from": "pending"}, {"changed": True}):
-        assert not match({"status": undecidable}, operation=DELETE, payload={"status": "approved"})
+        assert not match(
+            {"status": undecidable}, operation=DELETE, payload={"status": "approved"}
+        )
 
 
 def test_insert_cannot_satisfy_prior_image_operators():

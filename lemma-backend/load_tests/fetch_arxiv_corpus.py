@@ -133,8 +133,9 @@ PAPERS: list[tuple[str, str]] = [
 ]
 
 ARXIV_PDF_URL = "https://arxiv.org/pdf/{arxiv_id}"
-USER_AGENT = "lemma-load-test/1.0 (document-processing benchmark; contact: ops@lemma.local)"
-
+USER_AGENT = (
+    "lemma-load-test/1.0 (document-processing benchmark; contact: ops@lemma.local)"
+)
 
 
 def default_corpus_dir() -> Path:
@@ -151,7 +152,9 @@ def default_corpus_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "benchmark-corpus" / "arxiv"
 
 
-def download(arxiv_id: str, slug: str, out_dir: Path, delay: float) -> tuple[str, int, str]:
+def download(
+    arxiv_id: str, slug: str, out_dir: Path, delay: float
+) -> tuple[str, int, str]:
     target = out_dir / f"{slug}.pdf"
     if target.exists() and target.stat().st_size > 10_000:
         return slug, target.stat().st_size, "cached"
@@ -181,7 +184,9 @@ def main() -> int:
         type=Path,
         default=None,
     )
-    parser.add_argument("--delay", type=float, default=3.0, help="seconds between downloads")
+    parser.add_argument(
+        "--delay", type=float, default=3.0, help="seconds between downloads"
+    )
     args = parser.parse_args()
 
     out_dir: Path = args.out or default_corpus_dir()
@@ -206,7 +211,9 @@ def main() -> int:
     manifest.write_text(json.dumps(results, indent=2))
 
     ok = [r for r in results if not r["status"].startswith("failed")]
-    print(f"\ncorpus: {len(ok)}/{len(selected)} papers, {total_bytes / 1e6:.1f} MB total")
+    print(
+        f"\ncorpus: {len(ok)}/{len(selected)} papers, {total_bytes / 1e6:.1f} MB total"
+    )
     print(f"manifest: {manifest}")
     if failures:
         print(f"\n{len(failures)} failed:")

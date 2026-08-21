@@ -75,9 +75,7 @@ async def test_list_connectors(authenticated_client: AsyncClient, test_connector
 
 @pytest.mark.asyncio
 async def test_get_connector(authenticated_client: AsyncClient, test_connector):
-    response = await authenticated_client.get(
-        f"/connectors/{test_connector.id}"
-    )
+    response = await authenticated_client.get(f"/connectors/{test_connector.id}")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == test_connector.id
@@ -164,8 +162,7 @@ async def test_triggers_filtered_by_auth_config_kind(
     await db_session.commit()
 
     triggers_url = (
-        f"/organizations/{fixed_test_org['id']}/connectors/"
-        f"{auth_config.name}/triggers"
+        f"/organizations/{fixed_test_org['id']}/connectors/{auth_config.name}/triggers"
     )
 
     response = await authenticated_client.get(triggers_url)

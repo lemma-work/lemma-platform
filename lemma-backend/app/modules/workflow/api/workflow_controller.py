@@ -167,7 +167,10 @@ async def update_workflow(
         requester_user_id=user.id,
         ctx=ctx,
     )
-    updated = await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx) or updated
+    updated = (
+        await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx)
+        or updated
+    )
     return await _flow_detail_response(updated)
 
 
@@ -209,7 +212,10 @@ async def update_workflow_graph(
         requester_user_id=user.id,
         ctx=ctx,
     )
-    updated = await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx) or updated
+    updated = (
+        await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx)
+        or updated
+    )
     return await _flow_detail_response(updated)
 
 
@@ -239,7 +245,9 @@ async def list_workflows(
         ctx=ctx,
     )
     return WorkflowListResponse(
-        items=[WorkflowSummaryResponse.model_validate(summary) for summary in summaries],
+        items=[
+            WorkflowSummaryResponse.model_validate(summary) for summary in summaries
+        ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )

@@ -18,7 +18,9 @@ def start_analytics() -> None:
     if not key:
         # Explicitly reinstall the null sink rather than leaving whatever a
         # previous process or test put there.
-        configure(None, deployment=settings.environment, strict=settings.analytics_strict)
+        configure(
+            None, deployment=settings.environment, strict=settings.analytics_strict
+        )
         return
     existing = current_sink()
     if isinstance(existing, PostHogSink) and existing.write_key == key:

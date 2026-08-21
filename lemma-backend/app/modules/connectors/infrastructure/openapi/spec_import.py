@@ -167,7 +167,9 @@ def _analyze_body(
         for name, prop in properties.items():
             if _is_binary_property(prop) or name in forced_binary:
                 binary_fields.append(name)
-                new_props[name] = _file_input_schema(f"File for multipart field '{name}'.")
+                new_props[name] = _file_input_schema(
+                    f"File for multipart field '{name}'."
+                )
             else:
                 form_fields.append(name)
                 new_props[name] = prop
@@ -175,7 +177,9 @@ def _analyze_body(
             "type": "object",
             "properties": new_props,
             "required": body_schema.get("required", []),
-            "additionalProperties": bool(body_schema.get("additionalProperties", False)),
+            "additionalProperties": bool(
+                body_schema.get("additionalProperties", False)
+            ),
         }
         return binary_fields, form_fields, body_prop
 
@@ -220,7 +224,11 @@ def _collect_parameters(
             path_params.append(name)
         elif entry["location"] == "query":
             query_params.append(
-                {"name": name, "style": entry.get("style"), "explode": entry.get("explode")}
+                {
+                    "name": name,
+                    "style": entry.get("style"),
+                    "explode": entry.get("explode"),
+                }
             )
         elif entry["location"] == "header":
             header_params.append(name)
@@ -249,7 +257,9 @@ def _collect_request_body(
     content_type, body_schema, _ = pick_content_schema(
         spec, request_body.get("content") or {}, preferred_types=_BODY_PREFERRED_TYPES
     )
-    binary_fields, form_fields, body_prop = _analyze_body(content_type, body_schema, override)
+    binary_fields, form_fields, body_prop = _analyze_body(
+        content_type, body_schema, override
+    )
     properties["body"] = body_prop
     if request_body.get("required"):
         required.append("body")
@@ -277,7 +287,9 @@ def _resolve_response(
 
     resp_content = resolve_once(spec, success).get("content") or {}
     if not binary:
-        binary = prefers_binary_response(operation_id=op_id, path=path, content=resp_content)
+        binary = prefers_binary_response(
+            operation_id=op_id, path=path, content=resp_content
+        )
     if binary:
         return True, _binary_output_schema()
     _, output_schema, _ = pick_content_schema(
@@ -341,19 +353,24 @@ def _build_operation(
     op_servers = operation.get("servers") or []
     if op_servers and isinstance(op_servers[0], dict) and op_servers[0].get("url"):
         server_url = op_servers[0]["url"].rstrip("/")
-    public_name = _normalize_name(override.get("name") or build_tool_name(op_id, method, path))
+    public_name = _normalize_name(
+        override.get("name") or build_tool_name(op_id, method, path)
+    )
     display_name = operation.get("summary") or public_name
-    description = (
-        override.get("description")
-        or _clean_description(operation.get("summary") or operation.get("description"), public_name)
+    description = override.get("description") or _clean_description(
+        operation.get("summary") or operation.get("description"), public_name
     )
 
     params = _collect_parameters(spec, shared_parameters, operation)
     properties = dict(params.properties)
     required = list(params.required)
 
-    request_body_desc = _collect_request_body(spec, operation, override, properties, required)
-    binary, output_schema = _resolve_response(spec, operation, override, op_id=op_id, path=path)
+    request_body_desc = _collect_request_body(
+        spec, operation, override, properties, required
+    )
+    binary, output_schema = _resolve_response(
+        spec, operation, override, op_id=op_id, path=path
+    )
 
     if binary:
         properties["output_path"] = _output_path_schema()
@@ -417,7 +434,11 @@ def build_operation_descriptors(
             if method not in _HTTP_METHODS or not isinstance(operation, dict):
                 continue
             op_id = operation.get("operationId") or ""
-            if not select_all and op_id not in allowed_ids and (method, path) not in allowed_paths:
+            if (
+                not select_all
+                and op_id not in allowed_ids
+                and (method, path) not in allowed_paths
+            ):
                 continue
             override = overrides.get(op_id) or overrides.get(f"{method} {path}") or {}
             results.append(

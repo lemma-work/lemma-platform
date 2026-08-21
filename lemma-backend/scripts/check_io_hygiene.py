@@ -150,7 +150,9 @@ class Violation:
         return f"{self.path}::{self.scope}::{self.rule}::{self.detail}"
 
     def render(self) -> str:
-        return f"{self.path}:{self.line}  {self.rule}  in {self.scope}()  [{self.detail}]"
+        return (
+            f"{self.path}:{self.line}  {self.rule}  in {self.scope}()  [{self.detail}]"
+        )
 
 
 def _dotted(node: ast.AST) -> str:
@@ -162,7 +164,6 @@ def _dotted(node: ast.AST) -> str:
     if isinstance(node, ast.Call):
         return _dotted(node.func)
     return ""
-
 
 
 def _is_none(node: ast.AST) -> bool:
@@ -262,9 +263,7 @@ class IoHygieneChecker(ast.NodeVisitor):
         if callee in UNLIMITED_OFFLOADS and not self._offload_owner:
             self._record(node.lineno, "unlimited-offload", callee)
         elif callee.endswith("aiohttp.ClientSession") or callee == "ClientSession":
-            timeout = next(
-                (kw for kw in node.keywords if kw.arg == "timeout"), None
-            )
+            timeout = next((kw for kw in node.keywords if kw.arg == "timeout"), None)
             if timeout is None:
                 self._record(node.lineno, "untimed-aiohttp-session", callee)
             elif _is_none(timeout.value):
@@ -304,7 +303,6 @@ def source_files() -> list[Path]:
         for path in SCAN_ROOT.rglob("*.py")
         if not any(part in EXCLUDED_PARTS for part in path.parts)
     )
-
 
 
 def _load_baseline(path: Path) -> dict[str, int]:

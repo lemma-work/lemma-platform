@@ -126,9 +126,7 @@ class RedisJsonCache(Generic[T]):
         if not suffixes:
             return 0
         keys = [
-            self.build_key(
-                item.decode() if isinstance(item, bytes) else str(item)
-            )
+            self.build_key(item.decode() if isinstance(item, bytes) else str(item))
             for item in suffixes
         ]
         await redis.delete(*keys, index_key)
@@ -165,6 +163,7 @@ class RedisJsonCache(Generic[T]):
         """
         async with self._lock:
             self._redis = None
+
 
 async def close_redis_json_caches() -> None:
     """Close every live process-local cache client during service teardown."""

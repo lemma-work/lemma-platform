@@ -57,7 +57,8 @@ class PickerScreen(ModalScreen[str | None]):
         filtered = [
             item
             for item in self._items
-            if needle in _label(item).lower() or needle in str(item.get("id", "")).lower()
+            if needle in _label(item).lower()
+            or needle in str(item.get("id", "")).lower()
         ]
         self._populate(filtered if needle else self._items)
 

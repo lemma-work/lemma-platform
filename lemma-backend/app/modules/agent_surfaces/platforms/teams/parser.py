@@ -179,10 +179,9 @@ class TeamsMessageParser:
         tenant = channel_data.get("tenant") or {}
 
         is_thread_reply = bool(payload.get("replyToId"))
-        is_dm = (
-            str(conversation.get("conversationType") or "").lower() == "personal"
-            or not channel.get("id")
-        )
+        is_dm = str(
+            conversation.get("conversationType") or ""
+        ).lower() == "personal" or not channel.get("id")
 
         # For channel thread replies Teams may leave channelData.channel.id empty and
         # set conversation.id to a compound string:
@@ -257,7 +256,9 @@ class TeamsMessageParser:
         if not raw_text and not attachments:
             return None
 
-        sender = (message.get("from") or {}).get("user", {}) or message.get("from") or {}
+        sender = (
+            (message.get("from") or {}).get("user", {}) or message.get("from") or {}
+        )
         conversation = message.get("conversation") or {}
         channel_data = message.get("channelData") or {}
         channel = channel_data.get("channel") or {}
@@ -265,10 +266,9 @@ class TeamsMessageParser:
         tenant = channel_data.get("tenant") or {}
 
         is_thread_reply = bool(message.get("replyToId"))
-        is_dm = (
-            str(conversation.get("conversationType") or "").lower() == "personal"
-            or not channel.get("id")
-        )
+        is_dm = str(
+            conversation.get("conversationType") or ""
+        ).lower() == "personal" or not channel.get("id")
 
         channel_id_raw = str(channel.get("id") or "")
         if not channel_id_raw and not is_dm:
@@ -385,7 +385,9 @@ class TeamsMessageParser:
                     )
                     results.append(
                         {
-                            "name": name or filename_from_url(download_url) or "attachment",
+                            "name": name
+                            or filename_from_url(download_url)
+                            or "attachment",
                             "download_url": download_url,
                             "file_type": file_type,
                             "content_type": content_type or "application/octet-stream",
@@ -481,7 +483,10 @@ class TeamsMessageParser:
                 mentioned = entity.get("mentioned") or {}
                 if recipient_id and str(mentioned.get("id") or "") == recipient_id:
                     return True
-                if recipient_name and str(mentioned.get("name") or "") == recipient_name:
+                if (
+                    recipient_name
+                    and str(mentioned.get("name") or "") == recipient_name
+                ):
                     return True
             return False
         # Legacy payload shape with no entities array: fall back to an <at> tag

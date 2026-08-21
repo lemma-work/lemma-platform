@@ -50,6 +50,8 @@ FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
+STACK_DIR     := lemma-stack
+BUNDLE_DIR    := lemma-pod-bundle
 DESKTOP_DIR   := desktop
 SCENARIOS_DIR := tests/scenarios
 
@@ -1315,6 +1317,16 @@ coverage-frontend:
 	@cd $(FRONTEND_DIR) && npx vitest run --coverage 2>/dev/null || \
 		(echo "  Install @vitest/coverage-v8: npm install -D @vitest/coverage-v8"; exit 1)
 
+# Ruff cannot float. Two versions disagree about formatting output, and 0.16
+# widened the default rule selection enough to turn 1 finding into 711 on the
+# same tree -- so both the `--check` gate and `lint` have to name a version.
+#
+# Most components resolve one from their own `ruff>=0.14.8,<0.16` bound and use
+# `uv run ruff`. `lemma-pod-bundle` and `tests/scenarios` carry no ruff
+# dependency, so this is where they get one. EVERY PLACE THAT NAMES A VERSION
+# has to move together: this line and that bound in each pyproject.
+RUFF := uvx ruff@0.15.22
+
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
 # Every component's linter, and all four can fail. Three of them used to end
@@ -1334,12 +1346,60 @@ lint:
 	@cd $(CLI_DIR) && uv run ruff check . --quiet
 	@echo "→ Python SDK (ruff)…"
 	@cd $(PYTHON_DIR) && uv run ruff check . --quiet
+	@# These three carry a `[tool.ruff]` section that nothing enforced: the
+	@# stack and the bundle are already formatted by `make format`, and the
+	@# scenarios suite was in no lint target at all.
+	@echo "→ Stack (ruff)…"
+	@cd $(STACK_DIR) && $(RUFF) check . --quiet
+	@echo "→ Pod bundle (ruff)…"
+	@cd $(BUNDLE_DIR) && $(RUFF) check . --quiet
+	@echo "→ Scenarios (ruff)…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
 	@echo "→ Frontend (eslint)…"
 	@if [ -d $(FRONTEND_DIR)/node_modules ]; then \
 		cd $(FRONTEND_DIR) && npm run lint --silent; \
 	else \
 		echo "  skipped: run 'npm ci' in $(FRONTEND_DIR) first"; \
 	fi
+
+# ── Format ────────────────────────────────────────────────────────────────────
+#
+# Every first-party Python file is `ruff format` clean. Generated trees are
+# excluded and stay excluded: `lemma-backend/lemma-connectors/` comes from
+# provider OpenAPI specs and `lemma-python/lemma_sdk/openapi_client/` from the
+# API spec, so formatting either one would be reverted by the next generation
+# and read as codegen drift.
+#
+# `format-check` is deliberately NOT part of `quality` yet. Adding it there is
+# the one-line change that makes formatting a merge requirement, once you want
+# every open branch to have rebased through the reformat.
+SDK_FORMAT_EXCLUDE = --exclude lemma_sdk/openapi_client
+
+
+
+format:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format .
+
+format-check:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format-check
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format --check .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format --check $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format --check .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format --check .
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #
@@ -1372,6 +1432,11 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
 	@echo "→ Architecture ratchet + route inventory…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+	@echo "→ Logging event catalog freshness…"
+	@# The catalog is generated from the literal logger calls in the tree and is
+	@# what the logging contract is enforced against. Nothing ran the generator,
+	@# so nothing noticed when the two diverged.
+	@cd $(BACKEND_DIR) && uv run python ../scripts/generate_logging_event_catalogs.py --check
 	@echo "→ OpenAPI spec freshness…"
 	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
 	@echo "→ Module contract coverage…"

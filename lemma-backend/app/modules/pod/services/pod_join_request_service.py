@@ -65,8 +65,10 @@ class PodJoinRequestService:
         ]:
             return requester_org_member
 
-        requester_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-            pod_id, requester_org_member.id
+        requester_pod_member = (
+            await self.pod_member_repository.get_by_pod_and_org_member(
+                pod_id, requester_org_member.id
+            )
         )
         if not requester_pod_member or not roles_allow_required(
             requester_pod_member.roles,
@@ -139,8 +141,10 @@ class PodJoinRequestService:
         requester_user_id: UUID,
     ) -> PodMemberEntity:
         """Idempotently add the org member to the pod with the base USER role."""
-        existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-            pod_id, org_member.id
+        existing_pod_member = (
+            await self.pod_member_repository.get_by_pod_and_org_member(
+                pod_id, org_member.id
+            )
         )
         if existing_pod_member:
             return existing_pod_member
@@ -187,12 +191,12 @@ class PodJoinRequestService:
         )
         if org_member:
             if org_member.role == OrganizationRole.ORG_OWNER:
-                raise PodConflictError(
-                    "Org owner has access to all pods by default"
-                )
+                raise PodConflictError("Org owner has access to all pods by default")
 
-            existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-                pod_id, org_member.id
+            existing_pod_member = (
+                await self.pod_member_repository.get_by_pod_and_org_member(
+                    pod_id, org_member.id
+                )
             )
             if existing_pod_member:
                 raise PodConflictError("User is already a member of this pod")
@@ -211,9 +215,11 @@ class PodJoinRequestService:
 
             # Reuse a prior pending request (e.g. created while the pod was
             # invite-only) instead of leaving it dangling.
-            existing_pending = await self.pod_join_request_repository.get_pending_by_pod_and_user(
-                pod_id,
-                requester_user_id,
+            existing_pending = (
+                await self.pod_join_request_repository.get_pending_by_pod_and_user(
+                    pod_id,
+                    requester_user_id,
+                )
             )
             join_request = existing_pending or PodJoinRequestEntity(
                 pod_id=pod_id,
@@ -235,9 +241,11 @@ class PodJoinRequestService:
                 )
             return created_request, created_org_member
 
-        existing_pending = await self.pod_join_request_repository.get_pending_by_pod_and_user(
-            pod_id,
-            requester_user_id,
+        existing_pending = (
+            await self.pod_join_request_repository.get_pending_by_pod_and_user(
+                pod_id,
+                requester_user_id,
+            )
         )
         if existing_pending:
             return existing_pending, None
@@ -367,9 +375,7 @@ class PodJoinRequestService:
             # The org role is granted to a brand-new member here, so bound it to
             # what the approver may confer: only an org owner mints owners/editors.
             if not can_grant_org_role(approver.role, org_role):
-                raise PodAccessDeniedError(
-                    "You may not grant that organization role"
-                )
+                raise PodAccessDeniedError("You may not grant that organization role")
             target_org_member = await self.organization_repository.add_member(
                 OrganizationMemberEntity(
                     user_id=join_request.user_id,
@@ -378,9 +384,11 @@ class PodJoinRequestService:
                 )
             )
 
-        existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-            pod_id,
-            target_org_member.id,
+        existing_pod_member = (
+            await self.pod_member_repository.get_by_pod_and_org_member(
+                pod_id,
+                target_org_member.id,
+            )
         )
         if not existing_pod_member:
             pod_member = PodMemberEntity(

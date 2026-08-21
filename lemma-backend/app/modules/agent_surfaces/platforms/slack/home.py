@@ -84,9 +84,7 @@ class SlackHomeSurface:
             )
             return True
         except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_channel_setup_prompt.diagnostic'
-            )
+            logger.debug("agent_surfaces.service.slack_channel_setup_prompt.diagnostic")
             return False
 
     async def open_channel_setup_modal(
@@ -119,7 +117,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_open_setup_modal.diagnostic',
+                "agent_surfaces.service.slack_open_setup_modal.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -155,7 +153,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_starter_prompt.diagnostic',
+                "agent_surfaces.service.slack_starter_prompt.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -183,7 +181,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_open_setup_modal.diagnostic',
+                "agent_surfaces.service.slack_open_setup_modal.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -224,7 +222,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_publish_home_view.diagnostic',
+                "agent_surfaces.service.slack_publish_home_view.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -271,9 +269,7 @@ class SlackHomeSurface:
             )
             return True
         except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_set_thread_title.diagnostic'
-            )
+            logger.debug("agent_surfaces.service.slack_set_thread_title.diagnostic")
             return False
 
     async def set_suggested_prompts(
@@ -324,6 +320,6 @@ class SlackHomeSurface:
             return True
         except SlackApiError:
             logger.debug(
-                'agent_surfaces.service.slack_set_suggested_prompts.diagnostic'
+                "agent_surfaces.service.slack_set_suggested_prompts.diagnostic"
             )
             return False

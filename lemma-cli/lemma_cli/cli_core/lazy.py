@@ -16,6 +16,7 @@ proxy imports the module and delegates everything to the real Typer group.
 The registry's help strings are pinned to the real sub-app help by
 tests/test_lazy_groups.py, so they cannot drift silently.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -89,8 +90,18 @@ def hoist_global_options(args: list[str]) -> list[str]:
 class LazyGroupProxy(typer.core.TyperGroup):
     """Stand-in for a sub-Typer group; imports its module on first real use."""
 
-    def __init__(self, *, name: str, module: str, attr: str, short_help: str, hidden: bool = False) -> None:
-        super().__init__(name=name, short_help=short_help, help=short_help, hidden=hidden)
+    def __init__(
+        self,
+        *,
+        name: str,
+        module: str,
+        attr: str,
+        short_help: str,
+        hidden: bool = False,
+    ) -> None:
+        super().__init__(
+            name=name, short_help=short_help, help=short_help, hidden=hidden
+        )
         self._module = module
         self._attr = attr
         self._real_group: typer.core.TyperGroup | None = None
@@ -154,7 +165,11 @@ class LazyRootGroup(typer.core.TyperGroup):
         if proxy is None:
             module, attr, short_help, hidden = self.registry[name]
             proxy = LazyGroupProxy(
-                name=name, module=module, attr=attr, short_help=short_help, hidden=hidden
+                name=name,
+                module=module,
+                attr=attr,
+                short_help=short_help,
+                hidden=hidden,
             )
             self._lazy_cache[name] = proxy
         return proxy

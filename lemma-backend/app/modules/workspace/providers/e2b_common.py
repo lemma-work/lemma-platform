@@ -59,7 +59,6 @@ META_PROFILE_DIGEST = meta_profile_digest(DEFAULT_METADATA_NAMESPACE)
 META_TEMPLATE = meta_template(DEFAULT_METADATA_NAMESPACE)
 
 
-
 def classify(exc: Exception) -> Exception:
     """Turn an SDK failure into this module's two-axis vocabulary.
 
@@ -235,9 +234,7 @@ async def ensure_serving(
             budget_seconds=budget_seconds,
         )
     else:
-        await ensure_agent_serving(
-            sandbox, provider_id, budget_seconds=budget_seconds
-        )
+        await ensure_agent_serving(sandbox, provider_id, budget_seconds=budget_seconds)
 
 
 async def ensure_agent_serving(
@@ -282,7 +279,7 @@ async def _run_true(sandbox) -> bool:
     try:
         with sdk_errors():
             result = await sandbox.commands.run("true")
-    except (ProviderGone, SandboxUnavailable):
+    except ProviderGone, SandboxUnavailable:
         # Not up yet: the agent can lag the VM by a moment after a create or
         # a resume, and the budget decides how long "a moment" is allowed to
         # be. A definitive refusal still escapes.

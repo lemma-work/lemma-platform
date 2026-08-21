@@ -50,9 +50,7 @@ async def test_thread_title_is_set_for_a_dm(monkeypatch):
     )
 
     assert await home.set_thread_title(event=_event(), title="Q3 pipeline") is True
-    assert calls == [
-        {"channel_id": "D1", "thread_ts": "100.0", "title": "Q3 pipeline"}
-    ]
+    assert calls == [{"channel_id": "D1", "thread_ts": "100.0", "title": "Q3 pipeline"}]
 
 
 async def test_thread_title_is_skipped_outside_a_dm_and_without_scope(monkeypatch):
@@ -66,7 +64,10 @@ async def test_thread_title_is_skipped_outside_a_dm_and_without_scope(monkeypatc
     scoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
-    assert await scoped_home.set_thread_title(event=_event(is_dm=False), title="x") is False
+    assert (
+        await scoped_home.set_thread_title(event=_event(is_dm=False), title="x")
+        is False
+    )
 
     unscoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": "chat:write"}
@@ -140,7 +141,8 @@ async def test_suggested_prompts_need_at_least_one_usable_pair(monkeypatch):
 
     assert await home.set_suggested_prompts(event=_event(), prompts=[]) is False
     assert (
-        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")]) is False
+        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")])
+        is False
     )
 
 
@@ -182,7 +184,9 @@ async def test_agent_avatar_rides_along_with_the_name():
         "username": "agent3"
     }
     # Without the scope, nothing is customised at all.
-    assert slack_customized_message_kwargs({"access_token": "x"}, "a", "https://y") == {}
+    assert (
+        slack_customized_message_kwargs({"access_token": "x"}, "a", "https://y") == {}
+    )
 
 
 async def test_setup_confirmation_names_what_was_saved():

@@ -28,8 +28,12 @@ from app.modules.agent_surfaces.platforms.outlook.service import OutlookPlatform
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import TelegramPlatformService
-from app.modules.agent_surfaces.platforms.whatsapp.service import WhatsAppPlatformService
+from app.modules.agent_surfaces.platforms.telegram.service import (
+    TelegramPlatformService,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.service import (
+    WhatsAppPlatformService,
+)
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
 
 pytestmark = pytest.mark.e2e
@@ -211,7 +215,9 @@ async def test_teams_final_answer_contract(fake_teams, message_store, monkeypatc
     payload = messages[-1]
     assert payload["_method"] == "POST"
     assert payload["_authorization"] == "Bearer teams-contract-token"
-    assert payload["_path"] == "/teams/v3/conversations/conversation-contract/activities"
+    assert (
+        payload["_path"] == "/teams/v3/conversations/conversation-contract/activities"
+    )
     assert payload["body"] == {
         "type": "message",
         "text": "**Contract** reply",
@@ -522,13 +528,9 @@ def test_detail_label_falls_back_through_content_type_mime_type_and_file_type():
     platform that just doesn't report one) raised ``AttributeError`` the
     moment ``render_attachment_summary_suffix``/``render_attachment_prompt_block``
     tried to render it."""
+    assert SurfaceFileAttachment(name="no-metadata.bin").detail_label() == ""
     assert (
-        SurfaceFileAttachment(name="no-metadata.bin").detail_label() == ""
-    )
-    assert (
-        SurfaceFileAttachment(
-            name="a.bin", file_type="binary"
-        ).detail_label()
+        SurfaceFileAttachment(name="a.bin", file_type="binary").detail_label()
         == "binary"
     )
     assert (
@@ -568,9 +570,7 @@ def test_provider_failure_classifies_status_body_and_missing_response():
     assert no_response_failure.status_code is None
 
     named_failure = provider_failure(
-        _ProviderError(
-            _FakeResponse(403, json_result={"name": "restricted_api_key"})
-        )
+        _ProviderError(_FakeResponse(403, json_result={"name": "restricted_api_key"}))
     )
     assert named_failure.status_code == 403
     assert named_failure.provider_error == "restricted_api_key"
@@ -634,7 +634,9 @@ def test_strip_quoted_reply_edge_cases():
     assert forwarded == "please review this"
 
     # An "On ... wrote:" marker cuts the quoted original.
-    quote_marker_body = "My reply.\n\nOn Mon, Jan 1, 2024, Alice wrote:\n> original text"
+    quote_marker_body = (
+        "My reply.\n\nOn Mon, Jan 1, 2024, Alice wrote:\n> original text"
+    )
     assert strip_quoted_reply(quote_marker_body).strip() == "My reply."
 
     # "> " quoting that runs to the end of the message is trimmed; the prose
@@ -740,9 +742,7 @@ def test_coerce_display_resource_plans_normalizes_mixed_input():
     invalid_dict = {"title": "missing resource_type"}
     not_a_plan = 12345
 
-    plans = coerce_display_resource_plans(
-        [matching, foreign, invalid_dict, not_a_plan]
-    )
+    plans = coerce_display_resource_plans([matching, foreign, invalid_dict, not_a_plan])
 
     assert len(plans) == 2
     assert plans[0] is matching
@@ -832,9 +832,7 @@ async def test_resolve_outbound_email_attachments_and_urls(monkeypatch):
         datastore_deps, ["/me/reports/report.pdf"], inline_cap_bytes=10
     )
     assert inline_link == []
-    assert links_link == [
-        ("report.pdf", "https://signed.example.test/report.pdf")
-    ]
+    assert links_link == [("report.pdf", "https://signed.example.test/report.pdf")]
 
     resolved, unresolved = await resolve_outbound_email_attachment_urls(
         big_deps, ["work.bin"]

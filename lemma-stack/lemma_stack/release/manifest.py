@@ -34,9 +34,16 @@ APP_IMAGE_KEYS = (
     "function",
 )
 
-# Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
+# pg18 everywhere, matching what actually runs: prod is CloudSQL
+# POSTGRES_18_4 and the dev cluster is CloudNativePG 18.4.
+#
+# Postgres will not start on a data directory from an older major, so an
+# install carrying a pg16 volume needs it removed -- `lemma down` takes a flag
+# that deletes the Postgres volume. Local and desktop installs are pre-stable,
+# so this is a reset rather than a migration; a released stack would need a
+# pg_upgrade step before a bump like this.
 DEFAULT_INFRA_IMAGES = {
-    "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
+    "postgres": "docker.io/pgvector/pgvector:0.8.3-pg18",
     # Plain Redis. Nothing issues a JSON.* or FT.* command -- RedisJsonCache
     # stores JSON as an ordinary string, and vector search is Postgres -- so the
     # Stack image was ~200 MB of modules nothing loaded, downloaded on every

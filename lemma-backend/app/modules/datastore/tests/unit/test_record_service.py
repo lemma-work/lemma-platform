@@ -18,7 +18,9 @@ from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
-from app.modules.datastore.services.record_service import RecordService as _RecordService
+from app.modules.datastore.services.record_service import (
+    RecordService as _RecordService,
+)
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
 
@@ -303,9 +305,7 @@ async def test_update_event_carries_what_changed_and_what_it_was():
     async def update_record(*args, event_factory, **kwargs):
         # Stands in for the repository, which is the only layer that knows
         # which columns the statement wrote and what they held before.
-        staged_events.append(
-            event_factory(updated, ["status"], {"status": "pending"})
-        )
+        staged_events.append(event_factory(updated, ["status"], {"status": "pending"}))
         return updated
 
     record_repository.update_record.side_effect = update_record
@@ -596,7 +596,11 @@ async def test_rls_record_mutations_use_record_write_action():
     record_repository.create_record.return_value = type(
         "StoredRecord",
         (),
-        {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Cafe", "user_id": str(user_id)}},
+        {
+            "user_id": uuid4(),
+            "id": str(uuid4()),
+            "data": {"merchant": "Cafe", "user_id": str(user_id)},
+        },
     )()
     authorization_service = AsyncMock()
     authorization_service.resolve_resource_id_by_name.return_value = uuid4()
@@ -824,7 +828,9 @@ async def test_rls_list_records_enforces_current_user_scope_for_non_admin():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    )
 
 
 async def test_rls_list_records_scopes_pod_admin_by_default():
@@ -847,7 +853,9 @@ async def test_rls_list_records_scopes_pod_admin_by_default():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    )
 
 
 async def test_rls_list_records_admin_mode_bypasses_scope_for_admin():
@@ -868,7 +876,9 @@ async def test_rls_list_records_admin_mode_bypasses_scope_for_admin():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is False
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is False
+    )
 
 
 async def test_rls_list_records_admin_mode_rejected_for_non_admin():
@@ -943,7 +953,10 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
 
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
     ctx.can.assert_not_awaited()
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is False
+    )
 
 
 async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on_all_rls_tables():
@@ -969,7 +982,10 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
 
     assert (rows, total) == ([{"merchant": "x"}], 1)
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is True
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is True
+    )
 
 
 async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin():
@@ -1019,7 +1035,10 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     # No registered table to authorize against -> falls back to a pod-level read check.
     ctx.require.assert_awaited()
     table_service.get_table.assert_not_awaited()
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is False
+    )
 
 
 async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypatch):
@@ -1129,4 +1148,6 @@ async def test_a_single_update_still_checks_permission_and_dispatches():
     assert authz.require_record_write.await_count == 1
     assert service.events.dispatch.await_count == 1
     # The scope decision still reaches the repository.
-    assert record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True
+    assert (
+        record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True
+    )

@@ -79,7 +79,7 @@ class LocalCrossEncoderReranker:
             return [results[index] for index in order[:top_n]]
         except Exception:
             logger.debug(
-                'datastore.reranker.local_reranker_keeping_first_stage.diagnostic'
+                "datastore.reranker.local_reranker_keeping_first_stage.diagnostic"
             )
             return list(results)[:top_n]
 
@@ -107,7 +107,7 @@ class OpenAICompatReranker:
         api_key = reveal_secret(settings.lemma_openai_api_key)
         if not api_key:
             logger.debug(
-                'datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic'
+                "datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic"
             )
             return list(results)[:top_n]
         url = f"{settings.lemma_openai_base_url.rstrip('/')}/rerank"
@@ -128,7 +128,7 @@ class OpenAICompatReranker:
                 payload = response.json()
         except Exception:
             logger.debug(
-                'datastore.reranker.openai_compat_reranker_keeping_first.diagnostic'
+                "datastore.reranker.openai_compat_reranker_keeping_first.diagnostic"
             )
             return list(results)[:top_n]
 

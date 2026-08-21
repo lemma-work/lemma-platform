@@ -206,9 +206,7 @@ class SandboxRepository:
         await self.session.execute(
             update(SandboxInstanceModel)
             .where(SandboxInstanceModel.id == instance_id)
-            .values(
-                state=SandboxInstanceState.RELEASED.value, released_at=utcnow()
-            )
+            .values(state=SandboxInstanceState.RELEASED.value, released_at=utcnow())
         )
 
     async def mark_instance_destroyed(self, instance_id: UUID) -> None:
@@ -286,9 +284,7 @@ class SandboxRepository:
             .values(provider_volume_id=volume_id, updated_at=utcnow())
         )
 
-    async def set_profile(
-        self, sandbox_id: UUID, *, name: str, digest: str
-    ) -> None:
+    async def set_profile(self, sandbox_id: UUID, *, name: str, digest: str) -> None:
         await self.session.execute(
             update(SandboxModel)
             .where(SandboxModel.id == sandbox_id)

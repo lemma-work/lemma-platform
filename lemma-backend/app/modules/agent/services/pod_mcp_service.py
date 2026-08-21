@@ -93,7 +93,8 @@ class PodMCPService:
             if is_control_flow_exception(exc):
                 raise
             logger.debug(
-                'agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic', exc_info=True
+                "agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic",
+                exc_info=True,
             )
             return self._mcp_error_result(tool_name, exc)
         return self._mcp_result(result)

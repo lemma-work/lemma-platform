@@ -51,9 +51,7 @@ def test_normalize_rejects_missing_or_empty_operations(raw_config):
 def test_normalize_rejects_unknown_operations(op):
     # Aliases (create, write) are no longer accepted — only INSERT/UPDATE/DELETE.
     with pytest.raises(ValueError):
-        normalize_datastore_schedule_config(
-            {"table_name": "users", "operations": op}
-        )
+        normalize_datastore_schedule_config({"table_name": "users", "operations": op})
 
 
 def test_normalize_stores_conditions_in_their_expanded_form():

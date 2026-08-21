@@ -4,9 +4,10 @@ from uuid import uuid4
 
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.services.webhook_handler import WebhookHandler
-from app.modules.schedule.services.webhook_schedule_matcher import WebhookScheduleMatcher
+from app.modules.schedule.services.webhook_schedule_matcher import (
+    WebhookScheduleMatcher,
+)
 from app.modules.schedule.domain.errors import ScheduleSourceEventIdRequiredError
-
 
 
 def _null_uow_factory():
@@ -139,8 +140,5 @@ async def test_handle_webhook_composio_v3_success():
     publish_call = event_publisher.publish_schedule_fired.call_args.kwargs
     assert publish_call["payload"] == payload["data"]
     assert publish_call["metadata"]["event_type"] == payload["metadata"]["trigger_slug"]
-    assert (
-        publish_call["metadata"]["webhook_event_type"]
-        == "composio.trigger.message"
-    )
+    assert publish_call["metadata"]["webhook_event_type"] == "composio.trigger.message"
     assert publish_call["source_event_id"] == "evt_123"

@@ -30,7 +30,9 @@ def _service(*, trigger_repository, kind=ConnectorKind.COMPOSIO, connector_id="s
     )
 
 
-def _trigger(kind: ConnectorKind, connector_id: str = "slack") -> ConnectorTriggerEntity:
+def _trigger(
+    kind: ConnectorKind, connector_id: str = "slack"
+) -> ConnectorTriggerEntity:
     return ConnectorTriggerEntity(
         id=f"{connector_id}:{kind.value}:new_message",
         connector_id=connector_id,
@@ -46,7 +48,9 @@ async def test_list_triggers_for_auth_config_passes_kind_to_repo():
     trigger_repository.list_by_connector_kind.return_value = [
         _trigger(ConnectorKind.COMPOSIO)
     ]
-    service = _service(trigger_repository=trigger_repository, kind=ConnectorKind.COMPOSIO)
+    service = _service(
+        trigger_repository=trigger_repository, kind=ConnectorKind.COMPOSIO
+    )
 
     triggers = await service.list_triggers_for_auth_config(
         user_id=uuid4(),
@@ -72,7 +76,9 @@ async def test_get_trigger_for_auth_config_uses_kind_lookup():
     trigger_repository.get_by_connector_kind_and_name.return_value = _trigger(
         ConnectorKind.PACKAGE
     )
-    service = _service(trigger_repository=trigger_repository, kind=ConnectorKind.PACKAGE)
+    service = _service(
+        trigger_repository=trigger_repository, kind=ConnectorKind.PACKAGE
+    )
 
     trigger = await service.get_trigger_for_auth_config(
         user_id=uuid4(),

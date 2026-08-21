@@ -65,10 +65,19 @@ class PodSchedules(BoundResource):
         return self._call(schedule_create, self._pod_uuid(), body=request)
 
     def get(self, schedule_id: str) -> ScheduleDetailResponse:
-        return self._call(schedule_get, self._pod_uuid(), self._schedule_id(schedule_id))
+        return self._call(
+            schedule_get, self._pod_uuid(), self._schedule_id(schedule_id)
+        )
 
-    def update(self, schedule_id: str, request: UpdateScheduleRequest) -> ScheduleDetailResponse:
-        return self._call(schedule_update, self._pod_uuid(), self._schedule_id(schedule_id), body=request)
+    def update(
+        self, schedule_id: str, request: UpdateScheduleRequest
+    ) -> ScheduleDetailResponse:
+        return self._call(
+            schedule_update,
+            self._pod_uuid(),
+            self._schedule_id(schedule_id),
+            body=request,
+        )
 
     def delete(self, schedule_id: str) -> None:
         self._call(schedule_delete, self._pod_uuid(), self._schedule_id(schedule_id))

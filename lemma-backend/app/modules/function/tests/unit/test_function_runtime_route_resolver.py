@@ -191,7 +191,9 @@ async def test_a_failed_destroy_still_leaves_the_endpoint_evicted() -> None:
             return_value=SimpleNamespace(ready=True, retry_after_ms=None)
         ),
         lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
-        destroy_sandbox=AsyncMock(side_effect=SandboxUnavailable("provider unreachable")),
+        destroy_sandbox=AsyncMock(
+            side_effect=SandboxUnavailable("provider unreachable")
+        ),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
@@ -228,9 +230,7 @@ async def test_the_readiness_poll_does_not_oversleep_the_sandbox(monkeypatch):
     deadline = datetime.now(timezone.utc) + timedelta(seconds=120)
 
     for attempt in range(6):
-        await FunctionRuntimeRouteResolver._wait_retry(
-            None, deadline, attempt=attempt
-        )
+        await FunctionRuntimeRouteResolver._wait_retry(None, deadline, attempt=attempt)
 
     # Six polls cap at 0.1+0.2+0.4+0.75+0.75+0.75 = 2.95s, times 1.2 jitter.
     # The old ladder capped at 0.5+1+2+4+5+5 = 17.5s, times the same jitter.

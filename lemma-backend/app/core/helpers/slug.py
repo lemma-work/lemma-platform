@@ -18,7 +18,9 @@ def validate_slug(value: str) -> str:
     if len(normalized) > _MAX_SLUG_LENGTH:
         raise ValueError("Slug must be 255 characters or fewer")
     if not is_valid_slug(normalized):
-        raise ValueError("Slug must contain only lowercase letters, numbers, and hyphens")
+        raise ValueError(
+            "Slug must contain only lowercase letters, numbers, and hyphens"
+        )
     return normalized
 
 

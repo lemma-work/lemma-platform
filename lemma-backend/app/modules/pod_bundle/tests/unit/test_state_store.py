@@ -186,9 +186,7 @@ async def test_durable_get_imports_legacy_redis_snapshot(monkeypatch, store, cac
     )
 
 
-async def test_durable_save_does_not_mirror_state_conflict(
-    monkeypatch, store, cache
-):
+async def test_durable_save_does_not_mirror_state_conflict(monkeypatch, store, cache):
     state = _state()
     store._durable = True
     monkeypatch.setattr(

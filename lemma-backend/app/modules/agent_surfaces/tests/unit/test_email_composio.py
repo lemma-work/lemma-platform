@@ -143,7 +143,9 @@ async def test_outlook_reply_email_composio_attaches_datastore_url(monkeypatch):
     assert calls[0]["payload"]["attachment"] == "https://signed.example/report.pdf"
 
 
-async def test_outlook_reply_email_composio_notes_unattachable_workspace_file(monkeypatch):
+async def test_outlook_reply_email_composio_notes_unattachable_workspace_file(
+    monkeypatch,
+):
     """A workspace file can't be signed into a URL, so it's noted in the body and
     the reply still sends (no silent drop, no hard failure)."""
     calls: list[dict] = []

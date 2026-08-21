@@ -75,7 +75,7 @@ def test_every_stream_subscriber_takes_an_untyped_event(registered_bindings):
         "These subscribers validate before acknowledging, so any other event on "
         "their stream becomes a poison message that is redelivered forever:\n  "
         + "\n  ".join(offenders)
-        + "\n\nTake `event: dict`, return early unless `event.get(\"event_type\")` "
+        + '\n\nTake `event: dict`, return early unless `event.get("event_type")` '
         "matches, then `model_validate` inside the handler."
     )
 

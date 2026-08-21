@@ -51,7 +51,10 @@ def snakeify(name: str) -> str:
 
 
 def pascalify(name: str) -> str:
-    return "".join(part.capitalize() for part in re.split(r"[^a-zA-Z0-9]+", name) if part) or "Item"
+    return (
+        "".join(part.capitalize() for part in re.split(r"[^a-zA-Z0-9]+", name) if part)
+        or "Item"
+    )
 
 
 def _render(template: str, **tokens: str) -> str:
@@ -334,7 +337,13 @@ def init_pod(
     and don't want to delete generic scaffolding first."""
     slug = slugify(name)
     files: list[Path] = []
-    files.append(_write(directory / "pod.json", _render(POD_JSON, NAME=slug, FORMAT_VERSION=str(FORMAT_VERSION)), force=force))
+    files.append(
+        _write(
+            directory / "pod.json",
+            _render(POD_JSON, NAME=slug, FORMAT_VERSION=str(FORMAT_VERSION)),
+            force=force,
+        )
+    )
 
     if with_starter:
         # A shared "items" table.
@@ -352,7 +361,13 @@ def init_pod(
         # assistant.
         agent_name = "hello"
         agent_json = _render(STARTER_AGENT_JSON, NAME=agent_name, TABLE=table_name)
-        files.append(_write(directory / "agents" / agent_name / f"{agent_name}.json", agent_json, force=force))
+        files.append(
+            _write(
+                directory / "agents" / agent_name / f"{agent_name}.json",
+                agent_json,
+                force=force,
+            )
+        )
         files.append(
             _write(
                 directory / "agents" / agent_name / "instruction.md",
@@ -361,8 +376,12 @@ def init_pod(
             )
         )
 
-    files.append(_write(directory / "README.md", _render(README_MD, NAME=slug), force=force))
-    files.append(_write(directory / "AGENTS.md", _render(AGENTS_MD, NAME=slug), force=force))
+    files.append(
+        _write(directory / "README.md", _render(README_MD, NAME=slug), force=force)
+    )
+    files.append(
+        _write(directory / "AGENTS.md", _render(AGENTS_MD, NAME=slug), force=force)
+    )
     return ScaffoldResult("pod", slug, files)
 
 
@@ -402,7 +421,9 @@ def report(result: ScaffoldResult, *, next_hint: str | None = None) -> None:
     """Print a scaffold result (deferred console import keeps cli_app below cli_core)."""
     from ..cli_core.state import console
 
-    console.print(f"[green]init[/green] {result.resource_type} [bold]{result.name}[/bold]")
+    console.print(
+        f"[green]init[/green] {result.resource_type} [bold]{result.name}[/bold]"
+    )
     for path in result.files:
         console.print(f"  [dim]wrote[/dim] {path}")
     if next_hint:
@@ -425,7 +446,13 @@ def init_resource(
     if resource_type in {"table", "tables"}:
         slug = snakeify(name)
         path = base / "tables" / slug / f"{slug}.json"
-        files = [_write(path, _render(TABLE_JSON, NAME=slug, RLS="false" if shared else "true"), force=force)]
+        files = [
+            _write(
+                path,
+                _render(TABLE_JSON, NAME=slug, RLS="false" if shared else "true"),
+                force=force,
+            )
+        ]
         return ScaffoldResult("table", slug, files)
 
     if resource_type in {"function", "functions"}:
@@ -433,8 +460,16 @@ def init_resource(
         pascal = pascalify(name)
         rdir = base / "functions" / slug
         files = [
-            _write(rdir / f"{slug}.json", _render(FUNCTION_JSON, NAME=slug, TABLE="items"), force=force),
-            _write(rdir / "code.py", _render(FUNCTION_CODE, NAME=slug, PASCAL=pascal, TABLE="items"), force=force),
+            _write(
+                rdir / f"{slug}.json",
+                _render(FUNCTION_JSON, NAME=slug, TABLE="items"),
+                force=force,
+            ),
+            _write(
+                rdir / "code.py",
+                _render(FUNCTION_CODE, NAME=slug, PASCAL=pascal, TABLE="items"),
+                force=force,
+            ),
         ]
         return ScaffoldResult("function", slug, files)
 
@@ -450,20 +485,34 @@ def init_resource(
             )
         files = [
             _write(rdir / f"{slug}.json", agent_json, force=force),
-            _write(rdir / "instruction.md", _render(AGENT_INSTRUCTION, NAME=slug), force=force),
+            _write(
+                rdir / "instruction.md",
+                _render(AGENT_INSTRUCTION, NAME=slug),
+                force=force,
+            ),
         ]
         return ScaffoldResult("agent", slug, files)
 
     if resource_type in {"workflow", "workflows"}:
         slug = slugify(name)
         path = base / "workflows" / slug / f"{slug}.json"
-        files = [_write(path, _render(WORKFLOW_JSON, NAME=slug, AGENT="some-agent"), force=force)]
+        files = [
+            _write(
+                path, _render(WORKFLOW_JSON, NAME=slug, AGENT="some-agent"), force=force
+            )
+        ]
         return ScaffoldResult("workflow", slug, files)
 
     if resource_type in {"schedule", "schedules"}:
         slug = slugify(name)
         path = base / "schedules" / slug / f"{slug}.json"
-        files = [_write(path, _render(SCHEDULE_JSON, NAME=slug, TARGET="some-workflow"), force=force)]
+        files = [
+            _write(
+                path,
+                _render(SCHEDULE_JSON, NAME=slug, TARGET="some-workflow"),
+                force=force,
+            )
+        ]
         return ScaffoldResult("schedule", slug, files)
 
     if resource_type in {"surface", "surfaces"}:
@@ -473,7 +522,12 @@ def init_resource(
         files = [
             _write(
                 path,
-                _render(SURFACE_JSON, PLATFORM=plat, PLATFORM_LOWER=plat_lower, AGENT="some-agent"),
+                _render(
+                    SURFACE_JSON,
+                    PLATFORM=plat,
+                    PLATFORM_LOWER=plat_lower,
+                    AGENT="some-agent",
+                ),
                 force=force,
             )
         ]
@@ -508,7 +562,9 @@ def resource_example(resource_type: str, name: str = "example") -> str:
     if rt == "schedule":
         return _render(SCHEDULE_JSON, NAME=slugify(name), TARGET="some-workflow")
     if rt == "surface":
-        return _render(SURFACE_JSON, PLATFORM="SLACK", PLATFORM_LOWER="slack", AGENT="some-agent")
+        return _render(
+            SURFACE_JSON, PLATFORM="SLACK", PLATFORM_LOWER="slack", AGENT="some-agent"
+        )
     raise ScaffoldError(f"No example for resource type: {resource_type!r}")
 
 
@@ -675,7 +731,9 @@ def parse_grant_spec(spec: str) -> dict:
             continue
         if token in presets:
             perm_ids.extend(presets[token])
-        elif "." in token:  # a raw permission id, e.g. folder.read / datastore.record.write
+        elif (
+            "." in token
+        ):  # a raw permission id, e.g. folder.read / datastore.record.write
             perm_ids.append(token)
         else:
             raise ScaffoldError(
@@ -788,7 +846,10 @@ def _validate_start(payload: dict) -> list[str]:
             )
     if stype == "SCHEDULED":
         schedule_type = cfg.get("schedule_type")
-        if isinstance(schedule_type, str) and schedule_type.upper() not in _SCHEDULE_TYPES:
+        if (
+            isinstance(schedule_type, str)
+            and schedule_type.upper() not in _SCHEDULE_TYPES
+        ):
             issues.append(
                 f"SCHEDULED start.config.schedule_type '{schedule_type}' is "
                 f"invalid — use one of {', '.join(sorted(_SCHEDULE_TYPES))}."
@@ -799,7 +860,9 @@ def _validate_start(payload: dict) -> list[str]:
             bad = [
                 op
                 for op in operations
-                if not (isinstance(op, str) and op.strip().upper() in _DATASTORE_OPERATIONS)
+                if not (
+                    isinstance(op, str) and op.strip().upper() in _DATASTORE_OPERATIONS
+                )
             ]
             if bad:
                 issues.append(
@@ -809,9 +872,7 @@ def _validate_start(payload: dict) -> list[str]:
     return issues
 
 
-def _decision_misroute_issues(
-    nodes: list, edges: list
-) -> list[str]:
+def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
     """Flag DECISION nodes whose outgoing-edge shape risks the silent-misroute the
     dogfood hit: a decision routes a non-matching case (e.g. a rejection) to the
     first-listed outgoing edge, which can be a 'positive' branch.
@@ -867,7 +928,8 @@ def _decision_misroute_issues(
                 (
                     str(r.get("condition"))
                     for r in rules
-                    if isinstance(r, dict) and str(r.get("next_node_id")) == default_target
+                    if isinstance(r, dict)
+                    and str(r.get("next_node_id")) == default_target
                 ),
                 "?",
             )
@@ -962,7 +1024,9 @@ def validate_workflow(payload: dict) -> list[str]:
         if ntype == "AGENT" and not cfg.get("agent_name"):
             issues.append(f"AGENT node '{node.get('id')}' has no config.agent_name.")
         if ntype == "FUNCTION" and not cfg.get("function_name"):
-            issues.append(f"FUNCTION node '{node.get('id')}' has no config.function_name.")
+            issues.append(
+                f"FUNCTION node '{node.get('id')}' has no config.function_name."
+            )
 
     # DECISION nodes whose rule/edge shape risks routing an unmatched input
     # (e.g. a rejection) silently onto a 'positive' default branch.
@@ -1071,7 +1135,9 @@ def splice_grants(original_text: str, merged_grants: list[dict]) -> str | None:
     return original_text[:start] + serialized + original_text[end:]
 
 
-def grant_in_bundle(resource_type: str, name: str, specs: list[str], *, root: Path | None = None) -> tuple[Path, dict]:
+def grant_in_bundle(
+    resource_type: str, name: str, specs: list[str], *, root: Path | None = None
+) -> tuple[Path, dict]:
     """Merge grants into a resource's bundle JSON, in place.
 
     The `"grants"` array is spliced so the scaffold's surrounding comments

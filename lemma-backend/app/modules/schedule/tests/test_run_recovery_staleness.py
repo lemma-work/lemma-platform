@@ -31,9 +31,7 @@ def _service() -> ScheduleRunRecoveryService:
 
 
 def _run(*, source_occurred_at=None, created_at=None):
-    return SimpleNamespace(
-        source_occurred_at=source_occurred_at, created_at=created_at
-    )
+    return SimpleNamespace(source_occurred_at=source_occurred_at, created_at=created_at)
 
 
 def test_a_recent_lost_dispatch_is_still_redelivered() -> None:

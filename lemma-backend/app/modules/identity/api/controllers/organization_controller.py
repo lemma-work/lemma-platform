@@ -553,9 +553,7 @@ async def remove_member(
     # org member cascades its pod memberships away, but their (FK-less) role
     # assignments and grants do not cascade. The read is harmless if the removal
     # is subsequently denied.
-    targets = await authz.member_authorization_targets(
-        organization_member_id=member_id
-    )
+    targets = await authz.member_authorization_targets(organization_member_id=member_id)
     await org_service.remove_member(
         member_id=member_id,
         requester_user_id=user.id,

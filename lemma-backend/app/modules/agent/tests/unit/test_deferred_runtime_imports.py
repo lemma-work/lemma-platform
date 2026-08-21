@@ -95,9 +95,7 @@ class TestVisionModelResolution:
         with patch(
             "app.modules.agent.services.runtime_profile_service."
             "AgentRuntimeProfileService.resolve",
-            new=AsyncMock(
-                return_value=_resolved_stub([RuntimeModelCapability.TEXT])
-            ),
+            new=AsyncMock(return_value=_resolved_stub([RuntimeModelCapability.TEXT])),
         ):
             with pytest.raises(vision_service.VisionUnavailableError) as caught:
                 await vision_service._resolve_vision_model(
@@ -204,7 +202,9 @@ class TestConfiguredVisionModelName:
     ) -> None:
         from app.modules.agent.services import vision_service
 
-        monkeypatch.setattr(vision_service.agent_settings, "vision_model", "from-settings")
+        monkeypatch.setattr(
+            vision_service.agent_settings, "vision_model", "from-settings"
+        )
         monkeypatch.setenv("VISION_MODEL", "from-env")
 
         assert vision_service.configured_vision_model_name() == "from-env"
@@ -215,7 +215,9 @@ class TestConfiguredVisionModelName:
         from app.modules.agent.services import vision_service
 
         monkeypatch.delenv("VISION_MODEL", raising=False)
-        monkeypatch.setattr(vision_service.agent_settings, "vision_model", "from-settings")
+        monkeypatch.setattr(
+            vision_service.agent_settings, "vision_model", "from-settings"
+        )
 
         assert vision_service.configured_vision_model_name() == "from-settings"
 
@@ -305,9 +307,7 @@ def test_every_deferred_import_in_these_modules_resolves() -> None:
         source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         for function in ast.walk(tree):
-            if not isinstance(
-                function, (ast.FunctionDef, ast.AsyncFunctionDef)
-            ):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for node in ast.walk(function):
                 if not isinstance(node, ast.ImportFrom) or node.module is None:

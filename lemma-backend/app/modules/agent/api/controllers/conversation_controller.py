@@ -42,7 +42,10 @@ from app.modules.agent.api.schemas import (
     UpdateConversationRequest,
     UserApprovalListResponse,
 )
-from app.modules.agent.domain.errors import AgentNotFoundError, ConversationNotFoundError
+from app.modules.agent.domain.errors import (
+    AgentNotFoundError,
+    ConversationNotFoundError,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     ConversationAgentSelection,

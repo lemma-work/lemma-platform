@@ -40,7 +40,9 @@ def _reconnect_delay(attempt: int) -> float:
     return random.uniform(0.0, ceiling)
 
 
-def _changes_ws_url(base_url: str, pod_id: str, table: str | None, since: str | None) -> str:
+def _changes_ws_url(
+    base_url: str, pod_id: str, table: str | None, since: str | None
+) -> str:
     root = base_url.rstrip("/")
     if root.startswith("https://"):
         root = "wss://" + root.removeprefix("https://")
@@ -143,7 +145,7 @@ async def _run(
 def _handle_message(state: CliState, raw: object, cursor: str | None) -> str | None:
     try:
         frame = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return cursor
     if not isinstance(frame, dict):
         return cursor

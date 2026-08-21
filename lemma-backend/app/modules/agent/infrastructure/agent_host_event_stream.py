@@ -343,7 +343,7 @@ def _decode(fields: dict[Any, Any]) -> JsonObject | None:
         return None
     try:
         decoded = json.loads(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return decoded if isinstance(decoded, dict) else None
 

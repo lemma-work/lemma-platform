@@ -67,7 +67,11 @@ class AuthConfigRepository(
             if hasattr(entity.config_source, "value")
             else str(entity.config_source)
         )
-        instance.status = entity.status.value if hasattr(entity.status, "value") else str(entity.status)
+        instance.status = (
+            entity.status.value
+            if hasattr(entity.status, "value")
+            else str(entity.status)
+        )
         instance.config = await self.encryption.encrypt_json_async(entity.config)
         instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata

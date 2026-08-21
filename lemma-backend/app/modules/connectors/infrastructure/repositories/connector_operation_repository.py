@@ -66,9 +66,7 @@ class ConnectorOperationRepository(
                 (ConnectorOperation.display_name.ilike(f"%{normalized_query}%"), 1),
                 else_=0,
             ).label("exact_match_rank")
-            tokens = [
-                token for token in normalized_query.split(" ") if len(token) >= 2
-            ]
+            tokens = [token for token in normalized_query.split(" ") if len(token) >= 2]
             token_match_conditions = [
                 or_(
                     ConnectorOperation.name.ilike(f"%{token}%"),
@@ -141,22 +139,30 @@ class ConnectorOperationRepository(
             (func.lower(ConnectorOperation.name) == normalized_name, 3),
             (ConnectorOperation.provider_operation_name == operation_name, 2),
             (
-                func.lower(func.coalesce(ConnectorOperation.provider_operation_name, ""))
+                func.lower(
+                    func.coalesce(ConnectorOperation.provider_operation_name, "")
+                )
                 == normalized_name,
                 1,
             ),
             else_=0,
         ).label("match_rank")
-        stmt = select(ConnectorOperation).where(
-            ConnectorOperation.connector_id == connector_id,
-            or_(
-                func.lower(ConnectorOperation.name) == normalized_name,
-                func.lower(func.coalesce(ConnectorOperation.provider_operation_name, ""))
-                == normalized_name,
-            ),
-        ).order_by(
-            desc(match_rank),
-            ConnectorOperation.name.asc(),
+        stmt = (
+            select(ConnectorOperation)
+            .where(
+                ConnectorOperation.connector_id == connector_id,
+                or_(
+                    func.lower(ConnectorOperation.name) == normalized_name,
+                    func.lower(
+                        func.coalesce(ConnectorOperation.provider_operation_name, "")
+                    )
+                    == normalized_name,
+                ),
+            )
+            .order_by(
+                desc(match_rank),
+                ConnectorOperation.name.asc(),
+            )
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()

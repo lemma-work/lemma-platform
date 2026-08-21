@@ -35,8 +35,13 @@ def _record(
     message: str, *, name: str = "asyncio", level: int = logging.ERROR
 ) -> logging.LogRecord:
     return logging.LogRecord(
-        name=name, level=level, pathname=__file__, lineno=1, msg=message,
-        args=(), exc_info=None,
+        name=name,
+        level=level,
+        pathname=__file__,
+        lineno=1,
+        msg=message,
+        args=(),
+        exc_info=None,
     )
 
 

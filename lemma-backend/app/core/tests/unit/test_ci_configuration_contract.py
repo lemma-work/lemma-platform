@@ -86,9 +86,7 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     assert "== 'labeled'" not in condition
     assert "workflow_run" not in condition
     assert (
-        "opened" in condition
-        and "synchronize" in condition
-        and "reopened" in condition
+        "opened" in condition and "synchronize" in condition and "reopened" in condition
     )
 
 
@@ -112,7 +110,12 @@ def _nightly_prune_step() -> dict:
 
     workflow = yaml.safe_load(_read(".github/workflows/release-local-images.yml"))
     steps = workflow["jobs"]["share-desktop-dmg"]["steps"]
-    return next(s for s in steps if s["name"] == "Prune superseded nightly prereleases")
+    # `.get`, not `[]`: a step is allowed to be a bare `uses:` with no name,
+    # and indexing made this helper raise KeyError on the first such step
+    # rather than skipping it.
+    return next(
+        s for s in steps if s.get("name") == "Prune superseded nightly prereleases"
+    )
 
 
 def _run_prune(tmp_path, releases: list[str], *, keep: str = "3") -> tuple[int, str]:

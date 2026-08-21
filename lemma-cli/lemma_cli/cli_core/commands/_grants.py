@@ -70,9 +70,7 @@ def _replace_request_model(kind: str) -> Any:
 def list_grants(pod_sdk: Any, kind: str, name: str) -> list[dict[str, Any]]:
     """The workload's current grants, normalized to plain dicts."""
     payload = to_plain(_resource_api(pod_sdk, kind).permissions(name))
-    return [
-        grant for grant in (payload.get("grants") or []) if isinstance(grant, dict)
-    ]
+    return [grant for grant in (payload.get("grants") or []) if isinstance(grant, dict)]
 
 
 def replace_grants(
@@ -206,9 +204,7 @@ def grants_from_options(
 
     sources = [option for option in (json_payload, file, from_bundle) if option]
     if len(sources) > 1:
-        raise typer.BadParameter(
-            "Use only one of --data, --file, or --from-bundle."
-        )
+        raise typer.BadParameter("Use only one of --data, --file, or --from-bundle.")
     if from_bundle is not None:
         from pathlib import Path
 

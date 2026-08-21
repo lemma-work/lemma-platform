@@ -5,8 +5,12 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
-from lemma_sdk.openapi_client.models.update_function_request import UpdateFunctionRequest
+from lemma_sdk.openapi_client.models.create_function_request import (
+    CreateFunctionRequest,
+)
+from lemma_sdk.openapi_client.models.update_function_request import (
+    UpdateFunctionRequest,
+)
 
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
@@ -86,7 +90,9 @@ def get_function(
 @app.command("create")
 def create_function(
     ctx: typer.Context,
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -126,7 +132,9 @@ def create_function(
 def update_function(
     ctx: typer.Context,
     function: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -145,9 +153,7 @@ def update_function(
         pod_sdk = pod_client(client, s, pod)
         updated = pod_sdk.functions.update(
             function,
-            build_request(
-                UpdateFunctionRequest, body, context=f"function {function}"
-            ),
+            build_request(UpdateFunctionRequest, body, context=f"function {function}"),
         )
         applied = apply_inline_permissions(pod_sdk, "function", function, permissions)
         report_inline_permissions("function", function, applied, state=state)
@@ -200,9 +206,7 @@ def replace_function_permissions(
     pushes the grants a bundle already declares for this function, so you never
     have to copy them out of the JSON by hand.
     """
-    grants = grants_from_options(
-        "function", function, json_payload, file, from_bundle
-    )
+    grants = grants_from_options("function", function, json_payload, file, from_bundle)
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
@@ -235,7 +239,13 @@ def add_function_permissions(
     edits a bundle file instead.
     """
     change_live_grants(
-        ctx, kind="function", name=function, specs=specs, pod=pod, show=show, remove=False
+        ctx,
+        kind="function",
+        name=function,
+        specs=specs,
+        pod=pod,
+        show=show,
+        remove=False,
     )
 
 
@@ -253,7 +263,13 @@ def remove_function_permissions(
 ) -> None:
     """Remove grants from a LIVE function (a grant with no permissions left is dropped)."""
     change_live_grants(
-        ctx, kind="function", name=function, specs=specs, pod=pod, show=show, remove=True
+        ctx,
+        kind="function",
+        name=function,
+        specs=specs,
+        pod=pod,
+        show=show,
+        remove=True,
     )
 
 
@@ -265,8 +281,12 @@ def grant_function(
         metavar="GRANT...",
         help="name:perms or type:name:perms, e.g. tickets:read,write /knowledge:read app:gmail:use",
     ),
-    root: Path | None = typer.Option(None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."),
-    show: bool = typer.Option(False, "--print", help="Print grant JSON instead of editing the bundle file."),
+    root: Path | None = typer.Option(
+        None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."
+    ),
+    show: bool = typer.Option(
+        False, "--print", help="Print grant JSON instead of editing the bundle file."
+    ),
 ) -> None:
     """Add resource grants to a function's bundle JSON (functions have zero access by default)."""
     from ._authoring import grant_resource
@@ -286,7 +306,9 @@ def schema_function() -> None:
 def run_function(
     ctx: typer.Context,
     function: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),

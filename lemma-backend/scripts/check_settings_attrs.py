@@ -74,7 +74,7 @@ def check() -> list[str]:
     for path in _python_files():
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
+        except SyntaxError, UnicodeDecodeError:
             continue
         aliases = _local_aliases(tree)
         if not aliases:

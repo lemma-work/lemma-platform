@@ -64,9 +64,7 @@ def build_original_download_response(file_entity, download) -> Response:
     cache_headers["Content-Disposition"] = build_content_disposition(
         "inline" if inline else "attachment", file_entity.name
     )
-    return Response(
-        content=content, media_type=content_type, headers=cache_headers
-    )
+    return Response(content=content, media_type=content_type, headers=cache_headers)
 
 
 def build_child_download_response(
@@ -91,6 +89,4 @@ def build_child_download_response(
         "inline" if inline else "attachment",
         artifact_name.rsplit("/", 1)[-1],
     )
-    return Response(
-        content=content, media_type=content_type, headers=cache_headers
-    )
+    return Response(content=content, media_type=content_type, headers=cache_headers)

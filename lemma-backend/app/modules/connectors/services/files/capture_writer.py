@@ -72,9 +72,7 @@ class BinaryResultWriter:
     def __init__(self, pod_file_gateway: Any | None):
         self._gateway = pod_file_gateway
 
-    async def resolve(
-        self, result: Any
-    ) -> tuple[BinaryCandidate, bytes] | None:
+    async def resolve(self, result: Any) -> tuple[BinaryCandidate, bytes] | None:
         """Find the binary and get its bytes. Touches no database.
 
         Deliberately separate from persisting it: this walks and base64-decodes
@@ -86,7 +84,9 @@ class BinaryResultWriter:
         if candidate is None:
             return None
 
-        data = candidate.data if candidate.source == "inline" else await _fetch(candidate)
+        data = (
+            candidate.data if candidate.source == "inline" else await _fetch(candidate)
+        )
         if data is None:
             return None
 

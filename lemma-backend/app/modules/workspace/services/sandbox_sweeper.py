@@ -76,9 +76,7 @@ class SandboxSweeper:
         It only ever failed to delete them because destroy could not address a
         paused sandbox -- which is a bug that has since been fixed.
         """
-        kind = getattr(
-            self._provider, "storage_kind", ProviderStorageKind.VOLUME
-        )
+        kind = getattr(self._provider, "storage_kind", ProviderStorageKind.VOLUME)
         return kind is not ProviderStorageKind.SANDBOX_NATIVE
 
     async def release_idle(self, *, idle_after_seconds: int, limit: int = 50) -> int:
@@ -139,8 +137,13 @@ class SandboxSweeper:
             processes = await self._provider.list_processes(
                 instance, deadline_at=deadline_at
             )
-        except (SandboxError, ProviderFailed, ProviderGone, ProviderNotReady,
-                ProviderRejected):
+        except (
+            SandboxError,
+            ProviderFailed,
+            ProviderGone,
+            ProviderNotReady,
+            ProviderRejected,
+        ):
             # An unreachable sandbox is not evidence that it is idle, and
             # releasing on a failed probe is the mistake this guards against.
             return True
@@ -305,8 +308,10 @@ class SandboxSweeper:
             if instance is None:
                 return None
             return "superseded by the current provisioning path"
-        if self._epoch_is_a_fence and obj.epoch is not None and (
-            obj.epoch < sandbox.epoch
+        if (
+            self._epoch_is_a_fence
+            and obj.epoch is not None
+            and (obj.epoch < sandbox.epoch)
         ):
             return f"epoch {obj.epoch} is behind {sandbox.epoch}"
         return None
@@ -328,7 +333,7 @@ class SandboxSweeper:
             instance = await self._provider.inspect(obj.name, deadline_at=deadline_at)
         except ProviderGone:
             return False
-        except (ProviderFailed, ProviderNotReady, ProviderRejected, SandboxError):
+        except ProviderFailed, ProviderNotReady, ProviderRejected, SandboxError:
             return False
         return instance is not None and instance.provider_id == obj.provider_id
 

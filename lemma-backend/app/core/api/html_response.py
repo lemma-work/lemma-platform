@@ -30,9 +30,7 @@ def build_asset_response(
     - Other assets are content-hashed by the bundler, so they are immutable.
     """
     cache_control = (
-        "public, no-cache"
-        if is_entrypoint
-        else "public, max-age=31536000, immutable"
+        "public, no-cache" if is_entrypoint else "public, max-age=31536000, immutable"
     )
     headers = {"Cache-Control": cache_control}
     if etag:

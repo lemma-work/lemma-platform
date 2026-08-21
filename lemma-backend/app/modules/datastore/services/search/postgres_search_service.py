@@ -199,7 +199,7 @@ class PostgresSearchService:
 
         if not chunks:
             logger.debug(
-                'datastore.postgres_search_service.no_chunks_s.diagnostic',
+                "datastore.postgres_search_service.no_chunks_s.diagnostic",
                 file_id=file_id,
             )
             return IndexingMetrics(
@@ -240,7 +240,10 @@ class PostgresSearchService:
             )
             return metrics
         except Exception:
-            logger.debug('datastore.postgres_search_service.add_file_search_s.propagated', exc_info=True)
+            logger.debug(
+                "datastore.postgres_search_service.add_file_search_s.propagated",
+                exc_info=True,
+            )
             raise
 
     async def remove_file(self, file_id: UUID):

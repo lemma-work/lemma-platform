@@ -102,9 +102,10 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         "text": "Open Pocket Desk",
         "web_app": {"url": "https://apps.example.test/pocket-desk"},
     }
-    assert {
-        command["command"] for command in calls["setMyCommands"]["commands"]
-    } == {"help", "retry"}
+    assert {command["command"] for command in calls["setMyCommands"]["commands"]} == {
+        "help",
+        "retry",
+    }
 
 
 async def test_create_surface(monkeypatch):
@@ -199,7 +200,9 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
     assert second.name == "slack-support"
 
 
-async def test_create_telegram_surface_uses_built_in_credentials_without_account(monkeypatch):
+async def test_create_telegram_surface_uses_built_in_credentials_without_account(
+    monkeypatch,
+):
     repo = AsyncMock()
     enricher = AsyncMock()
     service = AgentSurfaceService(
@@ -256,7 +259,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
 
     with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
         await service.create_surface(
-        platform=SurfacePlatform.TELEGRAM,
+            platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -266,7 +269,9 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
     repo.create.assert_not_awaited()
 
 
-async def test_create_telegram_webhook_surface_registers_per_surface_webhook(monkeypatch):
+async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
+    monkeypatch,
+):
     repo = AsyncMock()
     enricher = AsyncMock()
     account_port = AsyncMock()
@@ -336,7 +341,7 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
 
     with pytest.raises(AgentSurfaceValidationError, match="already connected"):
         await service.create_surface(
-        platform=SurfacePlatform.TELEGRAM,
+            platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -374,7 +379,7 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
         AgentSurfaceCredentialConflictError, match="System WHATSAPP credentials"
     ) as raised:
         await service.create_surface(
-        platform=SurfacePlatform.WHATSAPP,
+            platform=SurfacePlatform.WHATSAPP,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -417,7 +422,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
         AgentSurfaceCredentialConflictError, match="connected account"
     ) as raised:
         await service.create_surface(
-        platform=SurfacePlatform.SLACK,
+            platform=SurfacePlatform.SLACK,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -467,7 +472,7 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
 async def test_create_teams_requires_account_id():
     with pytest.raises(AgentSurfaceValidationError, match="require account_id"):
         AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.TEAMS,
+            surface_type=SurfacePlatform.TEAMS,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=SurfaceConfig(),
@@ -781,7 +786,7 @@ async def test_create_gmail_surface_requires_composio_account():
 
     with pytest.raises(AgentSurfaceValidationError, match="Composio-backed"):
         await service.create_surface(
-        platform=SurfacePlatform.GMAIL,
+            platform=SurfacePlatform.GMAIL,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -1077,7 +1082,9 @@ async def test_get_platform_setup_guide():
 
     assert guide.platform is SurfacePlatform.TEAMS
     assert guide.docs_path == "docs/surfaces/teams.md"
-    assert any(connector.mode.value == "CONNECTED_ACCOUNT" for connector in guide.connectors)
+    assert any(
+        connector.mode.value == "CONNECTED_ACCOUNT" for connector in guide.connectors
+    )
 
 
 async def test_get_platform_setup_guide_raises_for_invalid_platform():
@@ -1168,7 +1175,9 @@ def _runtime_service() -> AgentSurfaceService:
     )
 
 
-async def test_resend_surface_allowed_without_public_url_when_polling_enabled(monkeypatch):
+async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
+    monkeypatch,
+):
     """The desktop-app fix: a localhost API URL must not block a Resend surface
     when polling mode is on — outbound goes over the API and inbound is polled,
     so no public webhook callback is needed."""

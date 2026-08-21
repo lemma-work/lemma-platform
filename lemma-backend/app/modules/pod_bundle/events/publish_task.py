@@ -460,9 +460,7 @@ async def _record_publish_retry(
 ) -> None:
     state.error = "GitHub is temporarily unavailable; retrying publish."
     state.error_type = type(exc).__name__
-    state.error_code = str(
-        getattr(exc, "code", None) or "POD_BUNDLE_GITHUB_TRANSIENT"
-    )
+    state.error_code = str(getattr(exc, "code", None) or "POD_BUNDLE_GITHUB_TRANSIENT")
     state.retryable = True
     await store.save_publish(state)
 
@@ -477,9 +475,7 @@ async def _fail_publish(
     state.status = PublishStatus.FAILED
     state.error = public_message or str(exc)
     state.error_type = type(exc).__name__
-    state.error_code = str(
-        getattr(exc, "code", None) or "POD_BUNDLE_PUBLISH_FAILED"
-    )
+    state.error_code = str(getattr(exc, "code", None) or "POD_BUNDLE_PUBLISH_FAILED")
     state.retryable = False
     state.completed_at = _now()
     try:

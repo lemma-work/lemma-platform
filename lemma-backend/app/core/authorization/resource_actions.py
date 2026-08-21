@@ -65,4 +65,6 @@ OWNER_RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
 
 
 def owner_actions_for_resource(resource_type: ResourceType) -> tuple[str, ...]:
-    return OWNER_RESOURCE_ACTIONS.get(resource_type, RESOURCE_ACTIONS.get(resource_type, ()))
+    return OWNER_RESOURCE_ACTIONS.get(
+        resource_type, RESOURCE_ACTIONS.get(resource_type, ())
+    )

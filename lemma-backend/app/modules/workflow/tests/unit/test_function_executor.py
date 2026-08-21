@@ -1,5 +1,6 @@
 """FunctionExecutor node outcome: a dispatched run (any function type) suspends
 the workflow on a FUNCTION wait; a non-run result advances inline."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

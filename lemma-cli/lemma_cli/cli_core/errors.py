@@ -64,7 +64,9 @@ def report_cli_error(exc: BaseException, *, base_url: str | None = None) -> bool
         message = f"{exc} Run `lemma init` to set up this CLI."
     elif isinstance(exc, LemmaAPIError):
         status = getattr(exc, "status_code", None)
-        message = f"request failed ({status}): {exc}" if status else f"request failed: {exc}"
+        message = (
+            f"request failed ({status}): {exc}" if status else f"request failed: {exc}"
+        )
     else:
         message = str(exc) or type(exc).__name__
 

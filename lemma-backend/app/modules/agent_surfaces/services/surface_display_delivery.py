@@ -88,7 +88,7 @@ async def deliver_display_resource_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic",
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
         )
@@ -114,7 +114,7 @@ async def deliver_surface_message_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic",
             conversation_id=conversation_id,
         )
         return False
@@ -142,7 +142,7 @@ async def deliver_voice_note_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic",
             conversation_id=conversation_id,
         )
         return False

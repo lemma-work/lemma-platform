@@ -54,6 +54,7 @@ CLOCK_SKEW_SUSPECT_SECONDS = 300
 # other side. One line a minute is enough to see it and enough to date it.
 CLOCK_SKEW_REPORT_INTERVAL_SECONDS = 60
 
+
 class _ReportThrottle:
     """Lets one observation through per interval, and swallows the rest.
 
@@ -103,7 +104,7 @@ def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
     payload += "=" * (-len(payload) % 4)
     try:
         claims = json.loads(base64.urlsafe_b64decode(payload))
-    except (binascii.Error, ValueError, UnicodeDecodeError):
+    except binascii.Error, ValueError, UnicodeDecodeError:
         return None
     expiry = claims.get("exp") if isinstance(claims, dict) else None
     return float(expiry) if isinstance(expiry, (int, float)) else None

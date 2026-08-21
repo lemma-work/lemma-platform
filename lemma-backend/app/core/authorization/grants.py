@@ -416,9 +416,9 @@ async def list_grants_for_grantees(
         resource_name = names.get((resource_type, row.resource_id))
         if resource_name is None:
             continue
-        grouped[row.grantee_id].setdefault(
-            (resource_type, resource_name), []
-        ).append(row.permission_id)
+        grouped[row.grantee_id].setdefault((resource_type, resource_name), []).append(
+            row.permission_id
+        )
     return grouped
 
 
@@ -466,9 +466,7 @@ async def list_grantee_resource_grants(
         resource_name = names.get((resource_type, row.resource_id))
         if resource_name is None:
             continue
-        grouped.setdefault((resource_type, resource_name), []).append(
-            row.permission_id
-        )
+        grouped.setdefault((resource_type, resource_name), []).append(row.permission_id)
     return grouped
 
 

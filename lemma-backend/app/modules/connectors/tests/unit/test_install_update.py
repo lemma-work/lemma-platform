@@ -65,7 +65,10 @@ class TestMcpAndHttpTargets:
         rediscover, invalidates = _effects(
             ConnectorKind.MCP,
             {"server_url": "https://mcp.example.com/mcp", "extra_headers": {}},
-            {"server_url": "https://mcp.example.com/mcp", "extra_headers": {"X-Env": "prod"}},
+            {
+                "server_url": "https://mcp.example.com/mcp",
+                "extra_headers": {"X-Env": "prod"},
+            },
         )
         assert rediscover is True
         assert invalidates is False
@@ -73,14 +76,22 @@ class TestMcpAndHttpTargets:
     def test_pointing_http_at_a_new_spec_rediscovers(self):
         rediscover, _ = _effects(
             ConnectorKind.HTTP,
-            {"server_url": "https://api.example.com", "spec_url": "https://api.example.com/v1.json"},
-            {"server_url": "https://api.example.com", "spec_url": "https://api.example.com/v2.json"},
+            {
+                "server_url": "https://api.example.com",
+                "spec_url": "https://api.example.com/v1.json",
+            },
+            {
+                "server_url": "https://api.example.com",
+                "spec_url": "https://api.example.com/v2.json",
+            },
         )
         assert rediscover is True
 
 
 class TestSqlTargets:
-    @pytest.mark.parametrize("field,value", [("host", "db2.example.com"), ("database", "other")])
+    @pytest.mark.parametrize(
+        "field,value", [("host", "db2.example.com"), ("database", "other")]
+    )
     def test_a_different_database_invalidates_credentials(self, field, value):
         # A username/password pair is defined inside one database on one host.
         base = {"host": "db.example.com", "port": 5432, "database": "app"}
@@ -90,7 +101,9 @@ class TestSqlTargets:
     def test_sql_never_rediscovers(self):
         # Its operations are a fixed set, not something a server advertises.
         base = {"host": "db.example.com", "port": 5432, "database": "app"}
-        rediscover, _ = _effects(ConnectorKind.SQL, base, {**base, "host": "db2.example.com"})
+        rediscover, _ = _effects(
+            ConnectorKind.SQL, base, {**base, "host": "db2.example.com"}
+        )
         assert rediscover is False
 
 
@@ -124,8 +137,14 @@ class TestOAuthClientSwap:
     def test_an_unrelated_key_leaves_accounts_alone(self):
         _, invalidates = _effects(
             ConnectorKind.PACKAGE,
-            {"oauth2_credentials": {"client_id": "same", "client_secret": "s"}, "label": "a"},
-            {"oauth2_credentials": {"client_id": "same", "client_secret": "s"}, "label": "b"},
+            {
+                "oauth2_credentials": {"client_id": "same", "client_secret": "s"},
+                "label": "a",
+            },
+            {
+                "oauth2_credentials": {"client_id": "same", "client_secret": "s"},
+                "label": "b",
+            },
         )
         assert invalidates is False
 

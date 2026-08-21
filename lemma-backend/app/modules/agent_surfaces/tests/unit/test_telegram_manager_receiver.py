@@ -83,12 +83,9 @@ async def test_polling_keeps_offset_when_handling_fails(monkeypatch):
             {"ok": True, "result": [{"update_id": 17, "message": {}}]},
         ]
     )
-    receiver._service.handle_update = AsyncMock(
-        side_effect=RuntimeError("transient")
-    )
+    receiver._service.handle_update = AsyncMock(side_effect=RuntimeError("transient"))
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_receiver."
-        "asyncio.sleep",
+        "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         AsyncMock(side_effect=asyncio.CancelledError),
     )
 
@@ -119,8 +116,7 @@ async def test_polling_keeps_offset_when_persisting_offset_fails(monkeypatch):
         side_effect=RuntimeError("redis unavailable")
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_receiver."
-        "asyncio.sleep",
+        "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         AsyncMock(),
     )
 
@@ -152,8 +148,7 @@ async def test_webhook_registration_retries_network_failure(monkeypatch):
         register,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_receiver."
-        "asyncio.sleep",
+        "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         sleep,
     )
 
@@ -187,8 +182,7 @@ async def test_webhook_registration_retries_transient_telegram_error(
         register,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_receiver."
-        "asyncio.sleep",
+        "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         sleep,
     )
 
@@ -216,8 +210,7 @@ async def test_webhook_registration_stops_on_permanent_telegram_error(
         register,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_receiver."
-        "asyncio.sleep",
+        "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         sleep,
     )
 

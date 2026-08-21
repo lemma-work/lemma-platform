@@ -229,7 +229,6 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     return f"/workspace/conversations/{conversation.id}"
 
 
-
 def _stored_todos(conversation: Conversation) -> list[tuple[str, bool]]:
     """The conversation's task list as ``(content, done)``, oldest first."""
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
@@ -286,7 +285,7 @@ def _task_list_section(
         f"Pick up at the first unchecked item — **{first_open}** — unless this "
         "message sends you somewhere else. The moment you finish an item, call "
         "`write_todos` with that one line checked "
-        f"(`[\"- [x] {first_open}\"]`) and only then start the next. A finished "
+        f'(`["- [x] {first_open}"]`) and only then start the next. A finished '
         "item still showing unchecked is not a cosmetic problem: it is what the "
         "person is reading to know where you are."
     )

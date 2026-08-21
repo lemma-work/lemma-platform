@@ -60,15 +60,13 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             return False
 
         kind = str(setup.get("kind") or "")
-        candidates, user_id, authorized = (
-            await self._authorized_configuration_surfaces(
-                request,
-                tenant_id=setup.get("tenant_id"),
-                platform=platform,
-                actor_external_user_id=setup.get("actor_external_user_id"),
-                adapter=adapter,
-                action=self._configuration_action(kind),
-            )
+        candidates, user_id, authorized = await self._authorized_configuration_surfaces(
+            request,
+            tenant_id=setup.get("tenant_id"),
+            platform=platform,
+            actor_external_user_id=setup.get("actor_external_user_id"),
+            adapter=adapter,
+            action=self._configuration_action(kind),
         )
         selected = await self._pick_configuration_surface(
             authorized,
@@ -110,7 +108,7 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic',
+                "agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic",
                 surface_id=str(surface.id),
                 exc_info=True,
             )
@@ -288,9 +286,7 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         if not external_user_id:
             return
         chosen = dict(surface.config.slack.dm_agent_by_user)
-        chosen[external_user_id] = (
-            agent_name or surface.config.slack.POD_ASSISTANT
-        )
+        chosen[external_user_id] = agent_name or surface.config.slack.POD_ASSISTANT
         surface.config.slack.dm_agent_by_user = chosen
         await self.surface_repository.update(surface)
         await self.uow.commit()
@@ -370,7 +366,7 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_home_apps.diagnostic',
+                "agent_surfaces.ingress_service.surface_home_apps.diagnostic",
                 surface_id=str(surface.id),
             )
             return []
@@ -452,19 +448,15 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             if parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
             else Permissions.AGENT_READ
         )
-        candidates, user_id, authorized = (
-            await self._authorized_configuration_surfaces(
-                request,
-                tenant_id=parsed.tenant_id,
-                platform=platform,
-                actor_external_user_id=parsed.actor_external_user_id,
-                adapter=adapter,
-                action=action,
-            )
+        candidates, user_id, authorized = await self._authorized_configuration_surfaces(
+            request,
+            tenant_id=parsed.tenant_id,
+            platform=platform,
+            actor_external_user_id=parsed.actor_external_user_id,
+            adapter=adapter,
+            action=action,
         )
-        explicit_surface_id = (
-            str(surface.id) if surface is not None else None
-        )
+        explicit_surface_id = str(surface.id) if surface is not None else None
         selected = await self._pick_configuration_surface(
             authorized,
             explicit_surface_id=explicit_surface_id,
@@ -532,12 +524,10 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             return True
         surface, ctx = selected
         try:
-            await self._handle_lifecycle_event(
-                surface=surface, parsed=parsed, ctx=ctx
-            )
+            await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic',
+                "agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic",
                 surface_id=str(surface.id),
                 exc_info=True,
             )

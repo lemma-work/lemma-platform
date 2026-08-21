@@ -11,9 +11,7 @@ from typing import Callable, Optional
 
 from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 
-AppBrandingEntitlementFactory = Callable[
-    [object], Optional[AppBrandingEntitlementPort]
-]
+AppBrandingEntitlementFactory = Callable[[object], Optional[AppBrandingEntitlementPort]]
 
 _factory: Optional[AppBrandingEntitlementFactory] = None
 

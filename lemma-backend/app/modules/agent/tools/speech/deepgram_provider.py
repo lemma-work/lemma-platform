@@ -79,7 +79,9 @@ class DeepgramSpeechProvider(SpeechProvider):
         if not self._api_key:
             raise RuntimeError("Deepgram API key is not configured.")
         params: dict[str, str] = {"model": voice or _DEFAULT_TTS_MODEL}
-        params.update(_TTS_FORMAT_PARAMS.get(output_format.lower(), {"encoding": "mp3"}))
+        params.update(
+            _TTS_FORMAT_PARAMS.get(output_format.lower(), {"encoding": "mp3"})
+        )
         async with httpx.AsyncClient(timeout=_TTS_TIMEOUT) as client:
             response = await client.post(
                 _SPEAK_URL,
@@ -103,5 +105,7 @@ def _parse_transcription(payload: dict[str, Any]) -> TranscriptionResult:
     return TranscriptionResult(
         text=transcript,
         detected_language=detected_language if detected_language else None,
-        duration_seconds=float(duration) if isinstance(duration, (int, float)) else None,
+        duration_seconds=float(duration)
+        if isinstance(duration, (int, float))
+        else None,
     )

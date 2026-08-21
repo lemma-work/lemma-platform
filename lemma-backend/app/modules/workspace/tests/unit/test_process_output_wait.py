@@ -170,7 +170,7 @@ class TestWritingToATerminal:
                 await asyncio.sleep(0.005)
                 try:
                     received.extend(os.read(slave, 2048))
-                except (BlockingIOError, OSError):
+                except BlockingIOError, OSError:
                     continue
 
         reader = asyncio.create_task(slow_reader())

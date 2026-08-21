@@ -4,8 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from lemma_sdk.openapi_client.models.create_schedule_request import CreateScheduleRequest
-from lemma_sdk.openapi_client.models.update_schedule_request import UpdateScheduleRequest
+from lemma_sdk.openapi_client.models.create_schedule_request import (
+    CreateScheduleRequest,
+)
+from lemma_sdk.openapi_client.models.update_schedule_request import (
+    UpdateScheduleRequest,
+)
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
@@ -50,7 +54,9 @@ def _normalize_datastore_operations(values: list[str]) -> list[str]:
         if op in {"ALL", "*"}:
             return list(_DATASTORE_OPERATIONS)
         if op not in _DATASTORE_OPERATIONS:
-            fail(f"Invalid --on value '{raw}'. Valid values: insert, update, delete, all.")
+            fail(
+                f"Invalid --on value '{raw}'. Valid values: insert, update, delete, all."
+            )
         if op not in normalized:
             normalized.append(op)
     return normalized
@@ -159,7 +165,9 @@ def create_schedule(
         ),
     ),
     filter_instruction: str | None = typer.Option(None, "--filter"),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -223,7 +231,9 @@ def create_schedule(
 def update_schedule(
     ctx: typer.Context,
     schedule: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),

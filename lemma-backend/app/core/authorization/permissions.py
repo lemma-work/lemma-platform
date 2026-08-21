@@ -87,57 +87,229 @@ class Permissions:
 
 
 PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
-    PermissionDefinition(Permissions.ORG_READ, PermissionScope.ORG, "organization", "Read organization metadata"),
-    PermissionDefinition(Permissions.ORG_UPDATE, PermissionScope.ORG, "organization", "Update organization settings"),
-    PermissionDefinition(Permissions.ORG_MEMBER_MANAGE, PermissionScope.ORG, "organization_member", "Manage organization members"),
-    PermissionDefinition(Permissions.ORG_INVITATION_MANAGE, PermissionScope.ORG, "organization_invitation", "Manage organization invitations"),
-    PermissionDefinition(Permissions.ORG_BILLING_MANAGE, PermissionScope.ORG, "billing", "Manage organization billing"),
-    PermissionDefinition(Permissions.POD_READ, PermissionScope.POD, "pod", "Read pod metadata"),
-    PermissionDefinition(Permissions.POD_CREATE, PermissionScope.ORG, "pod", "Create pods in an organization"),
-    PermissionDefinition(Permissions.POD_UPDATE, PermissionScope.POD, "pod", "Update pod settings"),
-    PermissionDefinition(Permissions.POD_DELETE, PermissionScope.POD, "pod", "Delete pods"),
-    PermissionDefinition(Permissions.POD_MEMBER_MANAGE, PermissionScope.POD, "pod_member", "Manage pod members"),
-    PermissionDefinition(Permissions.POD_ROLE_MANAGE, PermissionScope.POD, "role", "Manage pod roles"),
-    PermissionDefinition(Permissions.DATASTORE_TABLE_READ, PermissionScope.POD, "datastore_table", "Read datastore table metadata"),
-    PermissionDefinition(Permissions.DATASTORE_TABLE_CREATE, PermissionScope.POD, "datastore_table", "Create datastore tables"),
-    PermissionDefinition(Permissions.DATASTORE_TABLE_UPDATE, PermissionScope.POD, "datastore_table", "Update datastore table schema and configuration"),
-    PermissionDefinition(Permissions.DATASTORE_TABLE_DELETE, PermissionScope.POD, "datastore_table", "Delete datastore tables"),
-    PermissionDefinition(Permissions.DATASTORE_RECORD_READ, PermissionScope.POD, "datastore_record", "Read datastore records"),
-    PermissionDefinition(Permissions.DATASTORE_RECORD_WRITE, PermissionScope.POD, "datastore_record", "Write datastore records"),
-    PermissionDefinition(Permissions.FOLDER_READ, PermissionScope.POD, "folder", "Read folders and files"),
-    PermissionDefinition(Permissions.FOLDER_WRITE, PermissionScope.POD, "folder", "Write folders and files"),
-    PermissionDefinition(Permissions.FOLDER_DELETE, PermissionScope.POD, "folder", "Delete folders and files"),
+    PermissionDefinition(
+        Permissions.ORG_READ,
+        PermissionScope.ORG,
+        "organization",
+        "Read organization metadata",
+    ),
+    PermissionDefinition(
+        Permissions.ORG_UPDATE,
+        PermissionScope.ORG,
+        "organization",
+        "Update organization settings",
+    ),
+    PermissionDefinition(
+        Permissions.ORG_MEMBER_MANAGE,
+        PermissionScope.ORG,
+        "organization_member",
+        "Manage organization members",
+    ),
+    PermissionDefinition(
+        Permissions.ORG_INVITATION_MANAGE,
+        PermissionScope.ORG,
+        "organization_invitation",
+        "Manage organization invitations",
+    ),
+    PermissionDefinition(
+        Permissions.ORG_BILLING_MANAGE,
+        PermissionScope.ORG,
+        "billing",
+        "Manage organization billing",
+    ),
+    PermissionDefinition(
+        Permissions.POD_READ, PermissionScope.POD, "pod", "Read pod metadata"
+    ),
+    PermissionDefinition(
+        Permissions.POD_CREATE,
+        PermissionScope.ORG,
+        "pod",
+        "Create pods in an organization",
+    ),
+    PermissionDefinition(
+        Permissions.POD_UPDATE, PermissionScope.POD, "pod", "Update pod settings"
+    ),
+    PermissionDefinition(
+        Permissions.POD_DELETE, PermissionScope.POD, "pod", "Delete pods"
+    ),
+    PermissionDefinition(
+        Permissions.POD_MEMBER_MANAGE,
+        PermissionScope.POD,
+        "pod_member",
+        "Manage pod members",
+    ),
+    PermissionDefinition(
+        Permissions.POD_ROLE_MANAGE, PermissionScope.POD, "role", "Manage pod roles"
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_TABLE_READ,
+        PermissionScope.POD,
+        "datastore_table",
+        "Read datastore table metadata",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_TABLE_CREATE,
+        PermissionScope.POD,
+        "datastore_table",
+        "Create datastore tables",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_TABLE_UPDATE,
+        PermissionScope.POD,
+        "datastore_table",
+        "Update datastore table schema and configuration",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_TABLE_DELETE,
+        PermissionScope.POD,
+        "datastore_table",
+        "Delete datastore tables",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_RECORD_READ,
+        PermissionScope.POD,
+        "datastore_record",
+        "Read datastore records",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_RECORD_WRITE,
+        PermissionScope.POD,
+        "datastore_record",
+        "Write datastore records",
+    ),
+    PermissionDefinition(
+        Permissions.FOLDER_READ, PermissionScope.POD, "folder", "Read folders and files"
+    ),
+    PermissionDefinition(
+        Permissions.FOLDER_WRITE,
+        PermissionScope.POD,
+        "folder",
+        "Write folders and files",
+    ),
+    PermissionDefinition(
+        Permissions.FOLDER_DELETE,
+        PermissionScope.POD,
+        "folder",
+        "Delete folders and files",
+    ),
     PermissionDefinition(Permissions.APP_READ, PermissionScope.POD, "app", "Read apps"),
-    PermissionDefinition(Permissions.APP_CREATE, PermissionScope.POD, "app", "Create apps"),
-    PermissionDefinition(Permissions.APP_UPDATE, PermissionScope.POD, "app", "Update apps"),
-    PermissionDefinition(Permissions.APP_DELETE, PermissionScope.POD, "app", "Delete apps"),
-    PermissionDefinition(Permissions.APP_PUBLISH, PermissionScope.POD, "app", "Publish apps"),
-    PermissionDefinition(Permissions.AGENT_READ, PermissionScope.POD, "agent", "Read agents"),
-    PermissionDefinition(Permissions.AGENT_CREATE, PermissionScope.POD, "agent", "Create agents"),
-    PermissionDefinition(Permissions.AGENT_UPDATE, PermissionScope.POD, "agent", "Update agents"),
-    PermissionDefinition(Permissions.AGENT_DELETE, PermissionScope.POD, "agent", "Delete agents"),
-    PermissionDefinition(Permissions.AGENT_EXECUTE, PermissionScope.POD, "agent", "Execute agents"),
-    PermissionDefinition(Permissions.FUNCTION_READ, PermissionScope.POD, "function", "Read functions"),
-    PermissionDefinition(Permissions.FUNCTION_CREATE, PermissionScope.POD, "function", "Create functions"),
-    PermissionDefinition(Permissions.FUNCTION_UPDATE, PermissionScope.POD, "function", "Update functions"),
-    PermissionDefinition(Permissions.FUNCTION_DELETE, PermissionScope.POD, "function", "Delete functions"),
-    PermissionDefinition(Permissions.FUNCTION_EXECUTE, PermissionScope.POD, "function", "Execute functions"),
-    PermissionDefinition(Permissions.WORKFLOW_READ, PermissionScope.POD, "workflow", "Read workflows"),
-    PermissionDefinition(Permissions.WORKFLOW_CREATE, PermissionScope.POD, "workflow", "Create workflows"),
-    PermissionDefinition(Permissions.WORKFLOW_UPDATE, PermissionScope.POD, "workflow", "Update workflows"),
-    PermissionDefinition(Permissions.WORKFLOW_DELETE, PermissionScope.POD, "workflow", "Delete workflows"),
-    PermissionDefinition(Permissions.WORKFLOW_EXECUTE, PermissionScope.POD, "workflow", "Execute workflows"),
-    PermissionDefinition(Permissions.SCHEDULE_READ, PermissionScope.POD, "schedule", "Read schedules"),
-    PermissionDefinition(Permissions.SCHEDULE_CREATE, PermissionScope.POD, "schedule", "Create schedules"),
-    PermissionDefinition(Permissions.SCHEDULE_UPDATE, PermissionScope.POD, "schedule", "Update schedules"),
-    PermissionDefinition(Permissions.SCHEDULE_DELETE, PermissionScope.POD, "schedule", "Delete schedules"),
-    PermissionDefinition(Permissions.CONVERSATION_READ, PermissionScope.POD, "conversation", "Read conversations"),
-    PermissionDefinition(Permissions.CONVERSATION_WRITE, PermissionScope.POD, "conversation", "Create and update conversations"),
-    PermissionDefinition(Permissions.CONNECTOR_USE, PermissionScope.POD, "connector", "Use pod-enabled connectors"),
-    PermissionDefinition(Permissions.CONNECTOR_MANAGE, PermissionScope.ORG, "connector", "Enable and configure organization connectors"),
-    PermissionDefinition(Permissions.CONNECTOR_ACCOUNT_USE, PermissionScope.POD, "connector_account", "Use connected connector accounts"),
-    PermissionDefinition(Permissions.CONNECTOR_ACCOUNT_MANAGE, PermissionScope.POD, "connector_account", "Manage connected connector accounts"),
-    PermissionDefinition(Permissions.CONNECTOR_AUTH_CONFIG_MANAGE, PermissionScope.ORG, "connector_auth_config", "Manage organization connector auth configs"),
+    PermissionDefinition(
+        Permissions.APP_CREATE, PermissionScope.POD, "app", "Create apps"
+    ),
+    PermissionDefinition(
+        Permissions.APP_UPDATE, PermissionScope.POD, "app", "Update apps"
+    ),
+    PermissionDefinition(
+        Permissions.APP_DELETE, PermissionScope.POD, "app", "Delete apps"
+    ),
+    PermissionDefinition(
+        Permissions.APP_PUBLISH, PermissionScope.POD, "app", "Publish apps"
+    ),
+    PermissionDefinition(
+        Permissions.AGENT_READ, PermissionScope.POD, "agent", "Read agents"
+    ),
+    PermissionDefinition(
+        Permissions.AGENT_CREATE, PermissionScope.POD, "agent", "Create agents"
+    ),
+    PermissionDefinition(
+        Permissions.AGENT_UPDATE, PermissionScope.POD, "agent", "Update agents"
+    ),
+    PermissionDefinition(
+        Permissions.AGENT_DELETE, PermissionScope.POD, "agent", "Delete agents"
+    ),
+    PermissionDefinition(
+        Permissions.AGENT_EXECUTE, PermissionScope.POD, "agent", "Execute agents"
+    ),
+    PermissionDefinition(
+        Permissions.FUNCTION_READ, PermissionScope.POD, "function", "Read functions"
+    ),
+    PermissionDefinition(
+        Permissions.FUNCTION_CREATE, PermissionScope.POD, "function", "Create functions"
+    ),
+    PermissionDefinition(
+        Permissions.FUNCTION_UPDATE, PermissionScope.POD, "function", "Update functions"
+    ),
+    PermissionDefinition(
+        Permissions.FUNCTION_DELETE, PermissionScope.POD, "function", "Delete functions"
+    ),
+    PermissionDefinition(
+        Permissions.FUNCTION_EXECUTE,
+        PermissionScope.POD,
+        "function",
+        "Execute functions",
+    ),
+    PermissionDefinition(
+        Permissions.WORKFLOW_READ, PermissionScope.POD, "workflow", "Read workflows"
+    ),
+    PermissionDefinition(
+        Permissions.WORKFLOW_CREATE, PermissionScope.POD, "workflow", "Create workflows"
+    ),
+    PermissionDefinition(
+        Permissions.WORKFLOW_UPDATE, PermissionScope.POD, "workflow", "Update workflows"
+    ),
+    PermissionDefinition(
+        Permissions.WORKFLOW_DELETE, PermissionScope.POD, "workflow", "Delete workflows"
+    ),
+    PermissionDefinition(
+        Permissions.WORKFLOW_EXECUTE,
+        PermissionScope.POD,
+        "workflow",
+        "Execute workflows",
+    ),
+    PermissionDefinition(
+        Permissions.SCHEDULE_READ, PermissionScope.POD, "schedule", "Read schedules"
+    ),
+    PermissionDefinition(
+        Permissions.SCHEDULE_CREATE, PermissionScope.POD, "schedule", "Create schedules"
+    ),
+    PermissionDefinition(
+        Permissions.SCHEDULE_UPDATE, PermissionScope.POD, "schedule", "Update schedules"
+    ),
+    PermissionDefinition(
+        Permissions.SCHEDULE_DELETE, PermissionScope.POD, "schedule", "Delete schedules"
+    ),
+    PermissionDefinition(
+        Permissions.CONVERSATION_READ,
+        PermissionScope.POD,
+        "conversation",
+        "Read conversations",
+    ),
+    PermissionDefinition(
+        Permissions.CONVERSATION_WRITE,
+        PermissionScope.POD,
+        "conversation",
+        "Create and update conversations",
+    ),
+    PermissionDefinition(
+        Permissions.CONNECTOR_USE,
+        PermissionScope.POD,
+        "connector",
+        "Use pod-enabled connectors",
+    ),
+    PermissionDefinition(
+        Permissions.CONNECTOR_MANAGE,
+        PermissionScope.ORG,
+        "connector",
+        "Enable and configure organization connectors",
+    ),
+    PermissionDefinition(
+        Permissions.CONNECTOR_ACCOUNT_USE,
+        PermissionScope.POD,
+        "connector_account",
+        "Use connected connector accounts",
+    ),
+    PermissionDefinition(
+        Permissions.CONNECTOR_ACCOUNT_MANAGE,
+        PermissionScope.POD,
+        "connector_account",
+        "Manage connected connector accounts",
+    ),
+    PermissionDefinition(
+        Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
+        PermissionScope.ORG,
+        "connector_auth_config",
+        "Manage organization connector auth configs",
+    ),
 )
 
 PERMISSION_BY_ID: dict[str, PermissionDefinition] = {
@@ -246,7 +418,9 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     Permissions.APP_UPDATE: frozenset({Permissions.APP_READ}),
     Permissions.APP_DELETE: frozenset({Permissions.APP_UPDATE, Permissions.APP_READ}),
     Permissions.FOLDER_WRITE: frozenset({Permissions.FOLDER_READ}),
-    Permissions.FOLDER_DELETE: frozenset({Permissions.FOLDER_WRITE, Permissions.FOLDER_READ}),
+    Permissions.FOLDER_DELETE: frozenset(
+        {Permissions.FOLDER_WRITE, Permissions.FOLDER_READ}
+    ),
     Permissions.DATASTORE_TABLE_UPDATE: frozenset({Permissions.DATASTORE_TABLE_READ}),
     Permissions.DATASTORE_TABLE_DELETE: frozenset(
         {Permissions.DATASTORE_TABLE_UPDATE, Permissions.DATASTORE_TABLE_READ}

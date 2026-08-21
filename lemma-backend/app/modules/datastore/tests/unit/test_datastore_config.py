@@ -43,7 +43,11 @@ EXPECTED = [
         300,
     ),
     ("recovery_enqueue_batch_size", "RECOVERY_ENQUEUE_BATCH_SIZE", 10),
-    ("document_processing_extractor_max_threads", "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS", 4),
+    (
+        "document_processing_extractor_max_threads",
+        "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS",
+        4,
+    ),
     ("datastore_per_pod_max_inflight", "DATASTORE_PER_POD_MAX_INFLIGHT", 4),
     ("datastore_dispatch_global_batch", "DATASTORE_DISPATCH_GLOBAL_BATCH", 50),
     ("datastore_recovery_max_attempts", "DATASTORE_RECOVERY_MAX_ATTEMPTS", 3),
@@ -107,7 +111,11 @@ EXTRA_FIELDS = [
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
     ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),
-    ("document_processing_layout_strategy", "DOCUMENT_PROCESSING_LAYOUT_STRATEGY", "auto"),
+    (
+        "document_processing_layout_strategy",
+        "DOCUMENT_PROCESSING_LAYOUT_STRATEGY",
+        "auto",
+    ),
     ("document_processing_table_model", "DOCUMENT_PROCESSING_TABLE_MODEL", "tatr"),
 ]
 

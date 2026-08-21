@@ -42,7 +42,6 @@ POLL_INTERVAL = 0.15
 # --------------------------------------------------------------------------- #
 
 
-
 def _returns_async(fn):
     """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
 
@@ -81,7 +80,9 @@ async def _create_pod(client: httpx.AsyncClient, org_id: str) -> str:
     return response.json()["id"]
 
 
-async def _create_event_table(client: httpx.AsyncClient, pod_id: str, table: str) -> None:
+async def _create_event_table(
+    client: httpx.AsyncClient, pod_id: str, table: str
+) -> None:
     response = await client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -121,7 +122,7 @@ async def _create_function(
 def _plan_function_code(name: str) -> str:
     # Reads the inserted record's `merchants` CSV from start.payload and fans it
     # out into structured line items the loop will process.
-    return f'''#input_type_name: InputModel
+    return f"""#input_type_name: InputModel
 #output_type_name: OutputModel
 #function_name: {name}
 
@@ -143,11 +144,11 @@ async def {name}(ctx: FunctionContext, data: InputModel) -> OutputModel:
     names = [p.strip() for p in data.merchants.split(",") if p.strip()]
     items = [dict(merchant=n, amount=float(10 + i)) for i, n in enumerate(names)]
     return OutputModel(items=items, label=f"{{len(items)}} expenses to review")
-'''
+"""
 
 
 def _record_function_code(name: str) -> str:
-    return f'''#input_type_name: InputModel
+    return f"""#input_type_name: InputModel
 #output_type_name: OutputModel
 #function_name: {name}
 
@@ -168,7 +169,7 @@ class OutputModel(BaseModel):
 
 async def {name}(ctx: FunctionContext, data: InputModel) -> OutputModel:
     return OutputModel(merchant=data.merchant, amount=data.amount, recorded=True)
-'''
+"""
 
 
 async def _create_agent(client: httpx.AsyncClient, pod_id: str) -> str:
@@ -220,13 +221,17 @@ async def _create_workflow(
     return graph.json()
 
 
-async def _create_schedule(client: httpx.AsyncClient, pod_id: str, payload: dict) -> dict:
+async def _create_schedule(
+    client: httpx.AsyncClient, pod_id: str, payload: dict
+) -> dict:
     response = await client.post(f"/pods/{pod_id}/schedules", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _runs(client: httpx.AsyncClient, pod_id: str, workflow_name: str) -> list[dict]:
+async def _runs(
+    client: httpx.AsyncClient, pod_id: str, workflow_name: str
+) -> list[dict]:
     response = await client.get(f"/pods/{pod_id}/workflows/{workflow_name}/runs")
     assert response.status_code == 200, response.text
     return response.json()["items"]
@@ -271,7 +276,9 @@ async def _wait_for_triggered_run(
     return last
 
 
-def _graph(*, agent_name: str, plan_fn: str, record_fn: str) -> tuple[list[dict], list[dict]]:
+def _graph(
+    *, agent_name: str, plan_fn: str, record_fn: str
+) -> tuple[list[dict], list[dict]]:
     nodes = [
         {
             "id": "plan",
@@ -280,7 +287,10 @@ def _graph(*, agent_name: str, plan_fn: str, record_fn: str) -> tuple[list[dict]
             "config": {
                 "function_name": plan_fn,
                 "input_mapping": {
-                    "merchants": {"type": "expression", "value": "start.payload.merchants"}
+                    "merchants": {
+                        "type": "expression",
+                        "value": "start.payload.merchants",
+                    }
                 },
             },
         },
@@ -420,13 +430,18 @@ async def test_datastore_trigger_runs_full_real_workflow(full_stack):
             client,
             pod_id,
             workflow["name"],
-            lambda r: r["status"] == "WAITING"
-            and (r.get("active_wait") or {}).get("wait_type") == "HUMAN",
+            lambda r: (
+                r["status"] == "WAITING"
+                and (r.get("active_wait") or {}).get("wait_type") == "HUMAN"
+            ),
             "human approval after real function + agent",
         )
         run_id = waiting["id"]
         assert waiting["start_type"] == "DATASTORE_EVENT"
-        assert waiting["execution_context"]["start"]["payload"]["merchants"] == "Uber,Delta,AWS"
+        assert (
+            waiting["execution_context"]["start"]["payload"]["merchants"]
+            == "Uber,Delta,AWS"
+        )
 
         # The plan function really executed in Docker.
         plan_out = waiting["execution_context"]["plan"]
@@ -435,7 +450,9 @@ async def test_datastore_trigger_runs_full_real_workflow(full_stack):
 
         # The agent really ran on Fireworks and produced output before the form.
         summarize_out = waiting["execution_context"].get("summarize")
-        assert summarize_out, f"agent produced no output: {waiting['execution_context']}"
+        assert summarize_out, (
+            f"agent produced no output: {waiting['execution_context']}"
+        )
 
         # Approve the form -> decision -> loop -> per-item real functions -> end.
         submit = await client.post(
@@ -453,7 +470,15 @@ async def test_datastore_trigger_runs_full_real_workflow(full_stack):
         )
 
         history = {step["node_id"] for step in completed["step_history"]}
-        for expected in ["plan", "summarize", "approve", "route", "each", "record", "end"]:
+        for expected in [
+            "plan",
+            "summarize",
+            "approve",
+            "route",
+            "each",
+            "record",
+            "end",
+        ]:
             assert expected in history, f"{expected} missing from {sorted(history)}"
 
         loop_out = completed["execution_context"]["each"]
@@ -468,7 +493,7 @@ async def test_datastore_trigger_runs_full_real_workflow(full_stack):
 
 
 def _extract_function_code(name: str) -> str:
-    return f'''#input_type_name: InputModel
+    return f"""#input_type_name: InputModel
 #output_type_name: OutputModel
 #function_name: {name}
 
@@ -487,10 +512,12 @@ class OutputModel(BaseModel):
 
 async def {name}(ctx: FunctionContext, data: InputModel) -> OutputModel:
     return OutputModel(subject=data.subject, handled=True)
-'''
+"""
 
 
-def _single_function_graph(extract_fn: str, subject_path: str) -> tuple[list[dict], list[dict]]:
+def _single_function_graph(
+    extract_fn: str, subject_path: str
+) -> tuple[list[dict], list[dict]]:
     nodes = [
         {
             "id": "extract",
@@ -556,7 +583,9 @@ async def _seed_composio_trigger(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_webhook_event_trigger_runs_full_real_workflow(full_stack, db_session, monkeypatch):
+async def test_webhook_event_trigger_runs_full_real_workflow(
+    full_stack, db_session, monkeypatch
+):
     """A third-party webhook POST autonomously starts an EVENT workflow whose
     real FUNCTION consumes the trigger payload (start.payload.*)."""
     await _seed_composio_trigger(db_session)
@@ -603,24 +632,24 @@ async def test_webhook_event_trigger_runs_full_real_workflow(full_stack, db_sess
         monkeypatch.setattr(
             "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
             _returns_async(
-            lambda self, payload_text, headers: {
-                "version": "V3",
-                "payload": {
-                    "id": provider_id,
-                    "user_id": payload["metadata"]["user_id"],
-                    "toolkit_slug": payload["metadata"]["toolkit_slug"],
-                    "trigger_slug": payload["type"],
-                    "metadata": {
-                        "connected_account": {
-                            "id": payload["metadata"]["connected_account_id"],
-                            "auth_config_id": payload["metadata"]["auth_config_id"],
-                        }
+                lambda self, payload_text, headers: {
+                    "version": "V3",
+                    "payload": {
+                        "id": provider_id,
+                        "user_id": payload["metadata"]["user_id"],
+                        "toolkit_slug": payload["metadata"]["toolkit_slug"],
+                        "trigger_slug": payload["type"],
+                        "metadata": {
+                            "connected_account": {
+                                "id": payload["metadata"]["connected_account_id"],
+                                "auth_config_id": payload["metadata"]["auth_config_id"],
+                            }
+                        },
+                        "payload": {**payload["data"]},
                     },
-                    "payload": {**payload["data"]},
-                },
-                "raw_payload": payload,
-            }
-        ),
+                    "raw_payload": payload,
+                }
+            ),
         )
 
         webhook = await client.post("/webhooks/composio", json=payload)
@@ -823,7 +852,10 @@ async def test_manual_agent_workflow_completes_full_real(full_stack):
                     "config": {
                         "agent_name": agent_name,
                         "input_mapping": {
-                            "label": {"type": "literal", "value": "2 expenses to review"}
+                            "label": {
+                                "type": "literal",
+                                "value": "2 expenses to review",
+                            }
                         },
                     },
                 },
@@ -845,7 +877,9 @@ async def test_manual_agent_workflow_completes_full_real(full_stack):
         )
         assert completed["active_wait"] is None
         summarize_out = completed["execution_context"].get("summarize")
-        assert summarize_out, f"agent produced no output: {completed['execution_context']}"
+        assert summarize_out, (
+            f"agent produced no output: {completed['execution_context']}"
+        )
 
 
 @pytest.mark.asyncio

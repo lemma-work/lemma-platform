@@ -41,9 +41,9 @@ async def slack_candidates_for_workspace(
         )
         if not credentials.app_id or not credentials.signing_secret:
             continue
-        grouped.setdefault(
-            (credentials.app_id, credentials.signing_secret), []
-        ).append(surface.id)
+        grouped.setdefault((credentials.app_id, credentials.signing_secret), []).append(
+            surface.id
+        )
     return [
         SlackWebhookVerificationCandidate(
             app_id=app_id,

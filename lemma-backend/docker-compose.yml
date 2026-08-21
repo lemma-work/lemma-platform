@@ -1,8 +1,15 @@
 services:
   db:
-    # pg15 to stay data-compatible with existing volumes; 0.8.3 carries the
-    # CVE-2026-3172 (parallel HNSW build) fix and is needed for halfvec indexes.
-    image: docker.io/pgvector/pgvector:0.8.3-pg15
+    # pg18 to match what actually runs: prod is CloudSQL POSTGRES_18_4 and the
+    # dev cluster is CloudNativePG 18.4, so a local stack on 15 was testing
+    # against a major version nothing else uses. 0.8.3 carries the CVE-2026-3172
+    # (parallel HNSW build) fix and is needed for halfvec indexes.
+    #
+    # Postgres will not start on a data directory from an older major, so an
+    # existing local volume has to go: `docker compose down -v`. Local stack
+    # data is scratch -- pods and conversations live in the deployed
+    # environments -- so this is a reset, not a migration.
+    image: docker.io/pgvector/pgvector:0.8.3-pg18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

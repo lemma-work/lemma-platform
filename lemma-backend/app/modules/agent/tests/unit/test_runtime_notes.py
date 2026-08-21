@@ -18,9 +18,7 @@ def test_runtime_notes_render_current_time_in_utc():
     )
 
     assert build_runtime_notes(now=fixed) == (
-        "<notes>\n"
-        "Current date and time: 2026-07-25T13:15:12Z (UTC).\n"
-        "</notes>"
+        "<notes>\nCurrent date and time: 2026-07-25T13:15:12Z (UTC).\n</notes>"
     )
 
 

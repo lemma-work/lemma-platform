@@ -153,7 +153,9 @@ async def test_chat_screen_renders_stream(tmp_path):
         assert len(tools) == 1
         assert tools.first().title == "✓ web_search"
         assert len(screen.query(ThinkingBlock)) == 1
-        assert any("completed" in str(line.render()) for line in screen.query(StatusLine))
+        assert any(
+            "completed" in str(line.render()) for line in screen.query(StatusLine)
+        )
 
 
 @pytest.mark.asyncio

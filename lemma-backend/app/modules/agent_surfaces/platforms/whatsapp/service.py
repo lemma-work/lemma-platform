@@ -179,7 +179,7 @@ class WhatsAppPlatformService:
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
             logger.debug(
-                'agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic',
+                "agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic",
                 phone_number_id=phone_number_id,
                 sender_wa_id=sender_wa_id,
             )
@@ -218,7 +218,7 @@ class WhatsAppPlatformService:
             # guard in send_message, so log here to make the double-skip diagnosable
             # instead of a silent swallow.
             logger.debug(
-                'agent_surfaces.service.whatsapp_send_questions_skipped_missing.diagnostic',
+                "agent_surfaces.service.whatsapp_send_questions_skipped_missing.diagnostic",
                 phone_number_id=phone_number_id,
                 sender_wa_id=sender_wa_id,
             )
@@ -283,7 +283,7 @@ class WhatsAppPlatformService:
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not phone_number_id or not sender_wa_id:
             logger.debug(
-                'agent_surfaces.service.whatsapp_send_display_resource_skipped.diagnostic',
+                "agent_surfaces.service.whatsapp_send_display_resource_skipped.diagnostic",
                 phone_number_id=phone_number_id,
             )
             return

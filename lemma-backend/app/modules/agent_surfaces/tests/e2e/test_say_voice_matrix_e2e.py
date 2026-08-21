@@ -39,7 +39,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -380,7 +382,9 @@ async def test_telegram_voice_message_transcribed_at_ingress(
     assert isinstance(context, SurfaceChatContext)
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
     assert "book a meeting with the design team tomorrow" in user_message["text"]

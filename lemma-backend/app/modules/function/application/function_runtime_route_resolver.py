@@ -335,7 +335,9 @@ class FunctionRuntimeRouteResolver:
                 or "\n" in item.value
                 or "\x00" in item.value
             ):
-                raise ValueError("the sandbox returned an invalid runtime request header")
+                raise ValueError(
+                    "the sandbox returned an invalid runtime request header"
+                )
             names.add(normalized)
             headers.append((item.name, item.value))
         return tuple(headers)

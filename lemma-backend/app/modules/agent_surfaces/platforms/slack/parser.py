@@ -130,7 +130,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated',
+                "agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated",
                 exc_info=True,
             )
             raise
@@ -186,7 +186,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                     raw_payload=payload,
                 )
             return None
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except AttributeError, KeyError, TypeError, ValueError:
             logger.debug("surface.slack.parse_lifecycle_failed", exc_info=True)
             return None
 
@@ -315,7 +315,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             return data
         except Exception:
             logger.debug(
-                'agent_surfaces.parser.slack_parser_normalize_context_message.propagated',
+                "agent_surfaces.parser.slack_parser_normalize_context_message.propagated",
                 exc_info=True,
             )
             raise

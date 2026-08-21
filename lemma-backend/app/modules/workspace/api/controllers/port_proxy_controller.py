@@ -86,9 +86,7 @@ async def proxy_sandbox_port(token: str, path: str, request: Request) -> Respons
     # accident, and it silently ate a segment when a path began with "//",
     # reading the first one as an authority. Setting the path component alone
     # makes the host un-influenceable by construction.
-    target = httpx.URL(base_url).copy_with(
-        path="/" + quote(path.lstrip("/"), safe="/")
-    )
+    target = httpx.URL(base_url).copy_with(path="/" + quote(path.lstrip("/"), safe="/"))
 
     upstream = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
     try:

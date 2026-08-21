@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.platforms.telegram.service import (
 
 # --- renderer -------------------------------------------------------------
 
+
 def test_escape_markdown_v2_escapes_reserved_characters():
     assert escape_markdown_v2("a.b!c-d") == "a\\.b\\!c\\-d"
 
@@ -55,6 +56,7 @@ def test_chunk_text_hard_splits_single_long_run():
 
 
 # --- send_message ---------------------------------------------------------
+
 
 class _RecordingClient:
     """Stand-in for TelegramClient.call that records payloads and can fail."""
@@ -241,7 +243,9 @@ _THINKING_CLOSE = chr(60) + "/thinking" + chr(62)
 
 
 def test_strip_thinking_tokens_removes_closed_block():
-    text = f"Let me think. {_T_OPEN}I should help the user.{_T_CLOSE} Here is your answer."
+    text = (
+        f"Let me think. {_T_OPEN}I should help the user.{_T_CLOSE} Here is your answer."
+    )
     result = strip_thinking_tokens(text)
     assert "<think" not in result.lower()
     assert "I should help the user." not in result
@@ -259,7 +263,9 @@ def test_strip_thinking_tokens_removes_unclosed_block():
 
 def test_strip_thinking_tokens_removes_self_closing_tag():
     self_closing = chr(60) + "think/" + chr(62)
-    assert strip_thinking_tokens(f"Hello {self_closing} world") == "Hello  world".strip()
+    assert (
+        strip_thinking_tokens(f"Hello {self_closing} world") == "Hello  world".strip()
+    )
 
 
 def test_strip_thinking_tokens_removes_thinking_variant():
@@ -311,7 +317,7 @@ def test_strip_thinking_tokens_empty_string():
 
 
 def test_strip_thinking_tokens_preserves_code_blocks():
-    text = 'Check this code:\n```python\nx = 1  # not a think tag\n```\nDone'
+    text = "Check this code:\n```python\nx = 1  # not a think tag\n```\nDone"
     result = strip_thinking_tokens(text)
     assert "```python" in result
     assert "Done" in result

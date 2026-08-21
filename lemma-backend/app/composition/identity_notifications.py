@@ -25,8 +25,7 @@ async def user_can_view_organization_usage(
     member = await OrganizationRepository(uow).get_member(user_id, organization_id)
     return bool(
         member
-        and member.role
-        in {OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR}
+        and member.role in {OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR}
     )
 
 

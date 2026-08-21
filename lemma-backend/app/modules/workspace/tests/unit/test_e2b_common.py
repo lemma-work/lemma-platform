@@ -155,7 +155,9 @@ async def test_a_stopped_vm_is_not_polled_at_all(scripted_httpx) -> None:
 
     with pytest.raises(SandboxUnavailable):
         await ensure_runtime_serving(
-            _Sandbox(running=False), "i12345", runtime_port=8080,
+            _Sandbox(running=False),
+            "i12345",
+            runtime_port=8080,
             budget_seconds=0.3,
         )
 

@@ -73,7 +73,9 @@ async def _body_messages(response) -> list[bytes]:
         sent.append(message)
 
     await response({"type": "http", "method": "GET", "headers": []}, receive, send)
-    return [m["body"] for m in sent if m["type"] == "http.response.body" and m.get("body")]
+    return [
+        m["body"] for m in sent if m["type"] == "http.response.body" and m.get("body")
+    ]
 
 
 @pytest.mark.parametrize("newlines", [1, 500, 20_000])
@@ -105,9 +107,7 @@ async def test_a_child_artifact_download_is_one_body_message() -> None:
 
     bodies = await _body_messages(response)
 
-    assert len(bodies) == 1, (
-        f"a child artifact was sent as {len(bodies)} ASGI messages"
-    )
+    assert len(bodies) == 1, f"a child artifact was sent as {len(bodies)} ASGI messages"
     assert b"".join(bodies) == content
 
 

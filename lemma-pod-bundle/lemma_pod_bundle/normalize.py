@@ -26,8 +26,7 @@ def _normalize_resource_permissions_payload(payload: dict[str, Any]) -> dict[str
     if not isinstance(grants, list):
         raise ValueError("Embedded permissions must be an object with a grants list.")
     if any(
-        not isinstance(grant, dict) or "resource_name" not in grant
-        for grant in grants
+        not isinstance(grant, dict) or "resource_name" not in grant for grant in grants
     ):
         raise ValueError("Permission grants must reference resources by resource_name.")
     return {"grants": grants}
@@ -295,7 +294,11 @@ def _validate_function_payload(
     issues: list[BundleValidationIssue] = []
     code = payload.get("code")
     if not isinstance(code, str) or not code.strip():
-        issues.append(BundleValidationIssue(path=str(resource_dir), message="Function code is required."))
+        issues.append(
+            BundleValidationIssue(
+                path=str(resource_dir), message="Function code is required."
+            )
+        )
         return issues
 
     try:

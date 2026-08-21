@@ -6,7 +6,7 @@ from app.modules.datastore.infrastructure.markdown_images import (
 
 
 def test_rewrites_pathful_refs_to_known_basenames():
-    md = "![a](images/fig1.png)\n\n<img src=\"./assets/fig2.png\">"
+    md = '![a](images/fig1.png)\n\n<img src="./assets/fig2.png">'
     out = rewrite_image_references(md, {"fig1.png", "fig2.png"})
     assert "![a](fig1.png)" in out
     assert 'src="fig2.png"' in out

@@ -58,7 +58,7 @@ class WorkspaceStorageGenerationStore:
             return False
         try:
             return generation > int(previous)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     async def close(self) -> None:

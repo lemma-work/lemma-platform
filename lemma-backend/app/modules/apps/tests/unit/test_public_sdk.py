@@ -64,7 +64,9 @@ async def test_rereads_when_bundle_changes(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_serves_ui_bundle(tmp_path, monkeypatch):
     bundle = tmp_path / "lemma-ui.js"
-    bundle.write_text("customElements.define('lemma-agent-task', class {});", encoding="utf-8")
+    bundle.write_text(
+        "customElements.define('lemma-agent-task', class {});", encoding="utf-8"
+    )
     monkeypatch.setattr(
         sdk, "settings", SimpleNamespace(resolve_browser_ui_path=lambda: bundle)
     )

@@ -195,7 +195,11 @@ def write_server_env(
     for key, value in values.items():
         if key.startswith(LEMMA_PREFIX) and value:
             merged[key] = value
-    _write_env_file(target, merged, header=f"Lemma binding for server '{server}'. Safe to commit; no secrets.")
+    _write_env_file(
+        target,
+        merged,
+        header=f"Lemma binding for server '{server}'. Safe to commit; no secrets.",
+    )
 
     if seed_default_server:
         base_path = project_dir / LEMMA_ENV_NAME

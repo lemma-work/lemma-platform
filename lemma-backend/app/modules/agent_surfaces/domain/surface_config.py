@@ -31,8 +31,7 @@ class SurfaceIdentityPolicy(BaseModel):
             return True
         domain = normalized.rsplit("@", 1)[-1] if "@" in normalized else ""
         return (
-            normalized in self.allowed_email_addresses
-            or domain in self.allowed_domains
+            normalized in self.allowed_email_addresses or domain in self.allowed_domains
         )
 
 
@@ -143,4 +142,3 @@ class SurfaceConfig(BaseModel):
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)
     telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
     slack: SurfaceSlackConfig = Field(default_factory=SurfaceSlackConfig)
-

@@ -17,7 +17,6 @@ from anyio.abc import TaskStatus
 from fastapi import FastAPI
 
 
-
 @dataclass(frozen=True)
 class EmbeddedApp:
     """An ASGI sub-application whose lifespan belongs to the local process."""
@@ -47,7 +46,9 @@ class _EmbeddedLanes:
     the two recovery crons that would have noticed are on the same lane.
     """
 
-    async def run_async(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED) -> None:
+    async def run_async(
+        self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED
+    ) -> None:
         from app.core.infrastructure.jobs.streaq_runtime import Lane, run_worker_lanes
 
         await run_worker_lanes(list(Lane), task_status=task_status)

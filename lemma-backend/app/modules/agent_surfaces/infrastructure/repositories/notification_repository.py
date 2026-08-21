@@ -142,9 +142,7 @@ class NotificationRepository:
             NotificationModel.recipient_user_id == recipient_user_id,
         )
         if statuses:
-            stmt = stmt.where(
-                NotificationModel.status.in_([s.value for s in statuses])
-            )
+            stmt = stmt.where(NotificationModel.status.in_([s.value for s in statuses]))
         if cursor is not None:
             stmt = stmt.where(NotificationModel.id < cursor)
         stmt = stmt.order_by(NotificationModel.id.desc()).limit(limit + 1)
@@ -169,9 +167,7 @@ class NotificationRepository:
         )
         return int(result.scalar_one())
 
-    async def mark_all_read(
-        self, *, pod_id: UUID, recipient_user_id: UUID
-    ) -> int:
+    async def mark_all_read(self, *, pod_id: UUID, recipient_user_id: UUID) -> int:
         now = datetime.now(timezone.utc)
         result = await self.session.execute(
             select(NotificationModel).where(

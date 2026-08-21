@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.modules.datastore.domain.datastore_entities import ColumnSchema, DatastoreDataType, ForeignKeySpec
+from app.modules.datastore.domain.datastore_entities import (
+    ColumnSchema,
+    DatastoreDataType,
+    ForeignKeySpec,
+)
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
@@ -19,7 +23,11 @@ def _make_ctx(
 ) -> TableContext:
     if columns is None:
         columns = [
-            ColumnSchema(name="status", type=DatastoreDataType.ENUM, options=["planned", "active", "done"]),
+            ColumnSchema(
+                name="status",
+                type=DatastoreDataType.ENUM,
+                options=["planned", "active", "done"],
+            ),
             ColumnSchema(name="title", type=DatastoreDataType.TEXT, required=True),
             ColumnSchema(name="priority", type=DatastoreDataType.INTEGER),
         ]
@@ -45,7 +53,9 @@ class TestParseDbError:
         )
         exc = Exception(raw)
         ctx = _make_ctx()
-        msg, details, cls = parse_db_error(exc, table_name="app_specs", columns=ctx.columns)
+        msg, details, cls = parse_db_error(
+            exc, table_name="app_specs", columns=ctx.columns
+        )
 
         assert cls is DatastoreValidationError
         assert "draft" in msg.lower() or "value" in msg.lower()
@@ -54,9 +64,7 @@ class TestParseDbError:
         assert details["allowed_values"] == ["planned", "active", "done"]
 
     def test_check_violation_non_enum_gives_clean_message(self):
-        raw = (
-            'new row for relation "items" violates check constraint "items_qty_check"'
-        )
+        raw = 'new row for relation "items" violates check constraint "items_qty_check"'
         exc = Exception(raw)
         msg, details, cls = parse_db_error(exc, table_name="items")
 
@@ -89,7 +97,9 @@ class TestParseDbError:
                 foreign_key=ForeignKeySpec(references="projects.id"),
             ),
         ]
-        msg, details, cls = parse_db_error(exc, table_name="milestones", columns=columns)
+        msg, details, cls = parse_db_error(
+            exc, table_name="milestones", columns=columns
+        )
 
         assert cls is DatastoreValidationError
         assert "project_id" in msg
@@ -120,7 +130,9 @@ class TestParseDbError:
     def test_connection_error_is_infrastructure(self):
         raw = "connection refused\nserver closed the connection unexpectedly"
         exc = Exception(raw)
-        msg, details, cls = parse_db_error(exc, table_name="app_specs", operation="create record")
+        msg, details, cls = parse_db_error(
+            exc, table_name="app_specs", operation="create record"
+        )
 
         assert cls is DatastoreInfrastructureError
         assert "connectivity" in msg.lower()
@@ -134,7 +146,9 @@ class TestParseDbError:
             "(Background on this error at: https://sqlalche.me/e/20/gkpj)"
         )
         exc = Exception(raw)
-        msg, details, cls = parse_db_error(exc, table_name="app_specs", operation="create record")
+        msg, details, cls = parse_db_error(
+            exc, table_name="app_specs", operation="create record"
+        )
 
         assert cls is DatastoreValidationError
         assert "INSERT" not in msg
@@ -184,7 +198,9 @@ class TestParseDbError:
 
 
 class TestRecordValidatorEnum:
-    def _make_validator(self, columns: list[ColumnSchema] | None = None) -> RecordValidator:
+    def _make_validator(
+        self, columns: list[ColumnSchema] | None = None
+    ) -> RecordValidator:
         ctx = _make_ctx(columns=columns)
         return RecordValidator(ctx)
 
@@ -197,7 +213,9 @@ class TestRecordValidatorEnum:
         assert not is_valid
         assert any("draft" in e for e in errors)
         assert any("planned" in e and "active" in e and "done" in e for e in errors)
-        assert any(d.get("field") == "status" and "allowed_values" in d for d in details)
+        assert any(
+            d.get("field") == "status" and "allowed_values" in d for d in details
+        )
 
     def test_enum_valid_value_accepted(self):
         validator = self._make_validator()

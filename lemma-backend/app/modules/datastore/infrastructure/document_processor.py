@@ -39,7 +39,7 @@ _PAGE_MARKER = "<!-- PAGE "
 def _int_or_none(value: object) -> int | None:
     try:
         return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -107,12 +107,18 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
         chunks: list[DocumentChunk] = []
         for chunk in result.get_chunks():
             metadata = dict(chunk.get("metadata") or {})
-            page_start = _int_or_none(metadata.get("first_page", metadata.get("page_number")))
+            page_start = _int_or_none(
+                metadata.get("first_page", metadata.get("page_number"))
+            )
             page_end = _int_or_none(metadata.get("last_page"))
             if page_start is None:
-                page_start = self._page_for_byte(boundaries, _int_or_none(metadata.get("byte_start")))
+                page_start = self._page_for_byte(
+                    boundaries, _int_or_none(metadata.get("byte_start"))
+                )
             if page_end is None:
-                page_end = self._page_for_byte(boundaries, _int_or_none(metadata.get("byte_end")))
+                page_end = self._page_for_byte(
+                    boundaries, _int_or_none(metadata.get("byte_end"))
+                )
             page_end = page_end or page_start
             chunks.append(
                 DocumentChunk(
@@ -125,7 +131,9 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
         return chunks
 
     @staticmethod
-    def _page_boundaries(result: KreuzbergExtractionResult) -> list[tuple[int, int, int]]:
+    def _page_boundaries(
+        result: KreuzbergExtractionResult,
+    ) -> list[tuple[int, int, int]]:
         page_struct = (getattr(result, "metadata", None) or {}).get("pages") or {}
         boundaries: list[tuple[int, int, int]] = []
         for entry in page_struct.get("boundaries") or []:
@@ -139,7 +147,7 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
                         int(entry["page_number"]),
                     )
                 )
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
         return boundaries
 
@@ -182,7 +190,9 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
         else:
             # No top-level content (rare) — assemble from the per-page text.
             markdown = self._markdown_from_pages(result.get_pages(), images)
-        return self._rewrite_image_references(markdown, {image.name for image in images})
+        return self._rewrite_image_references(
+            markdown, {image.name for image in images}
+        )
 
     @staticmethod
     def _byte_to_char_index(content: str, byte_offsets: list[int]) -> dict[int, int]:
@@ -219,7 +229,9 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
         content: str,
         boundaries: list[tuple[int, int, int]],
     ) -> str:
-        page_starts = sorted(((b[0], b[2]) for b in boundaries), key=lambda item: item[0])
+        page_starts = sorted(
+            ((b[0], b[2]) for b in boundaries), key=lambda item: item[0]
+        )
         if not page_starts:
             return content
         mapping = self._byte_to_char_index(content, [start for start, _ in page_starts])

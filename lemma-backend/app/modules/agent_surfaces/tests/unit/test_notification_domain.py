@@ -231,7 +231,9 @@ def test_platforms_without_a_window_are_always_open():
 
 def test_chat_outranks_email():
     """Email is the fallback that always works, not the one people are watching."""
-    email = DeliveryChannel(surface=_surface(SurfacePlatform.RESEND), email_address="a@b.c")
+    email = DeliveryChannel(
+        surface=_surface(SurfacePlatform.RESEND), email_address="a@b.c"
+    )
     chat = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u1",
@@ -284,7 +286,7 @@ def test_surfaces_are_scoped_to_the_sending_agent():
 
 
 def test_the_pod_assistant_gets_the_surfaces_with_no_agent():
-    """"No agent" is a deliberate choice on a surface, not an absence.
+    """ "No agent" is a deliberate choice on a surface, not an absence.
 
     Reading it as "any surface" would send the pod assistant out through a named
     agent's bot, over that agent's name.
@@ -378,9 +380,7 @@ def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
     )
 
     old_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(days=3))
-    assert service._should_reset_dm_conversation(
-        surface=_dm_surface(), link=old_legacy
-    )
+    assert service._should_reset_dm_conversation(surface=_dm_surface(), link=old_legacy)
 
 
 def test_a_live_thread_is_not_reset():
