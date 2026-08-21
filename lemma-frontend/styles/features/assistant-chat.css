@@ -618,23 +618,37 @@ a.lchat-file:hover .lchat-file-go {
 }
 
 /* --- arrival motion -------------------------------------------------------------
-   Only the live turn's beats rise in. History loading into view must never
-   play an entrance (see the keying comment in the conversation component), so
-   the animation hangs off [data-live] — present only while the run is live. */
+   Only an arriving turn's beats rise in. History loading into view must never
+   play an entrance, so the animation hangs off [data-arrived], which the turn
+   sets from whether it was live at its mount and then leaves alone. It hung off
+   [data-live] before, which is a fact about *now* rather than about the mount —
+   and the moment it turned on, every beat already on screen rose again. */
 
 @keyframes lchat-rise {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
 }
 
-.lchat-turn[data-live] .lchat-user,
-.lchat-turn[data-live] .lchat-status,
-.lchat-turn[data-live] .lchat-bubble-them,
-.lchat-turn[data-live] .lchat-doc,
-.lchat-turn[data-live] .lchat-atts,
-.lchat-turn[data-live] .lchat-resources,
-.lchat-turn[data-live] .lchat-interaction,
-.lchat-turn[data-live] .lchat-notice {
+/* Keyed on `data-arrived`, which the turn fixes at its mount, and never on
+   `data-live`, which flips on a few hundred milliseconds later. A rule that
+   starts matching an element already on screen restarts its animation there —
+   so gating arrival motion on liveness made every sent message paint, then
+   drop back to `opacity: 0` and rise a second time.
+
+   Excluded once the turn settles, because the settle has its own choreography
+   and this would overrule it. The settled pill is a *fresh* node standing in
+   for the live one, so it looks like an arrival to this rule — but the FLIP is
+   already sliding it up from where the live pill stood, and a CSS animation
+   beats an inline transform, so rising it here cancelled that slide and left
+   the pill appearing out of nowhere in its new slot. */
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-user,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-status,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-bubble-them,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-doc,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-atts,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-resources,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-interaction,
+.lchat-turn[data-arrived]:not([data-settled]) .lchat-notice {
     animation: lchat-rise 0.22s var(--ease-standard) both;
 }
 
@@ -712,7 +726,7 @@ a.lchat-file:hover .lchat-file-go {
         animation: none;
     }
 
-    .lchat-turn[data-live] :where(.lchat-user, .lchat-status, .lchat-bubble-them, .lchat-doc, .lchat-atts, .lchat-resources, .lchat-interaction, .lchat-notice) {
+    .lchat-turn[data-arrived] :where(.lchat-user, .lchat-status, .lchat-bubble-them, .lchat-doc, .lchat-atts, .lchat-resources, .lchat-interaction, .lchat-notice) {
         animation: none;
     }
 

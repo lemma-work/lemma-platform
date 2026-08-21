@@ -148,6 +148,8 @@ interface AssistantMessageMetadata {
 
 type AssistantApiConversationMessage = ConversationMessage & {
   conversation_id?: string;
+  /** Set by the runtime store when this message replaced a provisional turn. */
+  optimistic_id?: string;
   metadata?: (Record<string, unknown> & AssistantMessageMetadata) | null;
   message_metadata?: AssistantMessageMetadata;
   tool_calls?: Record<string, unknown>[];
@@ -463,6 +465,7 @@ function mapConversationMessage(
     parts,
     createdAt: msg.created_at ? new Date(msg.created_at) : new Date(),
     conversation_id: msg.conversation_id,
+    optimistic_id: msg.optimistic_id,
     sequence: msg.sequence,
     agent_run_id: msg.agent_run_id,
     metadata: msg.metadata ?? null,
@@ -713,6 +716,12 @@ export function useAssistantController({
   const conversationDetailsRef = useRef<Map<string, Promise<Conversation | null>>>(new Map());
   const loadConversationMessagesRef = useRef<((conversationId: string) => Promise<AssistantApiConversationMessage[] | null>) | null>(null);
   const resumeConversationIfRunningRef = useRef<((conversationId: string) => Promise<boolean>) | null>(null);
+  // Which scope's conversation list and model catalog have already been
+  // fetched. Both effects below are re-entered on every identity change of the
+  // loader they call — and twice on mount under StrictMode — so without a key
+  // to compare against, one mount is two of each request.
+  const loadedHistoryScopeKeyRef = useRef<string | null>(null);
+  const loadedModelsScopeKeyRef = useRef<string | null>(null);
 
   const scope = useMemo<AssistantConversationScope>(() => ({
     podId: podId ?? null,
@@ -749,6 +758,10 @@ export function useAssistantController({
     [historyAgentName, historyPodId],
   );
   const previousHistoryScopeKeyRef = useRef(historyScopeKey);
+  const previousScopeKeyRef = useRef(scopeKey);
+  // The catalog is per-organization and nothing else, so this is the whole of
+  // what would make a second fetch return something different.
+  const modelsScopeKey = scope.organizationId ?? "";
 
   // A failed message load comes back from the session as an empty page, which
   // reads exactly like a conversation that has nothing in it. Counting the
@@ -796,6 +809,8 @@ export function useAssistantController({
     appendOptimisticUserMessage,
     replaceLoadedMessages,
     mergeMessages,
+    adoptPendingMessages,
+    dropPendingMessages,
     clear: clearRuntimeMessages,
   } = useAssistantRuntime({
     conversationId: activeConversationId,
@@ -937,7 +952,9 @@ export function useAssistantController({
     });
   }, [client, historyAgentName, scope.podId]);
 
-  const loadConversations = useCallback(async () => {
+  // Reports whether the list actually landed, so the caller's "already loaded
+  // this scope" key can be released after a failure instead of caching it.
+  const loadConversations = useCallback(async (): Promise<boolean> => {
     setIsLoadingConversations(true);
     try {
       const response = await listConversationHistory({ limit: CONVERSATIONS_PAGE_SIZE });
@@ -953,8 +970,10 @@ export function useAssistantController({
           : nextConversations;
       });
       setConversationsCursor(response.next_page_token ?? null);
+      return true;
     } catch (err) {
       setLocalError((prev) => prev || (err instanceof Error ? err.message : "Failed to load conversations"));
+      return false;
     } finally {
       setIsLoadingConversations(false);
     }
@@ -989,15 +1008,14 @@ export function useAssistantController({
     }
   }, [conversationsCursor, isLoadingConversations, isLoadingMoreConversations, listConversationHistory]);
 
+  // Throws rather than flattening a failure to `[]`: an empty catalog and a
+  // catalog we could not reach look identical to the caller otherwise, and the
+  // caller now has to tell them apart to know whether asking again is worth it.
   const loadAvailableModels = useCallback(async (): Promise<AvailableModelInfo[]> => {
-    try {
-      const response = await client.conversations.listModels({
-        orgId: scope.organizationId ?? undefined,
-      });
-      return response.items ?? [];
-    } catch {
-      return [];
-    }
+    const response = await client.conversations.listModels({
+      orgId: scope.organizationId ?? undefined,
+    });
+    return response.items ?? [];
   }, [client, scope.organizationId]);
 
   const loadConversationMessages = useCallback(async (
@@ -1089,10 +1107,17 @@ export function useAssistantController({
 
   useEffect(() => {
     if (!enabled) {
+      loadedModelsScopeKeyRef.current = null;
       setAvailableModels([]);
       return;
     }
     if (!autoLoad) return;
+    // Keyed rather than bare, for the same reason the transcript load is: this
+    // effect is re-entered whenever `loadAvailableModels` changes identity, and
+    // under StrictMode it is entered twice on mount. The catalog is a function
+    // of the org alone, so asking again for the same org is asking twice.
+    if (loadedModelsScopeKeyRef.current === modelsScopeKey) return;
+    loadedModelsScopeKeyRef.current = modelsScopeKey;
 
     let cancelled = false;
     void loadAvailableModels()
@@ -1100,18 +1125,30 @@ export function useAssistantController({
         if (cancelled) return;
         setAvailableModels(models);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        // Nothing was loaded, so nothing is cached: let the next run retry.
+        if (loadedModelsScopeKeyRef.current === modelsScopeKey) {
+          loadedModelsScopeKeyRef.current = null;
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [autoLoad, enabled, loadAvailableModels]);
+  }, [autoLoad, enabled, loadAvailableModels, modelsScopeKey]);
 
   const messages = useMemo(() => {
-    if (!activeConversationId) return [];
-
+    // A message with no conversation of its own is the turn you just sent, put
+    // on screen before the conversation it belongs to exists. Filtering it out
+    // is what made the first message of a new conversation vanish for the
+    // length of the create round-trip; `adoptPendingMessages` stamps it with
+    // the real id the moment there is one, and a failed send drops it.
     const normalized = sortMessagesByCreatedAt(runtimeMessages as AssistantApiConversationMessage[])
-      .filter((message) => message.conversation_id === activeConversationId);
+      .filter((message) => (
+        !message.conversation_id
+        || (!!activeConversationId && message.conversation_id === activeConversationId)
+      ));
+    if (!activeConversationId && normalized.length === 0) return [];
     if (
       normalized.length === 0
       && sessionStreamingText.trim().length === 0
@@ -1120,6 +1157,10 @@ export function useAssistantController({
     ) return [];
 
     const nextMessages = mapConversationMessages(normalized);
+    // Streamed thinking and text belong to a run, and a run belongs to a
+    // conversation — so with none open there is nothing streaming to append.
+    if (!activeConversationId) return nextMessages;
+
     const pendingThinking = resolveStreamingThinking({
       held: heldStreamingThinkingRef,
       conversationId: activeConversationId,
@@ -1206,7 +1247,9 @@ export function useAssistantController({
 
   useEffect(() => {
     const historyScopeChanged = previousHistoryScopeKeyRef.current !== historyScopeKey;
+    const scopeChanged = previousScopeKeyRef.current !== scopeKey;
     previousHistoryScopeKeyRef.current = historyScopeKey;
+    previousScopeKeyRef.current = scopeKey;
 
     if (!enabled) {
       sessionCancel();
@@ -1232,6 +1275,14 @@ export function useAssistantController({
       return;
     }
 
+    // Nothing to leave on the first run, so nothing to clear. Resetting
+    // unconditionally made mounting destructive: a consumer that opens a
+    // conversation from its own mount effect runs *before* this one (child
+    // effects precede the parent's), so this landed afterwards and closed the
+    // conversation it had just opened — a transcript that stayed blank until
+    // something else happened to re-open it.
+    if (!scopeChanged && !historyScopeChanged) return;
+
     activeConversationIdRef.current = null;
     loadedConversationIdsRef.current.clear();
     olderMessagesCursorsRef.current.clear();
@@ -1252,8 +1303,22 @@ export function useAssistantController({
 
   useEffect(() => {
     // No pod, nothing to list — the request would only fail on the missing id.
-    if (!enabled || !autoLoad || !historyPodId) return;
-    void loadConversations();
+    if (!enabled || !autoLoad || !historyPodId) {
+      loadedHistoryScopeKeyRef.current = null;
+      return;
+    }
+    // The list is a function of the scope, and this effect re-runs on every
+    // identity change of `loadConversations` — plus twice on mount under
+    // StrictMode. One scope, one list request. The scope-reset effect above
+    // clears this key when the scope actually changes.
+    if (loadedHistoryScopeKeyRef.current === historyScopeKey) return;
+    loadedHistoryScopeKeyRef.current = historyScopeKey;
+    void loadConversations().then((loaded) => {
+      // Nothing was listed, so nothing is cached: let the next run try again.
+      if (!loaded && loadedHistoryScopeKeyRef.current === historyScopeKey) {
+        loadedHistoryScopeKeyRef.current = null;
+      }
+    });
   }, [autoLoad, enabled, historyPodId, historyScopeKey, loadConversations]);
 
   useEffect(() => {
@@ -1407,6 +1472,9 @@ export function useAssistantController({
     }
 
     setLocalError(null);
+    // Leaving mid-send abandons the turn that was still waiting for its
+    // conversation; it must not follow you to the one you just opened.
+    dropPendingMessages();
     activeConversationIdRef.current = conversationId;
     loadingConversationIdRef.current = null;
     // The store keeps the last few transcripts, so switching to one that is
@@ -1422,7 +1490,7 @@ export function useAssistantController({
     );
     setIsLoadingMessages(Boolean(conversationId && autoLoadMessages && !isResident));
     setActiveConversationId(conversationId);
-  }, [autoLoadMessages, refreshConversationDetail, sessionCancel]);
+  }, [autoLoadMessages, dropPendingMessages, refreshConversationDetail, sessionCancel]);
 
   const openConversation = useCallback((conversationId: string) => {
     selectConversation(conversationId);
@@ -1472,10 +1540,15 @@ export function useAssistantController({
       ...scope,
     });
 
-    setConversations((prev) => sortConversationsByUpdatedAt([
+    const nextConversations = sortConversationsByUpdatedAt([
       createdConversation,
-      ...prev.filter((conversation) => conversation.id !== createdConversation.id),
-    ]));
+      ...conversationsRef.current.filter((conversation) => conversation.id !== createdConversation.id),
+    ]);
+    // Written to the ref as well as the state, because the send that follows
+    // reads the record from here in the same tick — before the effect that
+    // mirrors state into this ref has had a render to run in.
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
     activeConversationIdRef.current = createdConversation.id;
     loadedConversationIdsRef.current.add(createdConversation.id);
     loadingConversationIdRef.current = null;
@@ -1483,7 +1556,9 @@ export function useAssistantController({
     setActiveConversationId(createdConversation.id);
     setConversationModelState((createdConversation.model ?? conversationModel ?? null) as ConversationModel | null);
     setConversationRuntimeState(createdConversation.agent_runtime ?? conversationRuntime ?? null);
-    clearRuntimeMessages();
+    // Keeps the turn that triggered this create — it is on screen already and
+    // is about to be sent into the conversation being made for it.
+    clearRuntimeMessages({ keepPending: true });
     setOlderMessagesCursor(null);
 
     return createdConversation.id;
@@ -1534,12 +1609,28 @@ export function useAssistantController({
     }
 
     let conversationId = forceNewConversation ? null : activeConversationId;
+    // Raised before the create, not after it. This is what the transcript reads
+    // to know it is no longer an empty conversation, so leaving it down for the
+    // length of the round-trip left the empty state and its centred composer on
+    // screen — and then snapped the whole column to the floor when the first
+    // message landed.
+    setIsStreaming(true);
+    // Likewise the turn itself: with no attachments the text is already final,
+    // so it can go up now rather than a round-trip later. An upload changes the
+    // content (it appends the file references), so those still wait for it.
+    const hasEagerOptimisticTurn = uploadsToSend.length === 0;
+    if (hasEagerOptimisticTurn) {
+      appendOptimisticUserMessage(trimmed, { conversationId });
+    }
     try {
       if (!conversationId) {
         conversationId = await ensureConversation(trimmed, {
           instructions: options.instructions,
           metadata: options.conversationMetadata,
         });
+        // The turn above went up without a conversation to belong to. It has
+        // one now.
+        if (conversationId) adoptPendingMessages(conversationId);
       }
       if (!conversationId) {
         throw new Error("Conversation could not be initialized");
@@ -1561,11 +1652,12 @@ export function useAssistantController({
         }
       }
 
-      appendOptimisticUserMessage(messageContent, {
-        conversationId: finalConversationId,
-      });
+      if (!hasEagerOptimisticTurn) {
+        appendOptimisticUserMessage(messageContent, {
+          conversationId: finalConversationId,
+        });
+      }
 
-      setIsStreaming(true);
       touchConversation(finalConversationId, {
         status: "running" as Conversation["status"],
         last_run_status: "RUNNING" as Conversation["last_run_status"],
@@ -1574,6 +1666,12 @@ export function useAssistantController({
       });
       await sessionSendMessage(messageContent, {
         conversationId: finalConversationId,
+        // The controller opened (or just created) this conversation and is
+        // still holding the record; handing it over is what stops the session
+        // fetching the same conversation again before every first send.
+        knownConversation: conversationsRef.current.find(
+          (conversation) => conversation.id === finalConversationId,
+        ) ?? null,
         metadata: uploadedFiles.length > 0
           ? {
               ...(options.metadata ?? {}),
@@ -1589,6 +1687,10 @@ export function useAssistantController({
       });
       touchConversation(finalConversationId, { updated_at: new Date().toISOString() });
     } catch (err) {
+      // The conversation was never created, so the turn shown against it has
+      // nothing to belong to. Left in the store it would surface in whichever
+      // conversation is opened next, which is worse than losing it.
+      if (!conversationId) dropPendingMessages();
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
@@ -1601,7 +1703,9 @@ export function useAssistantController({
     }
   }, [
     activeConversationId,
+    adoptPendingMessages,
     appendOptimisticUserMessage,
+    dropPendingMessages,
     enabled,
     ensureConversation,
     isStreaming,

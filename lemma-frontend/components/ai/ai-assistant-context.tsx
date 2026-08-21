@@ -57,7 +57,6 @@ interface AIAssistantContextType {
     openAssistant: () => void;
     closeAssistant: (options?: { skipUrlSync?: boolean; suppressUrlRestore?: boolean }) => void;
     toggleAssistant: () => void;
-    messages: Message[];
     conversations: Conversation[];
     openedConversationId: string | null;
     activeConversationId: string | null;
@@ -101,12 +100,24 @@ interface AIAssistantContextType {
     stop: () => void;
     pendingActions: AIAction[];
     completedActions: AIAction[];
-    streamingTool: StreamingTool | null;
     navigateToResource: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
     lastCreatedResource: { type: string; id: string } | null;
 }
 
 const AIAssistantContext = createContext<AIAssistantContextType | undefined>(undefined);
+/**
+ * The live transcript, split out from the rest of the assistant because these
+ * are the values that change on every streaming flush. Held together with
+ * everything else, their identity dragged every consumer of the assistant —
+ * the pod shell, the sidebar, the layout provider — into a re-render per token,
+ * none of which display a transcript.
+ */
+interface AIAssistantTranscript {
+    messages: Message[];
+    streamingTool: StreamingTool | null;
+}
+
+const AIAssistantTranscriptContext = createContext<AIAssistantTranscript | undefined>(undefined);
 const AUTO_NAVIGATION_BLOCKLIST = new Set<string>();
 const ASSISTANT_CONVERSATION_PARAM = 'assistantConversationId';
 
@@ -576,7 +587,7 @@ export function AIAssistantProvider({
 
         setHasActivatedController(true);
 
-        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
+        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, controllerRef.current.messages);
         allowAutoNavigationRef.current = true;
 
         if (options?.forceNewConversation && controllerRef.current.openedConversationId) {
@@ -606,23 +617,23 @@ export function AIAssistantProvider({
         } catch (error) {
             throw error;
         }
-    }, [displayMessages, isProviderEnabled]);
+    }, [isProviderEnabled]);
 
     const retryFailedMessage = useCallback(async () => {
-        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
+        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, controllerRef.current.messages);
         allowAutoNavigationRef.current = true;
         await controllerRef.current.retryFailedMessage();
-    }, [displayMessages]);
+    }, []);
 
     const resolveUserApproval = useCallback(async (
         approvalId: string,
         decision: 'APPROVE_ONCE' | 'APPROVE_FOR_SESSION' | 'DENY',
         response?: Record<string, unknown> | null,
     ) => {
-        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
+        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, controllerRef.current.messages);
         allowAutoNavigationRef.current = true;
         await controllerRef.current.resolveUserApproval(approvalId, decision, response);
-    }, [displayMessages]);
+    }, []);
 
     const pendingActions = useMemo(() => controller.pendingActions as AIAction[], [controller.pendingActions]);
     const completedActions = useMemo(() => controller.completedActions as AIAction[], [controller.completedActions]);
@@ -636,7 +647,6 @@ export function AIAssistantProvider({
         openAssistant,
         closeAssistant,
         toggleAssistant,
-        messages: displayMessages,
         conversations: controller.conversations,
         openedConversationId: controller.openedConversationId,
         activeConversationId: controller.openedConversationId,
@@ -672,7 +682,6 @@ export function AIAssistantProvider({
         stop: controller.stop,
         pendingActions,
         completedActions,
-        streamingTool: controller.streamingTool,
         navigateToResource,
         lastCreatedResource,
     }), [
@@ -699,10 +708,8 @@ export function AIAssistantProvider({
         controller.isLoadingOlderMessages,
         controller.isUploadingFiles,
         controller.loadOlderMessages,
-        displayMessages,
         controller.pendingFiles,
         controller.pendingFileUploads,
-        controller.streamingTool,
         controller.removePendingFile,
         controller.setConversationModel,
         controller.stop,
@@ -723,9 +730,16 @@ export function AIAssistantProvider({
         toggleAssistant,
     ]);
 
+    const transcriptValue = useMemo<AIAssistantTranscript>(
+        () => ({ messages: displayMessages, streamingTool: controller.streamingTool }),
+        [controller.streamingTool, displayMessages],
+    );
+
     return (
         <AIAssistantContext.Provider value={contextValue}>
-            {children}
+            <AIAssistantTranscriptContext.Provider value={transcriptValue}>
+                {children}
+            </AIAssistantTranscriptContext.Provider>
         </AIAssistantContext.Provider>
     );
 }
@@ -736,4 +750,18 @@ export function useAIAssistant() {
         throw new Error('useAIAssistant must be used within an AIAssistantProvider');
     }
     return context;
+}
+
+/**
+ * The live transcript, subscribed to separately from the rest of the assistant.
+ *
+ * Only a surface that draws messages should call this — it updates on every
+ * streaming flush, and anything that reads it re-renders at that rate.
+ */
+export function useAIAssistantTranscript() {
+    const transcript = useContext(AIAssistantTranscriptContext);
+    if (transcript === undefined) {
+        throw new Error('useAIAssistantTranscript must be used within an AIAssistantProvider');
+    }
+    return transcript;
 }
