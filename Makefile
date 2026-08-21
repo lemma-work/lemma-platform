@@ -32,7 +32,7 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint quality check codeql codeql-python codeql-javascript codeql-all migrate
+        lint quality check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -344,9 +344,15 @@ help:
 	@echo "    make coverage-cli-e2e         lemma-cli e2e coverage (needs docker)"
 	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
-	@echo "  Other"
+	@echo "  Gates (what CI blocks on)"
+	@echo "    make pre-push           the fast subset — run this on every push"
+	@echo "    make quality            every gate the 'quality gates' CI job runs"
+	@echo "    make architecture       backend architecture ratchet + route inventory"
+	@echo "    make check              quality + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
+	@echo ""
+	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
 	@echo ""
 
@@ -1311,15 +1317,29 @@ coverage-frontend:
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
+# Every component's linter, and all four can fail. Three of them used to end
+# in `2>/dev/null || true`, so `make lint` printed four arrows and could only
+# ever report the backend -- a green run here meant nothing for the other
+# three. Components whose toolchain is not installed are skipped out loud
+# rather than silently passed.
 lint:
 	@echo "→ Backend (ruff)…"
-	@cd $(BACKEND_DIR) && uv run ruff check . --quiet
+	@# Delegates rather than running `ruff check .`, which walked into the
+	@# vendored lemma-backend/lemma-connectors tree and failed on generated
+	@# code. That is why this target had been red for a while without anyone
+	@# noticing: the backend line was the one line here that could fail, and
+	@# `make quality` -- the documented gate -- calls the scoped target below.
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@echo "→ CLI (ruff)…"
-	@cd $(CLI_DIR) && uv run ruff check . --quiet 2>/dev/null || true
+	@cd $(CLI_DIR) && uv run ruff check . --quiet
 	@echo "→ Python SDK (ruff)…"
-	@cd $(PYTHON_DIR) && uv run ruff check . --quiet 2>/dev/null || true
+	@cd $(PYTHON_DIR) && uv run ruff check . --quiet
 	@echo "→ Frontend (eslint)…"
-	@cd $(FRONTEND_DIR) && npm run lint --silent 2>/dev/null || true
+	@if [ -d $(FRONTEND_DIR)/node_modules ]; then \
+		cd $(FRONTEND_DIR) && npm run lint --silent; \
+	else \
+		echo "  skipped: run 'npm ci' in $(FRONTEND_DIR) first"; \
+	fi
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #
@@ -1331,11 +1351,17 @@ lint:
 # the runtime connection-scope suite, which needs Docker. Run that with
 # `make -C lemma-backend test-connection-scope`. Stated rather than implied,
 # because the last comment here claiming parity was wrong for weeks.
+#
+# `lint-e2e-waits` used to be the other exception, and it had no reason to be:
+# it is an AST pass over the test tree that needs nothing running, so leaving
+# it out only meant learning about a new clock-wait from CI.
 quality:
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+	@echo "→ Connector package (ruff, excludes generated clients)…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-connectors
 	@echo "→ DB connection scope…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
@@ -1350,9 +1376,35 @@ quality:
 	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
 	@echo "→ Module contract coverage…"
 	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
+	@echo "→ E2E wait patterns…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
+	@echo "→ CI aggregators + job timeouts…"
+	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ E2E shard layout…"
+	@python3 scripts/plan_e2e_shards.py --verify
 	@echo "→ Product scenario traceability…"
 	@python3 scripts/check_scenario_coverage.py
 	@echo "✓ quality gates pass"
+
+# The backend's architecture ratchet, from the repo root. AGENTS.md and
+# CONTRIBUTING.md both tell you to run `make architecture`; until now only one
+# of them mentioned that it exists solely inside lemma-backend.
+architecture:
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+
+# The tight loop before pushing: the gates that catch the most per second.
+# `quality` is the full pre-PR pass, but two of its steps import the whole app
+# (~16s each), which is too slow to run on every save.
+pre-push:
+	@echo "→ Ruff…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+	@echo "→ Async-safety…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+	@echo "→ Critical domain types…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
+	@echo "→ Architecture ratchet + route inventory…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+	@echo "✓ pre-push checks pass — run 'make quality' before opening the PR"
 
 # CodeQL, the same suites CI runs. Reports only what this branch changed;
 # `codeql-all` reports the repository's full backlog.

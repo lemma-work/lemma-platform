@@ -68,13 +68,52 @@ way a scenario says, do not edit the scenario.
 
 | Lane | Command | Runs |
 |---|---|---|
-| Backend unit | `make test-backend-unit` | Every push. **The only required check.** |
-| Backend e2e | `make test-e2e-fast` | After CI succeeds, via `e2e.yml` |
+| Backend unit | `make test-backend-unit` | Every push that touches the backend. **Required.** |
+| Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Nightly and before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
-| Protected e2e | — | Weekly, via `backend-protected-e2e.yml` |
+| Protected e2e | — | Weekly, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go. |
+
+### What may run in front of the merge button
+
+A pull request waits for the backend e2e lane, so a test in it spends every
+reviewer's time, every time. There is a budget: **45 seconds per test**,
+enforced per shard by `scripts/e2e_durations.py --check` against
+`.github/e2e-slow-baseline.json`.
+
+Over the budget, there are three honest answers and one dishonest one:
+
+- **Mark it `@pytest.mark.slow`.** It moves to the scheduled protected lane.
+  Right when the thing under test is a matrix of variations rather than a
+  contract that can break on its own.
+- **Split it.** Keep a cheap test that proves the wiring is connected, and
+  move the exhaustive half to `slow`. This is usually the best answer:
+  `test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable` (one PDF,
+  ~7s) proves upload → extract → project → search → dedup is connected, and
+  `test_kreuzberg_extractor_behaviour_matrix` (five PDFs, three search
+  methods, ~120s) covers the adapter's variations nightly. Before the split
+  they were one test that cost 130 seconds on every PR — 5.6% of the entire
+  suite.
+- **Baseline it,** with a reason, when the cost is genuine work rather than
+  waiting. One entry qualifies today: a journey that provisions a real Docker
+  sandbox because nothing in-process proves that contract.
+
+The dishonest answer is raising the budget.
+
+Note what the budget cannot see: a test marked `slow` never reaches it, because
+`slow` is filtered out before pytest writes the JUnit. That is the point — the
+gate measures what a PR waits for, not what exists.
+
+### Waiting
+
+`docs/testing.md`'s rule is *wait on a condition, never on the clock*, and the
+duration budget is what makes it enforceable rather than aspirational. Two
+recent examples of the failure mode, both found by measuring rather than
+reading: a cron test that waited for the real next minute boundary (41s → 1.5s
+by making the occurrence due), and a statement-timeout test that waited out the
+real 30-second default (30s → 1.0s by shrinking the timeout under test).
 
 The two scenario **gate** jobs are cheap and stay on every pull request, and
 they carry more weight than their runtime suggests: CI's quality job runs the
@@ -88,12 +127,26 @@ every push buys little.
 
 ### What gates a merge
 
-Only `lemma-backend unit` is required. Everything else reports. That is a
-deliberate choice about speed, and it puts the weight on reviewers rather than
-on the machine — so a red `e2e.yml` or a red nightly is a thing to go and read,
-not a thing to route around.
+Two checks: **`lemma-backend unit`** and **`Backend E2E passed`**. Everything
+else reports — a red nightly, a red scenario lane or a red coverage gate is a
+thing to go and read, not a thing that stops you.
 
-Coverage floors live in `e2e.yml` and are enforced by
+`Backend E2E passed` is an aggregator: it watches the whole shard matrix rather
+than naming individual shards. That indirection is the point. The ruleset used
+to require seven shards by name, which meant the shard layout could not be
+changed without silently dropping a required check, the workflow could not be
+skipped on a PR that cannot affect it, and one shard — `workspace` — had fallen
+out of the list by accident and gated nothing at all. The aggregator reports
+success when the matrix is correctly skipped, so path-filtering is safe, and
+`scripts/check_ci_aggregators.py` fails the build if a job ever falls out of
+its `needs:` list again.
+
+Both workflows are path-filtered. A PR that touches only the frontend runs
+neither, and both report green.
+
+Coverage floors live in `backend-coverage.yml` — a separate workflow that runs
+after Backend E2E finishes, so it is not on the critical path of a PR — and are
+enforced by
 `lemma-backend/scripts/check_coverage_thresholds.py`. `CONTRIBUTING.md` names
 coverage below floor as a merge blocker. Run the command rather than quoting a
 number:
