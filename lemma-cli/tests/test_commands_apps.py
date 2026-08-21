@@ -203,3 +203,109 @@ def test_apps_open_never_puts_the_token_in_argv(monkeypatch):
     # It still reaches the browser -- over stdin, where the process table
     # cannot see it.
     assert any(secret in call["input"] for call in calls)
+
+
+def _source_zip(entries: dict[str, str]) -> bytes:
+    import io
+    from zipfile import ZIP_DEFLATED, ZipFile
+
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _patch_pull(monkeypatch, archive: bytes):
+    captured = {}
+
+    class FakeApps:
+        def download_source_archive(self, name):
+            captured["downloaded"] = name
+            return archive
+
+    class FakePod:
+        def __init__(self):
+            self.apps = FakeApps()
+
+    state = SimpleNamespace(
+        config={"_runtime": {"pod": "pod-1"}, "defaults": {"org_id": "org-1"}},
+        output="json",
+        full=False,
+    )
+    monkeypatch.setattr(apps, "pod_client", lambda client, s, pod=None: FakePod())
+    monkeypatch.setattr(apps, "run_with_client", lambda ctx, fn: fn(object(), state))
+    return captured
+
+
+def test_apps_pull_writes_source_tree(monkeypatch, tmp_path):
+    archive = _source_zip(
+        {
+            "package.json": '{"name":"my-app"}',
+            "src/main.tsx": "export {}\n",
+        }
+    )
+    captured = _patch_pull(monkeypatch, archive)
+    target = tmp_path / "my-app"
+
+    result = runner.invoke(
+        app, ["--json", "--pod", "pod-1", "apps", "pull", "my-app", str(target)]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["downloaded"] == "my-app"
+    assert (target / "package.json").read_text() == '{"name":"my-app"}'
+    assert (target / "src" / "main.tsx").read_text() == "export {}\n"
+    payload = json.loads(result.stdout)
+    assert payload["files"] == 2
+
+
+def test_apps_pull_refuses_non_empty_target_without_force(monkeypatch, tmp_path):
+    _patch_pull(monkeypatch, _source_zip({"index.html": "<!doctype html>"}))
+    target = tmp_path / "my-app"
+    target.mkdir()
+    (target / "keep.txt").write_text("mine")
+
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "apps", "pull", "my-app", str(target)]
+    )
+
+    assert result.exit_code != 0
+    assert (target / "keep.txt").read_text() == "mine"
+    assert not (target / "index.html").exists()
+
+
+def test_apps_pull_force_overwrites_non_empty_target(monkeypatch, tmp_path):
+    _patch_pull(monkeypatch, _source_zip({"index.html": "<!doctype html>"}))
+    target = tmp_path / "my-app"
+    target.mkdir()
+    (target / "index.html").write_text("stale")
+
+    result = runner.invoke(
+        app, ["--json", "--pod", "pod-1", "apps", "pull", "my-app", str(target), "--force"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (target / "index.html").read_text() == "<!doctype html>"
+
+
+def test_apps_pull_rejects_path_traversal(monkeypatch, tmp_path):
+    _patch_pull(monkeypatch, _source_zip({"../escaped.txt": "nope"}))
+    target = tmp_path / "my-app"
+
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "apps", "pull", "my-app", str(target)]
+    )
+
+    assert result.exit_code != 0
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_apps_pull_defaults_target_to_app_name(monkeypatch, tmp_path):
+    _patch_pull(monkeypatch, _source_zip({"index.html": "<!doctype html>"}))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["--json", "--pod", "pod-1", "apps", "pull", "my-app"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (tmp_path / "my-app" / "index.html").exists()
