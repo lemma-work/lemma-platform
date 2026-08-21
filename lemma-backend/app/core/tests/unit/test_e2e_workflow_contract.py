@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import pathlib
 from pathlib import Path
 
 
@@ -54,10 +55,67 @@ def test_every_critical_module_is_covered_by_exactly_one_e2e_shard() -> None:
         assert len(running) == 1, f"{path} is run by {running or 'no shard'}"
 
 
-def test_sandbox_shard_is_the_only_one_that_builds_docker_images() -> None:
-    """Building the sandbox images twice raced one cache key and paid twice."""
-    building = [s["name"] for s in _shards() if s.get("needs_sandbox_images")]
-    assert building == ["sandbox"], building
+def test_every_shard_that_provisions_a_sandbox_declares_the_image() -> None:
+    """`needs_sandbox_images` must match which shards actually need one.
+
+    Not "only the sandbox shard": the agent module's `fast_workspace` journeys
+    provision a real Docker workspace too, and conftest exempts them from the
+    `workspace` marker precisely so they stay in the fast lane. When that shard
+    did not declare the image it still got one -- the `workspace_image` fixture
+    built it on demand, inside the test step, uncached, and invisibly, because
+    pytest captures the build output.
+
+    So the invariant is derived from the tests rather than pinned to a name: a
+    shard needs the image exactly when its directories contain a test that asks
+    for one.
+    """
+    backend = _REPO_ROOT / "lemma-backend"
+    provisioning_markers = ("fast_workspace", "configure_workspace_api_url")
+
+    for shard in _shards():
+        arguments = shard["args"].split()
+        directories = [arg for arg in arguments if not arg.startswith("--")]
+        # The catch-all shard collects whole roots and subtracts with --ignore,
+        # so the ignored subtrees are not its tests and must not count.
+        ignored = [
+            arg.split("=", 1)[1] for arg in arguments if arg.startswith("--ignore=")
+        ]
+
+        def _is_ignored(path: pathlib.Path) -> bool:
+            relative = path.relative_to(backend).as_posix()
+            return any(
+                relative == entry or relative.startswith(entry + "/")
+                for entry in ignored
+            )
+
+        # Asking for the workspace fixtures is not enough to need the image in
+        # *this* shard. conftest auto-marks such a test `workspace` unless it
+        # carries `fast_workspace`, and a shard whose filter says "not
+        # workspace" deselects it -- which is exactly how pod_bundle and
+        # workflow reference these fixtures while never provisioning anything.
+        excludes_workspace = "not workspace" in shard["markers"]
+        sources = [
+            path.read_text()
+            for directory in directories
+            if (backend / directory).is_dir()
+            for path in (backend / directory).rglob("test_*.py")
+            # e2e only. A shard's args name roots like `app/core`, which also
+            # contain unit tests -- including this file, which mentions the
+            # marker names it is checking for and would otherwise match itself.
+            if "e2e" in path.parts and not _is_ignored(path)
+        ]
+        if excludes_workspace:
+            provisions = any("fast_workspace" in text for text in sources)
+        else:
+            provisions = any(
+                any(marker in text for marker in provisioning_markers)
+                for text in sources
+            )
+        assert shard.get("needs_sandbox_images", False) == provisions, (
+            f"shard {shard['name']!r} declares "
+            f"needs_sandbox_images={shard.get('needs_sandbox_images', False)} "
+            f"but its tests provision a sandbox: {provisions}"
+        )
 
 
 def test_e2e_union_gate_is_separate_from_unit_aggregate() -> None:

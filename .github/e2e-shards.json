@@ -21,7 +21,7 @@
       "args": "app/modules/agent/tests/e2e",
       "workers": 1,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
-      "needs_sandbox_images": false,
+      "needs_sandbox_images": true,
       "why_serial": "worker-subprocess coverage files race under xdist",
       "serial_seconds": 314.0,
       "tests": 112
