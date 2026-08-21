@@ -158,6 +158,79 @@ impl SecretVault for PlatformVault {
     }
 }
 
+/// Every read of one secret, answered from the first one.
+///
+/// macOS authorizes keychain access per item, per reading process, and an
+/// ad-hoc-signed build is not remembered between reads at all -- so a second
+/// read of the same item is a second modal password prompt. `backend_environment`
+/// alone is called from seven places on the daemon's start and restart paths and
+/// reads two items each time, which is how a single first-run setup put fourteen
+/// prompts in front of the user before the workspace had even opened.
+///
+/// The items themselves do not change underneath us: this process is the only
+/// writer, so `set` and `delete` update the cache rather than clearing it. No
+/// secret is held here that locald was not already holding to hand to the
+/// backend as an environment variable.
+struct CachingVault {
+    inner: Arc<dyn SecretVault>,
+    seen: Mutex<HashMap<(String, String), Option<String>>>,
+}
+
+impl CachingVault {
+    fn new(inner: Arc<dyn SecretVault>) -> Self {
+        Self {
+            inner,
+            seen: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn key(install_id: &str, name: &str) -> (String, String) {
+        (install_id.to_owned(), name.to_owned())
+    }
+}
+
+impl SecretVault for CachingVault {
+    fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
+        let key = Self::key(install_id, name);
+        if let Some(known) = self
+            .seen
+            .lock()
+            .expect("secret cache poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(known);
+        }
+        // Deliberately outside the lock: a keychain read can block on a modal
+        // prompt, and holding the cache across it would stall every other
+        // secret this process wants behind the one the user is looking at.
+        let value = self.inner.get(install_id, name)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(key, value.clone());
+        Ok(value)
+    }
+
+    fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
+        self.inner.set(install_id, name, value)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(Self::key(install_id, name), Some(value.to_owned()));
+        Ok(())
+    }
+
+    fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
+        self.inner.delete(install_id, name)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(Self::key(install_id, name), None);
+        Ok(())
+    }
+}
+
 fn vault_error(error: keyring::v1::Error) -> io::Error {
     io::Error::other(format!("operating-system credential vault failed: {error}"))
 }
@@ -179,7 +252,7 @@ impl OperatorConfigStore {
     pub fn load(path: PathBuf) -> io::Result<Arc<Self>> {
         Self::load_components(
             path,
-            Arc::new(PlatformVault),
+            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
             Arc::new(HttpModelProviderProbe),
         )
     }
@@ -1151,6 +1224,85 @@ mod tests {
         fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
             self.inner.delete(install_id, name)
         }
+    }
+
+    /// The prompt this exists to stop. macOS authorizes keychain access per
+    /// item per read, and an ad-hoc-signed build is not remembered between
+    /// them, so a second read of one secret is a second modal password box.
+    #[test]
+    fn a_secret_is_read_from_the_vault_once_however_often_it_is_asked_for() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("install", "ai.api_key", "sk-test").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        for _ in 0..7 {
+            assert_eq!(
+                vault.get("install", "ai.api_key").unwrap().as_deref(),
+                Some("sk-test")
+            );
+        }
+
+        assert_eq!(counting.reads_of("ai.api_key"), 1);
+    }
+
+    /// An absent secret costs a round trip too, and `backend_environment` asks
+    /// for one on every call whether the user has set it or not.
+    #[test]
+    fn a_secret_that_is_not_there_is_only_looked_for_once() {
+        let counting = Arc::new(CountingVault::default());
+        let vault = CachingVault::new(counting.clone());
+
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+
+        assert_eq!(counting.reads_of("ai.api_key"), 1);
+    }
+
+    /// This process is the only writer, so a write is the freshest answer there
+    /// is -- and going back to the vault to confirm it would be another prompt.
+    #[test]
+    fn writing_a_secret_answers_the_next_read_without_asking_again() {
+        let counting = Arc::new(CountingVault::default());
+        let vault = CachingVault::new(counting.clone());
+
+        vault.set("install", "ai.api_key", "sk-new").unwrap();
+
+        assert_eq!(
+            vault.get("install", "ai.api_key").unwrap().as_deref(),
+            Some("sk-new")
+        );
+        assert_eq!(counting.reads_of("ai.api_key"), 0);
+    }
+
+    #[test]
+    fn deleting_a_secret_answers_the_next_read_as_absent() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("install", "ai.api_key", "sk-old").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        vault.delete("install", "ai.api_key").unwrap();
+
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+        assert_eq!(counting.reads_of("ai.api_key"), 0);
+    }
+
+    /// Keyed by both halves: a reinstall gets a new install id, and answering
+    /// its reads from the previous one's secrets would be worse than a prompt.
+    #[test]
+    fn two_installs_do_not_share_an_answer() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("first", "ai.api_key", "sk-first").unwrap();
+        counting.set("second", "ai.api_key", "sk-second").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        assert_eq!(
+            vault.get("first", "ai.api_key").unwrap().as_deref(),
+            Some("sk-first")
+        );
+        assert_eq!(
+            vault.get("second", "ai.api_key").unwrap().as_deref(),
+            Some("sk-second")
+        );
     }
 
     struct FixedModelProviderProbe;
