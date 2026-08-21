@@ -11,10 +11,11 @@ persistence.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 import json
+from collections.abc import Awaitable, Callable
 import math
 from pathlib import Path
 import statistics
@@ -43,6 +44,22 @@ class BenchmarkPhase(StrEnum):
     COLD = "cold"
     POOL_FILL = "pool_fill"
     STEADY = "steady"
+    # The two states a real pod spends most of its life entering, and the two
+    # the benchmark could not previously price. STEADY measures a sandbox that
+    # is already running; nobody's first call of the morning is that call.
+    #
+    # RESUMED: the sandbox was released and its next invocation woke it. This is
+    # the routine one -- the idle sweep releases after
+    # `WORKSPACE_IDLE_RELEASE_SECONDS`, so this is what a user pays after any
+    # gap longer than that.
+    #
+    # REBUILT: the sandbox was destroyed and its next invocation had to make a
+    # new one. This should be rare, and the gap between it and RESUMED is what
+    # a lifecycle bug costs. It was not rare: two deployments sharing an E2B
+    # team destroyed each other's sandboxes every five minutes, so every
+    # invocation was paying REBUILT while the dashboards showed STEADY.
+    RESUMED = "resumed"
+    REBUILT = "rebuilt"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +113,8 @@ class LatencyBudget:
     submit_p95_seconds: float | None = None
     platform_overhead_p95_seconds: float | None = None
     cold_terminal_seconds: float | None = None
+    resumed_terminal_seconds: float | None = None
+    rebuilt_terminal_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.case:
@@ -105,6 +124,8 @@ class LatencyBudget:
             self.submit_p95_seconds,
             self.platform_overhead_p95_seconds,
             self.cold_terminal_seconds,
+            self.resumed_terminal_seconds,
+            self.rebuilt_terminal_seconds,
         )
         if not any(value is not None for value in configured):
             raise ValueError("latency budget must configure at least one limit")
@@ -126,6 +147,17 @@ class BenchmarkConfig:
     pool_fill_hold_ms: int = 750
     cleanup: bool = True
     latency_budgets: tuple[LatencyBudget, ...] = ()
+    # Supplied by the caller because only it can reach the sandbox control
+    # plane: the harness speaks public HTTP APIs, and there is no public route
+    # that releases or destroys a sandbox. Left unset, the lifecycle phases are
+    # skipped and the report simply carries no RESUMED/REBUILT samples.
+    release_sandbox: Callable[[], Awaitable[None]] | None = None
+    destroy_sandbox: Callable[[], Awaitable[None]] | None = None
+    # Which case pays for the lifecycle measurement. `api_noop` by default: it
+    # issues no SDK call, so its terminal time is the platform path and nothing
+    # else, and it writes no rows -- which keeps sink-row verification exact
+    # without teaching it about these extra invocations.
+    lifecycle_case: str = "api_noop"
 
     def __post_init__(self) -> None:
         if not self.provider:
@@ -166,6 +198,13 @@ class InvocationSample:
     platform_overhead_seconds: float | None
     output_data: dict[str, Any] | None
     error: str | None
+    # Only set on lifecycle samples: how long the release or destroy that
+    # preceded this invocation took. It is not part of anyone's latency, but it
+    # is what decides the policy -- E2B documents a pause at roughly four
+    # seconds per GiB of RAM, so a memory-preserving pause of a 2 GiB function
+    # sandbox spends real time that a kill does not. Pausing is only worth it
+    # if `resumed` beats `rebuilt` by more than the pause costs to take.
+    disturb_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +246,7 @@ class BenchmarkReport:
     resources: dict[str, Any]
     cold: tuple[InvocationSample, ...]
     pool_fill: tuple[InvocationSample, ...]
+    lifecycle: tuple[InvocationSample, ...]
     cases: tuple[CaseSummary, ...]
     samples: tuple[InvocationSample, ...]
     verified_sink_rows: dict[str, int]
@@ -286,11 +326,18 @@ def evaluate_latency_budgets(
     budgets: tuple[LatencyBudget, ...],
     *,
     cold: tuple[InvocationSample, ...] | list[InvocationSample] = (),
+    lifecycle: tuple[InvocationSample, ...] | list[InvocationSample] = (),
 ) -> tuple[str, ...]:
     """Return stable quality-gate failures for a benchmark report."""
 
     summaries = {summary.case: summary for summary in cases}
     cold_by_case = {sample.case: sample for sample in cold}
+    # Keyed by phase as well as case: one case contributes both a RESUMED and a
+    # REBUILT sample, and collapsing them onto the case would let whichever
+    # arrived last answer for both.
+    lifecycle_by_phase = {
+        (sample.phase, sample.case): sample for sample in lifecycle
+    }
     failures: list[str] = []
     for budget in budgets:
         summary = summaries.get(budget.case)
@@ -337,7 +384,43 @@ def evaluate_latency_budgets(
                     f"{cold_sample.terminal_seconds:.3f}s exceeds "
                     f"{budget.cold_terminal_seconds:.3f}s"
                 )
+        for phase, limit in (
+            (BenchmarkPhase.RESUMED, budget.resumed_terminal_seconds),
+            (BenchmarkPhase.REBUILT, budget.rebuilt_terminal_seconds),
+        ):
+            if limit is None:
+                continue
+            sample = lifecycle_by_phase.get((phase, budget.case))
+            if sample is None:
+                # Absent rather than slow: the hooks were not supplied, so the
+                # phase never ran. Saying so beats a budget that silently
+                # passes because nothing measured it.
+                failures.append(f"{budget.case} {phase.value} has no sample")
+            elif sample.terminal_seconds > limit:
+                failures.append(
+                    f"{budget.case} {phase.value} terminal "
+                    f"{sample.terminal_seconds:.3f}s exceeds {limit:.3f}s"
+                )
     return tuple(failures)
+
+
+def _serializable_config(config: BenchmarkConfig) -> dict[str, Any]:
+    """The config as recorded in the report, minus the parts that are code.
+
+    `release_sandbox` and `destroy_sandbox` are callables the caller injects,
+    and `asdict` carries them straight into a structure the report then tries
+    to serialise as JSON. What a reader needs is whether the lifecycle phases
+    ran at all, which is a boolean.
+    """
+    payload = {
+        key: value
+        for key, value in asdict(config).items()
+        if key not in {"release_sandbox", "destroy_sandbox"}
+    }
+    payload["lifecycle_phases_enabled"] = (
+        config.release_sandbox is not None or config.destroy_sandbox is not None
+    )
+    return payload
 
 
 def write_report(report: BenchmarkReport, path: Path) -> None:
@@ -468,6 +551,7 @@ class FunctionExecutionBenchmark:
         errors: list[str] = []
         cold: list[InvocationSample] = []
         pool_fill: list[InvocationSample] = []
+        lifecycle: list[InvocationSample] = []
         samples: list[InvocationSample] = []
         summaries: list[CaseSummary] = []
         verified_sink_rows: dict[str, int] = {}
@@ -507,6 +591,8 @@ class FunctionExecutionBenchmark:
                     )
                 )
 
+            lifecycle.extend(await self._run_lifecycle(cases, resources))
+
             verified_sink_rows = await self._verify_sink_rows(resources)
             executions_per_case = (
                 1 + self._config.concurrency + self._config.invocations
@@ -522,7 +608,7 @@ class FunctionExecutionBenchmark:
                     "sink row verification failed: "
                     f"expected {expected_sink_rows}, found {verified_sink_rows}"
                 )
-            for sample in (*cold, *pool_fill, *samples):
+            for sample in (*cold, *pool_fill, *lifecycle, *samples):
                 if sample.status != "COMPLETED":
                     errors.append(
                         f"{sample.case}[{sample.index}] {sample.status}: "
@@ -533,6 +619,7 @@ class FunctionExecutionBenchmark:
                     summaries,
                     self._config.latency_budgets,
                     cold=cold,
+                    lifecycle=lifecycle,
                 )
             )
         finally:
@@ -548,15 +635,55 @@ class FunctionExecutionBenchmark:
             provider=self._config.provider,
             started_at=started.isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
-            config=asdict(self._config),
+            config=_serializable_config(self._config),
             resources=asdict(resources),
             cold=tuple(cold),
             pool_fill=tuple(pool_fill),
+            lifecycle=tuple(lifecycle),
             cases=tuple(summaries),
             samples=tuple(samples),
             verified_sink_rows=verified_sink_rows,
             errors=tuple(errors),
         )
+
+    async def _run_lifecycle(
+        self,
+        cases: tuple[BenchmarkCase, ...],
+        resources: BenchmarkResources,
+    ) -> list[InvocationSample]:
+        """Price the two states STEADY cannot see: resumed, and rebuilt.
+
+        Both are measured on one case and one invocation each, because what is
+        being measured is a step change, not a distribution: resuming a paused
+        sandbox and building a new one differ by seconds, and a single sample
+        separates them unambiguously. Spending the benchmark's time on repeats
+        here would buy precision nobody needs and slow every run.
+
+        Order matters. Release first, because releasing a sandbox that has just
+        been destroyed measures nothing; and the resumed invocation leaves a
+        running sandbox behind, which is exactly the state destroy needs.
+        """
+        case = next(
+            (item for item in cases if item.name == self._config.lifecycle_case),
+            None,
+        )
+        if case is None:
+            return []
+
+        samples: list[InvocationSample] = []
+        function_name = resources.functions[case.name]
+        for phase, disturb in (
+            (BenchmarkPhase.RESUMED, self._config.release_sandbox),
+            (BenchmarkPhase.REBUILT, self._config.destroy_sandbox),
+        ):
+            if disturb is None:
+                continue
+            disturb_started = time.perf_counter()
+            await disturb()
+            disturb_seconds = time.perf_counter() - disturb_started
+            sample = await self._invoke(case, function_name, 0, phase=phase)
+            samples.append(replace(sample, disturb_seconds=disturb_seconds))
+        return samples
 
     async def provision(self) -> BenchmarkResources:
         suffix = uuid4().hex[:10]

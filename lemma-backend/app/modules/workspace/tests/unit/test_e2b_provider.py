@@ -29,6 +29,7 @@ from app.modules.workspace.providers.e2b import (
     E2BSandboxProvider,
 )
 from app.modules.workspace.providers.e2b_common import (
+    DEFAULT_METADATA_NAMESPACE,
     META_EPOCH,
     META_PROFILE_DIGEST,
     META_SANDBOX_ID,
@@ -61,6 +62,11 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
             api_key="test-key",
             workspace_template="lemma-workspace",
             function_template="lemma-function",
+            # Stated, because the config no longer supplies one. The META_*
+            # constants this module asserts against are built from this same
+            # value, so the pair has to be named together or the assertions
+            # would be checking the fixture against itself.
+            metadata_namespace=DEFAULT_METADATA_NAMESPACE,
         )
     )
     # Only the SDK is substituted. The query type comes through the SDK itself,
