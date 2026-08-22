@@ -171,6 +171,9 @@ their credentials do not travel with it.
 
 - When a person with pod access downloads an app's source or build, the system
   shall give them the exact archive that was uploaded.
+- The system shall keep an app's source for every app it deploys, including one
+  promoted from something an agent produced, so what a person gets back is what
+  the app was authored from and not only its built output.
 - If a person without pod access requests either, then the system shall refuse.
 
 **Contracts:** `app.source.archive.get`, `app.dist.archive.get`

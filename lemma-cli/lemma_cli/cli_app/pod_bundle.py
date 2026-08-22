@@ -135,7 +135,7 @@ from lemma_sdk.openapi_client.models.workflow_update_request import (
 from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
 from ..cli_core.state import err_console as console
-from .app_bundle import deploy_app_bundle
+from .app_bundle import classify_app_source, deploy_app_bundle
 from .enums import SURFACE_PLATFORMS
 from lemma_pod_bundle.limits import (
     MAX_APP_BYTES,
@@ -695,6 +695,25 @@ def _extract_large_text(
     return next_payload
 
 
+def _collapse_single_file_app_source(resource_dir: Path) -> None:
+    """Rewrite a one-file `source/index.html` app back to `html.html`.
+
+    A no-build app uploads the same archive as source and dist, so its source
+    comes back as a lone `index.html`. `html.html` is the form the author wrote
+    and the form the docs describe, and it survives a re-export unchanged — a
+    round trip should hand back the file you edit, not a directory pretending
+    to be a project.
+    """
+    source_dir = resource_dir / "source"
+    files = [path for path in source_dir.rglob("*") if path.is_file()]
+    if len(files) != 1 or files[0].name != "index.html":
+        return
+    (resource_dir / "html.html").write_text(
+        files[0].read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    shutil.rmtree(source_dir)
+
+
 def _download_app_assets(
     client: Lemma,
     pod_id: str,
@@ -723,6 +742,7 @@ def _download_app_assets(
                         f"Unsafe path in app source archive for {app_name}: {member.filename}"
                     )
             archive.extractall(source_dir)
+        _collapse_single_file_app_source(resource_dir)
         return
 
     try:
@@ -1528,11 +1548,17 @@ def _build_import_plan(
     for resource_dir in app_dirs:
         app_name = resource_dir.name
         try:
-            if (resource_dir / "source").exists():
-                _build_app_bundle(
-                    resource_dir,
-                    stream_output=False,
-                )
+            source_subdir = resource_dir / "source"
+            if source_subdir.exists():
+                # Classify exactly as the deploy path does. Only a Vite project
+                # gets built here (a dry run should catch a broken build); a
+                # no-build source is uploaded as-is, so demanding a package.json
+                # rejected the very bundles export writes.
+                if classify_app_source(source_subdir) == "vite":
+                    _build_app_bundle(
+                        resource_dir,
+                        stream_output=False,
+                    )
         except ValueError as exc:
             issues.append(
                 BundleValidationIssue(path=str(resource_dir), message=str(exc))
