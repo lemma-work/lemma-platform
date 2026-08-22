@@ -326,6 +326,15 @@ button.agent-identity-avatar:focus-visible {
   box-shadow: var(--shadow-xs);
 }
 
+/* The two rows above are a contract: a bar, then a body that may shrink. A dock
+   holding one self-contained panel has no bar to put in the first row, and that
+   row is `auto` -- so the panel sizes to its own content, its inner
+   `overflow-y-auto` never receives a ceiling, and `overflow: hidden` above
+   clips whatever did not fit. One row, and the panel can shrink again. */
+.agent-dock-single {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .agent-dock-bar {
   display: flex;
   flex-wrap: wrap;
