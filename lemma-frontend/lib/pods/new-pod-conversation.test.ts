@@ -4,6 +4,7 @@ import {
     NEW_POD_OPENING_MESSAGE,
     buildNewPodInstructions,
     buildNewPodConversationHref,
+    buildNewPodWelcomeHref,
 } from './new-pod-conversation';
 
 function launchFrom(href: string) {
@@ -70,6 +71,70 @@ describe('every new pod', () => {
         );
 
         expect(path).toBe('/pod/a%2Fb%20c/conversations/new');
+    });
+});
+
+describe('a pod that has just been created has said nothing', () => {
+    // The point of the door: creating a pod is not a sentence, and sending
+    // "Hi" on the user's behalf spent a model turn answering a question they
+    // had not asked.
+    it('opens on a question rather than on a message it sent itself', () => {
+        const href = buildNewPodWelcomeHref({ podId: 'pod-1', isFirstPod: true });
+        const { path, message, instructions } = launchFrom(href);
+
+        expect(path).toBe('/pod/pod-1/conversations/new');
+        expect(new URLSearchParams(href.split('?')[1]).get('welcome')).toBe('1');
+        expect(message).toBeNull();
+        // Which instructions are right depends on how the door is answered,
+        // so none of them are decided here.
+        expect(instructions).toBeNull();
+    });
+
+    it('leaves behind what the door needs to build those instructions later', () => {
+        const { metadata } = launchFrom(
+            buildNewPodWelcomeHref({
+                podId: 'pod-1',
+                workDomain: 'acme.com',
+                isFirstPod: true,
+            }),
+        );
+
+        expect(metadata).toMatchObject({
+            source: 'onboarding',
+            first_run: true,
+            pod_id: 'pod-1',
+            work_domain: 'acme.com',
+        });
+    });
+
+    it('answers the door with intent, so the welcome turn never runs', () => {
+        const { message, instructions } = launchFrom(
+            buildNewPodConversationHref({
+                podId: 'pod-1',
+                podName: 'Ada Pod',
+                isFirstPod: true,
+                openingMessage: 'Put yourself on Telegram so I can reach you from my phone.',
+                extraInstructions: 'They asked for Telegram, so set it up now.',
+            }),
+        );
+
+        expect(message).toContain('Telegram');
+        expect(instructions).toContain('that message is the brief');
+        expect(instructions).toContain('They asked for Telegram, so set it up now.');
+        expect(instructions).not.toContain('Your first turn is a welcome and one offer');
+    });
+
+    it('falls back to the greeting only when somebody declines to say anything', () => {
+        const { message, instructions } = launchFrom(
+            buildNewPodConversationHref({
+                podId: 'pod-1',
+                podName: 'Ada Pod',
+                isFirstPod: true,
+            }),
+        );
+
+        expect(message).toBe(NEW_POD_OPENING_MESSAGE);
+        expect(instructions).toContain('Your first turn is a welcome and one offer');
     });
 });
 
