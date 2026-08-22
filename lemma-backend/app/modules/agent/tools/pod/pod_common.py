@@ -1,6 +1,6 @@
 """Shared plumbing for the pod tools: paths, grants, and result shapes.
 
-`_run` is the piece worth knowing about. Every pod tool goes through it, and it
+`run_pod_tool` is the piece worth knowing about. Every pod tool goes through it, and it
 turns a missing grant into a structured `needs_approval` result rather than an
 exception -- because the model can act on that: it re-issues the same action
 through `request_approval` and a person decides. An exception would just end the
@@ -24,7 +24,7 @@ from app.modules.agent.tools.pod.pod_paths import to_me_path
 from app.modules.agent.tools.tool_errors import approval_error_result
 
 
-def _resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
+def resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
     """Resolve a possibly-relative pod path against the agent's pod cwd."""
     if path.startswith("/"):
         return path
@@ -32,7 +32,7 @@ def _resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
     return f"{cwd}/{path}" if path else cwd
 
 
-def _split_pod_path(path: str) -> tuple[str, str]:
+def split_pod_path(path: str) -> tuple[str, str]:
     """Split an absolute pod path into (directory_path, name)."""
     normalized = path if path.startswith("/") else f"/{path}"
     trimmed = normalized.rstrip("/") or "/"
@@ -42,7 +42,7 @@ def _split_pod_path(path: str) -> tuple[str, str]:
     return (directory or "/", name)
 
 
-def _has_meaningful_data(data: JsonObject | None) -> bool:
+def has_meaningful_data(data: JsonObject | None) -> bool:
     """True if ``data`` has at least one non-null, non-blank value.
 
     Rejects ``None``, ``{}``, and payloads whose values are all null or empty/
@@ -60,7 +60,7 @@ def _has_meaningful_data(data: JsonObject | None) -> bool:
     return False
 
 
-async def _run(
+async def run_pod_tool(
     deps: BaseAgentContext,
     *,
     tool_name: str,
@@ -79,7 +79,7 @@ async def _run(
         return approval_error_result(exc, tool_name=tool_name, args=args)
 
 
-def _file_summary(entity: Any, user_id: Any) -> JsonObject:
+def file_summary(entity: Any, user_id: Any) -> JsonObject:
     """Curated view of a file for listings — surfaces whether it's an indexed
     document and how many pages it has, so the agent knows what to read/view."""
     metadata = getattr(entity, "metadata", None) or {}

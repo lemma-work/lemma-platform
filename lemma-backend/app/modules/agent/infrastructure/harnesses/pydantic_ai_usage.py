@@ -36,7 +36,7 @@ _USAGE_FIELDS = (
 )
 
 
-def _accumulate_usage(carried: dict[str, int], usage: object) -> None:
+def accumulate_usage(carried: dict[str, int], usage: object) -> None:
     """Fold an abandoned attempt's usage into the running total."""
     if usage is None:
         return
@@ -44,7 +44,7 @@ def _accumulate_usage(carried: dict[str, int], usage: object) -> None:
         carried[field] = carried.get(field, 0) + _usage_value(usage, field)
 
 
-def _usage_totals(usage: object, carried: dict[str, int]) -> dict[str, int]:
+def usage_totals(usage: object, carried: dict[str, int]) -> dict[str, int]:
     """This attempt's usage plus everything earlier attempts already spent."""
     return {
         field: _usage_value(usage, field) + carried.get(field, 0)

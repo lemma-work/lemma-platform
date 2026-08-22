@@ -487,54 +487,6 @@ in every module at once rather than one resource type at a time.
 **Covered by:** `test_removing_a_person_stops_their_delegations`, marked
 `xfail(strict=True)` — it turns the build red the moment this is fixed.
 
-### DEV-ACCESS-002 — A second approval for the same action is answered "yes" and thrown away
-**Violates:** PS-ACCESS-022, PS-AGENT-020
-**Severity:** medium
-**Where:** `_run_if_exact_match_already_approved` →
-[`pydantic_adapter.py:252`](lemma-backend/app/modules/agent/tools/user_interaction/pydantic_adapter.py#L252),
-which returns before
-[`record_session_approvals`](lemma-backend/app/modules/agent/services/approval_reconciliation.py#L162)
-can run.
-
-**Required:** When a person approves an action for the session, the permissions
-that approval names are remembered for the rest of the conversation.
-
-**Actual:** Only the first approval of a given call is remembered. A second
-`request_approval` naming the same tool and the same arguments takes the
-exact-match fast path: it executes the call as the user, reports
-`"Auto-approved: you approved this exact call earlier"` — and never records the
-`permission_ids` it was carrying, because resolution is the only thing that
-records them and resolution is exactly what was skipped.
-
-Reading a table needs two permissions and the check stops at the first missing
-one, so this is the ordinary path, not an edge:
-
-```
-pod_get_records            -> denied: datastore.table.read
-request_approval  (ids=[table.read])   -> approved for session, executed
-pod_get_records            -> denied: datastore.record.read     # past the table check
-request_approval  (ids=[record.read])  -> "Auto-approved", executed, ids DISCARDED
-pod_get_records            -> denied: datastore.record.read     # still
-```
-
-Changing one argument — `limit: 5` — makes the same sequence succeed, which is
-what isolates the cause: the exact-match key is computed from `(tool_name,
-args)` alone and takes no account of the permissions the new request carries.
-
-**Why it matters:** The agent is told it was approved, so it retries the action
-and is refused, so it asks again, is told it was approved, retries, is
-refused — a loop that ends only when the run hits its turn limit. The person is
-not asked again and sees nothing wrong; they approved it, and it still cannot
-read the table. The setting that exists to stop an agent nagging instead stops
-it working.
-
-**Fix:** Record the session approvals before taking the fast path — the
-exact-match check answers "may I skip the pause", which is a different question
-from "what has this approval authorised". Recording is idempotent, so doing it
-on both paths is safe.
-
-**Covered by:** `test_a_session_approval_stops_repeat_asking`, marked
-`xfail(strict=True)`.
 
 ---
 

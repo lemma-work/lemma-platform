@@ -65,6 +65,20 @@ class PostgresSearchService:
                 text("SELECT pg_advisory_xact_lock(:key)"),
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
             )
+            # The key above is a single global constant, so it serialises this
+            # method against itself -- which is all the database-wide catalogs
+            # below need. It does NOT serialise this pod's namespace against
+            # DatastoreSchemaManager, which creates the very same schema under
+            # `hashtext(schema_name)`. Two different keys exclude nobody: both
+            # paths could observe the namespace as absent and one would then
+            # lose on the pg_namespace.nspname unique index, which is what
+            # broke the datastore e2e shard. Take that key as well, always
+            # after the global one so every caller acquires the two in the same
+            # order and no pair of them can deadlock.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
+                {"schema_name": self.schema_name},
+            )
             # Azure Database for PostgreSQL checks CREATE EXTENSION privileges
             # even when IF NOT EXISTS would otherwise be a no-op. The runtime
             # datastore role is intentionally not an azure_pg_admin member, so

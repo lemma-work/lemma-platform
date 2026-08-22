@@ -214,6 +214,27 @@ class ApprovalCoordinator:
         )
         return ApprovalResolution(status=status, decision=effective_decision)
 
+    async def _claim_execution(
+        self, *, conversation_id: UUID, approval_id: str
+    ) -> bool:
+        """Take the right to run this approval's tool, durably, before running it.
+
+        Committed immediately and on its own. An uncommitted claim is not a
+        claim: the whole point is that a worker killed mid-execution leaves
+        evidence behind, and evidence inside a transaction that dies with the
+        worker is no evidence at all.
+
+        Returns False when somebody already holds it, which is how a retried
+        reconcile job skips an execution that already happened.
+        """
+        claimed = await self.conversation_repository.claim_approval_execution(
+            conversation_id=conversation_id,
+            approval_id=approval_id,
+        )
+        if claimed:
+            await self.uow.commit()
+        return claimed
+
     async def _reconcile_resume(
         self,
         *,
@@ -247,12 +268,13 @@ class ApprovalCoordinator:
             conversation_id=conversation.id,
             tool_call_id=approval_id,
         )
-        if existing_return is None:
-            # Build the return the resumed run will replay. This check guards the
-            # *build*, which for an approved request_approval runs the wrapped tool
-            # as the user — re-executing it (re-deploying an app, re-recording
-            # session grants) would be a correctness bug. The append below re-checks
-            # cheaply and closes the race.
+        if existing_return is None and await self._claim_execution(
+            conversation_id=conversation.id, approval_id=approval_id
+        ):
+            # Build the return the resumed run will replay. This runs the wrapped
+            # tool as the user, so it must happen at most once — hence a claim
+            # above rather than only the read below it. The append re-checks
+            # cheaply and closes the remaining window.
             return_tool_name, tool_result = await self.resume_returns.build(
                 conversation=conversation,
                 user_id=user_id,

@@ -22,11 +22,25 @@ from app.modules.agent.domain.agent_host import (
     AGENT_HOST_SESSION_METADATA_KEY,
     AgentHostHarnessCapabilities,
     AgentHostRunCheckpoint,
+    AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
+
+
+# RUNNING is emitted on the host's first provider *event*, WAITING_INPUT and
+# SUCCEEDED only after a turn actually ran. Everything else — the pre-dispatch
+# states, RECOVERING, and every failure — is compatible with the prompt never
+# having been sent.
+_STATES_PROVING_THE_PROMPT_LANDED = frozenset(
+    {
+        AgentHostRunState.RUNNING,
+        AgentHostRunState.WAITING_INPUT,
+        AgentHostRunState.SUCCEEDED,
+    }
+)
 
 
 async def remember_provider_session(
@@ -76,17 +90,28 @@ async def remember_provider_session(
         "harness_id": str(harness_id),
         "session_id": session_id,
     }
-    # This checkpoint is the host reporting that it prompted, so it is also the
-    # proof that the instructions dispatched with the run reached the session.
     # Promoted here rather than recorded at dispatch: a run that died before it
     # prompted — host offline, expired command, adapter that would not start —
     # delivered nothing, and marking those instructions delivered would keep
     # every later turn skipping them, silently losing a user's edit for the rest
     # of the conversation.
+    #
+    # But carrying a `provider_session_id` is NOT that proof. The host writes it
+    # in `before_prompt`, *before* `session/prompt` is sent (`acp.rs`), and the
+    # journal then attaches it to every checkpoint including terminal ones. So a
+    # prompt that failed — a context ceiling, an adapter fault — still reported
+    # FAILED with a session id attached, and this promoted the digest anyway.
+    # Every later turn then dispatched NEW_SESSION_ONLY, and nothing ever
+    # un-promotes a digest: the agent ran without its instructions, permanently.
+    #
+    # Only a state the host cannot reach without having prompted counts. The
+    # asymmetry is the whole point: failing to promote costs one re-send of the
+    # instructions, promoting wrongly costs every future turn.
     pending = stored.get("pending_instructions")
     delivered = stored.get("instructions_digest")
     promoted = (
-        isinstance(pending, dict)
+        checkpoint.state in _STATES_PROVING_THE_PROMPT_LANDED
+        and isinstance(pending, dict)
         and pending.get("run_id") == str(checkpoint.run_id)
         and isinstance(pending.get("digest"), str)
     )

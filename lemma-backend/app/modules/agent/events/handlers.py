@@ -452,9 +452,25 @@ async def reconcile_agent_host_dispatch() -> None:
     # Only database trouble is swallowed here: it is the transient failure this
     # sweep expects, and the next tick is five minutes away. Anything else is a
     # bug and surfaces through the worker's own job-failure path.
+    # Two transactions, not one, and that is a deadlock fix rather than a
+    # style choice. Both halves touch leases and commands; run together they
+    # hold lease locks from `cancel_abandoned_host_runs` while
+    # `reconcile_expired_leases` goes on to take command locks. The host poll
+    # walks the same two tables the other way round -- commands first, then a
+    # blocking lease lock -- so the two can wedge (ABBA), Postgres aborts one
+    # with 40P01, and the poll surfaces it as a 500 because it catches only
+    # `AgentHostRepositoryError`.
+    #
+    # Committing between them means no lease lock is ever held across a command
+    # acquisition, which removes this side of the cycle. The two sweeps are
+    # independent -- one cancels runs Lemma already finished, the other advances
+    # lapsed leases -- so splitting them costs nothing but a second round trip
+    # every five minutes.
     try:
         async with worker_ctx.uow() as uow:
             host_ids = await recovery.cancel_abandoned_host_runs(uow.session)
+            await uow.commit()
+        async with worker_ctx.uow() as uow:
             await recovery.reconcile_expired_leases(uow.session)
             await uow.commit()
     except SQLAlchemyError:
