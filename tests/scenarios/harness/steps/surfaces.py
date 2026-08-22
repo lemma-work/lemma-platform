@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -33,7 +33,7 @@ class SurfaceSteps:
     ) -> JSON:
         body: JSON = {
             "platform": platform,
-            "name": named or f"surface_{uuid4().hex[:8]}",
+            "name": named or a_name_for("surface"),
         }
         if agent:
             body["default_agent_name"] = agent
@@ -57,7 +57,7 @@ class SurfaceSteps:
             f"/pods/{in_pod['id']}/surfaces",
             json={
                 "platform": platform,
-                "name": f"surface_{uuid4().hex[:8]}",
+                "name": a_name_for("surface"),
                 **({"config": config} if config is not None else {}),
             },
         )

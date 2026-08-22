@@ -15,9 +15,8 @@ pytestmark = [
 
 @pytest.fixture
 async def stocked(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("sales")
     table = await alice.creates_a_table(
         in_pod=pod, columns=[column("title"), column("rank", "INTEGER")], shared=True
     )

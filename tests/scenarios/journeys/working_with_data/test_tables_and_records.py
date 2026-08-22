@@ -16,10 +16,15 @@ pytestmark = [journey("Working with data"), capability("Define tables")]
 
 @pytest.fixture
 async def pod(world):
-    """An owner with a pod, which nearly every scenario here needs."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    """Daniel, in the sales pod — where Vantage Freight keeps its rate tables.
+
+    He opens the pod he works in rather than making one, so these scenarios run
+    against a pod with months of other people's tables already in it. That is
+    the condition a real person is in, and everything a scenario creates here
+    carries this run's mark so it can still be found among them.
+    """
+    daniel = await world.person("daniel")
+    return daniel, await daniel.works_in("sales")
 
 
 @scenario("A person creates a table by declaring its columns")

@@ -35,7 +35,10 @@ JOIN = "_"
 #: Anything a run has ever made, from this run or any other. This is what
 #: `make scenarios-reset` matches on, so it is deliberately anchored to the end
 #: of the name: a person who names a table `scn_forecast` is not caught by it.
-MADE_BY_A_RUN = re.compile(rf"{JOIN}{MARK}[0-9a-f]{{4,}}$")
+#: A trailing extension is allowed, because a file keeps one — `notes_scn7f3a1`
+#: and `notes_scn7f3a1.txt` are both this run's, and matching only the first
+#: would leave every uploaded file invisible to cleanup.
+MADE_BY_A_RUN = re.compile(rf"{JOIN}{MARK}[0-9a-f]{{4,}}(\.[A-Za-z0-9]{{1,8}})?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,14 +48,26 @@ class Run:
     id: str
 
     def name(self, what: str) -> str:
-        """Name a durable thing so it is traceable to this run.
+        """Name a durable thing so it is traceable to this run, and unique.
 
         The only sanctioned way for a scenario to name a table, a pod, an agent
         or anything else that outlives it. A literal name works right up until
         two runs overlap, and then it fails as a mysterious conflict in whichever
         run was second.
+
+        It carries a unique part as well as the mark, and that is not belt and
+        braces — it is the thing the shared tenant actually needs. The mark alone
+        makes a name unique *between* runs; three scenarios of one run uploading
+        `notes.txt` into the same standing pod still collide with each other.
+        That is exactly what happened the first time this was tried, and the
+        409 arrives in a fixture, so it reads as five broken scenarios rather
+        than one name.
+
+        Two calls therefore give two names. Hold the result if a scenario needs
+        to say it twice — which is what a scenario asserting on what it made is
+        doing anyway.
         """
-        return f"{what}{JOIN}{MARK}{self.id}"
+        return f"{what}_{uuid4().hex[:6]}{JOIN}{MARK}{self.id}"
 
     def made_this(self, name: str) -> bool:
         """Did *this* run make it? What an assertion filters on."""
@@ -83,6 +98,34 @@ def _names_of(rows: object) -> list[str]:
     return found
 
 
+_current: Run | None = None
+
+
+def current() -> Run:
+    """This run. One per process, which is one per pytest session.
+
+    A module-level singleton rather than something threaded through, because the
+    steps need it: every one of them names things the caller did not name, and a
+    default name that carries no mark is a resource cleanup cannot find and an
+    assertion cannot filter to. Making the marked name the *default* name is
+    what stops the scoping depending on anybody remembering it.
+    """
+    global _current
+    if _current is None:
+        _current = Run(id=uuid4().hex[:6])
+    return _current
+
+
+def a_name_for(noun: str) -> str:
+    """A name for something this run is about to create.
+
+    What every step uses when the caller named nothing. Same rule as
+    `Run.name`, which is the point: a resource is marked and unique whether a
+    scenario chose its name or let the harness choose.
+    """
+    return current().name(noun)
+
+
 def begins() -> Run:
-    """A new run. One per session; the session fixture holds it."""
-    return Run(id=uuid4().hex[:6])
+    """The run, for the session fixture that hands it to scenarios."""
+    return current()

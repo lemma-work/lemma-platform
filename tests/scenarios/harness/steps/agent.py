@@ -8,6 +8,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 from harness.waiting import eventually
 
@@ -104,7 +105,7 @@ class AgentSteps:
         toolsets: list[str] | None = None,
         visibility: str | None = None,
     ) -> JSON:
-        name = named or f"agent_{uuid4().hex[:10]}"
+        name = named or a_name_for("agent")
         body: JSON = {"name": name, "instruction": instruction}
         if toolsets is not None:
             body["toolsets"] = toolsets

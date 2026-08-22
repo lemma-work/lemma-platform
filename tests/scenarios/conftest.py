@@ -7,6 +7,7 @@ world rather than touching it.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 
@@ -15,13 +16,18 @@ import pytest_asyncio
 
 from harness import environment, run as run_scope
 from harness.environment import Deployment
-from harness.provision import provision
+from harness.provision import provision, sweep
 from harness.run import Run
 from harness.fake_platform import start_fake_provider
 from harness.stack import Stack, start_stack
 from harness.world import Sessions, World
 
 pytest_plugins = ["harness.reporting"]
+
+
+def await_sweep(base_url: str) -> str:
+    """Run the sweep from a synchronous fixture teardown."""
+    return asyncio.run(sweep(base_url))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -80,7 +86,7 @@ def run() -> Run:
 
 
 @pytest.fixture(scope="session")
-def sessions(stack: Stack, target: Deployment) -> Sessions:
+def sessions(stack: Stack, target: Deployment) -> Iterator[Sessions]:
     """The standing cast's sessions, opened once and used all run.
 
     Carries the means to build the tenant, but only for a stack this process
@@ -93,9 +99,20 @@ def sessions(stack: Stack, target: Deployment) -> Sessions:
     accounts there would be doing the one thing this whole design is arranged to
     avoid. So it does not, and `Sessions.company_of` says what to run instead.
     """
-    return Sessions(
+    open_sessions = Sessions(
         build_tenant=partial(provision, stack.base_url) if stack.ours else None
     )
+    yield open_sessions
+    # Sweep only what this run made, and only if it made anything. A standing
+    # pod that keeps every run's leavings does not just get untidy: an
+    # unprocessable document retries for as long as it exists, so a few runs'
+    # worth of them starve document work for everything else in that pod, and
+    # the run that finally notices is the one that looks broken.
+    if open_sessions.tokens:
+        try:
+            print("\n" + await_sweep(stack.base_url))
+        except Exception as failed:  # noqa: BLE001 — a failed sweep must not fail the run
+            print(f"\ncould not sweep the tenant: {failed}")
 
 
 @pytest_asyncio.fixture
@@ -108,6 +125,28 @@ async def world(
         yield world
     finally:
         await world.aclose()
+
+
+@pytest_asyncio.fixture
+async def a_pod_of_its_own(world: World, run: Run) -> AsyncIterator[tuple]:
+    """A pod this run makes, and removes when the scenario is done.
+
+    For the scenarios that deliberately leave a pod in a state: a burst that
+    fills the staging pool, a document no converter can read and that therefore
+    retries for as long as it exists. Those belong in a pod of their own, and
+    not for tidiness — document work queues per pod, so one stuck file makes
+    every later document scenario in that pod look broken. It cost an afternoon
+    to find that out, which is why it is written down here.
+
+    Everything else should use a standing pod through `works_in`. A pod per
+    scenario is what this suite is moving away from.
+    """
+    daniel = await world.person("daniel")
+    pod = await daniel.creates_a_pod(named=run.name("scratch"))
+    try:
+        yield daniel, pod
+    finally:
+        await daniel.deletes_pod(pod)
 
 
 @pytest.fixture

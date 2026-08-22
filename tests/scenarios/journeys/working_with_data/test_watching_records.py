@@ -74,11 +74,10 @@ async def _next_change(
 
 @pytest.fixture
 async def a_watched_table(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("sales")
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
-    return alice, organization, pod, table
+    return alice, alice.organization, pod, table
 
 
 @scenario("A person watching a table sees a new record arrive")

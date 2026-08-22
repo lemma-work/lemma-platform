@@ -24,10 +24,11 @@ import argparse
 import asyncio
 import os
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from harness import environment, tenant
-from harness.run import made_by_a_run
+from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
 JSON = dict[str, Any]
@@ -108,7 +109,7 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
             pod = await _pod(boss, standing_pod, ledger)
             await _administers(boss, administrator, pod, ledger)
             if reset:
-                await _clear_run_debris(boss, pod, ledger)
+                await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
         if reset:
             await _clear_run_pods(boss, ledger)
 
@@ -184,26 +185,97 @@ async def _administers(
     ledger.did(f"{administrator.label} administers {pod.get('name')!r}")
 
 
-async def _clear_run_debris(owner: Person, pod: JSON, ledger: Ledger) -> None:
+async def _clear_run_debris(
+    owner: Person, pod: JSON, ledger: Ledger, *, mine: Callable[[str], bool]
+) -> None:
     """Delete what runs left in a standing pod, and nothing else.
 
     Matched on the `scn` mark rather than on shape, because this runs against a
     deployment where everything else in the pod is somebody's actual work. A
     reset that matched on shape would eventually take some of it.
 
-    Tables only, so far. Agents, schedules, workflows and files a run leaves
-    behind are still there afterwards — said plainly because a cleanup that
+    `mine` is the difference between the two callers. A run sweeping up after
+    itself takes only its own, so two runs against the same tenant do not delete
+    each other's work half way through. An operator running `--reset` takes
+    every run's, which is the point of asking.
+
+    Tables and the top level of the file tree. A file inside a run-made folder
+    goes when the folder does; agents, schedules and workflows a run leaves
+    behind are still there afterwards — said plainly, because a cleanup that
     quietly covers half of what it looks like it covers is worse than one that
     admits its edges.
     """
     for table in await owner.tables_in(pod):
         name = str(table.get("name", ""))
-        if made_by_a_run(name):
+        if mine(name):
             await owner.deletes_table(name, in_pod=pod)
-            ledger.did(f"removed leftover table {name!r} from {pod.get('name')!r}")
+            ledger.did(f"removed table {name!r} from {pod.get('name')!r}")
+
+    # Files matter more than they look: an unprocessable document retries for as
+    # long as it exists, and a standing pod that accumulates a few runs' worth of
+    # them starves document work for everything else in that pod. That is not
+    # hygiene, it is the reason a later run sees a converter that never answers.
+    for entry in _tree_entries(await owner.file_tree_of(pod)):
+        path = str(entry.get("path") or "")
+        name = str(entry.get("name") or "")
+        if path and mine(name):
+            await owner.deletes_file(path, in_pod=pod)
+            ledger.did(f"removed {path!r} from {pod.get('name')!r}")
 
 
-async def _clear_run_pods(owner: Person, ledger: Ledger) -> None:
+def _tree_entries(tree: Any) -> list[JSON]:
+    """The top level of a pod's file tree, whatever envelope it arrives in."""
+    if isinstance(tree, dict):
+        for key in ("items", "children", "entries", "nodes"):
+            found = tree.get(key)
+            if isinstance(found, list):
+                return [entry for entry in found if isinstance(entry, dict)]
+    if isinstance(tree, list):
+        return [entry for entry in tree if isinstance(entry, dict)]
+    return []
+
+
+async def sweep(base_url: str) -> str:
+    """Remove what *this* run left in the standing pods.
+
+    Called at the end of a session. Only this run's own leavings, so a second
+    run working in the same tenant at the same time is untouched.
+    """
+    ledger = Ledger()
+    world = World(base_url=base_url)
+    try:
+        owner = world.arriving(*_owner_credentials())
+        await owner.signs_in()
+        owner.organization = await _company_named(owner, tenant.VANTAGE.name)
+        if owner.organization is None:
+            return "nothing to sweep: the tenant is not provisioned here"
+        for standing_pod in tenant.STANDING_PODS:
+            for pod in await owner.pods_in(owner.organization):
+                if pod.get("name") == standing_pod.name:
+                    await _clear_run_debris(
+                        owner, pod, ledger, mine=current().made_this
+                    )
+        await _clear_run_pods(owner, ledger, mine=current().made_this)
+        return ledger.report(f"Swept {current()} from {base_url}")
+    finally:
+        await world.aclose()
+
+
+def _owner_credentials() -> tuple[str, str]:
+    owner = owner_of(tenant.VANTAGE)
+    return owner.label, owner.email
+
+
+async def _company_named(owner: Person, name: str) -> JSON | None:
+    for organization in await owner.organizations():
+        if organization.get("name") == name:
+            return organization
+    return None
+
+
+async def _clear_run_pods(
+    owner: Person, ledger: Ledger, *, mine: Callable[[str], bool] = made_by_a_run
+) -> None:
     """Delete pods a run made, which are the ones carrying the mark.
 
     A standing pod is never named through `run.name()`, so it can never match
@@ -217,7 +289,7 @@ async def _clear_run_pods(owner: Person, ledger: Ledger) -> None:
     """
     for pod in await owner.pods_in(owner.organization):
         name = str(pod.get("name", ""))
-        if made_by_a_run(name):
+        if mine(name):
             await owner.deletes_pod(pod)
             ledger.did(f"removed leftover pod {name!r}")
 

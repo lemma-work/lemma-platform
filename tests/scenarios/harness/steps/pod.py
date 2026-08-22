@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -44,7 +44,7 @@ class PodSteps:
                 f"{self.label} has no organization to create a pod in; "
                 f"call creates_an_organization() first"
             )
-        name = named or f"{self.label.title()} Pod {uuid4().hex[:8]}"
+        name = named or a_name_for(f"{self.label}_pod")
         pod = await self.api.post(
             "/pods",
             what=f"{self.label} creating pod {name!r}",

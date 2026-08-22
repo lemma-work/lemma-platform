@@ -8,8 +8,8 @@ sequence of things a person did, which is the point of the whole suite.
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -162,7 +162,7 @@ class IdentitySteps:
     # --- organizations ---------------------------------------------------
 
     async def creates_an_organization(self, *, named: str | None = None) -> JSON:
-        name = named or f"{self.label.title()} Org {uuid4().hex[:8]}"
+        name = named or a_name_for(f"{self.label}_org")
         organization = await self.api.post(
             "/organizations",
             what=f"{self.label} creating organization {name!r}",
