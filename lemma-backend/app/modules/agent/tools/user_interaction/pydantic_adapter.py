@@ -182,7 +182,9 @@ async def request_approval(
             conversation instead of re-prompting.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
-    del permission_ids  # read from the persisted tool call on resolution
+    # permission_ids rides to the exact-match fast path: the pause path re-reads
+    # it from the persisted tool call on resolution, but a skipped pause has no
+    # resolution, so what this request carries would otherwise be discarded.
     deps = ctx.deps
     if deps.agent_run_id is None:
         return RequestApprovalResponse(
@@ -207,7 +209,8 @@ async def request_approval(
                 error="request_approval requires a durable tool call id.",
             )
         auto_approved = await _run_if_exact_match_already_approved(
-            deps=deps, tool_name=tool_name, args=args
+            deps=deps, tool_name=tool_name, args=args,
+            permission_ids=permission_ids,
         )
         if auto_approved is not None:
             return auto_approved
@@ -240,7 +243,8 @@ async def request_approval(
         )
 
     auto_approved = await _run_if_exact_match_already_approved(
-        deps=deps, tool_name=tool_name, args=args
+        deps=deps, tool_name=tool_name, args=args,
+        permission_ids=permission_ids,
     )
     if auto_approved is not None:
         return auto_approved
@@ -260,6 +264,7 @@ async def _run_if_exact_match_already_approved(
     deps: BaseAgentContext,
     tool_name: str,
     args: JsonObject,
+    permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse | None:
     """Skip the pause when this exact call was approved for session earlier.
 
@@ -269,6 +274,14 @@ async def _run_if_exact_match_already_approved(
     exists for them — so this is the sole place their session-approval reuse
     can be honored. See session_approvals.exact_command_permission_id for why
     the match is exact-args-only, never a prefix.
+
+    The exact-match key answers "may I skip the pause", not "what did this
+    approval authorise". A second request of the same call may carry different
+    ``permission_ids`` than the first — reading a table needs table.read, then
+    record.read — so the approvals this request carries are recorded here too,
+    on both paths. Recording is idempotent. Skipping it told the agent it was
+    approved and discarded the very permissions it asked for, leaving it
+    refused on its next try. See PS-ACCESS-022 and DEV-ACCESS-002.
     """
     from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
@@ -286,6 +299,22 @@ async def _run_if_exact_match_already_approved(
     )
     if not approved:
         return None
+
+    if permission_ids:
+        from app.modules.agent.services.approval_reconciliation import (
+            record_session_approvals,
+        )
+
+        await record_session_approvals(
+            conversation_id=deps.conversation_id,
+            agent_id=getattr(deps, "workload_id", None),
+            tool_args={
+                "tool_name": tool_name,
+                "args": args,
+                "permission_ids": permission_ids,
+            },
+            user_id=deps.user_id,
+        )
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory

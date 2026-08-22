@@ -10,7 +10,10 @@ from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import (
+    PodContextDep,
+    require_pod_membership,
+)
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.errors import BadRequestError
@@ -69,6 +72,11 @@ logger = get_logger(__name__)
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
     tags=["agent_conversations"],
+    # Pod membership is a precondition of conversation access, not something
+    # inferred from grants: ownership plus an agent grant survive membership
+    # removal, which let a removed member keep reading -- and instructing --
+    # the pod's agents. See PS-POD-040, PS-ACCESS-023, DEV-ACCESS-001.
+    dependencies=[require_pod_membership("use conversations in this pod")],
 )
 
 
