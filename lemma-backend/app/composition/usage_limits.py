@@ -15,6 +15,7 @@ nothing else supplies one.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from uuid import UUID
 
 from app.core.config import settings
@@ -24,7 +25,8 @@ from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
 logger = get_logger(__name__)
 
 
-def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
+@lru_cache(maxsize=8)
+def _parse_overrides(raw: str) -> tuple[tuple[str, float, bool], ...]:
     """Override rules from the overrides JSON, in order.
 
     Each entry carries either ``slug`` (exact handle) or ``slug_prefix`` (a
@@ -32,9 +34,15 @@ def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
     ``monthly_limit_usd``. Malformed input yields nothing rather than taking
     spending decisions down with it -- but it warns, because a spend cap that
     silently does not apply is worse than one that refuses to start.
+
+    Cached on the raw setting, which is read once per process from the
+    environment. This runs in the admission preflight of every piece of model
+    work, and re-parsing a JSON document per conversation start to answer a
+    question whose input never changes is pure waste -- as is warning about the
+    same malformed document once per request instead of once per value.
     """
     if not raw.strip():
-        return []
+        return ()
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -43,14 +51,14 @@ def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
             detail="USAGE_ORG_LIMIT_OVERRIDES_JSON is not valid JSON; "
             "per-organization spend caps are NOT in effect",
         )
-        return []
+        return ()
     if not isinstance(parsed, list):
         logger.warning(
             "usage.limit_overrides.not_a_list",
             detail="USAGE_ORG_LIMIT_OVERRIDES_JSON must be a JSON list; "
             "per-organization spend caps are NOT in effect",
         )
-        return []
+        return ()
     rules: list[tuple[str, float, bool]] = []
     for entry in parsed:
         if not isinstance(entry, dict):
@@ -64,22 +72,43 @@ def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
             rules.append((slug, float(limit), False))
         elif isinstance(prefix, str) and prefix:
             rules.append((prefix, float(limit), True))
-    return rules
+    return tuple(rules)
 
 
-def _limit_for(slug: str | None, rules: list[tuple[str, float, bool]]) -> float | None:
-    """The limit from the last matching rule, or ``None`` if none match.
+def _limit_for(
+    slug: str | None, rules: tuple[tuple[str, float, bool], ...]
+) -> float | None:
+    """The limit for ``slug``, or ``None`` if no rule matches.
 
-    Last wins rather than first so a specific ``slug`` written after a broad
-    ``slug_prefix`` overrides it, which is the order people write these in.
+    Specificity decides, not authoring order: an exact ``slug`` beats any
+    ``slug_prefix``, and a longer prefix beats a shorter one. Ties -- the same
+    handle or the same prefix written twice -- go to the last one written,
+    which is the only case where order is a sensible answer.
+
+    Ordering used to decide outright, which quietly cut both ways: writing the
+    specific rule *before* the broad one it was meant to carve out of handed
+    the organization the broad limit, and nothing said so. A cap nobody can
+    predict from reading the setting is not a cap.
     """
     if slug is None:
         return None
-    matched: float | None = None
-    for value, limit, is_prefix in rules:
-        if slug.startswith(value) if is_prefix else slug == value:
-            matched = limit
-    return matched
+    # (is_exact, prefix_length, position) — compared as a tuple, so exact beats
+    # every prefix, the longest prefix beats the rest, and position only ever
+    # settles a tie between two rules of identical specificity.
+    best_rank: tuple[int, int, int] | None = None
+    best_limit: float | None = None
+    for index, (value, limit, is_prefix) in enumerate(rules):
+        if is_prefix:
+            if not slug.startswith(value):
+                continue
+            rank = (0, len(value), index)
+        else:
+            if slug != value:
+                continue
+            rank = (1, 0, index)
+        if best_rank is None or rank > best_rank:
+            best_rank, best_limit = rank, limit
+    return best_limit
 
 
 class ConfiguredUsageLimitPort:

@@ -398,15 +398,18 @@ class SearchClient:
     def __init__(self, search_engine: AvailableSearchEngines | None = None):
         self._pinned = search_engine
         self.search_engine = self._get_client(search_engine)
-        # True when nothing is configured and the choice fell through to the
-        # keyless scraper. A caller deserves to know the difference between a
-        # provider that answered "nothing" and no provider being looked at at
-        # all -- see PS-OPS-030 and DEV-OPS-005.
-        self.is_unconfigured_fallback = (
-            search_engine is None
-            and settings.web_search_provider.strip().lower() == "auto"
-            and isinstance(self.search_engine, DuckDuckGoSearchClient)
-        )
+        # True when the selected provider cannot actually search: an operator
+        # pinned WEB_SEARCH_PROVIDER at a backend whose credentials are missing
+        # (brave with no API key, searxng with no URL), so nothing is looked at
+        # and every query comes back empty and "successful". A caller deserves
+        # to know the difference between a provider that answered "nothing" and
+        # no provider being looked at at all -- see PS-OPS-030 and DEV-OPS-005.
+        #
+        # The keyless DuckDuckGo default is deliberately NOT this. Under `auto`
+        # it is what a deployment with no keys resolves to, and it is a working
+        # provider: calling its genuine zero-result answers "unavailable" would
+        # be the same lie told the other way round.
+        self.provider_is_unconfigured = not self.search_engine.is_available()
 
     def _get_client(self, engine: AvailableSearchEngines | None) -> BaseSearchClient:
         if engine is not None:

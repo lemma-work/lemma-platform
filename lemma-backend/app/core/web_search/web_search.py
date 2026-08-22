@@ -100,15 +100,16 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
         # successful search -- it is a facility that was never available. The
         # caller cannot tell "nothing exists" from "nothing was looked at", and
         # the two lead to opposite decisions. See PS-OPS-030, DEV-OPS-005.
-        if not results and search_client.is_unconfigured_fallback:
+        if not results and search_client.provider_is_unconfigured:
             return WebSearchResponse(
                 success=False,
                 results=[],
                 message="Web search is unavailable on this deployment",
                 error=(
-                    "No web-search provider is configured. Set "
-                    "LEMMA_WEB_SEARCH_PROVIDER, or configure SearXNG or Brave "
-                    "for this deployment."
+                    "The configured web-search provider has no credentials, so "
+                    "no search was performed. Set SEARXNG_URL or BRAVE_API_KEY "
+                    "for the provider named by WEB_SEARCH_PROVIDER, or set "
+                    "WEB_SEARCH_PROVIDER=duckduckgo for keyless search."
                 ),
             )
 

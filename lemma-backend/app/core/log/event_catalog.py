@@ -556,7 +556,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.breaker.tripped': EventSpec('warning', frozenset({'consecutive_failures', 'schedule_id'})),
     'schedule.breakers.reconcile_skipped': EventSpec('warning', frozenset()),
     'schedule.breakers.reconciled': EventSpec('warning', frozenset({'deactivated_count'})),
-    'schedule.cleanup.failed': EventSpec('error', frozenset({'pod_id'})),
     'schedule.cleanup.primary_failed': EventSpec('debug', frozenset({'pod_id'})),
     'schedule.datastore_consumer.fired_s_datastore_schedules.observed': EventSpec('debug', frozenset({'count'})),
     'schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic': EventSpec('debug', frozenset({'count', 'pod_id', 'record_id'})),

@@ -169,7 +169,7 @@ export class OrganizationsService {
     }
     /**
      * Check Organization Slug Availability
-     * Check whether an organization slug is available, and optionally whether a candidate name is still free
+     * Check whether an organization slug — the handle, and the only unique one of the two — is available. `name_available` is deprecated and always true: display names are labels, and two organizations may share one.
      * @param slug
      * @param name
      * @returns OrganizationSlugAvailabilityResponse Successful Response

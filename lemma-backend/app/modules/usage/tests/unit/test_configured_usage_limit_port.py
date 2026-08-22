@@ -28,17 +28,39 @@ def test_parse_overrides_drops_malformed_entries():
         '{"slug": "ok", "monthly_limit_usd": 3}, '
         '"junk"]'
     )
-    assert rules == [("ok", 3.0, False)]
+    assert rules == (("ok", 3.0, False),)
 
 
 def test_parse_overrides_survives_garbage():
-    assert _parse_overrides("") == []
-    assert _parse_overrides("not json") == []
-    assert _parse_overrides('{"slug": "acme"}') == []
+    assert _parse_overrides("") == ()
+    assert _parse_overrides("not json") == ()
+    assert _parse_overrides('{"slug": "acme"}') == ()
 
 
-def test_limit_for_matches_exact_then_prefix_last_rule_wins():
-    rules = [("acme", 5.0, False), ("lab-", 1.0, True), ("lab-", 2.0, True)]
+def test_limit_for_prefers_the_exact_handle_over_any_prefix():
+    """Specificity decides, not authoring order.
+
+    The broad rule is written *last* here, which under an order-wins rule would
+    have taken the cap away from the organization the exact rule names -- and
+    said nothing about it.
+    """
+    rules = (("acme", 5.0, False), ("acme", 9.0, True))
+    assert _limit_for("acme", rules) == 5.0
+
+
+def test_limit_for_prefers_the_longer_prefix():
+    rules = (("lab-eu-", 1.0, True), ("lab-", 7.0, True))
+    assert _limit_for("lab-eu-rat", rules) == 1.0
+    assert _limit_for("lab-us-rat", rules) == 7.0
+
+
+def test_limit_for_settles_a_genuine_tie_by_position():
+    rules = (("lab-", 1.0, True), ("lab-", 2.0, True))
+    assert _limit_for("lab-rat", rules) == 2.0
+
+
+def test_limit_for_matches_exact_and_prefix():
+    rules = (("acme", 5.0, False), ("lab-", 2.0, True))
     assert _limit_for("acme", rules) == 5.0
     assert _limit_for("acme-corp", rules) is None
     assert _limit_for("lab-rat", rules) == 2.0
