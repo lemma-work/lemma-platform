@@ -26,6 +26,10 @@ export interface ReadmePresentation {
     title: string;
     intro: string;
     coverImage: string | null;
+    /** The display width the README author declared for the cover, as a CSS
+     *  length -- `"300px"`, or `"100%"` for a banner meant to fill the column.
+     *  Null when they said nothing and the caller should pick. */
+    coverMaxWidth: string | null;
     body: string;
 }
 
@@ -113,13 +117,38 @@ function isDecorativeReadmeImage(value: string): boolean {
     );
 }
 
-function readmeImages(markdown: string): string[] {
-    const images: string[] = [];
+interface ReadmeImage {
+    src: string;
+    maxWidth: string | null;
+}
+
+// A README author who writes `width="300"` on a phone screenshot has told us the
+// size it is meant to be read at. Carrying that out of the parse is what lets the
+// cover honour it instead of stretching a 300px image across a 1000px column.
+//
+// A percentage is the opposite instruction — `width="100%"` on a social banner
+// asks it to fill whatever column it lands in — so it must not be read as a
+// number. Matching leading digits alone turned that `100%` into a 100px cap and
+// rendered a 1280px banner as a thumbnail. Anything we cannot resolve to a
+// length here (em, vw) is treated as unsaid, and the caller's default applies.
+function declaredImageWidth(tag: string): string | null {
+    const attribute = tag.match(/\bwidth=["']?([^"'\s>]+)/i)?.[1];
+    if (attribute) {
+        if (/^\d+%$/.test(attribute)) return '100%';
+        const pixels = attribute.match(/^(\d+)(?:px)?$/i);
+        return pixels ? `${pixels[1]}px` : null;
+    }
+    const style = tag.match(/\bstyle=["'][^"']*\bmax-width:\s*(\d+)px/i)?.[1];
+    return style ? `${style}px` : null;
+}
+
+function readmeImages(markdown: string): ReadmeImage[] {
+    const images: ReadmeImage[] = [];
     for (const match of markdown.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)) {
-        if (match[1]) images.push(match[1].trim());
+        if (match[1]) images.push({ src: match[1].trim(), maxWidth: declaredImageWidth(match[0]) });
     }
     for (const match of markdown.matchAll(/!\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/gi)) {
-        if (match[1]) images.push(match[1].trim());
+        if (match[1]) images.push({ src: match[1].trim(), maxWidth: null });
     }
     return images;
 }
@@ -206,17 +235,58 @@ export function resolveReadmeLinkUrl(
     return `https://github.com/${owner}/${repo}/blob/${branch}/${normalized}`;
 }
 
+// `#` at the start of a line is a heading in prose and a comment in most shells,
+// and a multiline regex cannot tell them apart. Searching the raw markdown made
+// the first line of a ```bash block the page's <h1> -- one real README titled its
+// page `set VITE_LEMMA_API_URL, VITE_LEMMA_AUTH_URL, VITE_LEMMA_POD_ID` -- and
+// then deleted that line out of the install instructions it was quoting.
+//
+// Blanking the fence bodies in place, rather than removing them, is what keeps
+// every offset equal to the original: the indices this returns are used to slice
+// the *unmasked* string, so the two must stay the same length.
+function maskFencedCode(markdown: string): string {
+    return markdown.replace(
+        // `(?![\s\S])`, not `$`, for the unterminated case: under `m` a bare `$`
+        // matches the end of every line, so the lazy body would stop at the
+        // first one and mask a single line of a long fence.
+        /^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\2[^\n]*$|(?![\s\S]))/gm,
+        (fence) => fence.replace(/[^\n]/g, ' '),
+    );
+}
+
 export function extractReadmePresentation(
     markdown: string,
     repo: string,
 ): ReadmePresentation {
-    const explicitTitle = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || '';
-    const coverImage =
-        readmeImages(markdown).find((image) => !isDecorativeReadmeImage(image)) ?? null;
-    const bodyWithPreamble = explicitTitle
-        ? markdown.replace(/^#\s+.+(?:\r?\n)?/m, '').trim()
-        : markdown.trim();
-    const firstMarkdownHeading = bodyWithPreamble.search(/^#{1,6}\s+/m);
+    // Every structural search runs against the masked copy; every slice and
+    // replacement runs against the original.
+    const masked = maskFencedCode(markdown);
+    const markdownTitle = masked.match(/^#\s+(.+)$/m)?.[1]?.trim() || '';
+    // A centred `<h1>` inside a `<p align="center">` header is the house style of
+    // exactly the polished repositories this page exists to show off, and no `#`
+    // heading follows it. Reading it is the difference between the repo's own
+    // name and a guess made from its URL slug.
+    const htmlTitle = markdownTitle
+        ? ''
+        : stripHtml(masked.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? '');
+    const explicitTitle = markdownTitle || htmlTitle;
+    const cover = readmeImages(markdown).find((image) => !isDecorativeReadmeImage(image.src));
+    const coverImage = cover?.src ?? null;
+    // Lift whichever element became the title out of the body — a title printed
+    // twice is a mistake, and `cleanReadmeBody` keeps the text of tags it
+    // strips, so an `<h1>` left behind surfaces as its own literal markup.
+    // Addressed by where the *masked* copy found it, so the removal can never
+    // reach inside a code fence.
+    const titleIndex = markdownTitle ? masked.search(/^#\s+/m) : -1;
+    const bodyWithPreamble = (
+        titleIndex >= 0
+            ? markdown.slice(0, titleIndex) +
+              markdown.slice(titleIndex).replace(/^#\s+.+(?:\r?\n)?/, '')
+            : htmlTitle
+              ? markdown.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>\s*/i, '')
+              : markdown
+    ).trim();
+    const firstMarkdownHeading = maskFencedCode(bodyWithPreamble).search(/^#{1,6}\s+/m);
     const preambleEnd =
         firstMarkdownHeading >= 0 ? firstMarkdownHeading : bodyWithPreamble.length;
     const preamble = bodyWithPreamble
@@ -233,6 +303,7 @@ export function extractReadmePresentation(
         title: explicitTitle || humanizeRepositoryName(repo),
         intro: readmeIntro(markdown),
         coverImage,
+        coverMaxWidth: cover?.maxWidth ?? null,
         body,
     };
 }
