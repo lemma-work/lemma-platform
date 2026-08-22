@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 
 pytestmark = [
@@ -110,10 +111,6 @@ async def test_a_notification_can_be_acknowledged(team):
     await bob.acknowledges(notification, in_pod=pod)
 
 
-@pytest.mark.xfail(
-    reason="DEV-SURF-001: notification reads have no pod-membership gate",
-    strict=True,
-)
 @scenario("Someone outside the pod sees none of its notifications")
 @proves("PS-SURF-030")
 @covers("notification.list")

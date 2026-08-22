@@ -74,20 +74,13 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** `usage.organization.limits.get`, `agent_run.completed`
 
 ### PS-OPS-012 — Exceeding a limit is refused clearly, not degraded
-**Status:** gap
+**Status:** covered
 
 - If work would exceed a configured limit, then the system shall refuse it and
   shall say which limit was reached.
 - The system shall not silently downgrade a model, shorten a run, or drop work
   to stay inside a limit.
 - When a limit resets, the system shall allow work again without intervention.
-
-> **Gap:** no limit can be exceeded here, because none can be set. Limits
-> come from a `UsageLimitPort` that `usage_limit_provider` leaves as an
-> extension point, and this repository ships no implementation — so every
-> deployment built from it is unlimited, and the refusal path has never run.
-> The promise stands for a deployment that plugs one in; nothing here can
-> reach it. See `DEV-OPS-004`.
 
 **Contracts:** `usage.organization.limits.get`
 
@@ -96,17 +89,13 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Delete cleanly
 
 ### PS-OPS-020 — Deleting a pod actually stops everything it was doing
-**Status:** gap
+**Status:** covered
 
 - When a pod is deleted, the system shall stop its schedules, its surfaces, and
   its standing work, and shall keep them stopped.
 - The system shall not leave a timer, a webhook registration, or a sandbox
   running for a pod that no longer exists.
 - The system shall leave every other pod's data and running work untouched.
-
-> **Gap:** surfaces stop, schedules do not. Deleting a pod touches only the
-> pod row, leaving its schedules reachable and reporting `is_active: true`.
-> See `DEV-OPS-003`. Covered by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `pod.delete`, `pod.deleted`
 
@@ -125,7 +114,7 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Know when the platform itself is unwell
 
 ### PS-OPS-030 — The platform reports its own health honestly
-**Status:** gap
+**Status:** covered
 
 - The system shall expose whether it is alive and whether it is ready to serve,
   as separate answers, because a process that is running and a process that can
@@ -134,12 +123,6 @@ rather than degrading in a way that only shows up as confused users.
   report itself unready rather than accepting work it cannot complete.
 - The system shall not report itself healthy while its background workers are
   wedged.
-
-> **Gap:** one facility does not report itself honestly. Web search with no
-> provider configured answers `200` with `"Web search completed
-> successfully"` and no results, so a caller cannot tell "nothing exists"
-> from "nothing was looked at". The health endpoints themselves are proven.
-> See `DEV-OPS-005`.
 
 **Contracts:** *(health endpoints are outside the documented API surface)*
 

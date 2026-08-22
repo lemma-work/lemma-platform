@@ -1,16 +1,12 @@
-"""Getting started → promises the product does not keep yet.
+"""Getting started → organizations, ownership, and what an invitation carries.
 
-Every scenario here is written to the behaviour we want and marked
-`xfail(strict=True)`, so it fails the build the moment the code catches up and
-somebody forgets to remove the marker. A gap with no test is a gap that gets
-fixed by accident and re-broken later.
-
-Each names the `DEV-` entry in `issues.md` holding the diagnosis.
+These scenarios held the divergences from `issues.md` as `xfail(strict=True)`
+markers until the code caught up; the markers are gone now that the promises
+hold. The ids stay with the promises they prove.
 """
 
 from __future__ import annotations
 
-import pytest
 
 from harness import capability, covers, journey, proves, scenario
 
@@ -20,14 +16,6 @@ pytestmark = [journey("Getting started"), capability("Create an organization")]
 @scenario("Two organizations may be called the same thing")
 @proves("PS-ONB-014")
 @covers("org.create")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-ONB-002: display names are unique deployment-wide, so the first "
-        "customer to register a common name takes it from everyone else — and "
-        "the 409 is an oracle for which organizations exist."
-    ),
-)
 async def test_two_organizations_may_share_a_display_name(world):
     alice = await world.new_person("alice")
     shared = f"Acme {alice.label}"
@@ -42,14 +30,6 @@ async def test_two_organizations_may_share_a_display_name(world):
 @scenario("An organization cannot be left with nobody able to administer it")
 @proves("PS-ONB-041")
 @covers("org.member.remove", "org.member.update_role")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-ONB-001: the sole owner can remove themselves or demote "
-        "themselves, and the state is unrecoverable — no remaining member can "
-        "ever mint an owner again."
-    ),
-)
 async def test_the_last_owner_cannot_step_down(world):
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()
@@ -94,14 +74,6 @@ async def test_an_invitation_carries_its_pod(world):
 @scenario("An invitation to a pod that has since gone says so rather than half-working")
 @proves("PS-ONB-021")
 @covers("org.invitation.accept", "pod.member.list")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-ONB-003: the pod grant is conditional and its fall-through is "
-        "silent. Accepting returns 200 with the pod quietly dropped, the "
-        "invitation is spent, and recovery needs an admin."
-    ),
-)
 async def test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied(world):
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()

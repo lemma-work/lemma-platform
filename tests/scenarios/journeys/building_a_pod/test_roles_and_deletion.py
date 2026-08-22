@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 
 pytestmark = [journey("Building a pod"), capability("Define roles the built-ins do not cover")]
@@ -117,13 +118,6 @@ class TestDeletingAPod:
 @scenario("A role naming a permission that does not exist is refused, not crashed")
 @proves("PS-POD-013")
 @covers("pod.roles.create")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-POD-004: the ValueError naming the bad id is never translated, so "
-        "it escapes as a 500 with a stack trace instead of a 400."
-    ),
-)
 async def test_an_unknown_permission_is_refused_clearly(world):
     alice = await world.new_person("alice")
     await alice.creates_an_organization()

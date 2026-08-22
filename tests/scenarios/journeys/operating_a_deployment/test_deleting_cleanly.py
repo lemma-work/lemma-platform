@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 from harness.fake_platform import start_fake_telegram
 from harness.waiting import never
@@ -107,14 +108,6 @@ async def _sent_to(fake, chat_id):
 @scenario("A deleted pod's standing work stops and stays stopped")
 @proves("PS-OPS-020")
 @covers("pod.delete", "schedule.list", "pod.deleted")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-OPS-003: pod deletion touches only the pod row, so its schedules "
-        "stay reachable and report is_active=true — a deleted pod keeps waking "
-        "up and running agents nobody can see."
-    ),
-)
 async def test_a_deleted_pod_runs_nothing_further(pod_doing_things):
     alice, pod, schedule, _fake, _path, _secret = pod_doing_things
 

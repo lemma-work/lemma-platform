@@ -128,7 +128,7 @@ rights than the person who asked.
 **Contracts:** `agent.conversation.approval.resolve`, `table.delete`, `record.bulk_delete`
 
 ### PS-ACCESS-022 — Approving for a session means that session only
-**Status:** gap
+**Status:** covered
 
 - When a person approves an action for the rest of a session, the system shall
   stop asking for that same action within that conversation.
@@ -137,26 +137,15 @@ rights than the person who asked.
 - The system shall expire a session approval, so a long-lived conversation does
   not become a standing grant by accident.
 
-> **Gap:** the scoping holds — a session approval does not reach another
-> conversation — but inside its own it is only remembered once. A second
-> approval for the same call is answered "yes" and its permissions are
-> discarded, so the agent is approved and refused in a loop. See
-> `DEV-ACCESS-002`; covered by a scenario marked `xfail(strict=True)`.
-
 **Contracts:** `agent.conversation.approval.resolve`, `agent.conversation.approval.list`
 
 ### PS-ACCESS-023 — Revoking a person's access revokes their software's too
-**Status:** gap
+**Status:** covered
 
 - When a person is removed from a pod, the system shall stop honouring
   delegations made in their name, on the next request.
 - The system shall not let work already dispatched on a removed person's behalf
   continue to act with their access.
-
-> **Gap:** a removed member can still read *and still drive* the agent
-> conversations they started — the pod closes to them, the delegation does
-> not. See `DEV-ACCESS-001`. The scenario is written and marked
-> `xfail(strict=True)`, so fixing it turns the build red.
 
 **Contracts:** `pod.member.remove`, `agent.conversation.get`, `function.run`
 

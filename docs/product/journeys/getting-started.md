@@ -96,17 +96,13 @@ worse than asking.
 **Contracts:** `org.create`, `org.update`, `org.slug_availability`
 
 ### PS-ONB-014 — Two organizations may share a display name
-**Status:** gap
+**Status:** covered
 
 - The system shall allow two unrelated organizations to carry the same display
   name, because names are how people recognise their own organization and not
   how the system tells organizations apart.
 - If a person asks whether a name is in use, then the system shall not reveal
   whether some other organization on the deployment is using it.
-
-> **Gap:** display names are unique across the entire deployment today, and the
-> availability check exposes that as a lookup. See `DEV-ONB-002` — this one may
-> be deliberate, and needs a product decision before any code changes.
 
 **Contracts:** `org.create`, `org.update`, `org.slug_availability`
 
@@ -124,7 +120,7 @@ worse than asking.
 ## Capability: Bring a team in
 
 ### PS-ONB-020 — An invited person joins with the role they were offered
-**Status:** gap
+**Status:** covered
 
 - When an owner or editor invites an email address with a role, the system shall
   create a pending invitation for that email and notify it.
@@ -135,15 +131,10 @@ worse than asking.
 - If a person attempts to accept an invitation addressed to a different email,
   then the system shall refuse.
 
-> **Gap:** the joining itself is correct — the invitation, the role, and the
-> refusal of a mismatched email all hold. The `organization.member_joined`
-> record does not: its consumer calls a repository method that does not exist,
-> so every join raises and the event is never recorded. See `DEV-ONB-004`.
-
 **Contracts:** `org.invitation.invite`, `org.invitation.accept`, `organization.member_joined`
 
 ### PS-ONB-021 — An invitation can carry a pod, and accepting it grants both
-**Status:** gap
+**Status:** covered
 
 - Where an invitation names a pod, accepting it shall make the person both a
   member of the organization and a member of that pod, with the pod role the
@@ -152,10 +143,6 @@ worse than asking.
   after the invitation was sent, for example — then the system shall refuse the
   acceptance and shall say which pod it could not grant, leaving the invitation
   usable once the problem is fixed.
-
-> **Gap:** the pod grant is best-effort today. When it cannot be applied the
-> acceptance still succeeds, the person lands in the organization without the
-> pod, and the invitation is spent. See `DEV-ONB-003`.
 
 **Contracts:** `org.invitation.invite`, `org.invitation.accept`, `pod.member.add`
 
@@ -246,7 +233,7 @@ worse than asking.
 **Contracts:** `org.member.update_role`, `org.member.list`
 
 ### PS-ONB-041 — An organization always has at least one owner
-**Status:** gap
+**Status:** covered
 
 - The system shall ensure every organization has at least one owner at all
   times.
@@ -256,10 +243,6 @@ worse than asking.
   the system shall refuse on the same grounds.
 - The system shall apply both rules to a person acting on their own membership,
   because leaving is the most common way to reach the state.
-
-> **Gap:** neither path is guarded today, and the resulting organization can
-> never be administered again through any API. See `DEV-ONB-001`. This is the
-> highest-severity divergence in this journey.
 
 **Contracts:** `org.member.remove`, `org.member.update_role`
 

@@ -148,3 +148,32 @@ async def test_a_repeated_answer_resumes_once(world):
     assert len(ends) <= 1, (
         f"the workflow ran its remaining steps more than once: {ends}"
     )
+
+
+@scenario("A person stops a run that is still going")
+@proves("PS-FLOW-013")
+@covers("workflow.run.cancel", "workflow.run.get")
+async def test_cancelling_a_live_run_stops_it(world):
+    """The other half of PS-FLOW-013: stopping must work, not only be refused
+    for runs that are already over. A run paused on a person is mid-flight —
+    it has done work, it is holding a wait, and the person who started it is
+    entitled to call the whole thing off rather than answer it."""
+    alice = await world.new_person("alice")
+    await alice.creates_an_organization()
+    pod = await alice.creates_a_pod()
+
+    _workflow, run = await _a_waiting_run(alice, pod)
+
+    cancelled = await alice.cancels_run(run, in_pod=pod)
+    assert cancelled.status_code < 400, (
+        f"stopping a live run answered {cancelled.status_code}: "
+        f"{cancelled.text[:300]}"
+    )
+
+    stopped = await eventually(
+        lambda: alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}"),
+        lambda state: str(state.get("status")).upper() == "CANCELLED",
+        describe="the run to report itself stopped",
+        timeout=60.0,
+    )
+    assert str(stopped.get("status")).upper() == "CANCELLED", stopped

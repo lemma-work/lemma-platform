@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.agent import answers, attempts, result_of
 from harness.steps.datastore import column
@@ -165,14 +166,6 @@ async def test_denying_leaves_the_action_undone(pod_with_two_records):
 @scenario("Approving for the session stops the asking inside that conversation")
 @proves("PS-ACCESS-022")
 @covers("agent.conversation.approval.resolve", "agent.conversation.approval.list")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-ACCESS-002: the second approval names the same tool and args, so "
-        "it takes the exact-match fast path and its permission_ids are never "
-        "recorded — the agent is told yes and refused anyway, forever."
-    ),
-)
 async def test_a_session_approval_stops_repeat_asking(pod_with_two_records):
     alice, pod, table, first, second, agent = pod_with_two_records
 
