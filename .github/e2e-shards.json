@@ -22,7 +22,7 @@
       "workers": 1,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": true,
-      "why_serial": "UNVERIFIED since WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS=1 landed. The original reason -- 'worker-subprocess coverage files race under xdist' -- cannot happen by filename: .coveragerc sets parallel=true and relative_files=true, so every process writes .coverage.<host>.<pid>.<rand>. Flipping to 2 needs three measured runs agreeing to within 0.2 coverage points, not this reasoning; ~150s of shard time is at stake.",
+      "why_serial": "MEASURED 2026-08-22, kept. The original reason -- 'worker-subprocess coverage files race under xdist' -- is false: .coveragerc sets parallel=true and relative_files=true, so filenames cannot collide. Four runs of this shard: workers=1 gave agent 77.0% in 192s; workers=2 gave 76.9%, 77.2%, 76.8% in 116s, 145s, 129s. The mean is identical (76.97 vs 77.0) and the variance is symmetric -- xdist landed above the serial number as often as below -- so there is no systematic coverage loss. But the per-run spread is 0.4 points against a 0.2 bar set before measuring, so this is not evidence enough to flip. ~62s of shard time is the prize; re-measure on a quiet machine before taking it.",
       "serial_seconds": 314.0,
       "tests": 112
     },
