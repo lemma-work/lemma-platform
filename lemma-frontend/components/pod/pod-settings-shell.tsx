@@ -18,9 +18,9 @@ interface PodSettingsShellProps {
     podId: string;
     /**
      * This tab's own name — "General", "Access" — not the area's. The context
-     * bar prints it, and a bar that says "Pod Settings" on all four routes
+     * bar prints it, and a bar that says "Pod Settings" on every route
      * tells you nothing you did not already know. The workspace tab keeps
-     * reading "Settings" (see `tabTitle` below) because all four routes share
+     * reading "Settings" (see `tabTitle` below) because every route shares
      * one tab, and a tab that relabels as you move within it reads as churn.
      */
     title: string;
@@ -40,12 +40,12 @@ interface PodSettingsShellProps {
 }
 
 /**
- * Chrome for the four pod settings routes.
+ * Chrome for the pod settings routes.
  *
  * Built on the same primitives as every ledger route — `ResourceIndexShell`
  * plus a declared `ResourceHeader` — so settings picks up shell changes with
  * everything else instead of drifting. It owns the content width, which is why
- * no settings page sets its own: four tabs at four widths is the area's most
+ * no settings page sets its own: a tab per width is the area's most
  * visible tell that nobody laid it out together.
  */
 export function PodSettingsShell({

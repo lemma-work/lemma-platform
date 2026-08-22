@@ -41,6 +41,7 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { Composer } from '@/components/shared/composer';
@@ -498,7 +499,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                         compact
                                         triggerLabelClassName="hidden sm:block"
                                         scopeHint="Just for this chat"
-                                        manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+                                        manageHref={podModelsHref(podId)}
                                     />
                                     {canWriteConversations ? (
                                         <ProjectPicker
