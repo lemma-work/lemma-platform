@@ -245,15 +245,36 @@ async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight()
 
 
 class _ReconcileRunSession:
-    def __init__(self, lease: AgentHostRunLeaseModel | None) -> None:
+    def __init__(
+        self,
+        lease: AgentHostRunLeaseModel | None,
+        *,
+        cancel_already_queued: bool = False,
+    ) -> None:
         self.lease = lease
         self.flushed = False
+        self.added: list[object] = []
+        self._cancel_already_queued = cancel_already_queued
 
     async def get(self, model, pk, *, with_for_update=False):
         return self.lease
 
+    async def scalar(self, _statement):
+        """Answers `cancel_already_queued`, the only scalar this path runs."""
+        return self._cancel_already_queued
+
+    def add(self, obj):
+        self.added.append(obj)
+
     async def flush(self):
         self.flushed = True
+
+    def queued_cancels(self) -> list[object]:
+        return [
+            command
+            for command in self.added
+            if getattr(command, "kind", None) == AgentHostCommandKind.CANCEL_RUN.value
+        ]
 
 
 @pytest.mark.asyncio
@@ -637,3 +658,72 @@ async def test_cleanup_retained_state_defaults_now_when_omitted() -> None:
 
     assert len(session.execute_calls) == 3
     assert session.flushed is True
+
+
+class TestGivingUpOnARunTellsTheHostToStop:
+    """A run Lemma terminalizes must still be cancelled on the host.
+
+    Lemma waits 90s for a heartbeat plus 120s of recovery grace, then writes
+    DISPATCH_UNKNOWN and finalizes the agent run FAILED. The host, meanwhile, is
+    a laptop that woke up with its ACP turn still alive -- and nothing told it
+    to stop. `enqueue_cancel` refuses a terminal lease and
+    `cancel_abandoned_host_runs` only sweeps non-terminal ones, so once the
+    state flipped there was no path left. The agent kept calling pod tools until
+    its own run deadline, up to fifty minutes, against a run reported failed;
+    its checkpoints were dropped silently on reconnect, so it never found out.
+
+    The cancel is therefore queued *before* the state becomes terminal, which is
+    the only moment both facts are available.
+    """
+
+    @staticmethod
+    def _expired_recovering_lease():
+        return _lease(
+            state=AgentHostRunState.RECOVERING,
+            accepted_at=NOW - timedelta(seconds=300),
+            lease_expires_at=NOW - timedelta(seconds=1),
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminalizing_queues_exactly_one_cancel(self) -> None:
+        lease = self._expired_recovering_lease()
+        session = _ReconcileRunSession(lease=lease)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
+        cancels = session.queued_cancels()
+        assert len(cancels) == 1, "the host was never told to stop"
+        assert cancels[0].run_id == lease.run_id
+        # Fenced on the epoch: a cancel against a superseded lease says nothing
+        # about the run the host is executing now.
+        assert cancels[0].lease_epoch == lease.lease_epoch
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_pile_on_a_cancel_already_in_flight(self) -> None:
+        lease = self._expired_recovering_lease()
+        session = _ReconcileRunSession(lease=lease, cancel_already_queued=True)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
+        assert session.queued_cancels() == []
+
+    @pytest.mark.asyncio
+    async def test_the_first_expiry_only_starts_recovery_and_cancels_nothing(
+        self,
+    ) -> None:
+        """A RUNNING lease that lapses gets a grace period, not a gravestone."""
+        lease = _lease(
+            state=AgentHostRunState.RUNNING,
+            accepted_at=NOW - timedelta(seconds=120),
+            lease_expires_at=NOW - timedelta(seconds=1),
+        )
+        session = _ReconcileRunSession(lease=lease)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.RECOVERING.value
+        assert session.queued_cancels() == [], (
+            "cancelling here would kill a host that is merely slow to heartbeat"
+        )

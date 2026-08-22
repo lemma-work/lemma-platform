@@ -220,7 +220,7 @@ def _patch_session(monkeypatch, session) -> None:
     async def fake_get(ctx, *, session_id, close_on_exit):
         return session
 
-    monkeypatch.setattr(web_fetch_module, "_get_workspace_session", fake_get)
+    monkeypatch.setattr(web_fetch_module, "get_workspace_session", fake_get)
     monkeypatch.setattr(
         web_fetch_module,
         "workspace_runtime_context",
@@ -905,7 +905,7 @@ class TestTheToolAlwaysReturns:
         async def no_session(ctx, *, session_id, close_on_exit):
             raise RuntimeError("sandbox is not available")
 
-        monkeypatch.setattr(web_fetch_module, "_get_workspace_session", no_session)
+        monkeypatch.setattr(web_fetch_module, "get_workspace_session", no_session)
         monkeypatch.setattr(
             web_fetch_module,
             "workspace_runtime_context",

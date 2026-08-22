@@ -86,7 +86,7 @@ class GmailPlatformService:
                 if ref
             ],
             content=message,
-            content_type=str((metadata or {}).get("content_type") or "text"),
+            content_type=str((metadata or {}).get("content_type") or "markdown"),
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),

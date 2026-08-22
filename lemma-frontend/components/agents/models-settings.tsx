@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { RuntimeProfileKind, RuntimeProfileScope } from 'lemma-sdk';
 import type { AgentRuntimeProfileResponse } from 'lemma-sdk';
 import { Cpu, Download, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
@@ -24,10 +24,10 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
+import { EmptyState } from '@/components/shared/empty-state';
+import { ListSkeleton } from '@/components/shared/loading';
 import { agentHostBridge, useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
 import {
     useAgentHostHarnesses,
@@ -41,13 +41,13 @@ import {
     type AgentHostHarness,
 } from '@/lib/hooks/use-agent-runtime';
 import { ThisComputerCard } from './this-computer-card';
-import { HarnessRow, StatusBadge } from './harness-row';
 import { HarnessProfileDialog, type HarnessDialogTarget } from './harness-profile-dialog';
 import { ProviderProfileDialog, type ProviderDialogTarget } from './provider-profile-dialog';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
     agentHostStatusLabel,
+    describeHarness,
     isArchivedProfile,
     isDiscoveringHarnesses,
     harnessLogo,
@@ -59,10 +59,12 @@ import {
 /**
  * Ownership, but only when it is the exception.
  *
- * Workspace scope is the default every profile lands in, so labelling it put a
- * "Workspace" chip on every row — a column of identical badges that said
- * nothing and crowded out the one badge that does say something. Only a profile
- * that is *not* shared earns a mark.
+ * Organization scope is the default every profile lands in, so labelling it put
+ * an identical chip on every row — a column of badges that said nothing and
+ * crowded out the one badge that does say something. Only a profile that is
+ * *not* shared earns a mark, which is also the one a reader in a pod needs:
+ * everything unmarked is picked from by every pod, this row is picked from by
+ * you alone.
  */
 function scopeBadge(scope: RuntimeProfileScope): { label: string; tone: 'ok' | 'muted' } | null {
     return scope === RuntimeProfileScope.PERSONAL ? { label: 'Personal', tone: 'muted' } : null;
@@ -84,18 +86,39 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: 'anthropic', kind: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com' },
 ];
 
+/**
+ * A ledger, not a stack of forms.
+ *
+ * This read as four boxes and a floating paragraph to answer one question. It
+ * now reads the way Access and Automation do, and for the same reason: a lead
+ * paragraph, then bare rows. Nothing here is a card, because a card is a
+ * promise that its contents belong together and are separate from what follows
+ * — and "the models you can pick" and "the computers some of them run on" are
+ * one page, read top to bottom, not two places to be switched between.
+ */
 export function ModelsSettings({
     organizationId,
+    defaultRow,
     onRefresh,
 }: {
     organizationId: string;
+    /**
+     * The caller's own "what do I use by default" control, rendered above the
+     * list it chooses from.
+     *
+     * A slot rather than a prop pair because the decision belongs to whoever
+     * owns it — a pod stores its default on the pod — while the list is
+     * organization data this component already holds.
+     */
+    defaultRow?: ReactNode;
     /** Extra work to do on "Recheck" — the page's own catalog query, if it has one. */
     onRefresh?: () => void | Promise<void>;
 }) {
     const [showArchived, setShowArchived] = useState(false);
-    // The management listing, not the catalog: it can include archived profiles,
-    // which must never reach the composer's model picker.
-    const managed = useManagedAgentRuntimes(organizationId, { includeArchived: showArchived });
+    // Archived profiles come down with everything else and are split below, so
+    // the toggle can name its own count instead of being a switch that might
+    // reveal nothing.
+    const managed = useManagedAgentRuntimes(organizationId, { includeArchived: true });
     const profiles = managed.data?.items ?? [];
     const hosts = useAgentHosts();
     // A revoked host stays readable through the API for audit, but it can never
@@ -104,8 +127,10 @@ export function ModelsSettings({
     const harnessOwners = useAgentHostHarnessOwners(activeHosts);
     const isRefreshing = managed.isFetching || hosts.isFetching;
 
-    const providers = profiles.filter((profile) => profile.kind === RuntimeProfileKind.MODEL_PROVIDER);
-    const codingAgents = profiles.filter((profile) => profile.kind === RuntimeProfileKind.HARNESS);
+    const live = profiles.filter((profile) => !isArchivedProfile(profile));
+    const archived = profiles.filter(isArchivedProfile);
+    const providers = live.filter((profile) => profile.kind === RuntimeProfileKind.MODEL_PROVIDER);
+    const codingAgents = live.filter((profile) => profile.kind === RuntimeProfileKind.HARNESS);
 
     const refreshAll = () => {
         void managed.refetch();
@@ -114,32 +139,44 @@ export function ModelsSettings({
     };
 
     return (
-        <SettingsStack>
-            <div className="flex items-start justify-between gap-4">
-                <p className="max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
-                    What this workspace can pick in a chat, and where it runs.
-                </p>
-                <div className="flex shrink-0 items-center gap-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-tertiary)]">
-                        <Switch checked={showArchived} onCheckedChange={setShowArchived}>
-                            <SwitchTrack className={showArchived ? 'bg-[var(--action-primary)]' : undefined}>
-                                <SwitchThumb className={showArchived ? 'translate-x-4' : undefined} />
-                            </SwitchTrack>
-                        </Switch>
-                        Show archived
-                    </label>
-                    <Button type="button" variant="quiet" size="sm" onClick={refreshAll} disabled={isRefreshing} className="gap-1.5">
+        <div className="space-y-5">
+            <p className="text-sm leading-6 text-[var(--text-secondary)]">
+                Everything this pod can pick in a chat. The list is shared with every pod in the
+                organization; coding agents run on the computer they came from.
+            </p>
+
+            {/* Recheck sits on the pod default's line rather than above the lead
+                paragraph, where it belonged to nothing. Every control on this
+                page now shares a right edge with the thing it acts on. */}
+            {defaultRow ? (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2.5">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                        {defaultRow}
+                    </div>
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="sm"
+                        onClick={refreshAll}
+                        disabled={isRefreshing}
+                        className="shrink-0 gap-1.5"
+                    >
                         <RefreshCw className={cn('size-3.5', isRefreshing && 'lemma-spin')} />
                         Recheck
                     </Button>
                 </div>
-            </div>
+            ) : null}
 
             <ModelsSection
                 organizationId={organizationId}
                 providers={providers}
                 codingAgents={codingAgents}
+                archived={showArchived ? archived : []}
+                archivedCount={archived.length}
+                showArchived={showArchived}
+                onToggleArchived={() => setShowArchived((current) => !current)}
                 harnessOwners={harnessOwners}
+                loading={managed.isLoading}
                 onRefresh={refreshAll}
             />
 
@@ -147,10 +184,37 @@ export function ModelsSettings({
                 organizationId={organizationId}
                 hosts={activeHosts}
                 loadingHosts={hosts.isLoading}
-                savedProfiles={codingAgents}
+                savedProfiles={[...codingAgents, ...archived]}
                 onRefresh={refreshAll}
             />
-        </SettingsStack>
+        </div>
+    );
+}
+
+/**
+ * A group heading with its own actions on the same line.
+ *
+ * Both groups use it, so "Connect a provider" and "Connect a computer" land on
+ * the same right edge at the same height in their sections instead of one
+ * dangling under a list and the other under a paragraph.
+ */
+function LedgerSectionHeader({
+    title,
+    hint,
+    actions,
+}: {
+    title: string;
+    hint?: string;
+    actions?: ReactNode;
+}) {
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                <h3 className="type-eyebrow">{title}</h3>
+                {hint ? <p className="text-xs text-[var(--text-tertiary)]">{hint}</p> : null}
+            </div>
+            {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
+        </div>
     );
 }
 
@@ -158,62 +222,89 @@ export function ModelsSettings({
  * Everything the model picker can offer, in one list.
  *
  * A key and a laptop are different things to *operate*, which is why the
- * computers have their own section below — but they are the same thing to
- * *choose*, and splitting the choice across two lists meant a fresh workspace
- * opened on a section whose entire content was "None yet, add one from a paired
- * computer below". A section that exists to point at another section is a
- * section the reader has to assemble themselves.
+ * computers keep their own group below — but they are the same thing to
+ * *choose*, and splitting the choice across two lists meant a fresh
+ * organization opened on a section whose entire content was "None yet, add one
+ * from a paired computer below". A section that exists to point at another
+ * section is a section the reader has to assemble themselves.
  */
 function ModelsSection({
     organizationId,
     providers,
     codingAgents,
+    archived,
+    archivedCount,
+    showArchived,
+    onToggleArchived,
     harnessOwners,
+    loading,
     onRefresh,
 }: {
     organizationId: string;
     providers: AgentRuntimeProfileResponse[];
     codingAgents: AgentRuntimeProfileResponse[];
+    archived: AgentRuntimeProfileResponse[];
+    archivedCount: number;
+    showArchived: boolean;
+    onToggleArchived: () => void;
     harnessOwners: Map<string, string>;
+    loading: boolean;
     onRefresh?: () => void;
 }) {
     const [providerDialog, setProviderDialog] = useState<ProviderDialogTarget | null>(null);
     const [harnessDialog, setHarnessDialog] = useState<HarnessDialogTarget | null>(null);
+    const rows = [...providers, ...codingAgents, ...archived];
 
     return (
-        <SettingsPanel
-            title="Models"
-            description="Providers are shared with everyone here. Coding agents run on the computer they came from."
-        >
-            <div className="flex flex-col gap-3">
-                <SettingsList>
-                    {providers.map((profile) => (
-                        <ProviderRow
-                            key={profile.id}
-                            profile={profile}
-                            organizationId={organizationId}
-                            onEdit={() => setProviderDialog({ mode: 'edit', profile })}
-                            onRefresh={onRefresh}
-                        />
+        <section className="space-y-2">
+            <LedgerSectionHeader
+                title="Models"
+                actions={(
+                    <>
+                        {/* Only when there is something behind it. A permanent
+                            "Show archived" is an invitation to look at nothing. */}
+                        {archivedCount > 0 ? (
+                            <Button type="button" variant="quiet" size="sm" onClick={onToggleArchived}>
+                                {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
+                            </Button>
+                        ) : null}
+                        <ConnectProviderMenu onPick={setProviderDialog} />
+                    </>
+                )}
+            />
+            {loading ? <ListSkeleton rows={3} /> : rows.length === 0 ? (
+                <EmptyState
+                    variant="region"
+                    icon={<Sparkles className="h-5 w-5" />}
+                    title="No models yet"
+                    description="Connect a provider key, or pair a computer to bring the coding agents already installed on it."
+                />
+            ) : (
+                <ul className="lemma-index-list">
+                    {rows.map((profile) => (
+                        profile.kind === RuntimeProfileKind.HARNESS ? (
+                            <CodingAgentRow
+                                key={profile.id}
+                                profile={profile}
+                                organizationId={organizationId}
+                                computer={
+                                    profile.harness_id ? harnessOwners.get(profile.harness_id) ?? null : null
+                                }
+                                onEdit={() => setHarnessDialog({ mode: 'edit', profile })}
+                                onRefresh={onRefresh}
+                            />
+                        ) : (
+                            <ProviderRow
+                                key={profile.id}
+                                profile={profile}
+                                organizationId={organizationId}
+                                onEdit={() => setProviderDialog({ mode: 'edit', profile })}
+                                onRefresh={onRefresh}
+                            />
+                        )
                     ))}
-                    {codingAgents.map((profile) => (
-                        <CodingAgentRow
-                            key={profile.id}
-                            profile={profile}
-                            organizationId={organizationId}
-                            computer={
-                                profile.harness_id ? harnessOwners.get(profile.harness_id) ?? null : null
-                            }
-                            onEdit={() => setHarnessDialog({ mode: 'edit', profile })}
-                            onRefresh={onRefresh}
-                        />
-                    ))}
-                </SettingsList>
-
-                <div>
-                    <ConnectProviderMenu onPick={setProviderDialog} />
-                </div>
-            </div>
+                </ul>
+            )}
 
             <ProviderProfileDialog
                 target={providerDialog}
@@ -227,13 +318,13 @@ function ModelsSection({
                 onClose={() => setHarnessDialog(null)}
                 onSaved={onRefresh}
             />
-        </SettingsPanel>
+        </section>
     );
 }
 
 // One button instead of eleven chips. The chips were a wall of equal-weight
 // names that made choosing a provider look like the main thing this page is
-// for, when for most workspaces the built-in models already answer it.
+// for, when for most organizations the built-in models already answer it.
 function ConnectProviderMenu({ onPick }: { onPick: (target: ProviderDialogTarget) => void }) {
     return (
         <DropdownMenu>
@@ -281,20 +372,49 @@ function ConnectProviderMenu({ onPick }: { onPick: (target: ProviderDialogTarget
 }
 
 /**
- * One badge per row, answering one question: can I use this right now?
+ * One status per row, answering one question: can I use this right now?
  *
- * The rows used to carry up to four — archived, scope, availability, built-in —
- * which mixed what a thing *is* with who *owns* it and whether it *works*, so
- * none of them read as status. Ownership only appears when it is the exception
- * (a personal profile in a shared workspace); everything else is folded into
- * this one label.
+ * The rows used to carry up to four badges — archived, scope, availability,
+ * built-in — which mixed what a thing *is* with who *owns* it and whether it
+ * *works*, so none of them read as status. Ownership only appears when it is
+ * the exception (a personal profile in a shared organization); everything else
+ * folds into this one label.
  */
-function modelStatus(profile: AgentRuntimeProfileResponse): { label: string; tone: 'ok' | 'muted' } {
+function modelStatus(profile: AgentRuntimeProfileResponse): { label: string; tone: StatusTone } {
     if (isArchivedProfile(profile)) return { label: 'Archived', tone: 'muted' };
     if (profile.scope === RuntimeProfileScope.SYSTEM) return { label: 'Built in', tone: 'ok' };
     const availability = runtimeAvailabilityLabel(profile);
     if (availability) return { label: availability, tone: 'muted' };
     return { label: 'Ready', tone: 'ok' };
+}
+
+type StatusTone = 'ok' | 'warn' | 'muted';
+
+/**
+ * Status the way every other ledger in the pod states it: a coloured dot and a
+ * word, at the right edge of the row.
+ *
+ * The pill this replaces was a filled shape on a line that already had one for
+ * the icon, so a list of four models was eight filled shapes and two of them
+ * were the same grey. Triggers, runs and members have all read as dot-plus-word
+ * for a while; this page was the holdout.
+ */
+function StatusDot({ label, tone }: { label: string; tone: StatusTone }) {
+    return (
+        <span
+            className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 text-xs font-medium',
+                tone === 'ok'
+                    ? 'text-[var(--state-success)]'
+                    : tone === 'warn'
+                        ? 'text-[var(--state-warning)]'
+                        : 'text-[var(--text-tertiary)]',
+            )}
+        >
+            <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+            {label}
+        </span>
+    );
 }
 
 function ModelRow({
@@ -306,8 +426,9 @@ function ModelRow({
     onEdit,
     onRefresh,
 }: {
-    icon: React.ReactNode;
+    icon: ReactNode;
     name: string;
+    /** Empty when there is nothing to add beyond the name. */
     detail: string;
     profile: AgentRuntimeProfileResponse;
     organizationId: string;
@@ -318,27 +439,28 @@ function ModelRow({
     const scope = scopeBadge(profile.scope);
 
     return (
-        <SettingsRow>
-            <div className="flex min-w-0 items-center gap-3">
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
-                    {icon}
-                </span>
-                <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{name}</div>
-                    <div className="truncate text-xs text-[var(--text-tertiary)]">{detail}</div>
-                </div>
+        <li className="lemma-index-row group flex items-center gap-2.5">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
+                {icon}
+            </span>
+            {/* Name and detail on one line, not stacked. A two-line row for
+                "Lemma / 4 models" is a paragraph where a sentence would do, and
+                it is what made four models fill a screen. */}
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="truncate text-sm font-medium text-[var(--text-primary)]">{name}</span>
+                {detail ? (
+                    <span className="truncate text-xs text-[var(--text-tertiary)]">{detail}</span>
+                ) : null}
+                {scope ? <span className="chip chip-sm chip-muted">{scope.label}</span> : null}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-                {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
-                <StatusBadge label={status.label} tone={status.tone} />
-                <ProfileRowActions
-                    profile={profile}
-                    organizationId={organizationId}
-                    onEdit={onEdit}
-                    onRefresh={onRefresh}
-                />
-            </div>
-        </SettingsRow>
+            <StatusDot label={status.label} tone={status.tone} />
+            <ProfileRowActions
+                profile={profile}
+                organizationId={organizationId}
+                onEdit={onEdit}
+                onRefresh={onRefresh}
+            />
+        </li>
     );
 }
 
@@ -355,6 +477,12 @@ function ProviderRow({
 }) {
     const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
     const modelCount = profile.model_catalog?.length ?? 0;
+    // "Built in" is the row's status badge. Printing it here as well made every
+    // built-in row say the same word twice, three inches apart.
+    const detail = [
+        isSystem ? null : 'Shared key',
+        modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
+    ].filter(Boolean).join(' · ');
 
     return (
         <ModelRow
@@ -366,9 +494,7 @@ function ProviderRow({
                 )
             }
             name={profile.name}
-            detail={`${isSystem ? 'Built in' : 'Your key'}${
-                modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''
-            }`}
+            detail={detail}
             profile={profile}
             organizationId={organizationId}
             onEdit={onEdit}
@@ -460,7 +586,12 @@ function ProfileRowActions({
 
     return (
         <>
-            <ResourceActionsMenu ariaLabel={`Actions for ${profile.name}`}>
+            <ResourceActionsMenu
+                ariaLabel={`Actions for ${profile.name}`}
+                align="end"
+                // Quiet until wanted, like every other ledger row in the pod.
+                triggerClassName="h-7 w-7 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            >
                 <DropdownMenuItem
                     onSelect={(event) => {
                         event.preventDefault();
@@ -509,10 +640,11 @@ function ProfileRowActions({
 
 
 /**
- * The machines that run this workspace's coding agents.
+ * The machines that run the coding agents in the Models list.
  *
- * Not a peer of Models — it is where the coding agents in that list come from.
- * A computer holds a scoped, separately revocable secret and reaches Lemma over
+ * Not a peer of Models — it is where those rows come from — which is why it is
+ * a view of the same ledger rather than a second card stacked under it. A
+ * computer holds a scoped, separately revocable secret and reaches Lemma over
  * outbound HTTPS, so nothing here needs an inbound port or the user's own
  * session on that machine.
  */
@@ -552,49 +684,46 @@ function ComputersSection({
     const showGetTheApp = !isDesktop && !loadingHosts && hosts.length === 0;
 
     return (
-        <SettingsPanel
-            title="Computers"
-            description="Each one runs Claude Code, Codex and OpenCode for this workspace. Their credentials stay on the machine."
-        >
-            <div className="flex flex-col gap-3">
-                <ThisComputerCard onHostIdChange={onHostIdChange} onPaired={onRefresh} />
-
-                {loadingHosts ? (
-                    <p className="text-sm text-[var(--text-tertiary)]">Loading computers…</p>
-                ) : null}
-
-                {hosts.map((host) => (
-                    <AgentHostCard
-                        key={host.id}
-                        host={host}
-                        organizationId={organizationId}
-                        isThisComputer={host.id === thisHostId}
-                        savedProfileByHarnessId={savedProfileByHarnessId}
-                        onRefresh={onRefresh}
-                    />
-                ))}
-
-                {showGetTheApp ? <GetTheAppCard /> : null}
-
-                <div>
+        <section className="space-y-2">
+            <LedgerSectionHeader
+                title="Computers"
+                hint="Their credentials never leave the machine."
+                actions={(
                     <Button
                         type="button"
-                        variant="quiet"
+                        variant="secondary"
                         size="sm"
                         className="gap-1.5"
                         onClick={() => setConnecting(true)}
                     >
                         <Plus className="size-3.5" />
-                        {hosts.length ? 'Connect another computer' : 'Connect a computer'}
+                        {hosts.length ? 'Connect another' : 'Connect a computer'}
                     </Button>
-                </div>
-            </div>
+                )}
+            />
+
+            <ThisComputerCard onHostIdChange={onHostIdChange} onPaired={onRefresh} />
+
+            {loadingHosts ? <ListSkeleton rows={2} /> : null}
+
+            {hosts.map((host) => (
+                <AgentHostGroup
+                    key={host.id}
+                    host={host}
+                    organizationId={organizationId}
+                    isThisComputer={host.id === thisHostId}
+                    savedProfileByHarnessId={savedProfileByHarnessId}
+                    onRefresh={onRefresh}
+                />
+            ))}
+
+            {showGetTheApp ? <GetTheAppCard /> : null}
 
             <ConnectComputerDialog
                 open={connecting}
                 onClose={() => setConnecting(false)}
             />
-        </SettingsPanel>
+        </section>
     );
 }
 
@@ -660,7 +789,7 @@ function ConnectComputerDialog({
                 <ol className="flex flex-col gap-3">
                     {[
                         'Install the Lemma app on that computer.',
-                        'Open it and sign in to this workspace.',
+                        'Open it and sign in with your Lemma account.',
                         'It appears here on its own, with the agents it found.',
                     ].map((step, index) => (
                         <li key={step} className="flex items-baseline gap-3">
@@ -685,7 +814,16 @@ function ConnectComputerDialog({
     );
 }
 
-function AgentHostCard({
+/**
+ * One computer and the agents it published, as a group heading over its rows.
+ *
+ * This was a bordered card holding a header and a second bordered region of
+ * filled sub-cards — three surfaces deep for one laptop with three agents on
+ * it, inside a panel that was a fourth. The computer is a heading now, and its
+ * agents are rows underneath, which is the same shape Access uses for a person
+ * and their roles.
+ */
+function AgentHostGroup({
     host,
     organizationId,
     isThisComputer,
@@ -719,6 +857,7 @@ function AgentHostCard({
     const activeRuns = host.capacity?.active_runs ?? 0;
     const maxRuns = host.capacity?.max_runs ?? null;
     const online = host.status === 'ONLINE';
+    const items = harnesses.data?.items ?? [];
 
     const remove = async () => {
         try {
@@ -731,27 +870,26 @@ function AgentHostCard({
     };
 
     return (
-        <div className="rounded-md border border-[var(--border-subtle)]">
-            <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
-                    <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
-                </span>
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{host.display_name}</span>
-                        {isThisComputer ? <StatusBadge label="This computer" tone="muted" /> : null}
-                    </div>
-                    <div className="text-xs text-[var(--text-tertiary)]">
+        <section>
+            <div className="group flex items-center gap-2.5 px-1 py-1.5">
+                <TerminalSquare className="size-4 shrink-0 text-[var(--text-tertiary)]" />
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="truncate text-sm font-medium text-[var(--text-primary)]">
+                        {host.display_name}
+                    </span>
+                    {isThisComputer ? <span className="chip chip-sm chip-muted">This computer</span> : null}
+                    <span className="truncate text-xs text-[var(--text-tertiary)]">
                         Agent Host {host.host_release} · {activeRuns}
                         {maxRuns === null ? '' : `/${maxRuns}`} running
                         {host.last_seen_at ? ` · seen ${new Date(host.last_seen_at).toLocaleTimeString()}` : ''}
-                    </div>
+                    </span>
                 </div>
-                <StatusBadge label={agentHostStatusLabel(host.status)} tone={online ? 'ok' : 'muted'} />
+                <StatusDot label={agentHostStatusLabel(host.status)} tone={online ? 'ok' : 'muted'} />
                 <Button
                     type="button"
                     variant="quiet"
                     size="sm"
+                    className="h-7 w-7 shrink-0 p-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                     onClick={() => void harnesses.refetch()}
                     disabled={harnesses.isFetching}
                     aria-label={`Recheck ${host.display_name}`}
@@ -772,6 +910,7 @@ function AgentHostCard({
                             type="button"
                             variant="quiet"
                             size="sm"
+                            className="h-7 w-7 shrink-0 p-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             onClick={() => setConfirmRemove(true)}
                             loading={revoke.isPending}
                             aria-label={`Remove ${host.display_name}`}
@@ -797,45 +936,54 @@ function AgentHostCard({
                     </>
                 )}
             </div>
-            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
-                {/*
-                  * `isLoading` alone was the bug: it is only true for the very
-                  * first fetch, and that fetch returns an empty list straight
-                  * away because the computer has not published anything yet.
-                  * The page then stated "No agents published yet" as fact while
-                  * the host was still installing adapter packages, which takes
-                  * minutes on a machine's first pairing.
-                  */}
-                {harnesses.isLoading || discovering ? (
-                    <p className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]">
-                        <RefreshCw className="size-3 lemma-spin" />
-                        Looking for agents on this computer…
-                        {isThisComputer ? ' The first time takes a few seconds longer.' : null}
-                    </p>
-                ) : null}
-                {(harnesses.data?.items ?? []).map((harness) => (
-                    <AgentHostHarnessRow
-                        key={harness.id}
-                        harness={harness}
-                        organizationId={organizationId}
-                        hostOnline={online}
-                        savedProfile={savedProfileByHarnessId.get(harness.id) ?? null}
-                        onRefresh={onRefresh}
-                        onRecheck={isThisComputer ? onRecheckThisComputer : undefined}
-                    />
-                ))}
-                {!harnesses.isLoading && !discovering && !(harnesses.data?.items.length ?? 0) ? (
-                    <p className="px-1 text-xs text-[var(--text-tertiary)]">
-                        No agents published yet. {isThisComputer
-                            ? 'Use "Recheck agents" above to look again now.'
-                            : 'That computer publishes what it finds as soon as it changes.'}
-                    </p>
-                ) : null}
-            </div>
-        </div>
+
+            {/*
+              * `isLoading` alone was the bug: it is only true for the very
+              * first fetch, and that fetch returns an empty list straight
+              * away because the computer has not published anything yet.
+              * The page then stated "No agents published yet" as fact while
+              * the host was still installing adapter packages, which takes
+              * minutes on a machine's first pairing.
+              */}
+            {harnesses.isLoading || discovering ? (
+                <p className="flex items-center gap-2 px-1 py-2 pl-8 text-xs text-[var(--text-tertiary)]">
+                    <RefreshCw className="size-3 lemma-spin" />
+                    Looking for agents on this computer…
+                    {isThisComputer ? ' The first time takes a few seconds longer.' : null}
+                </p>
+            ) : items.length === 0 ? (
+                <p className="px-1 py-2 pl-8 text-xs text-[var(--text-tertiary)]">
+                    No agents published yet. {isThisComputer
+                        ? 'Use the recheck button above to look again now.'
+                        : 'That computer publishes what it finds as soon as it changes.'}
+                </p>
+            ) : (
+                <ul className="lemma-index-list pl-7">
+                    {items.map((harness) => (
+                        <AgentHostHarnessRow
+                            key={harness.id}
+                            harness={harness}
+                            organizationId={organizationId}
+                            hostOnline={online}
+                            savedProfile={savedProfileByHarnessId.get(harness.id) ?? null}
+                            onRefresh={onRefresh}
+                            onRecheck={isThisComputer ? onRecheckThisComputer : undefined}
+                        />
+                    ))}
+                </ul>
+            )}
+        </section>
     );
 }
 
+/**
+ * One agent on one computer, as a row under that computer's heading.
+ *
+ * Uses `describeHarness` rather than `HarnessRow`: onboarding meets this list
+ * as a standalone card and wants the fuller treatment, while here the computer
+ * directly above already carries the icon, the reachability and the actions.
+ * What the harness *is* still comes from one place; only the layout differs.
+ */
 function AgentHostHarnessRow({
     harness,
     organizationId,
@@ -854,6 +1002,7 @@ function AgentHostHarnessRow({
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
     const restore = useRestoreAgentRuntime();
     const archived = savedProfile ? isArchivedProfile(savedProfile) : false;
+    const { logo, facts, statusLabel, usable, blockedReason } = describeHarness(harness, { hostOnline });
 
     const restoreSaved = async () => {
         if (!savedProfile) return;
@@ -866,54 +1015,90 @@ function AgentHostHarnessRow({
         }
     };
 
+    /*
+     * "Add to models" is offered only when the computer can actually take the
+     * profile. Creating one binds it to a live harness — the backend reads the
+     * host's config options to validate the selections — so offering this
+     * against a sleeping laptop meant taking the user through the whole dialog
+     * and then failing on save. Everything else on the row still renders while
+     * offline; only creating is withheld.
+     */
+    const action = archived ? (
+        <Button
+            type="button"
+            size="sm"
+            variant="quiet"
+            className="shrink-0 gap-1.5 px-2"
+            loading={restore.isPending}
+            loadingLabel="Restoring"
+            onClick={() => void restoreSaved()}
+        >
+            <RotateCcw className="size-3.5" />
+            Restore
+        </Button>
+    ) : savedProfile || !usable ? null : (
+        <Button
+            type="button"
+            size="sm"
+            variant="quiet"
+            className="shrink-0 gap-1.5 px-2"
+            onClick={() => setDialog({ mode: 'create', harness })}
+        >
+            <Plus className="size-3.5" />
+            Add to models
+        </Button>
+    );
+
     return (
-        <>
-            <HarnessRow
-                harness={harness}
-                hostOnline={hostOnline}
-                savedProfile={savedProfile ? { name: savedProfile.name, archived } : null}
-                onRecheck={onRecheck}
-                action={(usable: boolean) => {
-                    if (archived) {
-                        return (
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="quiet"
-                                className="gap-1.5 px-2"
-                                loading={restore.isPending}
-                                loadingLabel="Restoring"
-                                onClick={() => void restoreSaved()}
-                            >
-                                <RotateCcw className="size-3.5" />
-                                Restore
-                            </Button>
-                        );
-                    }
-                    /*
-                     * Offered only when the computer can actually take the
-                     * profile. Creating one binds it to a live harness — the
-                     * backend reads the host's config options to validate the
-                     * selections — so offering this against a sleeping laptop
-                     * meant taking the user through the whole dialog and then
-                     * failing on save. Everything else on the row still renders
-                     * while offline; only creating is withheld.
-                     */
-                    if (savedProfile || !usable) return null;
-                    return (
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant="quiet"
-                            className="gap-1.5 px-2"
-                            onClick={() => setDialog({ mode: 'create', harness })}
-                        >
-                            <Plus className="size-3.5" />
-                            Add to models
-                        </Button>
-                    );
-                }}
-            />
+        <li className="lemma-index-row group flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                {logo ? (
+                    <Image src={logo} alt="" width={14} height={14} className="size-3.5 object-contain" />
+                ) : (
+                    <TerminalSquare className="size-3.5 text-[var(--text-tertiary)]" />
+                )}
+            </span>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="truncate text-sm font-medium text-[var(--text-primary)]">
+                    {harness.display_name}
+                </span>
+                {facts.length > 0 ? (
+                    <span className="truncate text-xs text-[var(--text-tertiary)]">{facts.join(' · ')}</span>
+                ) : null}
+                {savedProfile ? (
+                    <span className="chip chip-sm chip-muted">
+                        {archived ? `Archived as ${savedProfile.name}` : `Added as ${savedProfile.name}`}
+                    </span>
+                ) : null}
+            </div>
+            {/*
+              * Only stated when the computer itself is reachable — otherwise the
+              * heading directly above already said it, and repeating it on every
+              * agent it owns is the same sentence three times.
+              */}
+            {blockedReason ? (
+                <span className="basis-full pl-8 text-xs text-[var(--text-tertiary)]">{blockedReason}</span>
+            ) : null}
+            {/*
+              * The copy for AUTH_REQUIRED already says "then let Agent Host
+              * re-probe", and there was nothing anywhere to press. Probing is
+              * otherwise on a fifteen-minute timer, so someone who signed in did
+              * so and then watched nothing happen.
+              */}
+            {onRecheck && harness.health === 'AUTH_REQUIRED' ? (
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="quiet"
+                    className="shrink-0 gap-1.5 px-2"
+                    onClick={onRecheck}
+                >
+                    <RefreshCw className="size-3.5" />
+                    I&apos;ve signed in — re-check
+                </Button>
+            ) : null}
+            {action}
+            {hostOnline ? <StatusDot label={statusLabel} tone={usable ? 'ok' : 'muted'} /> : null}
 
             <HarnessProfileDialog
                 target={dialog}
@@ -921,7 +1106,6 @@ function AgentHostHarnessRow({
                 onClose={() => setDialog(null)}
                 onSaved={onRefresh}
             />
-        </>
+        </li>
     );
 }
-

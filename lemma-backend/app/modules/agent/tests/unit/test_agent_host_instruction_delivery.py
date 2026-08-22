@@ -120,11 +120,15 @@ def test_the_host_is_told_to_send_them_unless_lemma_says_otherwise() -> None:
     )
 
 
-def _checkpoint(run_id, session_id: str) -> AgentHostRunCheckpoint:
+def _checkpoint(
+    run_id,
+    session_id: str,
+    state: AgentHostRunState = AgentHostRunState.RUNNING,
+) -> AgentHostRunCheckpoint:
     return AgentHostRunCheckpoint(
         run_id=run_id,
         lease_epoch=1,
-        state=AgentHostRunState.RUNNING,
+        state=state,
         detail={"provider_session_id": session_id},
     )
 
@@ -164,3 +168,123 @@ async def test_instructions_count_as_delivered_only_once_the_host_prompted(
 
     await memory.remember_provider_session(uow, _checkpoint(dispatched_run, "sess-1"))
     assert repository.stored["instructions_digest"] == "abc"
+
+
+class TestASessionIdIsNotProofThePromptLanded:
+    """The host writes `provider_session_id` in `before_prompt` -- *before*
+    `session/prompt` is sent -- and the journal then attaches it to every
+    checkpoint, terminal ones included.
+
+    So a prompt that failed (a context ceiling, an adapter fault) still reported
+    FAILED carrying a session id, and that used to promote the digest. Every
+    later turn then dispatched NEW_SESSION_ONLY, and nothing un-promotes a
+    digest: the agent ran without its instructions for the rest of the
+    conversation.
+
+    The asymmetry decides the gate. Failing to promote costs one re-send of the
+    instructions; promoting wrongly costs every future turn.
+    """
+
+    @staticmethod
+    def _uow(conversation_id, harness_id):
+        class _Result:
+            def one_or_none(self):
+                return (conversation_id, harness_id)
+
+        class _Session:
+            async def execute(self, *_args, **_kwargs):
+                return _Result()
+
+        return type("_Uow", (), {"session": _Session()})()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "state",
+        [
+            AgentHostRunState.FAILED,
+            AgentHostRunState.CANCELLED,
+            AgentHostRunState.DISPATCH_UNKNOWN,
+            AgentHostRunState.RECOVERING,
+            AgentHostRunState.ACCEPTED,
+            AgentHostRunState.DISPATCHING,
+        ],
+    )
+    async def test_a_state_that_may_precede_the_prompt_does_not_promote(
+        self, repository: _Repository, state: AgentHostRunState
+    ) -> None:
+        conversation_id, harness_id = uuid4(), uuid4()
+        run_id = uuid7()
+        uow = self._uow(conversation_id, harness_id)
+
+        await memory.record_pending_instructions(
+            uow, conversation_id=conversation_id, run_id=run_id, digest="abc"
+        )
+        await memory.remember_provider_session(
+            uow, _checkpoint(run_id, "sess-1", state)
+        )
+
+        assert "instructions_digest" not in repository.stored, (
+            f"{state.value} promoted the digest, so the next turn will skip "
+            "instructions that may never have reached the session"
+        )
+        assert repository.stored["pending_instructions"]["digest"] == "abc", (
+            "the promise was dropped, so the run that made it can never record it"
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "state",
+        [
+            AgentHostRunState.RUNNING,
+            AgentHostRunState.WAITING_INPUT,
+            AgentHostRunState.SUCCEEDED,
+        ],
+    )
+    async def test_a_state_the_host_cannot_reach_without_prompting_promotes(
+        self, repository: _Repository, state: AgentHostRunState
+    ) -> None:
+        conversation_id, harness_id = uuid4(), uuid4()
+        run_id = uuid7()
+        uow = self._uow(conversation_id, harness_id)
+
+        await memory.record_pending_instructions(
+            uow, conversation_id=conversation_id, run_id=run_id, digest="abc"
+        )
+        await memory.remember_provider_session(
+            uow, _checkpoint(run_id, "sess-1", state)
+        )
+
+        assert repository.stored["instructions_digest"] == "abc"
+
+    @pytest.mark.anyio
+    async def test_a_failed_turn_still_delivers_on_the_next_one(
+        self, repository: _Repository
+    ) -> None:
+        """The end-to-end shape: a failure must not cost the user's edit."""
+        conversation_id, harness_id = uuid4(), uuid4()
+        first, second = uuid7(), uuid7()
+        uow = self._uow(conversation_id, harness_id)
+
+        await memory.record_pending_instructions(
+            uow, conversation_id=conversation_id, run_id=first, digest="abc"
+        )
+        await memory.remember_provider_session(
+            uow, _checkpoint(first, "sess-1", AgentHostRunState.FAILED)
+        )
+        assert not await memory.instructions_already_delivered(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            digest="abc",
+        ), "the next turn would skip instructions the session never received"
+
+        await memory.record_pending_instructions(
+            uow, conversation_id=conversation_id, run_id=second, digest="abc"
+        )
+        await memory.remember_provider_session(uow, _checkpoint(second, "sess-1"))
+        assert await memory.instructions_already_delivered(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            digest="abc",
+        )

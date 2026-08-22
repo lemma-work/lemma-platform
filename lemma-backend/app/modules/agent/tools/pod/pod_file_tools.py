@@ -29,10 +29,10 @@ from app.modules.agent.tools.pod.models import (
     ViewDocumentPagesRequest,
 )
 from app.modules.agent.tools.pod.pod_common import (
-    _file_summary,
-    _resolve_pod_path,
-    _run,
-    _split_pod_path,
+    file_summary,
+    resolve_pod_path,
+    run_pod_tool,
+    split_pod_path,
 )
 from app.modules.agent.tools.pod.pod_data_access import PodServices
 from app.modules.agent.tools.pod.pod_paths import normalize_json_paths, to_me_path
@@ -56,8 +56,8 @@ async def pod_write_file(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        directory_path, name = _split_pod_path(resolved_path)
+        resolved_path = resolve_pod_path(ctx.deps, request.path)
+        directory_path, name = split_pod_path(resolved_path)
         content_bytes = request.content.encode("utf-8")
         try:
             entity = await services.file.create_file(
@@ -102,7 +102,7 @@ async def pod_write_file(
                 "created": False,
             }
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
     )
 
@@ -120,7 +120,7 @@ async def pod_list_files(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
+        resolved_path = resolve_pod_path(ctx.deps, request.path)
         if request.recursive:
             tree = await services.file.get_directory_tree(
                 services.ctx.pod_id,
@@ -140,11 +140,11 @@ async def pod_list_files(
         )
         return {
             "success": True,
-            "files": [_file_summary(f, services.ctx.user_id) for f in files],
+            "files": [file_summary(f, services.ctx.user_id) for f in files],
             "next_cursor": cursor,
         }
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_list_files",
         args=request.model_dump(),
@@ -168,10 +168,10 @@ async def pod_read_file(
 
     async def op(services: PodServices) -> JsonObject:
         return await read_file_text(
-            services, request, _resolve_pod_path(ctx.deps, request.path)
+            services, request, resolve_pod_path(ctx.deps, request.path)
         )
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
     )
 
@@ -239,7 +239,7 @@ async def pod_view_document_pages(
             ],
         )
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_view_document_pages",
         args=request.model_dump(),
@@ -295,7 +295,7 @@ async def pod_get_file_url(
             "expires_at": expires_at.isoformat(),
         }
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_get_file_url",
         args=request.model_dump(),
@@ -312,7 +312,7 @@ async def pod_search_files(
     async def op(services: PodServices) -> JsonObject:
         return await search_files(services, request)
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_search_files",
         args=request.model_dump(),

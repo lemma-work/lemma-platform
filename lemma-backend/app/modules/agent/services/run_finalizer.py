@@ -7,7 +7,7 @@ retry and nobody can bill.
 
 Separated from the runner because "decide what happened" and "record what
 happened" fail differently. The recording half is the one that must survive
-cancellation, and the shielding that lets it do so — see `_finalize_safely` and
+cancellation, and the shielding that lets it do so — see `finalize_safely` and
 its caller — is subtle enough to deserve its own file rather than being the tail
 of a 350-line method.
 """
@@ -60,7 +60,7 @@ def is_usage_limit_error(exc: BaseException) -> bool:
     return isinstance(exc, UsageLimitExceededError)
 
 
-def _run_failure_message(exc: BaseException) -> str:
+def run_failure_message(exc: BaseException) -> str:
     """What the user reads when a run dies outside the harness's own handling.
 
     Distinguishing these matters: a quota exhaustion and a dropped connection
@@ -84,7 +84,7 @@ def _run_failure_message(exc: BaseException) -> str:
     return "Agent run failed. Please check the agent runtime configuration."
 
 
-async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
+async def finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
     """Await a finalization coroutine, swallowing all errors.
 
     Used inside ``asyncio.shield()`` so the coroutine completes even when the
@@ -106,7 +106,7 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
         )
 
 
-def _rejected_run_error_message(data: object) -> str:
+def rejected_run_error_message(data: object) -> str:
     """Build a user-facing message for a pre-dispatch harness rejection."""
     if isinstance(data, dict):
         detail = data.get("detail")

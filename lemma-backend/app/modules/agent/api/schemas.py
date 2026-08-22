@@ -416,21 +416,3 @@ class AgentRuntimeProfileDetailResponse(AgentRuntimeProfileResponse):
 
     harness: AgentHostHarnessResponse | None = None
     host_status: AgentHostStatus | None = None
-
-
-class AgentRunResponse(BaseModel):
-    id: UUID
-    conversation_id: UUID
-    agent_id: UUID | None = None
-    parent_run_id: UUID | None = None
-    status: AgentRunStatus
-    agent_runtime: AgentRuntimeConfig
-    started_at: datetime
-    finished_at: datetime | None = None
-    error: str | None = None
-    output_data: JsonValue | None = None
-    metadata: JsonObject | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)

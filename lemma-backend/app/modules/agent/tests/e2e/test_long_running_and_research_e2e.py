@@ -512,7 +512,7 @@ async def test_web_fetch_reports_a_clear_error_when_the_workspace_is_unreachable
     async def fake_get_session(*_args, **_kwargs):
         raise RuntimeError("sandbox connection refused")
 
-    monkeypatch.setattr(web_fetch_module, "_get_workspace_session", fake_get_session)
+    monkeypatch.setattr(web_fetch_module, "get_workspace_session", fake_get_session)
 
     result = await web_fetch_internal(
         ctx,
