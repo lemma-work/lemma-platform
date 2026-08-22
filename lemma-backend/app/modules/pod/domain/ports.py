@@ -14,6 +14,7 @@ from app.modules.pod.domain.pod_entities import (
     PodJoinRequestStatus,
     PodMemberEntity,
 )
+from app.modules.pod.domain.roles import PodRole
 
 
 class PodRepositoryPort(Protocol):
@@ -72,6 +73,21 @@ class PodMemberRepositoryPort(Protocol):
     async def check_user_has_pod_access(
         self, pod_id: UUID, org_member_id: UUID
     ) -> bool: ...
+
+    async def count_members_with_role(
+        self, pod_id: UUID, role: PodRole
+    ) -> int: ...
+
+
+class PodScheduleTeardownPort(Protocol):
+    """What pod deletion needs from the schedule module, stated locally.
+
+    Deleting a pod must take its standing work with it, in the same request --
+    an event-driven cleanup is a retry away from a deleted pod firing agents
+    nobody can see. See PS-OPS-020 and DEV-OPS-003.
+    """
+
+    async def delete_all_for_pod(self, pod_id: UUID) -> int: ...
 
 
 class PodJoinRequestRepositoryPort(Protocol):

@@ -24,6 +24,7 @@ from app.modules.pod.domain.ports import (
     OrganizationMembershipPort,
     PodMemberRepositoryPort,
     PodRepositoryPort,
+    PodScheduleTeardownPort,
 )
 from app.modules.pod.domain.visibility import roles_allow_required
 from app.modules.pod.services.pod_role_service import PodRoleService
@@ -38,6 +39,7 @@ class PodService:
         pod_role_service: PodRoleService | None = None,
         authorization_service: object | None = None,
         icon_service: IconCleanupPort | None = None,
+        schedule_teardown: PodScheduleTeardownPort | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -45,6 +47,7 @@ class PodService:
         self.pod_role_service = pod_role_service
         self.authorization_service = authorization_service
         self.icon_service = icon_service
+        self.schedule_teardown = schedule_teardown
 
     async def create_pod(self, entity: PodEntity, creator_user_id: UUID) -> PodEntity:
         member = await self.organization_repository.get_member(
@@ -91,7 +94,12 @@ class PodService:
         if not org_member:
             raise PodAccessDeniedError("User doesn't have access to this pod")
 
-        if org_member.role in [OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR]:
+        # Organization ownership reaches every pod, for reading as for listing
+        # and deletion. An editor's reach is pod membership, like everyone
+        # else's -- get/list/delete must answer with one rule or the product
+        # shows someone pods they may not open, or hides ones they may. See
+        # PS-POD-030 and DEV-POD-001.
+        if org_member.role == OrganizationRole.ORG_OWNER:
             return pod
 
         has_access = await self.pod_member_repository.check_user_has_pod_access(
@@ -183,6 +191,20 @@ class PodService:
         await self.pod_repository.update(pod)
         if self.icon_service:
             await self.icon_service.delete_by_url(old_icon_url)
+        # The pod's standing work stops with the pod, in this request — not one
+        # consumer tick later, and not only if the deletion event survives the
+        # queue. A deleted pod that can still report itself armed is the worst
+        # kind of runaway: invisible by construction, and billed. See
+        # PS-OPS-020, PS-POD-050, DEV-OPS-003.
+        if self.schedule_teardown is not None:
+            try:
+                await self.schedule_teardown.delete_all_for_pod(pod_id)
+            except Exception:  # noqa: BLE001 - the event-driven sweep retries
+                from app.core.log.log import get_logger
+
+                get_logger(__name__).debug(
+                    "pod.delete.schedule_teardown_failed", pod_id=pod_id
+                )
         return True
 
     async def list_pods_by_organization(

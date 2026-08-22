@@ -4,6 +4,7 @@ from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_ as sa_and
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -18,8 +19,8 @@ from app.modules.pod.domain.ports import (
     PodRepositoryPort,
 )
 from app.modules.pod.domain.errors import PodConflictError
-from app.modules.pod.domain.pod_entities import (
-    PodEntity,
+from app.modules.pod.domain.roles import PodRole
+from app.modules.pod.domain.pod_entities import (    PodEntity,
     PodJoinRequestEntity,
     PodJoinRequestStatus,
     PodMemberEntity,
@@ -412,6 +413,23 @@ class PodMemberRepository(PodMemberRepositoryPort):
         )
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
+
+    async def count_members_with_role(self, pod_id: UUID, role: PodRole) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(PodMember)
+            .join(
+                RoleAssignmentModel,
+                sa_and(
+                    RoleAssignmentModel.principal_type == "POD_MEMBER",
+                    RoleAssignmentModel.principal_id == PodMember.id,
+                ),
+            )
+            .join(RoleModel, RoleModel.id == RoleAssignmentModel.role_id)
+            .where(PodMember.pod_id == pod_id, RoleModel.name == role.value)
+        )
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one())
 
 
 class PodJoinRequestRepository(PodJoinRequestRepositoryPort):

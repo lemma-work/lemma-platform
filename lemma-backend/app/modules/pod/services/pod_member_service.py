@@ -320,6 +320,19 @@ class PodMemberService:
                 "pod.pod_member_service.fetch_user_info_event_emission.diagnostic"
             )
 
+        # The rule is about the pod, not about the requester: even an
+        # organization owner -- who bypasses pod roles for permission -- cannot
+        # leave the pod with nobody able to administer it. See PS-POD-041.
+        if self._member_has_role(pod_member, PodRole.ADMIN):
+            admin_count = await self.pod_member_repository.count_members_with_role(
+                pod_id, PodRole.ADMIN
+            )
+            if admin_count <= 1:
+                raise PodConflictError(
+                    "Cannot remove the last admin of the pod; appoint another "
+                    "admin first"
+                )
+
         deleted = await self.pod_member_repository.delete_entity(pod_member)
         if not deleted:
             raise PodMemberNotFoundError()
@@ -379,6 +392,23 @@ class PodMemberService:
         )
         target_user_id = org_member.user_id if org_member else None
         normalized_roles = normalize_role_list(roles)
+
+        # Demotion that would zero the admin count is refused whatever the
+        # requester's own standing -- an organization owner included. See
+        # PS-POD-041 and DEV-POD-002.
+        loses_admin = self._member_has_role(
+            pod_member, PodRole.ADMIN
+        ) and PodRole.ADMIN.value not in normalized_roles
+        if loses_admin:
+            admin_count = await self.pod_member_repository.count_members_with_role(
+                pod_id, PodRole.ADMIN
+            )
+            if admin_count <= 1:
+                raise PodConflictError(
+                    "Cannot demote the last admin of the pod; appoint another "
+                    "admin first"
+                )
+
         if self.pod_role_service is not None:
             await self.pod_role_service.require_role_manager_bounds(
                 pod_id=pod_member.pod_id,
