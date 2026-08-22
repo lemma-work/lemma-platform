@@ -28,7 +28,7 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { POD_WELCOME_PARAM, parseConversationMetadataParam, stripAssistantLaunchParams } from '@/lib/pods/composer-launch';
 import { buildNewPodConversationHref } from '@/lib/pods/new-pod-conversation';
-import { withSettingsReturnPath } from '@/lib/navigation/settings-return';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
 import type { AgentRuntimeConfig } from '@/lib/types';
 
 function waitForConversationReset() {
@@ -101,7 +101,6 @@ function PodConversationSurface({
     } = assistant;
     const assistantMessage = searchParams.get('assistantMessage');
     const searchParamsString = searchParams.toString();
-    const conversationRouteHref = `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}${searchParamsString ? `?${searchParamsString}` : ''}`;
     const scopedAgentName = searchParams.get('agent')?.trim() || null;
     const presentedResourceHref = normalizeConversationPresentedResourceHref(
         searchParams.get('presented'),
@@ -205,23 +204,16 @@ function PodConversationSurface({
             boundProject={projectFromMetadata(activeConversation?.metadata)}
             onAgentChange={handleAgentChange}
             onRuntimeChange={handleCommandRuntimeChange}
-            manageModelsHref={pod?.organization_id
-                ? withSettingsReturnPath(
-                    `/organizations/${pod.organization_id}/settings/agent-runtimes`,
-                    conversationRouteHref,
-                )
-                : undefined}
+            manageModelsHref={podModelsHref(podId)}
         />
     ) : undefined, [
         activeConversation,
         agents,
         canWriteConversations,
-        conversationRouteHref,
         effectiveDefaultRuntime,
         handleAgentChange,
         handleCommandRuntimeChange,
         isNewConversation,
-        pod,
         podId,
         runtimeCatalog,
         selectedAgentName,

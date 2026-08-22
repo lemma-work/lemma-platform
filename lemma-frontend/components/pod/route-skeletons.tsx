@@ -176,6 +176,22 @@ export function PodSettingsLedgerFill({ tabs = 4, rows = 6 }: { tabs?: number; r
 }
 
 /**
+ * Models settles into the pod default over the list it picks from — no count
+ * strip, so it must not borrow the ledger fill: `.lemma-index-tabs` carries a
+ * border and a background, and an empty one is a band of chrome the arriving
+ * page never draws.
+ */
+export function PodModelsFill({ rows = 4 }: { rows?: number }) {
+    return (
+        <div className="space-y-5" role="status" aria-label="Loading">
+            <SkeletonText lines={2} className="max-w-2xl" />
+            <Skeleton shape="block" className="h-16 w-full rounded-lg" />
+            <ListSkeleton rows={rows} />
+        </div>
+    );
+}
+
+/**
  * The same two fills at route level, for `loading.tsx`.
  *
  * They carry the width the shell would have given them (`max-w-6xl`), because a
@@ -187,6 +203,18 @@ export function PodSettingsSkeleton({ panels = 3 }: { panels?: number }) {
         <div className="resource-index-shell context-shell min-h-full bg-transparent">
             <div className="w-full max-w-6xl">
                 <PodSettingsPanelsFill panels={panels} />
+            </div>
+        </div>
+    );
+}
+
+export function PodModelsSkeleton({ rows = 4 }: { rows?: number }) {
+    return (
+        <div className="resource-index-shell context-shell min-h-full bg-transparent">
+            {/* Matches the route's `width="form"` shell, so the skeleton and the
+                content that replaces it share one measure. */}
+            <div className="w-full max-w-3xl">
+                <PodModelsFill rows={rows} />
             </div>
         </div>
     );

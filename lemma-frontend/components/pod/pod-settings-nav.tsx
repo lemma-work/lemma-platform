@@ -12,6 +12,11 @@ const ITEMS = [
         segment: '',
     },
     {
+        label: 'Models',
+        description: 'What this pod runs on, and everything it can pick from.',
+        segment: 'models',
+    },
+    {
         label: 'Access',
         description: 'Who can enter the pod and what role they hold.',
         segment: 'members',

@@ -308,6 +308,50 @@ export function agentHostHarnessHealth(health: string): { label: string; detail:
     };
 }
 
+/**
+ * One harness, described once, for whichever layout is drawing it.
+ *
+ * `HarnessRow` draws a card in onboarding; the models ledger draws a bare row.
+ * They disagreed about how much to say once already — which is why the row was
+ * extracted in the first place — so what a harness *is* lives here, and only
+ * where the pieces land is the layout's business.
+ */
+export function describeHarness(
+    harness: {
+        harness_key: string;
+        upstream_version?: string | null;
+        health: string;
+        config_options?: Array<{ category: string; options?: Array<Record<string, unknown>> }> | null;
+    },
+    { hostOnline = true }: { hostOnline?: boolean } = {},
+): {
+    logo: string | undefined;
+    /** The agent's version and model count — the two facts a reader can act on. */
+    facts: string[];
+    statusLabel: string;
+    usable: boolean;
+    /** What to say when the row cannot take work and the status alone won't explain it. */
+    blockedReason: string | null;
+} {
+    const health = agentHostHarnessHealth(harness.health);
+    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
+    const usable = health.ready && hostOnline;
+    return {
+        logo: harnessLogo(harness.harness_key),
+        facts: [
+            harness.upstream_version ? `agent ${harness.upstream_version}` : null,
+            modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
+        ].filter((fact): fact is string => fact !== null),
+        // Reachability decides first: a healthy agent on a sleeping laptop is
+        // not "Ready", whatever the harness itself last reported.
+        statusLabel: hostOnline ? health.label : 'Computer offline',
+        usable,
+        // An unreachable computer is stated by the computer's own row; repeating
+        // it under every agent it owns is the same sentence three times.
+        blockedReason: usable || !hostOnline ? null : health.detail,
+    };
+}
+
 const AGENT_HOST_STATUS_LABELS: Record<string, string> = {
     ONLINE: 'Online',
     OFFLINE: 'Offline',
