@@ -87,6 +87,13 @@ async def production_worker_process(
         "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
         "ENVIRONMENT": "testing",
         "DEBUG": "true",
+        # E2E workers have no production drain to protect, and the default
+        # 10s grace period is exactly the teardown's patience below -- so the
+        # worker spent its whole grace draining, overran, and got SIGKILLed.
+        # SIGKILL cannot be trapped, so coverage's `sigterm = true` handler
+        # never flushed and the subprocess's coverage was lost. That is the
+        # race that pinned the `agent` shard to one xdist worker.
+        "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
         "GCS_STORAGE_BUCKET": "",
@@ -137,7 +144,11 @@ async def production_worker_process(
         finally:
             process.terminate()
             try:
-                process.wait(timeout=10)
+                # Comfortably longer than the 1s grace period set above. The
+                # point is that SIGKILL becomes unreachable in practice, not
+                # that teardown is patient: a worker that needs 30s here is a
+                # bug worth seeing rather than one worth killing quietly.
+                process.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 process.kill()
             redis_client = redis.from_url(

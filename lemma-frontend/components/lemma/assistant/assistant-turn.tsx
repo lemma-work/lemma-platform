@@ -509,6 +509,9 @@ export const AssistantTurnView = memo(function AssistantTurnView({
   // tracked with the adjust-state-during-render pattern: one extra render,
   // once per turn, the first time it renders live.
   const [seenLive, setSeenLive] = useState(false);
+  // Read once, at the mount: a turn that was live when it appeared is an
+  // arrival and animates in; history was never live and mounts without motion.
+  const [arrivedLive] = useState(() => turn.isLive);
   if (turn.isLive && !seenLive) setSeenLive(true);
   const isSettled = seenLive && !turn.isLive;
   // The settle reorganizes the turn in one commit (pill to the header slot,
@@ -539,11 +542,17 @@ export const AssistantTurnView = memo(function AssistantTurnView({
     />
   );
 
+  // `data-arrived` drives the entrance motion and is fixed at the mount, never
+  // moving again. `data-live` cannot carry it: it flips on a few hundred
+  // milliseconds after the turn is already painted, and a CSS rule that starts
+  // matching an element already on screen replays its animation there — which
+  // is exactly how a sent message came to flicker once, on every send.
   return (
     <div
       ref={settleFlipRef}
       className="lchat-turn"
       data-live={turn.isLive || undefined}
+      data-arrived={arrivedLive || undefined}
       data-settled={isSettled || undefined}
       {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: ""}}
     >

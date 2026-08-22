@@ -2,11 +2,8 @@
 
 from contextlib import asynccontextmanager
 
-from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.core.registry import LemmaModule
-
-logger = get_logger(__name__)
 
 
 def _routers():

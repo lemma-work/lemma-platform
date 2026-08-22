@@ -11,6 +11,12 @@ import pytest
 T = TypeVar("T")
 
 
+#: First poll gap. Everything after it doubles until the caller's
+#: ``interval_seconds`` ceiling, so a condition that is already true costs one
+#: probe and a condition that takes a while is not polled in a hot loop.
+_INITIAL_POLL_SECONDS = 0.02
+
+
 async def eventually(
     *,
     label: str,
@@ -34,6 +40,7 @@ async def eventually(
     deadline = loop.time() + timeout_seconds
     last_value: T | None = None
     last_error: BaseException | None = None
+    delay = _INITIAL_POLL_SECONDS
     while True:
         try:
             last_value = await probe()
@@ -53,7 +60,15 @@ async def eventually(
         # still gets exactly one real probe instead of silently skipping it.
         if loop.time() >= deadline:
             break
-        await asyncio.sleep(interval_seconds)
+        # Ramp rather than a flat interval. Most waits here resolve on the first
+        # or second poll against an in-process ASGI probe that answers in single
+        # -digit milliseconds, so a flat 0.25s default overshot by 5-15x every
+        # time it missed -- and 51 of 77 call sites take the default, while
+        # every site that thought about it chose tighter. Backing off to the
+        # caller's interval keeps a genuinely slow condition from being polled
+        # in a hot loop.
+        await asyncio.sleep(min(delay, interval_seconds))
+        delay *= 2
 
     if last_error is not None:
         pytest.fail(f"Timed out waiting for {label}. Last error: {last_error!r}")

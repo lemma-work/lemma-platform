@@ -1,19 +1,12 @@
 import type { Metadata } from 'next';
 import { RootPageSwitch } from '@/components/root/root-page-switch';
 import { JsonLd } from '@/components/seo/json-ld';
+import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/seo/site-copy';
 import {
     organizationSchema,
     softwareApplicationSchema,
     webSiteSchema,
 } from '@/lib/seo/structured-data';
-
-/**
- * The shared preview is the first thing anyone sees — tab title, Slack unfurl,
- * social card. It carries the same thesis as the hero, not a second one.
- */
-const SITE_TITLE = "The software you need doesn't exist yet.";
-const SITE_DESCRIPTION =
-    'Your coding agent can write it. Lemma turns it into something your team can actually use — and run anywhere.';
 
 export const metadata: Metadata = {
     title: 'Lemma — the runtime for agent-built software',

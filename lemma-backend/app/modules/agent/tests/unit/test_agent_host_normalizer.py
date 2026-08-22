@@ -13,7 +13,7 @@ from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     is_terminal_event,

@@ -69,10 +69,6 @@ class Message(CreatedEntity):
     tool_result: JsonValue | None = None
     metadata: JsonObject | None = None
 
-    @property
-    def is_visible(self) -> bool:
-        return True
-
     @classmethod
     def create(
         cls,

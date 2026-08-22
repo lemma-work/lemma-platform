@@ -372,8 +372,8 @@ def test_teams_download_helper_classifies_urls_and_credentials():
         looks_like_bot_attachment_url as _looks_like_bot_attachment_url,
         split_sharepoint_site_and_item_path as _split_sharepoint_site_and_item_path,
     )
-    from app.modules.agent_surfaces.platforms.teams.service import (
-        _tenant_id_from_credentials,
+    from app.modules.agent_surfaces.platforms.teams.credentials import (
+        tenant_id_from_credentials as _tenant_id_from_credentials,
     )
 
     assert (

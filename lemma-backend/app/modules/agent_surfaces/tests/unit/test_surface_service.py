@@ -116,7 +116,7 @@ async def test_create_surface(monkeypatch):
         account_binding_resolver=enricher,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -156,7 +156,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
         account_binding_resolver=enricher,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     pod_id = uuid4()
@@ -253,7 +253,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "http://localhost:8711",
     )
 
@@ -293,7 +293,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     register = AsyncMock()
@@ -335,7 +335,7 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
     )
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -371,7 +371,7 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
     repo.get_system_credential_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -414,7 +414,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     repo.get_account_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -452,7 +452,7 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = ("tenant-123", None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -881,7 +881,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     register = AsyncMock()
@@ -997,7 +997,7 @@ async def test_update_surface_updates_account_metadata(monkeypatch):
     repo.update.return_value = entity
     enricher.resolve_binding.return_value = (None, "T999", "U-BOT-NEW")
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -1182,7 +1182,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
     when polling mode is on — outbound goes over the API and inbound is polled,
     so no public webhook callback is needed."""
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "http://localhost:8711",
     )
     monkeypatch.setattr(
@@ -1197,7 +1197,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
 
 async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "http://localhost:8711",
     )
     monkeypatch.setattr(

@@ -12,6 +12,7 @@
  */
 
 import { COMPANY_LEGAL_NAME } from '@/lib/company';
+import { config } from '@/lib/config';
 import { absoluteUrl, publicSiteUrl } from '@/lib/seo/site-url';
 
 export type JsonLdSchema = Record<string, unknown>;
@@ -33,9 +34,17 @@ export function organizationSchema(): JsonLdSchema {
         '@id': ORGANIZATION_ID,
         name: 'Lemma',
         legalName: COMPANY_LEGAL_NAME,
+        description:
+            'Lemma is the runtime for agent-built software: a coding agent writes the app, and Lemma gives it a pod so a whole team can use it.',
         url: publicSiteUrl(),
         logo: absoluteUrl('/icon-192.png'),
         sameAs: ['https://github.com/lemma-work'],
+        contactPoint: {
+            '@type': 'ContactPoint',
+            email: config.SUPPORT_EMAIL,
+            contactType: 'customer support',
+            url: absoluteUrl('/contact'),
+        },
     };
 }
 

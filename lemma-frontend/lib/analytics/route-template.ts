@@ -18,11 +18,13 @@
  *  because they do not appear in URLs. Kept in sync by `route-template.test.ts`. */
 export const ROUTE_TEMPLATES: readonly string[] = [
     "/",
+    "/about",
     "/auth/[[...path]]",
     "/blog",
     "/blog/[slug]",
     "/changelog",
     "/connectors",
+    "/contact",
     "/conversations",
     "/create-pod",
     "/docs",

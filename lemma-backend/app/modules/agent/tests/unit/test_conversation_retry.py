@@ -12,6 +12,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageRole,
 )
+import app.modules.agent.services.conversation_queries as queries
 from app.modules.agent.services.conversation_retry_service import (
     ConversationRetryService,
 )
@@ -228,6 +229,7 @@ async def test_retry_failed_run_requires_a_persisted_user_turn() -> None:
 async def test_conversation_detail_reports_persisted_retryability(
     has_non_user_activity: bool,
     expected_retryable: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
@@ -247,8 +249,10 @@ async def test_conversation_detail_reports_persisted_retryability(
     conversation.last_run_status = AgentRunStatus.FAILED
     repository.get_conversation.return_value = conversation
     repository.run_has_only_user_messages.return_value = not has_non_user_activity
-    service._expected_agent_id = AsyncMock(return_value=None)
-    service._require_agent_action = AsyncMock()
+    monkeypatch.setattr(
+        queries, "resolve_expected_agent_id", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(queries, "require_agent_action", AsyncMock())
 
     result = await service.get_conversation(
         conversation_id=conversation.id,
