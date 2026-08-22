@@ -46,13 +46,6 @@ async def _count_tokens_off_loop(messages: Sequence[object]) -> int:
     return await run_blocking(count_model_message_tokens, messages)
 
 
-def _is_response_with_tool_calls(message: object) -> bool:
-    return any(
-        type(part).__name__ == "ToolCallPart"
-        for part in getattr(message, "parts", ()) or ()
-    )
-
-
 def _starts_with_tool_returns(message: object) -> bool:
     return any(
         type(part).__name__ == "ToolReturnPart"

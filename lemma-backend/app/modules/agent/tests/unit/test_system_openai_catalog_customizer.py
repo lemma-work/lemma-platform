@@ -17,6 +17,8 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
+)
+from app.modules.agent.services.runtime_system_profiles import (
     register_system_openai_catalog_customizer,
     system_lemma_openai_catalog_model_names,
 )

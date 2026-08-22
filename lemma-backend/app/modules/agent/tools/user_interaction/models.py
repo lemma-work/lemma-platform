@@ -198,17 +198,6 @@ class DisplayResourceResponse(BaseToolResponse):
     )
 
 
-class UserApprovalResponse(BaseToolResponse):
-    decision: AgentRunApprovalDecision | None = Field(
-        default=None,
-        description="User approval decision returned by the approval API.",
-    )
-    response: JsonObject = Field(
-        default_factory=dict,
-        description="Optional structured response submitted with the approval decision.",
-    )
-
-
 class RequestApprovalResponse(BaseToolResponse):
     """Result of a higher-order ``request_approval`` call.
 

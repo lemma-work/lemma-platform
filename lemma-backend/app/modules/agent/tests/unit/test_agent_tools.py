@@ -22,10 +22,8 @@ from app.modules.agent.infrastructure.harnesses.history import build_history_pro
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
-)
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
     _inline_schema,

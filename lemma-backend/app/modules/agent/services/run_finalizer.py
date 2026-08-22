@@ -40,9 +40,6 @@ from app.modules.agent.services.realtime import (
     error_payload,
     publish_conversation_event,
 )
-from app.modules.agent.services.runtime_history import (
-    FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
-)
 from app.modules.agent.services.run_identity import RunIdentity
 from app.composition.agent_usage import (
     usage_context_from_agent_context,
@@ -50,11 +47,6 @@ from app.composition.agent_usage import (
 from app.modules.agent.tools.context import ConversationContext
 
 logger = get_logger(__name__)
-
-# Ceiling on the shielded finalization write. Comfortably longer than the write
-# takes and comfortably inside the worker's shutdown grace period, so a healthy
-# run always finalizes and a wedged one still lets the process exit.
-_FINALIZATION_TIMEOUT_SECONDS = 8.0
 
 
 def is_usage_limit_error(exc: BaseException) -> bool:

@@ -61,7 +61,6 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
-    FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
     apply_surface_history_window,
     runtime_full_run_ids,
     select_runtime_history,

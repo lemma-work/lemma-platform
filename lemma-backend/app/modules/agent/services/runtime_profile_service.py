@@ -46,8 +46,6 @@ from app.modules.agent.services.runtime_system_profiles import (
     SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
     _system_lemma_profile,
     _system_profile_by_id,
-    register_system_openai_catalog_customizer as register_system_openai_catalog_customizer,
-    system_lemma_openai_catalog_model_names as system_lemma_openai_catalog_model_names,
 )
 from app.modules.agent.services.runtime_capabilities import (
     _unselected_capabilities,
