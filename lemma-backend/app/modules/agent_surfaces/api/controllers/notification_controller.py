@@ -46,7 +46,9 @@ router = APIRouter(prefix="/pods/{pod_id}/notifications", tags=["notifications"]
     response_model=NotificationListResponse,
     operation_id="notification.list",
     summary="List My Notifications",
-    dependencies=[require_pod_membership("read notifications in this pod")],
+    dependencies=[
+        require_pod_membership("read notifications in this pod", enumerates=True)
+    ],
     description=(
         "Notifications addressed to the current user in this pod, newest first. "
         "Filter with `status` (repeatable). Each item carries everything needed "
@@ -86,7 +88,9 @@ async def list_notifications(
     response_model=NotificationUnreadCountResponse,
     operation_id="notification.unread_count",
     summary="Count My Unread Notifications",
-    dependencies=[require_pod_membership("read notifications in this pod")],
+    dependencies=[
+        require_pod_membership("read notifications in this pod", enumerates=True)
+    ],
     description=(
         "Unread, not unanswered. A notification you have read but not yet acted "
         "on has stopped being new."
@@ -110,6 +114,7 @@ async def unread_count(
     "/{notification_id}/read",
     response_model=NotificationResponse,
     operation_id="notification.mark_read",
+    dependencies=[require_pod_membership("act on notifications in this pod")],
     summary="Mark Notification Read",
 )
 async def mark_read(
@@ -131,6 +136,7 @@ async def mark_read(
     "/read-all",
     response_model=NotificationUnreadCountResponse,
     operation_id="notification.mark_all_read",
+    dependencies=[require_pod_membership("act on notifications in this pod")],
     summary="Mark All My Notifications Read",
     description="Returns the remaining unread count, which is always zero.",
 )
@@ -149,6 +155,7 @@ async def mark_all_read(
     "/{notification_id}/respond",
     response_model=NotificationResponse,
     operation_id="notification.respond",
+    dependencies=[require_pod_membership("act on notifications in this pod")],
     summary="Respond To A Notification",
     description=(
         "Answer a notification from the app. Produces the same `RESPONDED` an "
@@ -185,6 +192,7 @@ async def respond_to_notification(
     "/{notification_id}/acknowledge",
     response_model=NotificationResponse,
     operation_id="notification.acknowledge",
+    dependencies=[require_pod_membership("act on notifications in this pod")],
     summary="Acknowledge A Notification",
     description=(
         "Dismiss a notification that asked for nothing. Returns 409 when a "

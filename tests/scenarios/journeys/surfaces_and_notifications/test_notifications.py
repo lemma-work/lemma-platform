@@ -124,3 +124,48 @@ async def test_an_outsider_sees_no_notifications(world, team):
     assert response.status_code >= 400, (
         f"an outsider read pod notifications ({response.status_code})"
     )
+
+
+@scenario("A removed member cannot act on the notifications they still hold")
+@proves("PS-SURF-030")
+@covers("notification.respond", "notification.acknowledge", "notification.mark_read")
+async def test_removal_closes_the_inbox_it_left_behind(world, team):
+    """Reading was gated; answering was not, and answering is the louder half.
+
+    A notification is how an agent asks a person something, so responding to
+    one steers the run that asked. Gating the two read routes and leaving
+    respond/acknowledge/mark_read open closed the window and left the door.
+    Same rule as PS-POD-040: membership is the precondition, for reading and
+    for acting alike.
+    """
+    alice, bob, pod = team
+    await alice.notifies(bob, in_pod=pod, title="Ship it?")
+    notification = (await bob.notifications_in(pod))[0]
+
+    await alice.removes_member(await alice.membership_of(bob, in_pod=pod), from_pod=pod)
+
+    answered = await bob.api.call(
+        "POST",
+        f"/pods/{pod['id']}/notifications/{notification['id']}/respond",
+        json={"summary": "Yes, ship it."},
+    )
+    dismissed = await bob.api.call(
+        "POST",
+        f"/pods/{pod['id']}/notifications/{notification['id']}/acknowledge",
+    )
+    read = await bob.api.call(
+        "POST",
+        f"/pods/{pod['id']}/notifications/{notification['id']}/read",
+    )
+
+    # All three reported together: which of them is still open says how much of
+    # the inbox a removed person keeps, and stopping at the first would hide it.
+    assert (
+        answered.status_code >= 400
+        and dismissed.status_code >= 400
+        and read.status_code >= 400
+    ), (
+        f"a removed member could still act on their old notifications: "
+        f"respond={answered.status_code} acknowledge={dismissed.status_code} "
+        f"mark_read={read.status_code}"
+    )
