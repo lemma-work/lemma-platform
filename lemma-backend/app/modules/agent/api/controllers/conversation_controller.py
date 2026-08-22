@@ -208,7 +208,7 @@ async def list_conversations(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
     _ = ctx
-    conversations, next_cursor = await service.list_conversations(
+    conversations, next_cursor = await service.queries.list_conversations(
         pod_id=pod_id,
         agent_selection=_parse_conversation_agent_selection(agent_name),
         user_id=user.id,
@@ -243,7 +243,7 @@ async def get_conversation(
     ctx: PodContextDep,
 ) -> ConversationResponse:
     _ = ctx
-    conversation = await service.get_conversation(
+    conversation = await service.queries.get_conversation(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -307,7 +307,7 @@ async def list_messages(
 ) -> MessageListResponse:
     _ = ctx
     token_sequence = _parse_message_page_token(page_token)
-    messages, next_cursor = await service.list_messages(
+    messages, next_cursor = await service.queries.list_messages(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -342,7 +342,7 @@ async def list_approvals(
     ctx: PodContextDep,
 ) -> UserApprovalListResponse:
     _ = ctx
-    approvals = await service.list_user_approvals(
+    approvals = await service.queries.list_user_approvals(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -508,7 +508,7 @@ async def stream_conversation(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
             service = _build_conversation_service(scope.uow)
-            await service.get_conversation(
+            await service.queries.get_conversation(
                 conversation_id=conversation_id,
                 user_id=user.id,
                 pod_id=pod_id,
@@ -541,7 +541,7 @@ async def stream_conversation(
                         pod_id=pod_id,
                     )
                     if agent_run_id is not None
-                    else await service.get_active_agent_run(
+                    else await service.queries.get_active_agent_run(
                         conversation_id=conversation_id,
                         user_id=user.id,
                         pod_id=pod_id,

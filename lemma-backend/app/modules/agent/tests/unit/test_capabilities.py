@@ -101,10 +101,12 @@ def test_agent_has_toolset_detects_todo():
 
 
 def test_web_search_capability_bundles_tool_and_prompt():
-    from app.modules.agent.capabilities.web_search import WebSearchCapability
+    from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.tools.graceful_toolset import GracefulToolset
 
-    cap = WebSearchCapability()
+    # Built the way the assembler builds it. Web search used to have a bespoke
+    # capability class that did exactly what the generic instructed path does.
+    cap = _visible_capability(web_search_toolset)
     # The toolset is graceful-wrapped so a web-search failure becomes a tool
     # response rather than aborting the run.
     toolset = cap.get_toolset()
@@ -148,24 +150,21 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
     from app.modules.agent.capabilities.prompt_caching import (
         PromptCachingCapability as _PC,
     )
-    from app.modules.agent.capabilities.web_search import WebSearchCapability
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
 
     # No extra (pod/image/audio) toolsets → no MCP/token path, no network.
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=None,
-        agent=SimpleNamespace(
-            toolsets=[AgentToolset.WEB_SEARCH, AgentToolset.WORKSPACE_CLI]
-        ),
         ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
         full_toolsets=[web_search_toolset, workspace_cli_toolset],
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=True,
     )
-    assert any(isinstance(c, WebSearchCapability) for c in capabilities)
+    assert any(
+        isinstance(c, InstructedToolsetCapability)
+        and c.get_serialization_name() == "web_search"
+        for c in capabilities
+    )
     # The workspace CLI toolset is wrapped as an instructed capability that carries
     # its usage fragment.
     assert any(
@@ -194,12 +193,8 @@ async def test_caching_capability_uses_the_lever_its_protocol_understands():
 
     async def settings_for(protocol: RuntimeProfileProtocol) -> dict[str, object]:
         capabilities = await build_lemma_harness_tooling(
-            uow_factory=None,
-            agent=SimpleNamespace(toolsets=[AgentToolset.WEB_SEARCH]),
             ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
             full_toolsets=[web_search_toolset],
-            agent_run_id=uuid4(),
-            model_name="m",
             enable_prompt_caching=True,
             protocol=protocol,
         )
@@ -243,7 +238,8 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {"is_sub_agent": True}  # a sibling metadata key
@@ -251,7 +247,9 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
 
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -376,14 +374,17 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -430,14 +431,17 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -520,14 +524,17 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -690,7 +697,6 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -711,12 +717,8 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -768,7 +770,6 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -786,12 +787,8 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -819,7 +816,6 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
     from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
         view_image_toolset,
@@ -841,12 +837,8 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         if supports_vision:
             toolsets = [*full_toolsets, view_image_toolset]
         return await build_lemma_harness_tooling(
-            uow_factory=_FakeUoW,
-            agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
             ctx=deps,
             full_toolsets=toolsets,
-            agent_run_id=uuid4(),
-            model_name="m",
             enable_prompt_caching=False,
         )
 
@@ -900,7 +892,6 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -918,12 +909,8 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -1006,12 +993,8 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     )
     full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=agent_entity,
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 

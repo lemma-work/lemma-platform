@@ -343,14 +343,3 @@ def build_todo_toolset(
         return _todo_result(todos)
 
     return FunctionToolset[BaseAgentContext](tools=[write_todos], id=TODO_TOOLSET_ID)
-
-
-def build_todo_capability(
-    *,
-    uow_factory: UnitOfWorkFactory,
-    conversation_id: UUID,
-) -> TodoCapability:
-    """Wrap the todo toolset in a capability (adds the task-list instructions)."""
-    return TodoCapability(
-        build_todo_toolset(uow_factory=uow_factory, conversation_id=conversation_id)
-    )

@@ -44,12 +44,12 @@ from app.modules.agent.services.runtime_profile_creation import (
 from app.modules.agent.services.runtime_system_profiles import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID as DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
-    _system_lemma_profile,
-    _system_profile_by_id,
+    system_lemma_profile,
+    system_profile_by_id,
 )
 from app.modules.agent.services.runtime_capabilities import (
-    _unselected_capabilities,
-    _with_harness_vision,
+    unselected_capabilities,
+    with_harness_vision,
 )
 
 logger = get_logger(__name__)
@@ -142,7 +142,7 @@ class AgentRuntimeProfileService:
         return getattr(getattr(self.repository, "uow", None), "session", None)
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
-        profile = _system_lemma_profile()
+        profile = system_lemma_profile()
         return [profile] if profile is not None else []
 
     async def list_profiles(
@@ -342,7 +342,7 @@ class AgentRuntimeProfileService:
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
         harness_sees = await self._harness_reads_images(profile)
-        model = _with_harness_vision(model, harness_sees=harness_sees)
+        model = with_harness_vision(model, harness_sees=harness_sees)
         credentials = reveal_credentials(profile.credentials)
         return ResolvedAgentRuntime(
             profile=profile,
@@ -356,7 +356,7 @@ class AgentRuntimeProfileService:
             unselected_capabilities=(
                 []
                 if model is not None
-                else _unselected_capabilities(profile, harness_sees=harness_sees)
+                else unselected_capabilities(profile, harness_sees=harness_sees)
             ),
         )
 
@@ -427,7 +427,7 @@ class AgentRuntimeProfileService:
         organization_id: UUID | None,
         user_id: UUID,
     ) -> AgentRuntimeProfile | None:
-        system_profile = _system_profile_by_id(profile_id)
+        system_profile = system_profile_by_id(profile_id)
         if system_profile is not None:
             return system_profile
         if self.repository is None or organization_id is None:

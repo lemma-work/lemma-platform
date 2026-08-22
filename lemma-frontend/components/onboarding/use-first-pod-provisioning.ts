@@ -12,7 +12,7 @@ import {
 } from "@/lib/hooks/use-organizations";
 import { useUpdateProfile } from "@/lib/hooks/use-user";
 import { trackPodReady, type OnboardingEntryKind } from "@/lib/analytics/onboarding";
-import { buildNewPodConversationHref } from "@/lib/pods/new-pod-conversation";
+import { buildNewPodWelcomeHref } from "@/lib/pods/new-pod-conversation";
 import { OrganizationJoinPolicy, type Organization } from "@/lib/types";
 import { normalizeEmailDomain, workDomainFromEmail } from "@/lib/utils/organization-slugs";
 
@@ -143,10 +143,11 @@ export function useFirstPodProvisioning({
         trackPodReady(entryKind, profile?.created_at ?? null);
         // Into the conversation, not onto pod home: nobody answered a question
         // to get here, so the launcher there has nothing to offer them yet.
+        // The conversation opens behind the welcome door rather than opening
+        // itself with a greeting — nobody has said anything to answer yet.
         router.replace(
-          buildNewPodConversationHref({
+          buildNewPodWelcomeHref({
             podId: pod.id,
-            podName: pod.name,
             workDomain,
             isFirstPod: true,
           }),

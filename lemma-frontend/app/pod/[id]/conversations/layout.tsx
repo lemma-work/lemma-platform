@@ -9,6 +9,7 @@ import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-he
 import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
 import { projectFromMetadata } from '@/lib/assistant/project-selection';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
+import { PodWelcome, type PodWelcomeChoice } from '@/components/pod/pod-welcome';
 import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
 import {
@@ -25,8 +26,9 @@ import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useAgent, useAgents } from '@/lib/hooks/use-agents';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
-import { parseConversationMetadataParam, stripAssistantLaunchParams } from '@/lib/pods/composer-launch';
-import { withSettingsReturnPath } from '@/lib/navigation/settings-return';
+import { POD_WELCOME_PARAM, parseConversationMetadataParam, stripAssistantLaunchParams } from '@/lib/pods/composer-launch';
+import { buildNewPodConversationHref } from '@/lib/pods/new-pod-conversation';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
 import type { AgentRuntimeConfig } from '@/lib/types';
 
 function waitForConversationReset() {
@@ -99,7 +101,6 @@ function PodConversationSurface({
     } = assistant;
     const assistantMessage = searchParams.get('assistantMessage');
     const searchParamsString = searchParams.toString();
-    const conversationRouteHref = `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}${searchParamsString ? `?${searchParamsString}` : ''}`;
     const scopedAgentName = searchParams.get('agent')?.trim() || null;
     const presentedResourceHref = normalizeConversationPresentedResourceHref(
         searchParams.get('presented'),
@@ -203,23 +204,16 @@ function PodConversationSurface({
             boundProject={projectFromMetadata(activeConversation?.metadata)}
             onAgentChange={handleAgentChange}
             onRuntimeChange={handleCommandRuntimeChange}
-            manageModelsHref={pod?.organization_id
-                ? withSettingsReturnPath(
-                    `/organizations/${pod.organization_id}/settings/agent-runtimes`,
-                    conversationRouteHref,
-                )
-                : undefined}
+            manageModelsHref={podModelsHref(podId)}
         />
     ) : undefined, [
         activeConversation,
         agents,
         canWriteConversations,
-        conversationRouteHref,
         effectiveDefaultRuntime,
         handleAgentChange,
         handleCommandRuntimeChange,
         isNewConversation,
-        pod,
         podId,
         runtimeCatalog,
         selectedAgentName,
@@ -311,12 +305,57 @@ function PodConversationSurface({
         })();
     }, [assistantMessage, clearMessages, closeAssistant, conversationInstructions, conversationMetadata, isNewConversation, isReady, newConversationScopeKey, podId, router, searchParams, sendMessage]);
 
+    /**
+     * A pod that was just created arrives here having said nothing, so the door
+     * asks before anything is sent. `assistantMessage` in the URL means the
+     * asking is over — either the door was answered, or the arrival stated its
+     * intent somewhere else — and the effect above is already sending.
+     */
+    const showWelcome = isNewConversation
+        && searchParams.get(POD_WELCOME_PARAM) === '1'
+        && !assistantMessage;
+    const isFirstPod = conversationMetadata?.first_run === true;
+
+    /**
+     * Answering the door is a `replace` back onto this same route carrying an
+     * `assistantMessage`, which the effect above then sends. Nothing new sends
+     * a message: the door only decides which sentence, and with what framing.
+     *
+     * `null` is the way past — no opening message means the greeting and the
+     * welcome turn, which is exactly what this route did before the door.
+     */
+    const leaveWelcome = (choice: PodWelcomeChoice | null) => {
+        router.replace(buildNewPodConversationHref({
+            podId,
+            podName: pod?.name ?? '',
+            workDomain: typeof conversationMetadata?.work_domain === 'string'
+                ? conversationMetadata.work_domain
+                : null,
+            isFirstPod,
+            openingMessage: choice?.message,
+            extraInstructions: choice?.instructions,
+            metadata: {
+                ...conversationMetadata,
+                welcome_choice: choice ? choice.optionId ?? 'own_words' : 'skipped',
+            },
+        }));
+    };
+
     // One tree for both states, deliberately. This component is now the same
     // instance before and after the conversation exists, so what differs
     // between "new" and "open" has to be props — swapping the element type here
     // would hand back the remount the layout was moved up to avoid.
     const conversationSurface = (
         <div ref={newWorkspaceRef} className="flex h-full min-h-0 flex-col bg-[var(--pod-main-bg)]">
+            {/* Gated on the pod having loaded, because answering the door
+                builds instructions that name it — a click that landed a beat
+                early would tell the agent the pod is called nothing. */}
+            {showWelcome && pod ? (
+                <PodWelcome
+                    onStart={leaveWelcome}
+                    onSkip={() => leaveWelcome(null)}
+                />
+            ) : null}
             <section className="min-h-0 flex-1">
                 {isRouteConversationSelected ? (
                     <PodAssistantEmbedded

@@ -107,7 +107,9 @@ async def test_resend_send_email_builds_resend_api_payload():
     body = captured["json"]
     assert body["from"] == "Lemma <pod-1@ops.asur.work>"
     assert body["to"] == ["bob@example.com"]
-    assert "<strong>hi</strong>" in body["html"]
+    # Bold survives; the tag now carries inline styling, because a mail client
+    # cannot be relied on for a stylesheet. See email_styles.
+    assert "<strong style=" in body["html"] and ">hi</strong>" in body["html"]
     assert body["headers"]["In-Reply-To"] == "<m1@example.com>"
     assert body["attachments"][0]["filename"] == "note.txt"
 

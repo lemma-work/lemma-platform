@@ -26,7 +26,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
     PodServices,
     empty_data_error,
 )
-from app.modules.agent.tools.pod.pod_common import _has_meaningful_data, _run
+from app.modules.agent.tools.pod.pod_common import has_meaningful_data, run_pod_tool
 from app.modules.agent.tools.pod.pod_file_tools import (
     pod_get_file_url,
     pod_list_files,
@@ -100,7 +100,7 @@ async def pod_tables(
         )
         return {"success": True, "tables": [_table_summary(t) for t in tables]}
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps, tool_name="pod_tables", args=request.model_dump(), op=op
     )
 
@@ -136,7 +136,7 @@ async def pod_get_records(
             "total": total,
         }
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_get_records",
         args=request.model_dump(),
@@ -156,7 +156,7 @@ async def pod_write_record(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        if request.action in ("create", "update") and not _has_meaningful_data(
+        if request.action in ("create", "update") and not has_meaningful_data(
             request.data
         ):
             # Guard against silent blank-row writes: an empty/all-null `data`
@@ -195,7 +195,7 @@ async def pod_write_record(
         )
         return {"success": bool(deleted), "deleted": bool(deleted)}
 
-    return await _run(
+    return await run_pod_tool(
         ctx.deps,
         tool_name="pod_write_record",
         args=request.model_dump(),
@@ -225,7 +225,9 @@ async def pod_query(
         )
         return {"success": True, "rows": to_json_value(rows), "total": total}
 
-    return await _run(ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op)
+    return await run_pod_tool(
+        ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op
+    )
 
 
 pod_toolset = FunctionToolset[BaseAgentContext](

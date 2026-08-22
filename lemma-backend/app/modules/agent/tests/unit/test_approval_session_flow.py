@@ -168,3 +168,266 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
         tool_args={},
         user_id=uuid4(),
     )
+
+
+class TestTheSecondDenialOfTheSameCall:
+    """DEV-ACCESS-002: approve -> still denied -> approve -> still denied.
+
+    Reading a table needs two permissions and the authorizer stops at the first
+    missing one, so the agent hits a second denial for the *same* call. The
+    exact-command key is tool-name-plus-args, so that second attempt matches the
+    session approval recorded by the first and reaches the auto-approve path --
+    which used to execute the tool and return, swallowing the request without
+    ever recording the new permission. The agent hit the same denial on its own
+    next attempt, forever.
+
+    The fix is that the fast path now *requires* every permission the call names,
+    rather than recording them. A call asking for something not yet granted
+    falls through to the pause, so the user is asked once and
+    `record_session_approvals` writes it with a human behind it.
+    """
+
+    @staticmethod
+    def _deps(conversation_id, user_id):
+        return SimpleNamespace(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            workload_id=None,
+            agent_run_id=uuid4(),
+            supports_pause_signal=True,
+        )
+
+    @staticmethod
+    def _patch(monkeypatch, *, granted: set[str], executed: list[str]):
+        async def has_session_approval(*, session_id, workload_actor_id, permission_id):
+            return permission_id in granted
+
+        async def record_session_approval(**kwargs):  # pragma: no cover
+            raise AssertionError(
+                "the auto-approve path must never mint a grant; only a resolved "
+                f"approval may do that (tried to record {kwargs['permission_id']!r})"
+            )
+
+        async def execute_as_user(self, *, deps, tool_name, args):
+            executed.append(tool_name)
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.has_session_approval",
+            has_session_approval,
+        )
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.record_session_approval",
+            record_session_approval,
+        )
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+            execute_as_user,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_new_permission_falls_through_to_the_pause(self, monkeypatch):
+        """The loop, closed: the request is no longer swallowed."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"table": "orders"}
+        executed: list[str] = []
+        # The user approved this exact call earlier, but has never been asked
+        # about the permission the second denial named.
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("pod_get_records", args)},
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="pod_get_records",
+            args=args,
+            permission_ids=["datastore.record.read"],
+        )
+
+        assert result is None, "must pause and ask, not silently self-approve"
+        assert executed == [], "nothing may run before the user has been asked"
+
+    @pytest.mark.asyncio
+    async def test_a_fully_granted_call_still_auto_executes(self, monkeypatch):
+        """Once everything is granted, the repeat runs without re-prompting."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"table": "orders"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={
+                exact_command_permission_id("pod_get_records", args),
+                "datastore.record.read",
+            },
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="pod_get_records",
+            args=args,
+            permission_ids=["datastore.record.read"],
+        )
+
+        assert result is not None and result.executed is True
+        assert executed == ["pod_get_records"]
+
+    @pytest.mark.asyncio
+    async def test_the_model_cannot_mint_a_grant_it_was_never_given(self, monkeypatch):
+        """The escalation this path must not allow.
+
+        `permission_ids` is a tool argument, so a model that has read a poisoned
+        page writes whatever that page said. One approval of a harmless
+        `exec_command` must not become `pod.delete` without a card.
+        """
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"cmd": "echo hi"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("exec_command", args)},
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="exec_command",
+            args=args,
+            permission_ids=["pod.delete", "datastore.table.delete"],
+        )
+
+        # `_patch` raises if anything tries to record a grant, so reaching here
+        # at all is half the assertion.
+        assert result is None
+        assert executed == []
+
+    @pytest.mark.asyncio
+    async def test_a_call_carrying_no_permissions_still_auto_executes(
+        self, monkeypatch
+    ):
+        """exec_command has no structured permission -- the exact-command key is
+        the whole grant, and that path must keep working."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"cmd": "ls"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("exec_command", args)},
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="exec_command",
+            args=args,
+            permission_ids=None,
+        )
+
+        assert result is not None and result.executed is True
+        assert executed == ["exec_command"]
+
+
+class TestAnApprovedToolRunsAtMostOnce:
+    """A retried reconcile job must not run the command a second time.
+
+    Approving a `request_approval` executes the wrapped tool with the user's
+    authority — deleting records, deploying an app, sending mail. The guard used
+    to be a *read* of the tool return, which is written only after the tool
+    runs, so the window between check and write was one whole execution wide.
+
+    Concurrent clicks were already safe: the reconcile job has a deterministic
+    id and streaq's `publish_task` does `SET NX`. What was not safe is a retry
+    of the job already claimed — `max_tries=3`, and streaq requeues a job
+    cancelled inside the shutdown grace as well as reclaiming one whose worker
+    died. `execute_approved_tool_as_user` catches `Exception`, and
+    `CancelledError` is not one, so nothing intercepted the unwind.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_second_attempt_does_not_reach_the_tool(self):
+        from app.modules.agent.services.conversation_approvals import (
+            ApprovalCoordinator,
+        )
+
+        claims: list[str] = []
+        builds: list[str] = []
+
+        class _Repo:
+            async def claim_approval_execution(self, *, conversation_id, approval_id):
+                # The real conditional UPDATE: exactly one caller wins.
+                first = approval_id not in claims
+                claims.append(approval_id)
+                return first
+
+        class _Uow:
+            async def commit(self):
+                return None
+
+        class _Builder:
+            async def build(self, **kwargs):
+                builds.append(kwargs["kind"])
+                return "request_approval", {"success": True}
+
+        coordinator = ApprovalCoordinator(_Uow(), _Repo(), _Builder(), None)
+
+        assert (
+            await coordinator._claim_execution(
+                conversation_id=uuid4(), approval_id="approval-1"
+            )
+            is True
+        )
+        assert (
+            await coordinator._claim_execution(
+                conversation_id=uuid4(), approval_id="approval-1"
+            )
+            is False
+        ), "a retry took the claim a second time and would re-run the tool"
+        assert builds == []
+
+    @pytest.mark.asyncio
+    async def test_the_claim_is_committed_before_the_tool_could_run(self):
+        """An uncommitted claim is not a claim.
+
+        The whole point is that a worker killed mid-execution leaves evidence
+        behind. Evidence inside a transaction that dies with the worker is no
+        evidence at all — the retry would find the row unclaimed and run again.
+        """
+        from app.modules.agent.services.conversation_approvals import (
+            ApprovalCoordinator,
+        )
+
+        order: list[str] = []
+
+        class _Repo:
+            async def claim_approval_execution(self, **_kwargs):
+                order.append("claim")
+                return True
+
+        class _Uow:
+            async def commit(self):
+                order.append("commit")
+
+        coordinator = ApprovalCoordinator(_Uow(), _Repo(), None, None)
+        await coordinator._claim_execution(
+            conversation_id=uuid4(), approval_id="approval-1"
+        )
+
+        assert order == ["claim", "commit"]

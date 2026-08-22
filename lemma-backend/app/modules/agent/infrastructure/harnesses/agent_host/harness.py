@@ -60,9 +60,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     refresh_credential,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
-    _AgentHostRunConfig,
-    _agent_host_run_config,
-    _resolve_pod_cwd,
+    AgentHostRunConfig,
+    agent_host_run_config,
+    resolve_pod_cwd,
 )
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.services.run_suspension import run_suspended_on
@@ -139,7 +139,7 @@ class RemoteHarness:
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         try:
-            run_config = _agent_host_run_config(options)
+            run_config = agent_host_run_config(options)
         except (KeyError, TypeError, ValueError) as exc:
             yield error_event(
                 agent_run_id, f"Invalid Agent Host runtime profile: {exc}"
@@ -193,7 +193,7 @@ class RemoteHarness:
         ctx: AgentContext,
         conversation: Conversation,
         options: HarnessOptions,
-        run_config: _AgentHostRunConfig,
+        run_config: AgentHostRunConfig,
         dispatch: DispatchedRun,
     ) -> AsyncIterator[AgentEvent]:
         """Drive one dispatched run to a terminal event.
@@ -376,7 +376,7 @@ class RemoteHarness:
                 payload=entry.payload,
                 pod_id=conversation.pod_id,
                 user_context=ctx,
-                directory_path=f"{_resolve_pod_cwd(conversation)}/agent-output",
+                directory_path=f"{resolve_pod_cwd(conversation)}/agent-output",
                 agent_run_id=agent_run_id,
                 event_sequence=entry.sequence,
                 harness_key=normalizer.harness_key,

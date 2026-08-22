@@ -32,14 +32,14 @@ from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
 from app.modules.agent.services.runtime_profile_creation import (
-    _normalize_profile_name,
+    normalize_profile_name,
 )
 from app.modules.agent.services.runtime_provider_patch import (
     resolve_catalog_names,
     resolve_provider_patch,
 )
 from app.modules.agent.services.runtime_system_profiles import (
-    _agent_host_model_catalog,
+    agent_host_model_catalog,
 )
 
 # Imported as a module so a patched discovery function is the one that runs.
@@ -140,7 +140,7 @@ class AgentRuntimeProfileEditor:
 
         changes: dict[str, object] = {}
         if not isinstance(name, UnsetType):
-            changes["name"] = _normalize_profile_name(name)
+            changes["name"] = normalize_profile_name(name)
         if not isinstance(description, UnsetType):
             changes["description"] = description.strip() if description else None
 
@@ -176,7 +176,7 @@ class AgentRuntimeProfileEditor:
                 selections=selections or {},
             )
 
-            catalog = _agent_host_model_catalog(
+            catalog = agent_host_model_catalog(
                 config_options,
                 supports_images=bool(
                     (harness.capabilities or {}).get("images") is True

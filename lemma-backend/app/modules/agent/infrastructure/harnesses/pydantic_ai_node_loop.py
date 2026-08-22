@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    _usage_totals,
+    usage_totals,
 )
 
 logger = get_logger(__name__)
@@ -76,6 +76,11 @@ class NodeLoop:
         # already reported must not be reported again after a retry.
         self.malformed_tool_call_ids: set[str] = set()
         self.emitted_tool_response_ids: set[str] = set()
+        # Set per attempt by `drive_once`, so a terminal branch can bill without
+        # the run being threaded down into every pump method.
+        self._run: object | None = None
+        self._carried_usage: dict[str, int] = {}
+        self._usage_emitted = False
 
     async def drive_once(
         self,
@@ -87,6 +92,8 @@ class NodeLoop:
             # Published before the node loop so the retry handler can read
             # usage off the run that just failed.
             state["run"] = run
+            self._run, self._carried_usage = run, carried_usage
+            self._usage_emitted = False
             async for node in run:
                 if PydanticAIAgent.is_model_request_node(node):
                     if await self._pump_model_request(node, run, state):
@@ -98,32 +105,53 @@ class NodeLoop:
                     if await self._pump_end_node(node):
                         return
 
-            # Tokens burned by abandoned attempts are still billed by the
-            # provider, so they are carried forward rather than forgotten.
-            totals = _usage_totals(run.usage, carried_usage)
-            await self.queue.put(
-                (
-                    "event",
-                    AgentEvent(
-                        type=AgentEventType.USAGE,
-                        data=AgentRunUsage(
-                            model_name=self.options.model_name,
-                            usage_kind="llm",
-                            input_tokens=totals["input_tokens"],
-                            output_tokens=totals["output_tokens"],
-                            request_count=totals["requests"],
-                            tool_call_count=totals["tool_calls"],
-                            metadata={
-                                "cache_write_tokens": totals["cache_write_tokens"],
-                                "cache_read_tokens": totals["cache_read_tokens"],
-                                "input_audio_tokens": totals["input_audio_tokens"],
-                                "output_audio_tokens": totals["output_audio_tokens"],
-                            },
-                        ),
-                        agent_run_id=self.agent_run_id,
+            # The run finished on its own. The other exits bill for themselves:
+            # a terminal event bills before queueing it (the pump finalizes on
+            # sight of one and drops whatever follows), and a fatal exception
+            # bills in `drive_with_retry` before it re-raises.
+            self.emit_usage()
+
+    def emit_usage(self) -> None:
+        """Report what this attempt spent, including attempts already abandoned.
+
+        Must reach the queue BEFORE any terminal event. `RunEventPump` finalizes
+        the run the moment it sees one and drops everything after it, so usage
+        queued afterwards is read by nobody and the run bills zero.
+
+        Idempotent per attempt: the terminal branches call it explicitly and the
+        `finally` calls it again for the paths that raise instead of ending.
+
+        `put_nowait` rather than `await put`: the `finally` may already be
+        unwinding a cancellation, where awaiting can raise before the event
+        lands. The queue is unbounded, so it cannot be full.
+        """
+        if self._usage_emitted or self._run is None:
+            return
+        self._usage_emitted = True
+        totals = usage_totals(self._run.usage, self._carried_usage)
+        self.queue.put_nowait(
+            (
+                "event",
+                AgentEvent(
+                    type=AgentEventType.USAGE,
+                    data=AgentRunUsage(
+                        model_name=self.options.model_name,
+                        usage_kind="llm",
+                        input_tokens=totals["input_tokens"],
+                        output_tokens=totals["output_tokens"],
+                        request_count=totals["requests"],
+                        tool_call_count=totals["tool_calls"],
+                        metadata={
+                            "cache_write_tokens": totals["cache_write_tokens"],
+                            "cache_read_tokens": totals["cache_read_tokens"],
+                            "input_audio_tokens": totals["input_audio_tokens"],
+                            "output_audio_tokens": totals["output_audio_tokens"],
+                        },
                     ),
-                )
+                    agent_run_id=self.agent_run_id,
+                ),
             )
+        )
 
     async def _pump_model_request(self, node, run, state: dict[str, object]) -> bool:
         """Stream one model request, holding its messages until the node completes.
@@ -174,6 +202,7 @@ class NodeLoop:
                 # the terminal event so the user keeps it.
                 for held in buffered:
                     await self.queue.put(("event", held))
+                self.emit_usage()
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
@@ -190,11 +219,14 @@ class NodeLoop:
             malformed_tool_call_ids=self.malformed_tool_call_ids,
             emitted_tool_response_ids=self.emitted_tool_response_ids,
         ):
-            await self.queue.put(("event", event))
-            if event.type in {
+            terminal = event.type in {
                 AgentEventType.ERROR,
                 AgentEventType.STOPPED,
-            }:
+            }
+            if terminal:
+                self.emit_usage()
+            await self.queue.put(("event", event))
+            if terminal:
                 return True
         return False
 
@@ -220,6 +252,7 @@ class NodeLoop:
                     )
                 )
                 if await self.streamer.stop_requested():
+                    self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
             final_message = self.final_output_message(
@@ -239,6 +272,7 @@ class NodeLoop:
                     )
                 )
                 if await self.streamer.stop_requested():
+                    self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
 
@@ -260,6 +294,7 @@ class NodeLoop:
                     )
                 )
                 if await self.streamer.stop_requested():
+                    self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
         return False

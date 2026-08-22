@@ -375,6 +375,12 @@ class _ConversationRepository:
         self.decision: tuple | None = None
         self.appended: list[Message] = []
         self.created_runs = 0
+        self.execution_claims = 0
+
+    async def claim_approval_execution(self, **_kwargs):
+        """One claim per approval, like the real conditional UPDATE."""
+        self.execution_claims += 1
+        return self.execution_claims == 1
 
     async def get_approval_decision(self, **_kwargs):
         return self.decision

@@ -1,6 +1,7 @@
 import {
     CONVERSATION_INSTRUCTIONS_PARAM,
     CONVERSATION_METADATA_PARAM,
+    POD_WELCOME_PARAM,
 } from "@/lib/pods/composer-launch";
 
 /**
@@ -63,8 +64,11 @@ const WELCOME_TURN = [
 /**
  * What each answer to that offer means. The "no" branch is the point: an offer
  * that gets asked twice was never an offer.
+ *
+ * Exported because the welcome door asks the same question as a button, and
+ * the setup it leads to must not be written down twice.
  */
-const TELEGRAM_STEP = [
+export const TELEGRAM_STEP = [
     "If they say yes to Telegram, set it up now. Load the `lemma-builder` skill for how surfaces work, then run `lemma surfaces telegram-setup` in the workspace. Pass no `--agent`: the bot then answers as the pod's own assistant, which needs no agent to exist first. It returns a `launch_url` — render that as a QR code in a widget and tell them to scan it and say hello to the bot.",
     "Then stop. End your turn with nothing else in it — no questions, no options, no preview of what comes next. They are on their phone now and cannot answer you anyway. Wait for them to come back and say something, anything. While you wait you may quietly look into what they are likely to need, but do not report it yet.",
     "When they come back, check whether the bot actually came up with `lemma surfaces telegram-setup-status <setup_id>` before you say it worked, and say so briefly either way. If it never completed, offer the link again rather than letting it quietly go missing.",
@@ -146,6 +150,48 @@ export function buildNewPodInstructions({
     }
 
     return parts.join("\n\n");
+}
+
+/**
+ * Where a pod goes the moment it exists: a question, not a sent message.
+ *
+ * Everything below still assumes someone has spoken. Nobody has — creating a
+ * pod is not a sentence, and `NEW_POD_OPENING_MESSAGE` was standing in for one,
+ * which cost a model turn on a greeting the user never wrote and answered a
+ * question they had not asked. So the conversation opens empty with the welcome
+ * door over it, and the door produces the first message: an option, their own
+ * words, or "not now", which is the only branch that still sends "Hi".
+ *
+ * No instructions ride along here, because which set is right depends on which
+ * of those three happens. They are built when the door is answered, by the
+ * function below, out of what this one leaves in the metadata.
+ */
+export function buildNewPodWelcomeHref({
+    podId,
+    workDomain,
+    isFirstPod,
+    metadata,
+}: {
+    podId: string;
+    workDomain?: string | null;
+    isFirstPod: boolean;
+    metadata?: Record<string, unknown>;
+}): string {
+    const params = new URLSearchParams();
+    params.set(POD_WELCOME_PARAM, "1");
+    params.set(
+        CONVERSATION_METADATA_PARAM,
+        JSON.stringify({
+            source: isFirstPod ? "onboarding" : "create_pod",
+            first_run: isFirstPod,
+            pod_id: podId,
+            // Read back by the door, which rebuilds the instructions from it.
+            work_domain: workDomain || null,
+            ...metadata,
+        }),
+    );
+
+    return `/pod/${encodeURIComponent(podId)}/conversations/new?${params.toString()}`;
 }
 
 /** Pod home is a launcher; a pod that was just created belongs in a conversation. */
