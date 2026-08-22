@@ -19,7 +19,11 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep, require_action
+from app.core.authorization.dependencies import (
+    PodContextDep,
+    require_action,
+    require_pod_membership,
+)
 from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.api.dependencies import NotificationServiceDep
 from app.modules.agent_surfaces.api.schemas import (
@@ -42,6 +46,7 @@ router = APIRouter(prefix="/pods/{pod_id}/notifications", tags=["notifications"]
     response_model=NotificationListResponse,
     operation_id="notification.list",
     summary="List My Notifications",
+    dependencies=[require_pod_membership("read notifications in this pod")],
     description=(
         "Notifications addressed to the current user in this pod, newest first. "
         "Filter with `status` (repeatable). Each item carries everything needed "
@@ -81,6 +86,7 @@ async def list_notifications(
     response_model=NotificationUnreadCountResponse,
     operation_id="notification.unread_count",
     summary="Count My Unread Notifications",
+    dependencies=[require_pod_membership("read notifications in this pod")],
     description=(
         "Unread, not unanswered. A notification you have read but not yet acted "
         "on has stopped being new."

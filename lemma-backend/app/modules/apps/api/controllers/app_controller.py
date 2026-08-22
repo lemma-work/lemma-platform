@@ -170,6 +170,7 @@ async def list_apps(
     status_code=status.HTTP_200_OK,
     operation_id="app.get",
     summary="Get App",
+    dependencies=[require_pod_membership("read an app")],
 )
 async def get_app(
     pod_id: UUID,
@@ -313,6 +314,7 @@ async def upload_app_bundle(
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.root.get",
     summary="Get App Root Asset",
+    dependencies=[require_pod_membership("read an app")],
 )
 async def get_app_root_asset(
     request: Request,
@@ -337,6 +339,7 @@ async def get_app_root_asset(
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.get",
     summary="Get App Asset",
+    dependencies=[require_pod_membership("read an app")],
 )
 async def get_app_asset(
     request: Request,
@@ -364,6 +367,7 @@ async def get_app_asset(
     summary="Download App Source Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("read an app")],
 )
 async def download_app_source_archive(
     pod_id: UUID,
@@ -389,6 +393,7 @@ async def download_app_source_archive(
     summary="Download App Dist Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("read an app")],
 )
 async def download_app_dist_archive(
     pod_id: UUID,
