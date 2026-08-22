@@ -138,6 +138,29 @@ async def reconcile_expired_run(
         return lease
 
     if AgentHostRunState(lease.state) is AgentHostRunState.RECOVERING:
+        # Queue the cancel BEFORE the state becomes terminal. Once it is
+        # DISPATCH_UNKNOWN nothing can: `enqueue_cancel` refuses a terminal
+        # lease, and `cancel_abandoned_host_runs` only sweeps non-terminal ones.
+        # So a run Lemma gave up on was never told to stop -- it reported FAILED
+        # here while the host, whose ACP turn is still very much alive, kept
+        # calling pod tools until its own run deadline, up to fifty minutes
+        # later. Its checkpoints were dropped silently on reconnect, so it never
+        # found out either.
+        if not await cancel_already_queued(
+            session, run_id=run_id, lease_epoch=lease.lease_epoch
+        ):
+            session.add(
+                AgentHostCommandModel(
+                    host_id=lease.host_id,
+                    run_id=lease.run_id,
+                    kind=AgentHostCommandKind.CANCEL_RUN.value,
+                    lease_epoch=lease.lease_epoch,
+                    payload={"agent_run_id": str(lease.run_id)},
+                    state=AgentHostCommandState.QUEUED.value,
+                    expires_at=timestamp
+                    + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+                )
+            )
         lease.state = AgentHostRunState.DISPATCH_UNKNOWN.value
         lease.error_code = "HOST_LEASE_EXPIRED"
         lease.error_detail = (

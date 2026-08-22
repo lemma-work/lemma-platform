@@ -66,7 +66,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -167,6 +167,18 @@ test-e2e-indexing:
 	uv run pytest $(E2E_PARALLEL) -m "e2e and indexing and not provider and not local_cli" -o timeout=180
 
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
+# The real-model agent suite. Every `real_llm` test lives here and, until this
+# target existed, ran in no lane at all: the PR lane uses the mock, and the
+# weekly protected lane sets E2E_REAL=1 *and* E2E_LLM_MODE=mock, which
+# conftest reads first -- so they skipped there too.
+#
+# Reads the key from lemma-backend/.env like every other local target. Runs
+# serial: these make real provider calls, and running them concurrently buys
+# little while making a rate-limit failure look like a flake.
+test-e2e-real-llm:
+	E2E_LLM_MODE=real uv run pytest -m "e2e and not slow and not workspace and not local_cli and not indexing" \
+		app/modules/agent -o timeout=300
+
 test-e2e-runtime:
 	E2E_REAL=1 uv run pytest -m "e2e and (slow or workspace or provider or local_cli or indexing or surface_live or protected)"
 

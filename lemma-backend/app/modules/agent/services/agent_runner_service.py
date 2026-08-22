@@ -71,8 +71,8 @@ from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
     RunFinalizer,
-    _finalize_safely,
-    _run_failure_message,
+    finalize_safely,
+    run_failure_message,
 )
 from app.modules.agent.services.run_observer_delivery import (
     notify_run_failed,
@@ -108,7 +108,7 @@ def _run_input_text(messages: Sequence[Message]) -> str | None:
     reason: they are rows in the run, not the thing that started it.
     """
     for message in reversed(messages):
-        if message.role != MessageRole.USER.value:
+        if message.role is not MessageRole.USER:
             continue
         if message.kind is not MessageKind.TEXT:
             continue
@@ -259,12 +259,8 @@ class AgentRunnerService:
                 # The in-process harness realizes every tool surface as a
                 # capability, so its toolset list is empty.
                 harness_capabilities = await build_lemma_harness_tooling(
-                    uow_factory=self.uow_factory,
-                    agent=agent,
                     ctx=ctx,
                     full_toolsets=full_toolsets,
-                    agent_run_id=agent_run_id,
-                    model_name=resolved_runtime.model_name_for_harness,
                     # Both protocols cache, by different mechanisms — see
                     # PromptCachingCapability.
                     enable_prompt_caching=(
@@ -422,13 +418,13 @@ class AgentRunnerService:
             # worker is not: the platform SIGKILLs it and every other in-flight
             # run on that process dies with it.
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                await _finalize_safely(
+                await finalize_safely(
                     self.finalizer.finish(
                         run=run.with_runtime_profile(
                             runtime_profile_snapshot
                         ).with_reservation(usage_reservation),
                         status=AgentRunStatus.FAILED,
-                        error=_run_failure_message(exc),
+                        error=run_failure_message(exc),
                     ),
                     agent_run_id=agent_run_id,
                 )

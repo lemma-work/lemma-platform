@@ -30,7 +30,7 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    _accumulate_usage,
+    accumulate_usage,
 )
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
@@ -55,7 +55,7 @@ class HarnessDriverCancelled(Exception):
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
 
 
-def _reraise_driver_failure(
+def reraise_driver_failure(
     pending_error: BaseException | None,
     *,
     cancelled_by_us: bool,
@@ -95,7 +95,7 @@ def _reraise_driver_failure(
     ) from pending_error
 
 
-async def _drive_with_retry(
+async def drive_with_retry(
     drive_once,
     *,
     queue,
@@ -103,6 +103,7 @@ async def _drive_with_retry(
     stream_reset,
     stopped,
     should_stop,
+    emit_usage,
 ) -> None:
     """Run one agent-graph pass, re-entering it after a transient stream drop.
 
@@ -139,11 +140,23 @@ async def _drive_with_retry(
                 or attempt + 1 >= max_attempts
                 or not is_retryable_stream_error(exc)
             ):
+                # Ending for good, so bill before the exception leaves. Every
+                # non-retryable exit used to skip this: a provider error, retry
+                # exhaustion, and -- the common one -- a pausing tool raising to
+                # wait for a person. An approval-gated turn billed zero on every
+                # run that asked for one.
+                #
+                # Here rather than in a `finally` inside the loop because a
+                # retryable failure must NOT emit: its tokens are carried into
+                # the next attempt's total, and a second event would either
+                # double-count for a consumer that sums or make the "exactly one
+                # usage total per run" contract false.
+                emit_usage()
                 raise
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,
             # so no tool ever runs twice.
-            _accumulate_usage(carried_usage, getattr(run, "usage", None))
+            accumulate_usage(carried_usage, getattr(run, "usage", None))
             resume_history = list(snapshot)  # type: ignore[arg-type]
             attempt += 1
             logger.warning(

@@ -10,7 +10,11 @@ from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import (
+    PodContextDep,
+    assert_pod_membership,
+    require_pod_membership,
+)
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.errors import BadRequestError
@@ -70,6 +74,22 @@ router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
     tags=["agent_conversations"],
 )
+
+_CONVERSATION_ACCESS = "use conversations in this pod"
+
+#: Membership is a precondition of conversation access, not something inferred
+#: from grants: ownership plus an agent grant survive membership removal, which
+#: let a removed member keep reading -- and instructing -- the pod's agents.
+#: See PS-POD-040, PS-ACCESS-023, DEV-ACCESS-001. Applied per route, not on the
+#: router: the three routes that build their context in a short
+#: ``pod_context_scope`` would be handed a request-scoped ``PodContextDep``
+#: anyway, undoing the very thing that scope exists for -- they call
+#: ``assert_pod_membership`` inside their own scope instead.
+#:
+#: It is also what resolves the pod ``Context`` for these handlers now. They used
+#: to take a ``PodContextDep`` they never read, purely to make that happen.
+CONVERSATION_MEMBERSHIP = require_pod_membership(_CONVERSATION_ACCESS)
+CONVERSATION_ENUMERATION = require_pod_membership(_CONVERSATION_ACCESS, enumerates=True)
 
 
 def _build_conversation_service(uow) -> ConversationService:
@@ -142,6 +162,7 @@ def _parse_message_page_token(page_token: str | None) -> int | None:
     response_model=ConversationResponse,
     status_code=status.HTTP_201_CREATED,
     operation_id="agent.conversation.create",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Create Pod Agent Conversation",
     description=(
         "Create a new pod-scoped conversation. When agent_name is omitted, "
@@ -155,9 +176,7 @@ async def create_conversation(
     data: CreateConversationRequest,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
 ) -> ConversationResponse:
-    _ = ctx
     conversation = await service.create_conversation(
         pod_id=pod_id,
         agent_name=data.agent_name,
@@ -176,6 +195,7 @@ async def create_conversation(
     "",
     response_model=ConversationListResponse,
     operation_id="agent.conversation.list",
+    dependencies=[CONVERSATION_ENUMERATION],
     summary="List Pod Agent Conversations",
     description=(
         "List root conversations for the current user in a pod. Omit "
@@ -191,7 +211,6 @@ async def list_conversations(
     request: Request,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
     agent_name: str | None = Query(default=None, min_length=1),
     run_status: ConversationStatus | None = Query(default=None, alias="status"),
     conversation_type: ConversationType | None = Query(default=None, alias="type"),
@@ -199,8 +218,7 @@ async def list_conversations(
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
-    _ = ctx
-    conversations, next_cursor = await service.list_conversations(
+    conversations, next_cursor = await service.queries.list_conversations(
         pod_id=pod_id,
         agent_selection=_parse_conversation_agent_selection(agent_name),
         user_id=user.id,
@@ -224,6 +242,7 @@ async def list_conversations(
     "/{conversation_id}",
     response_model=ConversationResponse,
     operation_id="agent.conversation.get",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Get Pod Conversation",
     description="Get a single pod-scoped assistant or agent conversation by id.",
 )
@@ -232,10 +251,8 @@ async def get_conversation(
     conversation_id: UUID,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
 ) -> ConversationResponse:
-    _ = ctx
-    conversation = await service.get_conversation(
+    conversation = await service.queries.get_conversation(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -247,6 +264,7 @@ async def get_conversation(
     "/{conversation_id}",
     response_model=ConversationResponse,
     operation_id="agent.conversation.update",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Update Pod Conversation",
     description=(
         "Update mutable conversation settings for a pod-scoped conversation. "
@@ -260,9 +278,7 @@ async def update_conversation(
     data: UpdateConversationRequest,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
 ) -> ConversationResponse:
-    _ = ctx
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
@@ -279,6 +295,7 @@ async def update_conversation(
     "/{conversation_id}/messages",
     response_model=MessageListResponse,
     operation_id="agent.conversation.message.list",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="List Pod Conversation Messages",
     description=(
         "List the latest persisted messages in chronological order. Pass "
@@ -291,15 +308,13 @@ async def list_messages(
     conversation_id: UUID,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
     page_token: str | None = Query(default=None),
     before_sequence: int | None = Query(default=None, ge=0),
     after_sequence: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> MessageListResponse:
-    _ = ctx
     token_sequence = _parse_message_page_token(page_token)
-    messages, next_cursor = await service.list_messages(
+    messages, next_cursor = await service.queries.list_messages(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -320,6 +335,7 @@ async def list_messages(
     "/{conversation_id}/approvals",
     response_model=UserApprovalListResponse,
     operation_id="agent.conversation.approval.list",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="List Agent Run Approvals",
     description=(
         "List pending user-interaction tool calls (request_approval and ask_user) "
@@ -333,8 +349,7 @@ async def list_approvals(
     service: ConversationServiceDep,
     ctx: PodContextDep,
 ) -> UserApprovalListResponse:
-    _ = ctx
-    approvals = await service.list_user_approvals(
+    approvals = await service.queries.list_user_approvals(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -348,6 +363,7 @@ async def list_approvals(
     "/{conversation_id}/approvals/{approval_id}/decision",
     response_model=ApprovalDecisionResponse,
     operation_id="agent.conversation.approval.resolve",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Resolve User Approval",
     description=(
         "Record the user's decision/answers for a paused request_approval or "
@@ -365,7 +381,6 @@ async def resolve_approval(
     service: ConversationServiceDep,
     ctx: PodContextDep,
 ) -> ApprovalDecisionResponse:
-    _ = ctx
     # Idempotent + self-healing: resolving an already-recorded approval reconciles
     # its half-finished resume instead of erroring (status "reconciled"). A truly
     # unknown approval raises UnknownApprovalError -> 404 via the domain handler.
@@ -419,6 +434,7 @@ async def send_message(
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
+            assert_pod_membership(scope.ctx, "use conversations in this pod")
             service = _build_conversation_service(scope.uow)
             return await service.add_user_message_and_start_run(
                 conversation_id=conversation_id,
@@ -462,6 +478,7 @@ async def retry_failed_run(
     async with pod_context_scope(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
     ) as scope:
+        assert_pod_membership(scope.ctx, "use conversations in this pod")
         service = _build_conversation_retry_service(scope.uow)
         result = await service.retry_failed_run(
             conversation_id=conversation_id,
@@ -499,8 +516,9 @@ async def stream_conversation(
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
+            assert_pod_membership(scope.ctx, "use conversations in this pod")
             service = _build_conversation_service(scope.uow)
-            await service.get_conversation(
+            await service.queries.get_conversation(
                 conversation_id=conversation_id,
                 user_id=user.id,
                 pod_id=pod_id,
@@ -533,7 +551,7 @@ async def stream_conversation(
                         pod_id=pod_id,
                     )
                     if agent_run_id is not None
-                    else await service.get_active_agent_run(
+                    else await service.queries.get_active_agent_run(
                         conversation_id=conversation_id,
                         user_id=user.id,
                         pod_id=pod_id,
@@ -557,6 +575,7 @@ async def stream_conversation(
     "/{conversation_id}/stop",
     response_model=ConversationResponse,
     operation_id="agent.conversation.stop",
+    dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Stop Pod Conversation",
     description="Request cancellation of the active internal run for a conversation.",
 )
@@ -565,9 +584,7 @@ async def stop_conversation(
     conversation_id: UUID,
     user: CurrentUser,
     service: ConversationServiceDep,
-    ctx: PodContextDep,
 ) -> ConversationResponse:
-    _ = ctx
     conversation = await service.stop_conversation(
         conversation_id=conversation_id,
         user_id=user.id,

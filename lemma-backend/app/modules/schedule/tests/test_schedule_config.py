@@ -9,7 +9,6 @@ from app.modules.schedule.repositories.schedule_run_repository import (
 
 def test_schedule_settings_own_scheduler_policy(monkeypatch):
     assert set(ScheduleSettings.model_fields) == {
-        "scheduler_api_url",
         "schedule_max_consecutive_failures",
         "schedule_minimum_interval_minutes",
         "schedule_run_retention_days",
@@ -18,19 +17,25 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
         "schedule_run_reinspect_after_minutes",
     }
     assert (
-        ScheduleSettings.model_fields["scheduler_api_url"].default
-        == "http://localhost:8711"
-    )
-    assert (
         ScheduleSettings.model_fields["schedule_max_consecutive_failures"].default == 5
     )
     assert (
         ScheduleSettings.model_fields["schedule_minimum_interval_minutes"].default == 15
     )
 
+
+def test_the_scheduler_api_url_is_gone(monkeypatch):
+    """``SCHEDULER_API_URL`` addressed the scheduler service, which was deleted.
+
+    It pointed callers at the `/scheduler/jobs` control plane. That plane is
+    gone -- no ``app/scheduler.py``, no router, no routes -- and nothing in the
+    backend read this setting any more. Schedules are fired by the poller inside
+    the embedded worker. Setting it must be inert rather than look like
+    configuration that still reaches something.
+    """
     monkeypatch.setenv("SCHEDULER_API_URL", "http://scheduler:8001")
-    configured = ScheduleSettings()
-    assert configured.scheduler_api_url == "http://scheduler:8001"
+
+    assert "scheduler_api_url" not in ScheduleSettings().model_dump()
 
 
 def test_the_scheduler_sidecar_token_is_gone(monkeypatch):

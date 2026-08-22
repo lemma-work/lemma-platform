@@ -154,7 +154,7 @@ their credentials do not travel with it.
 **Contracts:** `app.create`, `app.bundle.upload`, `app.create_from_widget`, `app.get`, `app.created`
 
 ### PS-PACK-031 — An app reaches the people it is meant for
-**Status:** gap
+**Status:** covered
 
 - When an app is published, the system shall serve it at its own address and
   shall record `app.published`.
@@ -163,10 +163,6 @@ their credentials do not travel with it.
   carries, and shall not let the app widen it.
 - If someone without access to the pod opens an app, then the system shall
   refuse rather than serving pod data.
-
-> **Gap:** `app.get` returns the full app record to any signed-in person,
-> including one in neither the pod nor its organization — while `app.list` on
-> the same controller refuses. See `DEV-PACK-001`.
 
 **Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`
 

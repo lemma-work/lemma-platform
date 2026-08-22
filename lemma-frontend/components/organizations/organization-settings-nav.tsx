@@ -12,11 +12,6 @@ export function OrganizationSettingsNav({ organizationId }: { organizationId: st
             description: 'People, roles, and invitations.',
         },
         {
-            label: 'Models',
-            href: `/organizations/${organizationId}/settings/agent-runtimes`,
-            description: 'Built-in models, your provider keys, and coding agents.',
-        },
-        {
             label: 'Usage',
             href: `/organizations/${organizationId}/settings/usage`,
             description: 'Spend, limits, and recent API activity.',

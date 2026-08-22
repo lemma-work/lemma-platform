@@ -126,11 +126,23 @@ function ReadmeDocument({
             <section className="github-import-readme-card" aria-label="Repository README">
                 <div className="github-import-readme-rule">
                     <span>README</span>
-                    <span>{readme.branch}</span>
+                    {/* `HEAD` is what we ask GitHub for, not a branch anyone
+                        named. Printing it in the slot where a reader expects
+                        `main` says nothing true. */}
+                    <span>{readme.branch === 'HEAD' ? '' : readme.branch}</span>
                 </div>
 
                 {coverUrl ? (
-                    <div className="github-import-cover">
+                    // A README that declared a width meant it, in both
+                    // directions: a 300px phone screenshot stretched across the
+                    // column is the artwork the author was avoiding, and a
+                    // banner marked `100%` is one that wants the whole column.
+                    // Said nothing: cap rather than fill.
+                    <div
+                        className="github-import-cover"
+                        /* eslint-disable-next-line no-restricted-syntax -- The cap comes from the README author, so it is runtime geometry. */
+                        style={{ maxWidth: presentation.coverMaxWidth ?? '640px' }}
+                    >
                         <img src={coverUrl} alt="" />
                     </div>
                 ) : null}

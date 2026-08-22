@@ -22,9 +22,6 @@ class ScheduleSettings(BaseSettings):
         extra="ignore",
     )
 
-    scheduler_api_url: str = Field(
-        default="http://localhost:8711", description="Scheduler API URL"
-    )
     schedule_max_consecutive_failures: int = Field(
         default=5,
         le=BREAKER_STREAK_SCAN_LIMIT,

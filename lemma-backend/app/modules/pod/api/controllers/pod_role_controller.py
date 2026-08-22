@@ -100,14 +100,21 @@ async def create_pod_role(
     except HTTPException as exc:
         if exc.status_code != status.HTTP_409_CONFLICT:
             raise
-    role = await AuthorizationDataService(uow.session).create_or_update_role(
-        organization_id=pod.organization_id,
-        pod_id=pod_id,
-        name=data.name,
-        description=data.description,
-        permission_ids=data.permission_ids,
-        created_by_user_id=ctx.user_id,
-    )
+    try:
+        role = await AuthorizationDataService(uow.session).create_or_update_role(
+            organization_id=pod.organization_id,
+            pod_id=pod_id,
+            name=data.name,
+            description=data.description,
+            permission_ids=data.permission_ids,
+            created_by_user_id=ctx.user_id,
+        )
+    except ValueError as exc:
+        # A typo in a permission id is a mistake in the request, not a fault in
+        # the platform -- the message already names what was wrong.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -143,14 +150,19 @@ async def update_pod_role(
     pod = await uow.session.get(Pod, pod_id)
     if pod is None:
         raise HTTPException(status_code=404, detail="Pod not found")
-    role = await AuthorizationDataService(uow.session).create_or_update_role(
-        organization_id=pod.organization_id,
-        pod_id=pod_id,
-        name=role_name,
-        description=data.description,
-        permission_ids=data.permission_ids,
-        created_by_user_id=ctx.user_id,
-    )
+    try:
+        role = await AuthorizationDataService(uow.session).create_or_update_role(
+            organization_id=pod.organization_id,
+            pod_id=pod_id,
+            name=role_name,
+            description=data.description,
+            permission_ids=data.permission_ids,
+            created_by_user_id=ctx.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,

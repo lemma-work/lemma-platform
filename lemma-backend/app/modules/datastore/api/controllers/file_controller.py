@@ -205,7 +205,7 @@ async def create_folder(
     status_code=status.HTTP_200_OK,
     operation_id="file.list",
     summary="List Files",
-    dependencies=[require_pod_membership("list files")],
+    dependencies=[require_pod_membership("list files", enumerates=True)],
 )
 async def list_files(
     pod_id: UUID,
@@ -583,7 +583,7 @@ async def download_file_child(
     status_code=status.HTTP_200_OK,
     operation_id="file.search",
     summary="Search Files",
-    dependencies=[require_pod_membership("search files")],
+    dependencies=[require_pod_membership("search files", enumerates=True)],
 )
 async def search_files(
     pod_id: UUID,
@@ -615,7 +615,7 @@ async def search_files(
     status_code=status.HTTP_200_OK,
     operation_id="file.tree",
     summary="Get Directory Tree",
-    dependencies=[require_pod_membership("browse files")],
+    dependencies=[require_pod_membership("browse files", enumerates=True)],
 )
 async def get_directory_tree(
     pod_id: UUID,

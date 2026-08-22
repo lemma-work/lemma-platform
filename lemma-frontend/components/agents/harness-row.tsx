@@ -6,11 +6,7 @@ import type { ReactNode } from 'react';
 import { RefreshCw, TerminalSquare } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import {
-    agentHostHarnessHealth,
-    agentHostHarnessModelCount,
-    harnessLogo,
-} from './agent-runtime-helpers';
+import { describeHarness } from './agent-runtime-helpers';
 
 /** Just enough of a harness to describe it; both callers pass the wire shape. */
 export type HarnessRowHarness = {
@@ -80,24 +76,10 @@ export function HarnessRow({
     onRecheck?: () => void;
     className?: string;
 }) {
-    const health = agentHostHarnessHealth(harness.health);
-    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
-    // The agent's version and how many models it offers — the two things about a
-    // row that are the user's business.
-    //
-    // The adapter version led this line and is not: it is the ACP bridge Lemma
-    // pins and installs, so it is the same for everyone on a release and can only
-    // ever be a number they cannot act on. It was also the *only* thing an
-    // installing row could show, which is how a row mid-install came to read
-    // "adapter 0.62.0" over two identical sentences about installing. It is still
-    // in the log and the API for support; it is not a fact about their computer.
-    const facts = [
-        harness.upstream_version ? `agent ${harness.upstream_version}` : null,
-        modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
-    ].filter((fact): fact is string => fact !== null);
-    const logo = harnessLogo(harness.harness_key);
-    const usable = health.ready && hostOnline;
-    const blockedReason = usable ? null : hostOnline ? health.detail : 'That computer is not reachable right now.';
+    // The adapter version used to lead the facts line and is not a fact about
+    // the user's computer: it is the ACP bridge Lemma pins and installs, the
+    // same for everyone on a release. See `describeHarness` for what survived.
+    const { logo, facts, statusLabel, usable, blockedReason } = describeHarness(harness, { hostOnline });
 
     return (
         <div className={cn('rounded-md bg-[var(--surface-1)] px-3 py-3', className)}>
@@ -135,7 +117,7 @@ export function HarnessRow({
                         tone="muted"
                     />
                 ) : null}
-                <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
+                <StatusBadge label={statusLabel} tone={usable ? 'ok' : 'muted'} />
             </div>
             {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
             {action ? <div className="mt-2">{action(usable)}</div> : null}

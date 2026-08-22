@@ -194,7 +194,7 @@ dropped.
 ## Capability: Be told when something needs you
 
 ### PS-SURF-030 — A person has one place to see what needs them
-**Status:** gap
+**Status:** covered
 
 - When something in a pod needs a person's attention, the system shall put it in
   their notifications for that pod.
@@ -204,10 +204,6 @@ dropped.
   than one item per message.
 - If someone who does not belong to the pod asks for its notifications, then the
   system shall refuse, as it refuses every other read in that pod.
-
-> **Gap:** the two read endpoints answer 200 to a non-member. Nothing leaks —
-> the list is filtered to the caller — but there is no membership check behind
-> that filter. See `DEV-SURF-001`.
 
 **Contracts:** `notification.list`, `notification.unread_count`, `notification.send`
 

@@ -68,14 +68,6 @@ async def test_feedback_can_be_reported(person):
 @scenario("Web search is refused rather than silently empty when unconfigured")
 @proves("PS-OPS-030")
 @covers("agent.tool.web_search")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-OPS-005: an unconfigured deployment answers 200 with "
-        "'Web search completed successfully' and no results, which a caller "
-        "reads as 'the web has nothing on this'."
-    ),
-)
 async def test_web_search_says_when_it_is_unavailable(person):
     response = await person.api.call(
         "POST", "/tools/web-search", json={"query": "lemma platform", "max_results": 3}

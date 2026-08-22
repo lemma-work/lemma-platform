@@ -108,17 +108,6 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
         pass
 
 
-async def invalidate_brief_cache() -> None:
-    """Drop all cached briefs (test hook + future grant/table-mutation hook)."""
-    cache = _get_brief_cache()
-    if cache is None:
-        return
-    try:
-        await cache.clear_prefix()
-    except Exception:
-        pass
-
-
 class AgentContextBriefBuilder:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory

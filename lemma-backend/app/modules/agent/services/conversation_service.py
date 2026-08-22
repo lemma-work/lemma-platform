@@ -25,9 +25,7 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.domain.entities import (
-    AgentRun,
     Conversation,
-    Message,
 )
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
@@ -41,8 +39,6 @@ from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStartResult,
     AgentRuntimeConfig,
-    ConversationAgentSelection,
-    ConversationStatus,
     ConversationType,
 )
 from app.modules.agent.services.workspace_location import (
@@ -233,104 +229,6 @@ class ConversationService:
 
         return await self.conversation_repository.update_conversation(conversation)
 
-    async def list_conversations(
-        self,
-        *,
-        pod_id: UUID,
-        agent_selection: ConversationAgentSelection[str],
-        user_id: UUID,
-        status: ConversationStatus | None = None,
-        type: ConversationType | None = None,
-        metadata_filters: dict[str, object] | None = None,
-        parent_id: UUID | None = None,
-        cursor: UUID | None = None,
-        limit: int = 20,
-    ) -> tuple[list[Conversation], UUID | None]:
-        """See `ConversationQueries.list_conversations`."""
-        return await self.queries.list_conversations(
-            pod_id=pod_id,
-            agent_selection=agent_selection,
-            user_id=user_id,
-            status=status,
-            type=type,
-            metadata_filters=metadata_filters,
-            parent_id=parent_id,
-            cursor=cursor,
-            limit=limit,
-        )
-
-    async def get_conversation(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        pod_id: UUID,
-        agent_name: str | None = None,
-        require_read_grant: bool = True,
-    ) -> Conversation:
-        """See `ConversationQueries.get_conversation`."""
-        return await self.queries.get_conversation(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-            require_read_grant=require_read_grant,
-        )
-
-    async def list_messages(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        pod_id: UUID,
-        agent_name: str | None = None,
-        before_sequence: int | None = None,
-        after_sequence: int | None = None,
-        limit: int = 100,
-    ) -> tuple[list[Message], int | None]:
-        """See `ConversationQueries.list_messages`."""
-        return await self.queries.list_messages(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-            before_sequence=before_sequence,
-            after_sequence=after_sequence,
-            limit=limit,
-        )
-
-    async def get_active_agent_run(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        pod_id: UUID,
-        agent_name: str | None = None,
-    ) -> AgentRun | None:
-        """See `ConversationQueries.get_active_agent_run`."""
-        return await self.queries.get_active_agent_run(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-        )
-
-    async def list_user_approvals(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        pod_id: UUID,
-        agent_name: str | None = None,
-    ) -> list[Message]:
-        """See `ConversationQueries.list_user_approvals`."""
-        return await self.queries.list_user_approvals(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-        )
-
     async def resolve_user_approval(
         self,
         *,
@@ -496,7 +394,7 @@ class ConversationService:
         require_grant: bool = True,
     ) -> Conversation:
         if conversation_id is not None:
-            return await self.get_conversation(
+            return await self.queries.get_conversation(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 pod_id=pod_id,

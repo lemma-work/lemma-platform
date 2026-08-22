@@ -27,6 +27,7 @@ and RESOLVE_PERMISSION reaching that host for every run it is executing.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -309,6 +310,55 @@ class AgentHostDispatchRepository:
     async def get_run_lease(self, *, run_id: UUID) -> AgentHostRunLeaseModel | None:
         return await self.session.get(AgentHostRunLeaseModel, run_id)
 
+    async def _enqueue_for_live_run(
+        self,
+        *,
+        run_id: UUID,
+        kind: AgentHostCommandKind,
+        payload: dict,
+        ttl_seconds: int,
+        now: datetime | None,
+        skip_if: Callable[[AgentHostRunLeaseModel], Awaitable[bool]] | None = None,
+    ) -> AgentHostCommandModel | None:
+        """Queue one command against a run the host is still executing.
+
+        The fencing rule was written out once per command kind, and it is the
+        part that matters: take the lease `FOR UPDATE`, refuse if the run has
+        ended, and stamp the command with the lease's *current* epoch. A command
+        fenced on a superseded epoch would land on a dispatch the host has
+        already replaced. Written three times, a fix to it had to be applied
+        three times, with nothing to say when one was missed.
+
+        `skip_if` is the only thing that varies beyond kind, payload and TTL:
+        cancel alone refuses to stack a second command when one is already in
+        flight.
+        """
+        timestamp = now or utcnow()
+        lease = await self.session.get(
+            AgentHostRunLeaseModel,
+            run_id,
+            with_for_update=True,
+        )
+        if (
+            lease is None
+            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
+            return None
+        if skip_if is not None and await skip_if(lease):
+            return None
+        command = AgentHostCommandModel(
+            host_id=lease.host_id,
+            run_id=run_id,
+            kind=kind.value,
+            lease_epoch=lease.lease_epoch,
+            payload=payload,
+            state=AgentHostCommandState.QUEUED.value,
+            expires_at=timestamp + timedelta(seconds=ttl_seconds),
+        )
+        self.session.add(command)
+        await self.session.flush()
+        return command
+
     async def enqueue_cancel(
         self,
         *,
@@ -323,35 +373,16 @@ class AgentHostDispatchRepository:
         thing, they all occupy the poll's command limit, and the same guard
         already protects the abandoned-run sweep.
         """
-        timestamp = now or utcnow()
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_id,
-            with_for_update=True,
-        )
-        if (
-            lease is None
-            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-        ):
-            return None
-        if await recovery.cancel_already_queued(
-            self.session,
+        return await self._enqueue_for_live_run(
             run_id=run_id,
-            lease_epoch=lease.lease_epoch,
-        ):
-            return None
-        command = AgentHostCommandModel(
-            host_id=lease.host_id,
-            run_id=run_id,
-            kind=AgentHostCommandKind.CANCEL_RUN.value,
-            lease_epoch=lease.lease_epoch,
+            kind=AgentHostCommandKind.CANCEL_RUN,
             payload={"agent_run_id": str(run_id)},
-            state=AgentHostCommandState.QUEUED.value,
-            expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+            ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS,
+            now=now,
+            skip_if=lambda lease: recovery.cancel_already_queued(
+                self.session, run_id=run_id, lease_epoch=lease.lease_epoch
+            ),
         )
-        self.session.add(command)
-        await self.session.flush()
-        return command
 
     # Recovery and retention live in agent_host_recovery as plain functions;
     # these keep a single entry point for callers.
@@ -370,30 +401,13 @@ class AgentHostDispatchRepository:
         denies. Returns None when the run already ended, in which case there is
         nothing left holding the request and the host's own timeout applies.
         """
-        timestamp = now or utcnow()
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_id,
-            with_for_update=True,
-        )
-        if (
-            lease is None
-            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-        ):
-            return None
-        command = AgentHostCommandModel(
-            host_id=lease.host_id,
+        return await self._enqueue_for_live_run(
             run_id=run_id,
-            kind=AgentHostCommandKind.RESOLVE_PERMISSION.value,
-            lease_epoch=lease.lease_epoch,
+            kind=AgentHostCommandKind.RESOLVE_PERMISSION,
             payload={"request_id": request_id, "option_id": option_id},
-            state=AgentHostCommandState.QUEUED.value,
-            expires_at=timestamp
-            + timedelta(seconds=DEFAULT_PERMISSION_COMMAND_TTL_SECONDS),
+            ttl_seconds=DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
+            now=now,
         )
-        self.session.add(command)
-        await self.session.flush()
-        return command
 
     async def enqueue_credential_refresh(
         self,
@@ -408,29 +422,13 @@ class AgentHostDispatchRepository:
         refresh. Fenced on the current lease epoch so a credential minted for a
         superseded dispatch cannot land on the run executing now.
         """
-        timestamp = now or utcnow()
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_id,
-            with_for_update=True,
-        )
-        if (
-            lease is None
-            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-        ):
-            return None
-        command = AgentHostCommandModel(
-            host_id=lease.host_id,
+        return await self._enqueue_for_live_run(
             run_id=run_id,
-            kind=AgentHostCommandKind.REFRESH_CREDENTIAL.value,
-            lease_epoch=lease.lease_epoch,
+            kind=AgentHostCommandKind.REFRESH_CREDENTIAL,
             payload={"encrypted_mcp": encrypted_mcp_payload},
-            state=AgentHostCommandState.QUEUED.value,
-            expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+            ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS,
+            now=now,
         )
-        self.session.add(command)
-        await self.session.flush()
-        return command
 
     async def expire_unaccepted_run(
         self,

@@ -9,6 +9,11 @@ services:
     # existing local volume has to go: `docker compose down -v`. Local stack
     # data is scratch -- pods and conversations live in the deployed
     # environments -- so this is a reset, not a migration.
+    #
+    # The volume sits at /var/lib/postgresql, not .../data: the 18+ images keep
+    # major-version-specific directories under it (pg_ctlcluster layout,
+    # docker-library/postgres#1259) and refuse to start with a mount parked on
+    # the old path. A stale volume from before has to go all the same.
     image: docker.io/pgvector/pgvector:0.8.3-pg18
     environment:
       POSTGRES_USER: postgres
@@ -25,7 +30,7 @@ services:
       # standard ports for a plain `docker compose up`.
       - "${DEV_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./installer/postgres-init:/docker-entrypoint-initdb.d:ro
 
   redis:

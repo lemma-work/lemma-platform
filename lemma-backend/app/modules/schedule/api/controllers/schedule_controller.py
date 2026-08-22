@@ -79,7 +79,7 @@ async def create_schedule(
     "",
     response_model=ScheduleListResponse,
     operation_id="schedule.list",
-    dependencies=[require_pod_membership("list schedules")],
+    dependencies=[require_pod_membership("list schedules", enumerates=True)],
 )
 async def list_schedules(
     pod_id: UUID,

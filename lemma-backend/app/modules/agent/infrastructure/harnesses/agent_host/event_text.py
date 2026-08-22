@@ -2,7 +2,7 @@
 
 Split from the normalizer because these are the two halves of one contract
 the host also implements, in Rust: ``event_text`` mirrors ``runtime::
-chunk_text``, and ``_Segment`` mirrors the buffer the host seals into an
+chunk_text``, and ``Segment`` mirrors the buffer the host seals into an
 upsert. ``tests/fixtures/wire_contract.json`` holds both sides to the same
 cases, because a disagreement between them raises nothing -- it silently
 truncates a persisted message.
@@ -23,7 +23,7 @@ from app.modules.agent.domain.value_objects import (
 
 
 @dataclass(slots=True)
-class _Segment:
+class Segment:
     """Accumulated text for one stream kind, in the two halves the host has.
 
     The host seals its live text into an upsert before *every* non-chunk event
@@ -95,7 +95,7 @@ def event_text(payload: JsonObject) -> str:
     return ""
 
 
-def _integer(value: object, *, default: int = 0) -> int:
+def integer(value: object, *, default: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return default
     try:
@@ -104,7 +104,7 @@ def _integer(value: object, *, default: int = 0) -> int:
         return default
 
 
-def _number(value: object, *, default: float = 0.0) -> float:
+def number(value: object, *, default: float = 0.0) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return default
     try:

@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
 from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
@@ -18,6 +18,7 @@ from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
 )
 from app.core.authorization.service import AuthorizationDataService
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 
 
 def _is_default_pod_agent_claims(claims) -> bool:
@@ -259,42 +260,115 @@ def reject_delegated_workload_pod(action_label: str):
     return Depends(_dependency)
 
 
-def require_pod_membership(action_label: str = "browse this pod"):
-    """Gate *enumeration* on real membership, independent of what is readable.
+def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -> None:
+    """The membership rule itself: pure, and never touches the database.
 
-    Listing endpoints carry no permission dependency: what a caller sees is
-    decided entirely by the visibility projection in ``sql_actions``. That was
-    safe while every above-pod visibility still resolved through the caller's pod
-    role. It no longer is — ORGANIZATION and PUBLIC now project read actions for
-    people who are not in the pod, which is right for opening a resource someone
-    sent you and wrong for walking everything else the pod holds.
+    Separate from the dependency so the streaming endpoints can apply it inside
+    the short ``pod_context_scope`` they already open, instead of taking a
+    request-scoped ``PodContextDep`` that would pin a pooled connection for the
+    whole StreamingResponse (see ``app.core.authorization.scope``).
+    """
+    if ctx.actor_type != ActorType.USER or ctx.is_superuser:
+        return
+    if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
+        return
+    # Org owners hold authority over every pod in their organization without
+    # necessarily having a membership row — the same shortcut
+    # Authorizer._is_org_owner_of_pod applies.
+    if "ORG_OWNER" in ctx.role_names:
+        return
+    from app.core.domain.errors import DomainError
 
-    So the two directions move apart deliberately: reads widen, enumeration does
-    not. Holding one shared link must not become a directory of every other
-    shared thing, and the shape of a pod (folder names, table names, how much is
-    in there) is not public just because one document in it is.
+    raise DomainError(
+        f"You need access to this pod to {action_label}.",
+        code="POD_MEMBERSHIP_REQUIRED",
+        status_code=403,
+    )
 
-    Only human callers are gated. Workload actors keep the grant-first projection
-    this change never touched, so agents and functions are unaffected.
+
+async def _assert_pod_is_live(
+    uow_factory: UnitOfWorkFactory, pod_id: UUID | None
+) -> None:
+    """Refuse a pod that has been deleted, for every caller.
+
+    PS-POD-050 and PS-OPS-020 say deletion stops the pod being shown, and a
+    listing route that answers 200 with an empty list is still showing it --
+    which is how a deleted pod went on reporting its schedule list to its org
+    owner.
+
+    Three deliberate choices, each of which was a way to get this wrong.
+
+    It runs only where something is enumerated. Point reads -- opening one app,
+    one asset, one conversation someone sent you -- do not pay for it, so a pod's
+    app does not do a pod lookup per static file it serves.
+
+    It runs *before* the membership rule and has none of its exemptions. A
+    deleted pod is a fact about the pod, not about who is asking, so superusers
+    and workload actors are refused too.
+
+    It does not run in the shared pod context, and does not borrow the
+    request-scoped ``UoWDep``. ``get_pod_context`` ends by committing precisely
+    to hand that pooled connection back (see ``_release_after_authorization``);
+    reading on the same unit of work would check it straight out again and hold
+    an open transaction through the handler. A short unit of work releases
+    before the handler starts. Keeping it out of the context proper is also what
+    lets a retried ``pod.delete`` keep reporting success (PS-POD-050's
+    idempotency clause): the pod stays addressable for the routes that act on
+    it, and only enumeration stops.
+    """
+    if pod_id is None:
+        return
+    from app.core.domain.errors import DomainError
+    from app.modules.pod.infrastructure.models import Pod
+
+    async with uow_factory() as uow:
+        pod = await uow.session.get(Pod, pod_id)
+        is_live = pod is not None and not pod.is_deleted
+    if not is_live:
+        raise DomainError("Pod not found", code="POD_NOT_FOUND", status_code=404)
+
+
+def require_pod_membership(
+    action_label: str = "browse this pod", *, enumerates: bool = False
+):
+    """Gate access on real membership, independent of what is readable.
+
+    Listing endpoints carry no permission dependency, and pod-scoped resource
+    routes resolve through the visibility projection in ``sql_actions``. That
+    was safe while every above-pod visibility still resolved through the
+    caller's pod role. It no longer is: ORGANIZATION and PUBLIC project read
+    actions for people who are not in the pod, which is right for opening a
+    resource someone sent you by its own public address and wrong for reaching
+    into the pod that holds it.
+
+    So the two directions move apart deliberately: a resource's own public
+    address widens, everything routed through ``/pods/{pod_id}`` does not.
+    Holding one shared link must not become a directory of every other shared
+    thing, and the shape of a pod (folder names, table names, how much is in
+    there) is not public just because one document in it is.
+
+    Apps make the distinction concrete. They default to PUBLIC visibility on
+    purpose, and PUBLIC projects ``.read`` to *any* signed-in user -- so
+    ``app.get`` and the asset routes handed a pod's apps to any stranger with
+    an account (PS-PACK-031). The published shell stays reachable, because
+    strangers reach it by host through ``/public/apps``, which never routes
+    through a pod at all.
+
+    Only human callers are gated for membership. Workload actors keep the
+    grant-first projection this change never widened, so agents and functions
+    are unaffected.
+
+    ``enumerates`` additionally refuses a pod that has been deleted -- see
+    :func:`_assert_pod_is_live`. Pass it on routes that list, and only those.
     """
 
-    async def _dependency(ctx: PodContextDep) -> None:
-        if ctx.actor_type != ActorType.USER or ctx.is_superuser:
-            return
-        if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
-            return
-        # Org owners hold authority over every pod in their organization without
-        # necessarily having a membership row — the same shortcut
-        # Authorizer._is_org_owner_of_pod applies.
-        if "ORG_OWNER" in ctx.role_names:
-            return
-        from app.core.domain.errors import DomainError
-
-        raise DomainError(
-            f"You need access to this pod to {action_label}.",
-            code="POD_MEMBERSHIP_REQUIRED",
-            status_code=403,
-        )
+    async def _dependency(
+        ctx: PodContextDep,
+        uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    ) -> None:
+        if enumerates:
+            await _assert_pod_is_live(uow_factory, ctx.pod_id)
+        assert_pod_membership(ctx, action_label)
 
     return Depends(_dependency)
 

@@ -512,10 +512,13 @@ class ScheduleService:
     async def delete_all_for_pod(self, pod_id: UUID) -> int:
         """Delete every schedule in a pod with full teardown (cleanup-only).
 
-        System-level: no RBAC filtering, includes internal schedules. Best-effort
-        per schedule so one external-teardown failure (APScheduler/Composio) does
-        not abort the rest; on failure the row is force-deleted so the schedule
-        can no longer fire.
+        System-level: no RBAC filtering, includes internal schedules.
+        Best-effort in one specific respect: an *external* teardown failure
+        (APScheduler/Composio) does not abort the rest, and the row is
+        force-deleted anyway so the schedule can no longer fire. A database
+        failure is not best-effort and propagates -- swallowing it left the
+        session rollback-pending and the caller's commit failing later with an
+        error naming none of this, under a pod reported cleaned up.
         """
         schedules = await self.schedule_repository.list_all_by_pod(pod_id)
         deleted = 0
@@ -523,21 +526,16 @@ class ScheduleService:
             try:
                 if await self.delete_schedule(schedule.id):
                     deleted += 1
-            except Exception:
+            except ScheduleInfrastructureError:
+                # ``delete_schedule`` wraps every external failure in this, so
+                # this arm is the external teardown and nothing else.
                 logger.debug(
                     "schedule.cleanup.primary_failed",
                     pod_id=pod_id,
                     exc_info=True,
                 )
-                try:
-                    if await self.schedule_repository.delete(schedule.id):
-                        deleted += 1
-                except Exception:
-                    logger.error(
-                        "schedule.cleanup.failed",
-                        pod_id=pod_id,
-                        exc_info=True,
-                    )
+                if await self.schedule_repository.delete(schedule.id):
+                    deleted += 1
         return deleted
 
     async def list_schedules(

@@ -12,6 +12,12 @@ from html import escape
 from typing import Any, Literal
 
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
+from app.modules.agent_surfaces.platforms.email_styles import (
+    EMAIL_MARKDOWN_EXTENSIONS,
+    EmailStylesExtension,
+    email_body_wrapper,
+    style_stashed_code_blocks,
+)
 from app.modules.agent_surfaces.platforms.email_text import plain_text_from_html
 
 try:
@@ -50,13 +56,28 @@ def render_email_content(
         )
         return _append_display_resource_email_content(
             plain_text=normalized_content,
-            html_body=f"<pre>{escaped}</pre>",
+            html_body=email_body_wrapper(f"<pre>{escaped}</pre>"),
             display_resource_plans=display_resource_plans,
         )
     return _append_display_resource_email_content(
         plain_text=normalized_content,
-        html_body=markdown_lib.markdown(normalized_content),
+        html_body=email_body_wrapper(_markdown_to_email_html(normalized_content)),
         display_resource_plans=display_resource_plans,
+    )
+
+
+def _markdown_to_email_html(content: str) -> str:
+    """Render markdown with the extensions agents actually write against.
+
+    A fresh `Markdown` instance per call rather than a module-level one: the
+    parser carries per-document state (footnote refs, link definitions) and
+    resetting it is easy to forget. Rendering an email is not a hot path.
+    """
+    return style_stashed_code_blocks(
+        markdown_lib.markdown(
+            content,
+            extensions=[*EMAIL_MARKDOWN_EXTENSIONS, EmailStylesExtension()],
+        )
     )
 
 

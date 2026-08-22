@@ -920,8 +920,8 @@ async def test_org_domain_slug_availability_and_suggestions(
     assert available_after_resp.status_code == 200
     assert available_after_resp.json()["available"] is False
 
-    # Names are globally unique too, so the probe has to answer for the name a
-    # caller actually intends to create under — not just its slug.
+    # Names are not unique — the probe answers for the name a caller intends,
+    # and it is always available however many organizations carry it.
     name_taken_resp = await async_client.get(
         "/organizations/slug-availability",
         headers=owner_headers,
@@ -929,7 +929,7 @@ async def test_org_domain_slug_availability_and_suggestions(
     )
     assert name_taken_resp.status_code == 200
     assert name_taken_resp.json()["name"] == "Acme Auto Join"
-    assert name_taken_resp.json()["name_available"] is False
+    assert name_taken_resp.json()["name_available"] is True
 
     free_name = f"Acme Renamed {uuid4().hex[:6]}"
     name_free_resp = await async_client.get(
@@ -1039,13 +1039,31 @@ async def test_organization_slug_is_globally_unique(
     assert first.status_code == 201, first.text
     assert first.json()["slug"] == "global-slug-collision"
 
+    # Neither of these owners typed a handle, and the two display names are not
+    # even the same -- they merely slugify alike. Refusing the second would
+    # refuse a *name*, which PS-ONB-014 says is theirs to carry. So the handle
+    # moves aside and stays unique, which is the property this test is for.
     second = await async_client.post(
         "/organizations",
         headers=_auth_headers(second_owner["token"]),
         json={"name": "Global-Slug Collision"},
     )
-    assert second.status_code == 409, second.text
-    assert "slug" in second.json()["message"].lower()
+    assert second.status_code == 201, second.text
+    assert second.json()["name"] == "Global-Slug Collision"
+    assert second.json()["slug"] != first.json()["slug"], (
+        "two organizations ended up sharing a handle; the handle is the address "
+        "people are given, and it has to resolve to one of them"
+    )
+
+    # The other half of the rule: a handle somebody *asked for* is refused when
+    # it is gone, rather than quietly seating them somewhere else.
+    chosen = await async_client.post(
+        "/organizations",
+        headers=_auth_headers(second_owner["token"]),
+        json={"name": "Something Else", "slug": "global-slug-collision"},
+    )
+    assert chosen.status_code == 409, chosen.text
+    assert "slug" in chosen.json()["message"].lower()
 
 
 @pytest.mark.asyncio

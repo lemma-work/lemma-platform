@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.agent import attempts
 from harness.steps.datastore import column
@@ -157,14 +158,6 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider):
 @scenario("Removing a person stops the agents working in their name")
 @proves("PS-ACCESS-023")
 @covers("pod.member.remove", "agent.conversation.get", "agent.conversation.message.send")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-ACCESS-001: the pod closes but the conversation does not — a "
-        "removed member can still read the thread and still send the agent new "
-        "instructions, which it executes with its grants."
-    ),
-)
 async def test_removing_a_person_stops_their_delegations(world):
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()

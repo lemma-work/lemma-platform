@@ -7,6 +7,9 @@ import pytest
 
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
 from app.modules.datastore.infrastructure.reranker import NoopReranker
+from app.modules.datastore.infrastructure.schema_manager import (
+    SchemaManager,
+)
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
@@ -225,3 +228,70 @@ async def test_index_reports_zero_work_for_empty_chunk_set():
     assert result.embedding_seconds == 0
     assert result.persistence_seconds == 0
     service.chunk_repo.add_chunks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_schema_locks_the_same_key_as_the_pod_schema_provisioner():
+    """Both creators of one pod schema must serialise on the SAME key.
+
+    ``CREATE SCHEMA IF NOT EXISTS`` is not atomic in PostgreSQL. Two callers
+    holding *different* advisory locks exclude nobody: both can observe the
+    namespace as absent, and the loser fails the ``pg_namespace.nspname``
+    unique index. That is not hypothetical -- it is what broke the datastore
+    e2e shard:
+
+        duplicate key value violates unique constraint
+        "pg_namespace_nspname_index"
+        DETAIL:  Key (nspname)=(pod_01a0289d_...) already exists.
+        [SQL: CREATE SCHEMA IF NOT EXISTS "pod_01a0289d_..."]
+
+    ``ensure_schema`` used to take only the global ``_ENSURE_SCHEMA_LOCK_KEY``,
+    which serialises the database-wide catalogs and nothing about this pod,
+    while ``SchemaManager`` took ``hashtext(schema_name)``.
+    """
+    pod_id = uuid4()
+    connection = AsyncMock()
+    connection.scalar.return_value = True
+    service = PostgresSearchService(
+        pod_id,
+        engine=_Engine(connection),
+        session_factory=object(),
+        embedder=_FakeEmbedder(),
+        reranker=NoopReranker(),
+    )
+
+    # Each module builds the schema name with its own f-string. Identical lock
+    # SQL would still exclude nobody if those two ever drifted apart, so the
+    # names are part of the invariant, not an incidental detail.
+    manager = SchemaManager.__new__(SchemaManager)
+    assert manager.get_schema_name(pod_id) == service.schema_name
+
+    await service.ensure_schema()
+
+    calls = connection.execute.await_args_list
+    statements = [str(call.args[0]) for call in calls]
+    per_schema_locks = [
+        index
+        for index, statement in enumerate(statements)
+        if "pg_advisory_xact_lock(hashtext(" in statement
+    ]
+    assert per_schema_locks, (
+        "ensure_schema() never locked this pod's schema; the global key alone "
+        "does not exclude SchemaManager"
+    )
+    lock_index = per_schema_locks[0]
+    create_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("CREATE SCHEMA")
+    )
+    assert lock_index < create_index, "the lock must be held before CREATE SCHEMA"
+    assert calls[lock_index].args[1] == {"schema_name": service.schema_name}
+
+    # The lock is worthless unless it is byte-for-byte the provisioner's key.
+    provisioner_connection = AsyncMock()
+    await SchemaManager._lock_schema_bootstrap(
+        provisioner_connection, service.schema_name
+    )
+    provisioner_statement = str(provisioner_connection.execute.await_args.args[0])
+    assert provisioner_statement == statements[lock_index]

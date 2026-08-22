@@ -36,7 +36,7 @@ from app.modules.agent.services.realtime import (
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_observer_delivery import notify_event
 from app.modules.agent.services.run_finalizer import (
-    _rejected_run_error_message,
+    rejected_run_error_message,
 )
 
 logger = get_logger(__name__)
@@ -132,7 +132,7 @@ class RunEventPump:
             # event's structured data.
             await self.finalizer.finish(
                 status=AgentRunStatus.FAILED,
-                error=_rejected_run_error_message(event.data),
+                error=rejected_run_error_message(event.data),
                 usage_data=outcome.usage_data,
                 run=run,
             )

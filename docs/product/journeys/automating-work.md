@@ -128,7 +128,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `workflow.create`, `workflow.graph.update`, `workflow.get`, `workflow.created`
 
 ### PS-FLOW-002 — A person can see the shape of a workflow before running it
-**Status:** gap
+**Status:** covered
 
 - When a person asks to visualise a workflow, the system shall return its shape
   in a form that can be drawn, without running it.
@@ -136,9 +136,6 @@ always reaches a conclusion a person can see.
   took and where it currently is.
 - The system shall answer for a workflow whose graph is still empty, because a
   workflow is created before it is drawn.
-
-> **Gap:** both endpoints return 500 for every workflow and every run, and have
-> no test coverage at all. See `DEV-FLOW-001`.
 
 **Contracts:** `workflow.visualize`, `workflow.run.visualize`
 

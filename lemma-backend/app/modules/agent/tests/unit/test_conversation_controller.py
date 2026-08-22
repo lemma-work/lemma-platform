@@ -93,11 +93,19 @@ class _ConversationService:
 
 
 class _StreamConversationService:
+    """Shaped like the real service: reads go through `.queries`."""
+
     def __init__(self, agent_run: AgentRun | None) -> None:
         self.agent_run = agent_run
         self.conversation_repository = SimpleNamespace(
             get_agent_run=AsyncMock(return_value=agent_run)
         )
+        self.queries = _StreamConversationQueries(agent_run)
+
+
+class _StreamConversationQueries:
+    def __init__(self, agent_run: AgentRun | None) -> None:
+        self.agent_run = agent_run
 
     async def get_conversation(self, **kwargs):
         return SimpleNamespace(id=kwargs["conversation_id"])
@@ -107,6 +115,15 @@ class _StreamConversationService:
 
 
 class _ConversationListService:
+    def __init__(self) -> None:
+        self.queries = _ConversationListQueries()
+
+    @property
+    def kwargs(self):
+        return self.queries.kwargs
+
+
+class _ConversationListQueries:
     def __init__(self) -> None:
         self.kwargs = None
 
@@ -153,7 +170,6 @@ async def test_list_conversations_parses_agent_selection(
         request=SimpleNamespace(query_params=QueryParams(query)),
         user=SimpleNamespace(id=uuid4()),
         service=service,
-        ctx=SimpleNamespace(),
         agent_name=agent_name,
         run_status=None,
         conversation_type=None,
@@ -181,7 +197,6 @@ async def test_list_conversations_rejects_empty_agent_name(agent_name) -> None:
             ),
             user=SimpleNamespace(id=uuid4()),
             service=service,
-            ctx=SimpleNamespace(),
             agent_name=agent_name,
             run_status=None,
             conversation_type=None,

@@ -224,7 +224,7 @@ class AgentHostEventStream:
         redis = self._client()
         arguments: list[object] = [_STREAM_TTL_SECONDS]
         for event in events:
-            arguments.append(_integer(event.get("sequence")))
+            arguments.append(integer(event.get("sequence")))
             arguments.append(json.dumps(event))
         status, watermark, expected, got, resynced_from = await redis.eval(
             _APPEND_SCRIPT,
@@ -285,7 +285,7 @@ class AgentHostEventStream:
                 events.append(
                     StreamedEvent(
                         stream_id=stream_id,
-                        sequence=_integer(parsed.get("sequence")),
+                        sequence=integer(parsed.get("sequence")),
                         type=str(parsed.get("type") or ""),
                         object_id=(
                             str(parsed["object_id"])
@@ -320,9 +320,9 @@ class AgentHostEventStream:
             return 0
         fields = entries[0][1]
         if _SEQUENCE_FIELD in fields:
-            return _integer(fields[_SEQUENCE_FIELD])
+            return integer(fields[_SEQUENCE_FIELD])
         parsed = _decode(fields)
-        return _integer(parsed.get("sequence")) if parsed else 0
+        return integer(parsed.get("sequence")) if parsed else 0
 
     async def delete(self, *, run_id: UUID) -> None:
         """Drop a terminalized run's stream; best effort."""
@@ -348,7 +348,7 @@ def _decode(fields: dict[Any, Any]) -> JsonObject | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def _integer(value: object) -> int:
+def integer(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return 0
     try:
