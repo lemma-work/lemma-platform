@@ -44,7 +44,8 @@ my-pod/
   schedules/<name>/<name>.json
   surfaces/<platform>/<platform>.json   # e.g. surfaces/slack/slack.json
   apps/<name>/<name>.json
-  apps/<name>/source/            # Vite app project (built on import/deploy)
+  apps/<name>/source/            # Vite app project (built on import/deploy), OR a
+                                 #   no-build site (index.html, no package.json)
   apps/<name>/html.html          # OR a single no-build HTML app (uploaded as-is)
   files/<folder>/.folder.json     # folder metadata (file bytes travel with --with-files)
   payloads/                        # local test fixtures, not imported as pod resources
@@ -218,6 +219,10 @@ So a surface bundle looks like this, not like a literal uuid:
 - Import **does not create the pod** — create/select it first.
 - **No in-place column mutation.** Changing a column's type fails; imports only add/remove columns. Treat type changes as a migration (new column, backfill, drop old).
 - **Function schemas follow the code** — `input_schema`/`output_schema`/`config_schema` are re-extracted from the Pydantic models on every code-bearing create *or* update, import included. Edit the models and re-import.
+- **Export round-trips.** Every deploy stores the app's source, so `pods export`
+  writes back the form you authored: a Vite project comes back as `source/`, and a
+  single-file app comes back as `html.html` — re-importable as-is. An app deployed
+  before its source was stored has only built output, and exports as `dist.zip`.
 - **File bytes and table rows travel only on request.** `pods export --with-files --with-data` (or `--data-table <t>` for specific tables) writes them into the bundle; `pods import --with-files --with-data` applies them. Without those flags you get structure only, and you upload bytes with `lemma files upload` after import.
 - **Connectors are not bundle resources.** Auth configs, accounts, and connect state are org runtime state — script their setup (`lemma connectors ...`) in the pod README.
 - **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the connector id (`gmail`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there (they do, when they're part of the same bundle). The **one exception is a pinned `connector_account` grant**, whose `resource_name` is an account id: export turns it into a `${…}` variable, and an import that doesn't supply it drops the grant with a warning (the workload falls back to the invoking user's own account). See `authorization-model.md` §4b.
@@ -297,7 +302,8 @@ lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|
 lemma feedback --category cli|skill|platform|docs|other --subject … --issue-encountered … --expected-behavior … --actual-behavior …
 
 # apps
-lemma apps list|get|init|create|update|deploy|delete
+lemma apps list|get|init|create|update|deploy|pull|delete
+lemma apps pull <app> [./dir] [--dist] [--force]   # download the deployed source to edit
 ```
 
 ## Verify

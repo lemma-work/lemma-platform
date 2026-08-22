@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 from types import SimpleNamespace
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from typer.testing import CliRunner
 
@@ -225,3 +227,86 @@ def test_apps_open_never_puts_the_token_in_argv(monkeypatch):
     # It still reaches the browser -- over stdin, where the process table
     # cannot see it.
     assert any(secret in call["input"] for call in calls)
+
+
+_POD_UUID = "01a02962-89c2-72be-a2d8-9c6966f24104"
+
+
+def _zip_bytes(files: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _pull_client(*, source: bytes, dist: bytes):
+    class FakeApps:
+        def download_source_archive(self, name):
+            return source
+
+        def download_dist_archive(self, name):
+            return dist
+
+    class FakeClient:
+        def pod(self, pod_id):
+            return SimpleNamespace(apps=FakeApps())
+
+    return FakeClient()
+
+
+def test_apps_pull_writes_the_source_tree(monkeypatch, tmp_path):
+    client = _pull_client(
+        source=_zip_bytes({"package.json": "{}", "src/main.ts": "run()"}),
+        dist=_zip_bytes({"index.html": "<html>built</html>"}),
+    )
+    _patch(monkeypatch, client)
+    target = tmp_path / "my-app"
+
+    result = runner.invoke(
+        app, ["apps", "pull", "my-app", str(target), "--pod", _POD_UUID]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (target / "package.json").read_text() == "{}"
+    assert (target / "src" / "main.ts").read_text() == "run()"
+
+
+def test_apps_pull_falls_back_to_dist_and_says_so(monkeypatch, tmp_path):
+    """An app deployed before its source was stored has only built output.
+    Writing it silently would look like the code the author wrote."""
+    client = _pull_client(source=b"", dist=_zip_bytes({"index.html": "<h1>hi</h1>"}))
+    _patch(monkeypatch, client)
+    target = tmp_path / "my-app"
+
+    result = runner.invoke(
+        app, ["apps", "pull", "my-app", str(target), "--pod", _POD_UUID]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (target / "index.html").read_text() == "<h1>hi</h1>"
+    assert "no stored source" in result.stdout
+
+
+def test_apps_pull_refuses_to_clobber_a_non_empty_directory(monkeypatch, tmp_path):
+    client = _pull_client(source=_zip_bytes({"index.html": "<h1>new</h1>"}), dist=b"")
+    _patch(monkeypatch, client)
+    target = tmp_path / "my-app"
+    target.mkdir()
+    (target / "notes.md").write_text("mine")
+
+    result = runner.invoke(
+        app, ["apps", "pull", "my-app", str(target), "--pod", _POD_UUID]
+    )
+
+    assert result.exit_code != 0
+    assert (target / "notes.md").read_text() == "mine"
+
+    forced = runner.invoke(
+        app,
+        ["apps", "pull", "my-app", str(target), "--pod", _POD_UUID, "--force"],
+    )
+
+    assert forced.exit_code == 0, forced.stdout
+    assert not (target / "notes.md").exists()
+    assert (target / "index.html").read_text() == "<h1>new</h1>"

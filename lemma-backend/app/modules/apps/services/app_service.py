@@ -188,6 +188,7 @@ class AppService:
         The widget and the app share one source artifact at two lifecycle stages:
         the stored fragment is preserved, wrapped as a standalone document (no
         embed bridge or conversation padding), and deployed as the app's bundle.
+        A no-build app's html is its own source, so it is stored as both archives.
         """
         for issue in lint_app_html(artifact.content):
             logger.debug(
@@ -206,14 +207,13 @@ class AppService:
         app = await self.create_app_with_context(
             AppEntity(**entity_data), user_id, ctx=ctx
         )
+        bundle = await run_blocking(self._single_index_html_zip, document)
         return await self.upload_bundle(
             pod_id,
             app.name,
             user_id,
-            source_archive_bytes=None,
-            dist_archive_bytes=await run_blocking(
-                self._single_index_html_zip, document
-            ),
+            source_archive_bytes=bundle,
+            dist_archive_bytes=bundle,
             ctx=ctx,
         )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -160,6 +161,72 @@ def _materialize_static_dist(source: Path, tier: str) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
     return dist_dir
+
+
+def _extract_archive(archive_bytes: bytes, target_dir: Path) -> list[str]:
+    """Unpack an app archive into ``target_dir``, refusing to escape it."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    with ZipFile(io.BytesIO(archive_bytes)) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            destination = target_dir / member.filename
+            if not destination.resolve().is_relative_to(target_dir.resolve()):
+                raise ValueError(f"Unsafe path in app archive: {member.filename}")
+            written.append(member.filename)
+        archive.extractall(target_dir)
+    return sorted(written)
+
+
+def pull_app_bundle(
+    client: Any,
+    *,
+    pod_id: str,
+    app_name: str,
+    target_dir: Path,
+    dist: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Download a deployed app into ``target_dir``, ready to edit and redeploy.
+
+    The source archive is what comes back by default: for a Vite app that is the
+    project, and for a no-build app it is the single ``index.html``. Either is a
+    valid ``lemma apps deploy`` source, so pull → edit → deploy is a closed loop.
+    ``dist`` asks for the built output instead, which is what an app deployed
+    before its source was stored has.
+    """
+    if target_dir.exists() and any(target_dir.iterdir()) and not force:
+        raise ValueError(
+            f"Directory is not empty: {target_dir}. Pass --force to overwrite it."
+        )
+
+    pod_sdk = client.pod(pod_id)
+    kind = "dist" if dist else "source"
+    if dist:
+        archive_bytes = pod_sdk.apps.download_dist_archive(app_name)
+    else:
+        archive_bytes = pod_sdk.apps.download_source_archive(app_name)
+        if not archive_bytes:
+            # An app deployed before its source was stored has only a dist. Say
+            # so rather than writing an empty directory: what lands is built
+            # output, which redeploys but is not what the author edits.
+            archive_bytes = pod_sdk.apps.download_dist_archive(app_name)
+            kind = "dist"
+
+    if not archive_bytes:
+        raise ValueError(f"App has no {kind} archive to pull: {app_name}")
+
+    if force and target_dir.exists():
+        shutil.rmtree(target_dir)
+    files = _extract_archive(archive_bytes, target_dir)
+    return {
+        "app": app_name,
+        "pod_id": pod_id,
+        "directory": str(target_dir),
+        "archive": kind,
+        "files": files,
+    }
 
 
 def deploy_app_bundle(

@@ -3345,3 +3345,119 @@ def test_import_pod_bundle_uploads_a_no_build_app_as_source_and_dist(tmp_path: P
     assert upload["dist_archive"] == app_dir / "dist.zip"
     # The regression: this key used to be absent entirely.
     assert upload["source_archive"] == upload["dist_archive"]
+
+
+def test_download_app_assets_writes_html_html_for_a_single_file_app(tmp_path: Path):
+    """A no-build app comes back as the one file the author edits.
+
+    A single-`index.html` source archive IS an `html.html` app: writing it to
+    `source/index.html` is the form the round trip used to produce and the
+    importer used to reject.
+    """
+    resource_dir = tmp_path / "apps" / "support_app"
+    resource_dir.mkdir(parents=True)
+
+    source_zip = BytesIO()
+    with ZipFile(source_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<h1>hello</h1>")
+
+    client = FakeClient(
+        apps=SimpleNamespace(
+            download_source_archive=lambda pod_id, app_name: source_zip.getvalue(),
+            download_dist_archive=lambda pod_id, app_name: b"pretend-dist",
+        )
+    )
+
+    from lemma_cli.cli_app.pod_bundle import _ByteBudget, _download_app_assets
+
+    _download_app_assets(
+        client,
+        "pod_123",
+        "support_app",
+        resource_dir,
+        app_budget=_ByteBudget(per_item=10_000_000, total=20_000_000, warnings=[]),
+    )
+
+    assert (resource_dir / "html.html").read_text(encoding="utf-8") == "<h1>hello</h1>"
+    assert not (resource_dir / "source").exists()
+    assert not (resource_dir / "dist.zip").exists()
+
+
+def test_import_pod_bundle_accepts_a_no_build_app_source_dir(tmp_path: Path):
+    """`source/index.html` with no `package.json` is the documented no-build
+    form, and the deploy path already accepts it. Validation used to demand a
+    `package.json` there, so an exported bundle could not be re-imported."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
+    app_dir = tmp_path / "apps" / "support_app"
+    source_dir = app_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "index.html").write_text("<h1>hello</h1>", encoding="utf-8")
+    (app_dir / "support_app.json").write_text(
+        json.dumps({"name": "support_app", "description": "app"}),
+        encoding="utf-8",
+    )
+
+    client = _bare_pod_client()
+
+    result = import_pod_bundle(
+        client, pod_id="pod_123", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["errors"] == []
+    assert result["ok"] is True
+    assert result["summary"]["apps"] == ["created:support_app"]
+
+
+def test_exported_no_build_app_re_imports(tmp_path: Path):
+    """The round trip, end to end: export a no-build HTML app, then plan an
+    import of exactly what export wrote.
+
+    Export used to write `source/index.html` and the importer used to demand
+    `source/package.json` there, so no exported bundle carrying an HTML app
+    could ever be re-imported.
+    """
+    source_zip = BytesIO()
+    with ZipFile(source_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<h1>hello</h1>")
+
+    exporter = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}),
+        apps=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": [{"name": "support_app"}]},
+            get=lambda pod_id, app_name: {
+                "name": app_name,
+                "description": "app",
+                "public_slug": "support-app",
+            },
+            download_source_archive=lambda pod_id, app_name: source_zip.getvalue(),
+            download_dist_archive=lambda pod_id, app_name: b"",
+        ),
+    )
+
+    export_pod_bundle(
+        exporter,
+        pod_id="pod_123",
+        output_dir=tmp_path,
+        exclude={
+            "tables",
+            "functions",
+            "agents",
+            "workflows",
+            "schedules",
+            "surfaces",
+            "files",
+        },
+    )
+
+    bundle_root = tmp_path / "demo-pod"
+    assert (bundle_root / "apps" / "support_app" / "html.html").exists()
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_456", source_dir=bundle_root, dry_run=True
+    )
+
+    assert result["errors"] == []
+    assert result["ok"] is True
+    assert result["summary"]["apps"] == ["created:support_app"]
