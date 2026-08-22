@@ -8,3 +8,6 @@
 
 py/unused-global-variable lemma-backend/app/modules/workspace/services/sandbox_composition.py  # Read on a later call at line 46 via `global`; the query does not follow reads across calls.
 py/partial-ssrf lemma-backend/app/modules/workspace/api/controllers/port_proxy_controller.py  # The host comes only from the provider's base URL; the caller controls the path component alone, set via copy_with(path=...).
+py/undefined-export lemma-backend/lemma-connectors/src/lemma_connectors/__init__.py  # `__all__` names resolved lazily by a PEP 562 module `__getattr__` over `_LAZY_CLIENT_IMPORTS`; CodeQL does not model `__getattr__`. Checked by running it: `from lemma_connectors import *` succeeds and `SlackInfoClient` resolves, so the "exception on star-import" this query predicts does not happen.
+py/call-to-non-callable lemma-backend/app/modules/function/events/handlers.py  # The site is annotated `uow_factory: UnitOfWorkFactory`, a callable protocol. CodeQL inferred the type from one of four unrelated test-local classes named `_UowFactory`, three of which have no `__call__`.
+py/non-iterable-in-for-loop lemma-backend/scripts/export_agent_tool_schemas.py  # `for member in AgentToolset:` iterates an enum *class* via `EnumMeta.__iter__`, which CodeQL reads as iterating a bare `type`. Checked by running it: 12 members.

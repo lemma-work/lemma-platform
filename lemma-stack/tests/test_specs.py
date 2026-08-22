@@ -214,7 +214,6 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["SUPERTOKENS_CORE_URL"] == "http://supertokens:3567"
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
-    assert env["SCHEDULER_API_URL"] == "http://backend:8000"
     assert env["API_URL"] == "http://app.lemma.localhost:8711"
     assert env["FRONTEND_URL"] == "http://app.lemma.localhost:3711"
     assert env["AUTH_FRONTEND_URL"] == "http://app.lemma.localhost:3711/auth"

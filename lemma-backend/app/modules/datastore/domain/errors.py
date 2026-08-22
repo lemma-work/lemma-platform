@@ -88,8 +88,16 @@ class DatastoreQueryError(DatastoreDomainError):
 
 
 class DatastoreInfrastructureError(DatastoreDomainError):
-    def __init__(self, message: str):
-        super().__init__(message, code="DATASTORE_INFRA_ERROR", status_code=500)
+    # `details` is not decoration: `parse_db_error` returns this class or
+    # `DatastoreQueryError` interchangeably, and every caller then does
+    # `error_cls(message, details)`. Without the parameter that call raised
+    # `TypeError: __init__() takes 2 positional arguments but 3 were given`
+    # -- destroying both the real error and the `from exc` chain, on the
+    # database-failure path where the cause matters most.
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message, code="DATASTORE_INFRA_ERROR", status_code=500, details=details
+        )
 
 
 class DocumentExtractionUnavailableError(RuntimeError):

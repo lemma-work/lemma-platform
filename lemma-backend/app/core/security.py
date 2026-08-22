@@ -189,11 +189,6 @@ EXCLUDED_PATHS = (
     "/surfaces/teams/admin-consent/callback",  # surface consent callback
     "/surfaces/webhooks",  # surface webhook endpoints
     "/webhooks",
-    # Internal scheduler job API: reached service-to-service with no user
-    # session, so the router enforces its own bearer token instead
-    # (`require_scheduler_token`). Excluding it here is what lets that
-    # dependency be the single gate rather than one of two.
-    "/scheduler/jobs",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
     # A paired computer has no user session and never will: it authenticates
