@@ -211,6 +211,12 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
                     f"epoch {offer['lease_epoch']})"
                 )
     finally:
+        # The send was never meant to complete: it streams until the run
+        # finishes, and nothing here ever does the work. Cancel it and reap it
+        # so the task does not outlive the scenario. Its outcome is deliberately
+        # discarded -- the claim assertions above are what this proves, and a
+        # failure raised out of cleanup would replace whichever one of them
+        # actually failed.
         sending.cancel()
         with suppress(asyncio.CancelledError, Exception):
             await sending

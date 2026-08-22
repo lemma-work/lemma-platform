@@ -278,9 +278,27 @@ def require_pod_membership(action_label: str = "browse this pod"):
     this change never touched, so agents and functions are unaffected.
     """
 
-    async def _dependency(ctx: PodContextDep) -> None:
+    async def _dependency(ctx: PodContextDep, uow: UoWDep) -> None:
         if ctx.actor_type != ActorType.USER or ctx.is_superuser:
             return
+        # A deleted pod is not browsable by anyone, whatever their standing.
+        # PS-POD-050 and PS-OPS-020 say deletion stops *showing* the pod, and an
+        # enumeration route that still answers 200 with an empty list is still
+        # showing it -- which is how a deleted pod went on reporting its
+        # schedule list to its org owner.
+        #
+        # Checked here rather than in the shared pod context on purpose: a
+        # retried `pod.delete` has to keep reporting success (PS-POD-050's
+        # idempotency clause), so the pod stays addressable for the routes that
+        # act on it. It is enumeration specifically that must stop.
+        if ctx.pod_id is not None:
+            from app.modules.pod.infrastructure.models import Pod
+
+            pod = await uow.session.get(Pod, ctx.pod_id)
+            if pod is None or pod.is_deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Pod not found"
+                )
         if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
             return
         # Org owners hold authority over every pod in their organization without

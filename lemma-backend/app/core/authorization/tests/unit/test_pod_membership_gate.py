@@ -8,6 +8,7 @@ shared link enumerate the pod. ``require_pod_membership`` is the counterweight.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -41,8 +42,23 @@ def _ctx(
     )
 
 
-async def _run(ctx: Context) -> None:
-    await require_pod_membership("browse files").dependency(ctx)
+class _Session:
+    """Just enough session to answer the gate's pod lookup."""
+
+    def __init__(self, pod: object | None):
+        self._pod = pod
+
+    async def get(self, _model, _pk):
+        return self._pod
+
+
+def _uow(*, pod_exists: bool = True, pod_deleted: bool = False) -> object:
+    pod = SimpleNamespace(id=POD_ID, is_deleted=pod_deleted) if pod_exists else None
+    return SimpleNamespace(session=_Session(pod))
+
+
+async def _run(ctx: Context, uow: object | None = None) -> None:
+    await require_pod_membership("browse files").dependency(ctx, uow or _uow())
 
 
 @pytest.mark.asyncio
@@ -85,3 +101,29 @@ async def test_workload_actors_are_not_gated(actor_type: ActorType):
     # Workloads keep the grant-first projection this change never widened, so
     # gating them here would break agents listing files they already may read.
     await _run(_ctx(actor_type=actor_type))
+
+
+@pytest.mark.asyncio
+async def test_denies_everyone_once_the_pod_is_deleted():
+    """Deletion stops the pod being shown, to its owner as much as anyone.
+
+    An enumeration route that answers 200 with an empty list is still showing
+    the pod. This is the org owner -- who passes every other check here -- so
+    it proves the gate is about the pod's existence rather than the caller.
+    See PS-POD-050 and PS-OPS-020.
+    """
+    with pytest.raises(Exception) as exc:
+        await _run(
+            _ctx(role_names=frozenset({"ORG_OWNER"})),
+            _uow(pod_deleted=True),
+        )
+
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+@pytest.mark.asyncio
+async def test_denies_when_the_pod_never_existed():
+    with pytest.raises(Exception) as exc:
+        await _run(_ctx(is_pod_member=True), _uow(pod_exists=False))
+
+    assert getattr(exc.value, "status_code", None) == 404

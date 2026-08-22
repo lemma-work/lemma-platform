@@ -13,19 +13,21 @@ from __future__ import annotations
 from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
+from harness.stack import SPEND_CAP_PROBE_SLUG_PREFIX
 
 pytestmark = [
     journey("Operating a deployment"),
     capability("Stay inside the limits"),
 ]
 
-#: The stack under test configures a zero monthly cap for every organization
-#: whose slug carries this prefix (see USAGE_ORG_LIMIT_OVERRIDES_JSON in the
-#: backend env), so any model work at all exceeds it. The run suffix keeps the
-#: slug unique, because the server under test may outlive a single suite run —
-#: its organizations are real rows, not scratch. The prefix is the contract:
-#: it is what the setting keys on.
-PROBE_ORGANIZATION_PREFIX = "Spend Cap Probe"
+#: A display name that slugifies to the prefix the deployment caps at zero, so
+#: any model work at all exceeds the limit. Derived from the harness constant
+#: rather than repeated, because the prefix IS the contract between the
+#: scenario and the deployment's configuration — written twice, it would drift
+#: and the scenario would silently stop testing anything. The run suffix keeps
+#: the slug unique: the server under test may outlive a single suite run, and
+#: its organizations are real rows rather than scratch.
+PROBE_ORGANIZATION_PREFIX = SPEND_CAP_PROBE_SLUG_PREFIX
 
 
 @scenario("Work that would exceed the limit is refused, saying which one")
@@ -36,8 +38,9 @@ PROBE_ORGANIZATION_PREFIX = "Spend Cap Probe"
 )
 async def test_work_over_the_limit_is_refused_clearly(world):
     alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization(
-        named=f"{PROBE_ORGANIZATION_PREFIX} {uuid4().hex[:6]}"
+    # Created for its slug: the deployment caps this organization and no other.
+    await alice.creates_an_organization(
+        named=f"{PROBE_ORGANIZATION_PREFIX}-{uuid4().hex[:6]}"
     )
     pod = await alice.creates_a_pod()
     agent = await alice.creates_an_agent(in_pod=pod)

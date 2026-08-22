@@ -146,9 +146,49 @@ async def assign_organization_identity(
             ) from exc
         return
 
+    # Whether the person typed a handle, asked before it is derived from the
+    # name. It decides who the conflict below belongs to.
+    handle_was_chosen = bool(str(entity.slug or "").strip())
+
     entity.slug = normalize_organization_slug(entity.slug, entity.name)
-    if await get_by_slug(entity.slug):
+    if not await get_by_slug(entity.slug):
+        return
+
+    if handle_was_chosen:
+        # They asked for this handle by name. Handles are scarce and this one is
+        # gone; say so rather than quietly seating them somewhere else.
         raise OrganizationConflictError(
             "Organization slug already exists",
             code=OrganizationConflictError.SLUG_TAKEN,
         )
+
+    # They typed only a display name, and the handle was derived from it.
+    # Refusing here refuses the *name* -- which PS-ONB-014 says is theirs to
+    # share, because names are how people recognise their own organization and
+    # not how the system tells organizations apart. So the name stands and the
+    # handle moves.
+    entity.slug = await _free_handle_near(entity.slug, get_by_slug)
+
+
+async def _free_handle_near(base: str, get_by_slug: GetBySlug) -> str:
+    """A free handle as close to ``base`` as possible.
+
+    ``acme`` taken becomes ``acme-2``, then ``acme-3``. Past a handful the
+    numbering stops being recognisable, so it falls back to a suffix that
+    cannot realistically collide -- the same shape, and the same reasoning, as
+    :func:`resolve_available_identity`.
+    """
+    for attempt in range(2, READABLE_ATTEMPTS + 2):
+        candidate = f"{base}-{attempt}"
+        if not await get_by_slug(candidate):
+            return candidate
+
+    for _ in range(SUFFIXED_ATTEMPTS):
+        candidate = f"{base}-{uuid4().hex[:6]}"
+        if not await get_by_slug(candidate):
+            return candidate
+
+    raise OrganizationConflictError(
+        "Could not find an available organization handle",
+        code=OrganizationConflictError.SLUG_TAKEN,
+    )
