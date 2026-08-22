@@ -442,6 +442,7 @@ class PydanticAIHarness:
                     stream_reset=lambda: self._stream_reset_event(agent_run_id),
                     stopped=streamer.stopped_event,
                     should_stop=streamer.stop_requested,
+                    emit_usage=node_loop.emit_usage,
                 )
             except BaseException as exc:  # noqa: BLE001 — relayed to parent below
                 # Includes CancelledError from our own task.cancel(). pydantic's

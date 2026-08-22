@@ -103,6 +103,7 @@ async def _drive_with_retry(
     stream_reset,
     stopped,
     should_stop,
+    emit_usage,
 ) -> None:
     """Run one agent-graph pass, re-entering it after a transient stream drop.
 
@@ -139,6 +140,18 @@ async def _drive_with_retry(
                 or attempt + 1 >= max_attempts
                 or not is_retryable_stream_error(exc)
             ):
+                # Ending for good, so bill before the exception leaves. Every
+                # non-retryable exit used to skip this: a provider error, retry
+                # exhaustion, and -- the common one -- a pausing tool raising to
+                # wait for a person. An approval-gated turn billed zero on every
+                # run that asked for one.
+                #
+                # Here rather than in a `finally` inside the loop because a
+                # retryable failure must NOT emit: its tokens are carried into
+                # the next attempt's total, and a second event would either
+                # double-count for a consumer that sums or make the "exactly one
+                # usage total per run" contract false.
+                emit_usage()
                 raise
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,

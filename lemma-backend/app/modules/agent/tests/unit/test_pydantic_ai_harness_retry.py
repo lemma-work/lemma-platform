@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -40,7 +40,38 @@ def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
     return stream_fn
 
 
-async def _run_harness(model, *, monkeypatch, should_stop=None):
+def _stream_text(text: str):
+    """A stream that answers normally."""
+
+    async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[str]:
+        del messages, info
+        yield text
+
+    return stream_fn
+
+
+def _stream_then_fail(partial: str):
+    """A stream that dies mid-response, every time, unretryably."""
+
+    async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[str]:
+        del messages, info
+        yield partial
+        raise ValueError("provider blew up")
+
+    return stream_fn
+
+
+def _stream_tool_call(tool_name: str):
+    """A stream whose whole response is one call to `tool_name`."""
+
+    async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[object]:
+        del messages, info
+        yield {0: DeltaToolCall(name=tool_name, json_args="{}")}
+
+    return stream_fn
+
+
+async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
@@ -63,6 +94,7 @@ async def _run_harness(model, *, monkeypatch, should_stop=None):
             options=HarnessOptions(
                 model_name="test-model",
                 history_summarization_enabled=False,
+                toolsets=toolsets or [],
             ),
             agent_run_id=uuid4(),
             malformed_tool_call_ids=set(),
@@ -70,6 +102,53 @@ async def _run_harness(model, *, monkeypatch, should_stop=None):
             should_stop=should_stop,
         )
     ]
+
+
+async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
+    """Events queued before `_execute` raised, plus the exception.
+
+    `_execute` does not turn a pause or a fatal error into an event -- `run()`
+    does, one layer up. Testing at this level is deliberate: what matters here
+    is that usage reached the queue *before* the run died, because that is the
+    ordering the pump depends on.
+    """
+    events = []
+    try:
+        async for event in _execute_events(model, monkeypatch, toolsets):
+            events.append(event)
+    except BaseException as exc:  # noqa: BLE001 - returned for assertion
+        return events, exc
+    return events, None
+
+
+def _execute_events(model, monkeypatch, toolsets):
+    monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
+    pod_id = uuid4()
+    conversation = Conversation(pod_id=pod_id, user_id=uuid4())
+    return PydanticAIHarness()._execute(
+        agent=Agent(
+            pod_id=pod_id,
+            user_id=conversation.user_id,
+            name="assistant",
+            instruction="",
+        ),
+        conversation=conversation,
+        messages=[],
+        ctx=AgentContext(
+            user_id=conversation.user_id,
+            pod_id=pod_id,
+            conversation_id=conversation.id,
+        ),
+        options=HarnessOptions(
+            model_name="test-model",
+            history_summarization_enabled=False,
+            toolsets=toolsets or [],
+        ),
+        agent_run_id=uuid4(),
+        malformed_tool_call_ids=set(),
+        emitted_tool_response_ids=set(),
+        should_stop=None,
+    )
 
 
 def _messages(events) -> list[str]:
@@ -374,3 +453,74 @@ async def test_a_stop_request_wins_over_a_pending_retry(monkeypatch) -> None:
 
     assert len(attempts) == 1
     assert events[-1].type is AgentEventType.STOPPED
+
+
+class TestEveryEndingBills:
+    """The provider charges for tokens it produced, however the run ended.
+
+    Usage used to be reported only when the node loop completed normally. Every
+    other exit skipped it and the run billed zero: the user pressing Stop, a
+    non-retryable provider error, retry exhaustion, and -- the one that is not
+    an edge case at all -- a pausing tool raising to wait for a person. An
+    approval-gated turn billed nothing on every single run that asked for one.
+
+    Ordering is load-bearing and is why these assert on position, not just
+    presence. `RunEventPump` finalizes the run the moment it sees a terminal
+    event and drops everything after it, so a usage event queued afterwards is
+    read by nobody and the run still bills zero.
+    """
+
+    @staticmethod
+    def _usage(events):
+        return [e for e in events if e.type is AgentEventType.USAGE]
+
+    @pytest.mark.asyncio
+    async def test_a_stopped_run_still_bills(self, monkeypatch) -> None:
+        async def stop_now() -> bool:
+            return True
+
+        events = await _run_harness(
+            FunctionModel(stream_function=_stream_text("some tokens")),
+            monkeypatch=monkeypatch,
+            should_stop=stop_now,
+        )
+
+        usage = self._usage(events)
+        assert len(usage) == 1, "a stopped run reported no usage at all"
+        terminal = next(
+            i for i, e in enumerate(events) if e.type is AgentEventType.STOPPED
+        )
+        assert events.index(usage[0]) < terminal, (
+            "usage queued after the terminal event is dropped by the pump"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_paused_run_still_bills(self, monkeypatch) -> None:
+        """The common case: every single turn that asks for approval."""
+        from pydantic_ai.toolsets import FunctionToolset
+
+        from app.modules.agent.tools.tool_errors import AgentInputRequired
+
+        async def request_approval() -> str:
+            raise AgentInputRequired("call-1", "request_approval")
+
+        events, exc = await _run_harness_until_it_dies(
+            FunctionModel(stream_function=_stream_tool_call("request_approval")),
+            monkeypatch=monkeypatch,
+            toolsets=[FunctionToolset(tools=[request_approval])],
+        )
+
+        assert isinstance(exc, AgentInputRequired), "the run should have paused"
+        assert len(self._usage(events)) == 1, (
+            "an approval-gated turn billed zero, which is every run that pauses"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_dies_unretryably_still_bills(self, monkeypatch) -> None:
+        events, exc = await _run_harness_until_it_dies(
+            FunctionModel(stream_function=_stream_then_fail("partial ")),
+            monkeypatch=monkeypatch,
+        )
+
+        assert isinstance(exc, ValueError), exc
+        assert len(self._usage(events)) == 1, "a failed run billed zero"
