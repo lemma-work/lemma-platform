@@ -116,7 +116,11 @@ async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
     try:
         async for event in _execute_events(model, monkeypatch, toolsets):
             events.append(event)
-    except BaseException as exc:  # noqa: BLE001 - returned for assertion
+    except Exception as exc:  # noqa: BLE001 - returned for assertion
+        # Deliberately not `BaseException`: the two endings under test
+        # (`AgentInputRequired`, a provider error) are both `Exception`s, and
+        # catching wider would swallow a `KeyboardInterrupt` that should stop
+        # the suite. A `CancelledError` here is a real failure, not a result.
         return events, exc
     return events, None
 
