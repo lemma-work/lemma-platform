@@ -17,7 +17,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowRight, Boxes } from "@/components/ui/icons";
-import { buildNewPodConversationHref } from "@/lib/pods/new-pod-conversation";
+import {
+  buildNewPodConversationHref,
+  buildNewPodWelcomeHref,
+} from "@/lib/pods/new-pod-conversation";
 import { normalizeRemixSource, remixSourceLabel } from "@/lib/remix/app-remix";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 
@@ -154,8 +157,11 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
             className="mt-7"
             onSubmit={(event) => {
               event.preventDefault();
-              void createAndGo("create", (podId, podName) =>
-                buildNewPodConversationHref({ podId, podName, isFirstPod: false }),
+              // No start path, no name that says anything: this person has
+              // stated nothing, so the pod opens on the door rather than on a
+              // greeting it sent itself.
+              void createAndGo("create", (podId) =>
+                buildNewPodWelcomeHref({ podId, isFirstPod: false }),
               );
             }}
           >
