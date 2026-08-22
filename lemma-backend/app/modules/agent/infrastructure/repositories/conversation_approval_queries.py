@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.modules.agent.domain.entities import (
@@ -72,6 +72,39 @@ class ConversationApprovalQueriesMixin:
         )
         await self.session.flush()
         return result.rowcount > 0
+
+    async def claim_approval_execution(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+    ) -> bool:
+        """Win the right to run this approval's tool. True for exactly one caller.
+
+        Approving a `request_approval` executes the wrapped tool with the user's
+        authority, so it must happen at most once. The guard used to be a read
+        of the tool return -- which is written *after* the tool runs, leaving a
+        window one whole execution wide. A retried reconcile job (streaq
+        requeues one cancelled inside the shutdown grace, and `xautoclaim`
+        reclaims one whose worker died) walked straight through it and ran the
+        command again.
+
+        This is a conditional UPDATE, so Postgres arbitrates. The caller must
+        commit before running the tool: an uncommitted claim is not a claim.
+        """
+        result = await self.session.execute(
+            update(AgentApprovalDecisionModel)
+            .where(
+                AgentApprovalDecisionModel.conversation_id == conversation_id,
+                AgentApprovalDecisionModel.approval_id == approval_id,
+                AgentApprovalDecisionModel.execution_claimed_at.is_(None),
+            )
+            # The database's clock, not this process's. A claim compared
+            # against a server whose clock has drifted is not a claim.
+            .values(execution_claimed_at=func.now())
+            .returning(AgentApprovalDecisionModel.id)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def get_approval_decision(
         self,

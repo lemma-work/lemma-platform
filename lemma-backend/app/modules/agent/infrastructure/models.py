@@ -455,6 +455,12 @@ class AgentApprovalDecisionModel(UUIDCreatedBase):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Claimed before the approved tool runs, so a retried reconcile job cannot
+    # run it twice. See `claim_approval_execution` for why a read was not enough.
+    execution_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class AgentFeedbackModel(UUIDAuditBase):
