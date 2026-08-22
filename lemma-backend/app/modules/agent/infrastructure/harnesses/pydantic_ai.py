@@ -25,8 +25,8 @@ from pydantic_ai.messages import (
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
-    _drive_with_retry,
-    _reraise_driver_failure,
+    drive_with_retry,
+    reraise_driver_failure,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
@@ -435,7 +435,7 @@ class PydanticAIHarness:
 
         async def _drive() -> None:
             try:
-                await _drive_with_retry(
+                await drive_with_retry(
                     node_loop.drive_once,
                     queue=queue,
                     max_attempts=max_stream_attempts,
@@ -475,7 +475,7 @@ class PydanticAIHarness:
                 except BaseException:
                     pass
 
-        _reraise_driver_failure(
+        reraise_driver_failure(
             pending_error,
             cancelled_by_us=cancelled_by_us,
             agent_run_id=agent_run_id,

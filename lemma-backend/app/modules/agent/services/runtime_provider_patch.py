@@ -25,8 +25,8 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.domain.sentinels import UnsetType
 from app.modules.agent.services.runtime_profile_creation import (
-    _normalize_profile_name,
-    _normalized_headers,
+    normalize_profile_name,
+    normalize_headers,
 )
 
 
@@ -67,7 +67,7 @@ def resolve_provider_patch(
     """Settle a PATCH against the stored profile."""
     changes: dict[str, object] = {}
     if not isinstance(name, UnsetType):
-        changes["name"] = _normalize_profile_name(name)
+        changes["name"] = normalize_profile_name(name)
     if not isinstance(description, UnsetType):
         changes["description"] = description.strip() if description else None
 
@@ -79,7 +79,7 @@ def resolve_provider_patch(
     next_headers = (
         stored.headers
         if isinstance(headers, UnsetType)
-        else _normalized_headers(headers)
+        else normalize_headers(headers)
     )
     next_settings = (
         stored.model_settings

@@ -132,7 +132,7 @@ def _python_workspace_tool_failure(
     )
 
 
-async def _get_workspace_session(
+async def get_workspace_session(
     ctx: BaseAgentContext,
     *,
     session_id: str | None,
@@ -216,7 +216,7 @@ async def _process_control_tool(
             await runtime.resolve_session_for_process(process_id)
             or runtime_context.default_shell_session_id
         )
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=resolved_session_id,
             close_on_exit=False,
@@ -269,7 +269,7 @@ async def exec_command_internal(
         runtime_context = workspace_runtime_context(ctx)
 
         with run_phase("tool.workspace.session"):
-            workspace_session = await _get_workspace_session(
+            workspace_session = await get_workspace_session(
                 ctx,
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
@@ -349,7 +349,7 @@ async def write_stdin_internal(
             await runtime.resolve_session_for_process(request.process_id)
             or runtime_context.default_shell_session_id
         )
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=resolved_session_id,
             close_on_exit=False,
@@ -414,7 +414,7 @@ async def list_processes_internal(
     try:
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=runtime_context.default_shell_session_id,
             close_on_exit=False,
@@ -466,7 +466,7 @@ async def list_processes_internal(
 
 async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonRequest):
     try:
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=workspace_runtime_context(ctx).default_python_session_id,
             close_on_exit=False,

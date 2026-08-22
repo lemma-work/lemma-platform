@@ -30,7 +30,7 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    _accumulate_usage,
+    accumulate_usage,
 )
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
@@ -55,7 +55,7 @@ class HarnessDriverCancelled(Exception):
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
 
 
-def _reraise_driver_failure(
+def reraise_driver_failure(
     pending_error: BaseException | None,
     *,
     cancelled_by_us: bool,
@@ -95,7 +95,7 @@ def _reraise_driver_failure(
     ) from pending_error
 
 
-async def _drive_with_retry(
+async def drive_with_retry(
     drive_once,
     *,
     queue,
@@ -156,7 +156,7 @@ async def _drive_with_retry(
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,
             # so no tool ever runs twice.
-            _accumulate_usage(carried_usage, getattr(run, "usage", None))
+            accumulate_usage(carried_usage, getattr(run, "usage", None))
             resume_history = list(snapshot)  # type: ignore[arg-type]
             attempt += 1
             logger.warning(

@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    _usage_totals,
+    usage_totals,
 )
 
 logger = get_logger(__name__)
@@ -108,7 +108,7 @@ class NodeLoop:
             # The run finished on its own. The other exits bill for themselves:
             # a terminal event bills before queueing it (the pump finalizes on
             # sight of one and drops whatever follows), and a fatal exception
-            # bills in `_drive_with_retry` before it re-raises.
+            # bills in `drive_with_retry` before it re-raises.
             self.emit_usage()
 
     def emit_usage(self) -> None:
@@ -128,7 +128,7 @@ class NodeLoop:
         if self._usage_emitted or self._run is None:
             return
         self._usage_emitted = True
-        totals = _usage_totals(self._run.usage, self._carried_usage)
+        totals = usage_totals(self._run.usage, self._carried_usage)
         self.queue.put_nowait(
             (
                 "event",

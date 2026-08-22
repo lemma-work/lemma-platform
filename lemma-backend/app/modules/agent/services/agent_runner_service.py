@@ -71,8 +71,8 @@ from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
     RunFinalizer,
-    _finalize_safely,
-    _run_failure_message,
+    finalize_safely,
+    run_failure_message,
 )
 from app.modules.agent.services.run_observer_delivery import (
     notify_run_failed,
@@ -418,13 +418,13 @@ class AgentRunnerService:
             # worker is not: the platform SIGKILLs it and every other in-flight
             # run on that process dies with it.
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                await _finalize_safely(
+                await finalize_safely(
                     self.finalizer.finish(
                         run=run.with_runtime_profile(
                             runtime_profile_snapshot
                         ).with_reservation(usage_reservation),
                         status=AgentRunStatus.FAILED,
-                        error=_run_failure_message(exc),
+                        error=run_failure_message(exc),
                     ),
                     agent_run_id=agent_run_id,
                 )

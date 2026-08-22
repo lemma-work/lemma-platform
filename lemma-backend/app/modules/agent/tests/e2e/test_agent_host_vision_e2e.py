@@ -147,7 +147,7 @@ async def test_a_host_that_reports_images_may_read_a_page_without_a_vision_model
         db_session, scenario, reports_images=True
     )
 
-    mode, _run = await _vision_mode_for(db_session, scenario, profile)
+    mode, run_pod_tool = await _vision_mode_for(db_session, scenario, profile)
 
     assert mode is AgentVisionMode.DIRECT
 
@@ -197,7 +197,7 @@ async def test_a_stale_catalog_does_not_outvote_a_host_that_learned_to_see(
     )
     assert republished.status_code == 200, republished.text
 
-    mode, _run = await _vision_mode_for(db_session, scenario, profile)
+    mode, run_pod_tool = await _vision_mode_for(db_session, scenario, profile)
 
     assert mode is AgentVisionMode.DIRECT
 

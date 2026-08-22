@@ -56,7 +56,7 @@ def _text_messages(events):
     return [e for e in _messages(events) if e.data.tool_call_id is None]
 
 
-def _run(normalizer, events) -> list:
+def run_pod_tool(normalizer, events) -> list:
     """Feed events and terminate, so buffered tokens are drained."""
     out = []
     for event in events:
@@ -96,7 +96,7 @@ def _final_text(events) -> str:
 class TestTextAccumulation:
     def test_chunks_accumulate_into_one_message(self) -> None:
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [
                 _event(i, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": text})
@@ -110,7 +110,7 @@ class TestTextAccumulation:
         """An upsert supersedes what already streamed; re-emitting the whole
         segment would show the user duplicated text."""
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [
                 _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Hel"}),
@@ -131,7 +131,7 @@ class TestTextAccumulation:
         on reload and in the history the next turn was given.
         """
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [
                 _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Hello"}),
@@ -179,7 +179,7 @@ class TestTextAccumulation:
         pinning.
         """
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [
                 _event(
@@ -217,7 +217,7 @@ class TestTextAccumulation:
         """The host seals rich content ahead of itself, so an upsert can carry
         text the chunk lane never sent."""
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [_event(1, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Recovered"})],
         )
@@ -228,7 +228,7 @@ class TestTextAccumulation:
         """A token stream cannot take back what it emitted, so the host's
         record wins for the persisted text and nothing is re-streamed."""
         n = _normalizer()
-        out = _run(
+        out = run_pod_tool(
             n,
             [
                 _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Hello"}),
@@ -990,7 +990,7 @@ class TestStructuredFinalAnswer:
 
     def test_result_payload_becomes_structured_output(self) -> None:
         n = self._structured()
-        out = _run(n, self._close_tool_call({"result": self.RECORD}))
+        out = run_pod_tool(n, self._close_tool_call({"result": self.RECORD}))
 
         metadata = self._final_metadata(out)
         assert metadata["structured_output"] == {"label": "spam"}
@@ -1000,14 +1000,14 @@ class TestStructuredFinalAnswer:
     def test_arguments_are_read_when_the_adapter_reports_no_output(self) -> None:
         """Some adapters echo rawInput but not rawOutput; the args are the answer."""
         n = self._structured()
-        out = _run(n, self._close_tool_call({"rawInput": self.RECORD}))
+        out = run_pod_tool(n, self._close_tool_call({"rawInput": self.RECORD}))
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
     def test_text_only_result_is_recognised(self) -> None:
         """Others echo only the MCP text block, which carries the same marker."""
         n = self._structured()
-        out = _run(n, self._close_tool_call({"text": json.dumps(self.RECORD)}))
+        out = run_pod_tool(n, self._close_tool_call({"text": json.dumps(self.RECORD)}))
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
@@ -1017,7 +1017,7 @@ class TestStructuredFinalAnswer:
         looking structured while being nothing of the sort."""
         deep = {"a": {"b": {"c": {"d": {"e": "kept"}}}}}
         n = self._structured()
-        out = _run(
+        out = run_pod_tool(
             n,
             self._close_tool_call(
                 {"result": {**self.RECORD, "output": {"label": "x", "deep": deep}}}
@@ -1046,7 +1046,7 @@ class TestStructuredFinalAnswer:
                 object_id="call-2",
             ),
         ]
-        out = _run(n, events)
+        out = run_pod_tool(n, events)
 
         assert self._final_metadata(out)["structured_output"] == {"label": "ham"}
 
@@ -1063,7 +1063,7 @@ class TestStructuredFinalAnswer:
                 object_id="perm-1",
             ),
         ]
-        out = _run(n, events)
+        out = run_pod_tool(n, events)
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
@@ -1133,7 +1133,7 @@ class TestFinalAnswerTextFallback:
         )
 
     def _say(self, normalizer, text: str) -> list:
-        return _run(
+        return run_pod_tool(
             normalizer,
             [_event(1, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": text})],
         )

@@ -642,7 +642,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     model at all.
     """
     from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
-        _agent_host_run_config,
+        agent_host_run_config,
     )
 
     org_id = uuid4()
@@ -660,7 +660,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
         extra={"runtime_profile": resolved.public_snapshot()},
     )
 
-    run_config = _agent_host_run_config(options)
+    run_config = agent_host_run_config(options)
     assert run_config.harness_id == pinned.harness_id
     assert run_config.runtime_profile_id == UUID(pinned.id)
     assert run_config.model_name == "grok-4"
@@ -675,7 +675,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     )
     assert resolved_unpinned.model_name_for_harness == "default"
     assert (
-        _agent_host_run_config(
+        agent_host_run_config(
             HarnessOptions(
                 model_name=resolved_unpinned.model_name_for_harness,
                 extra={"runtime_profile": resolved_unpinned.public_snapshot()},
