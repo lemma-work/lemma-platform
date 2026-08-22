@@ -30,17 +30,15 @@ async def display_resource(
 
     Reach for this whenever the useful answer is more than short prose: several
     values, records, statuses, comparisons, a timeline, or a chart render as a
-    WIDGET instead of being described. After creating or changing a pod resource,
-    display it rather than only saying it was created.
+    WIDGET. After creating or changing a pod resource, display it.
 
     Set `type` and, for most types, a `name` — omit `name` to show all resources
     of that type. FILE takes a pod `path`, so upload sandbox deliverables with
-    `lemma files upload` first and never pass a workspace path. WIDGET takes
+    `lemma files upload` first; a workspace path is not pod-visible. WIDGET takes
     exactly one of `content` or `public_url`; load the `lemma-widget` skill before
-    your first widget, and build an app instead when the UI needs React, routing,
-    or real state.
+    your first widget. React, routing, or real state means an app.
 
-    This tool only displays. Use `ask_user` for choices and `request_approval` for
+    This tool displays. `ask_user` collects choices, `request_approval` collects
     permission.
     """
     # Semantic payload validation runs here (not as a raising pydantic validator)

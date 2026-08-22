@@ -7,10 +7,11 @@
   "private": true,
   "scripts": {
     "prepare:lemma-sdk": "npm --prefix ../lemma-typescript run build",
-    "predev": "npm run prepare:lemma-sdk && node scripts/gen-runtime-config.mjs",
+    "predev": "npm run prepare:lemma-sdk && node scripts/gen-runtime-config.mjs && node scripts/sync-openapi-spec.mjs",
     "dev": "next dev",
     "gen:runtime-config": "node scripts/gen-runtime-config.mjs",
-    "prebuild": "npm run prepare:lemma-sdk",
+    "sync:openapi-spec": "node scripts/sync-openapi-spec.mjs",
+    "prebuild": "npm run prepare:lemma-sdk && node scripts/sync-openapi-spec.mjs",
     "build": "next build",
     "prelint": "npm run prepare:lemma-sdk",
     "start": "next start",
