@@ -185,3 +185,106 @@ already does for a setting with no safe production default. Flipping the default
 to `False` would work too, but startup validation is the stronger guarantee and
 matches what this file already does elsewhere.
 
+### DEV-OPS-007 — A deleted pod keeps serving its schedules, agents and records
+
+**Violates:** PS-OPS-020
+**Severity:** high
+**Where:** [`service.py:509`](lemma-backend/app/core/authorization/service.py#L509)
+(`build_user_context`), reached through
+[`dependencies.py:161`](lemma-backend/app/core/authorization/dependencies.py#L161)
+(`resolve_pod_context`)
+
+**Required:** Deleting a pod stops the work it was doing and stops showing it.
+
+**Actual:** `pod.delete` is a soft delete — it sets `is_deleted`, renames the
+pod, and disarms its schedules. Nothing in the authorization path notices. Pod
+membership rows survive the delete, so the caller's role snapshot still
+authorizes them, and every pod-scoped route that resolves the pod only through
+`PodContextDep` keeps answering.
+
+Measured against a running stack, immediately after `DELETE /pods/{id}`:
+
+| request | answers |
+|---|---|
+| `GET /pods/{id}` | 404 |
+| `GET /pods/{id}/members` | 404 |
+| `GET /pods/{id}/schedules` | 404 |
+| `GET /pods/{id}/datastore/tables` | 404 |
+| `GET /pods/{id}/schedules/{schedule_id}` | **200** |
+| `GET /pods/{id}/schedules/{schedule_id}/runs` | **200** |
+| `GET /pods/{id}/agents` | **200** |
+| `GET /pods/{id}/datastore/tables/{name}/records` | **200** |
+
+The split is not random. The routes that refuse carry
+`require_pod_membership(...)`, which resolves the pod and 404s on a deleted one
+([`schedule_controller.py:82`](lemma-backend/app/modules/schedule/api/controllers/schedule_controller.py#L82)).
+The routes that answer carry only `PodContextDep`
+([`schedule_controller.py:173`](lemma-backend/app/modules/schedule/api/controllers/schedule_controller.py#L173)),
+and that dependency never reads the pod at all on a cache hit — deliberately,
+and the comment above it says why: reading the `Pod` row to build the snapshot
+key "paid for it on every pod request no matter how warm the cache was."
+
+**Why it matters:** Deleting a pod is what a person does when they want its
+contents gone. Its records, its conversations and its schedule history stay
+readable to everyone who had access, indefinitely, through URLs that are easy to
+still be holding — a bookmark, a link in a message, an open tab. It is also
+inconsistent enough to be a trap for anybody adding a pod-scoped route: whether
+a deleted pod is visible depends on which dependency the route happened to use.
+
+**Fix:** Not a one-line check in `build_user_context` — putting it there
+reinstates exactly the per-request `Pod` read that was optimised away, on the
+hot path of every pod-scoped request. Two shapes that do not:
+
+- Invalidate the pod's role snapshots when it is deleted, so a deleted pod is
+  always a cache miss, and refuse there — where the `Pod` row is already being
+  read ([`service.py:541`](lemma-backend/app/core/authorization/service.py#L541)).
+- Or carry `is_deleted` in the cached snapshot itself, so the check costs
+  nothing and the value is invalidated by the same path that writes it.
+
+Either way the check belongs in one place, so a new pod-scoped route inherits it
+rather than having to remember it.
+
+**Found by:** `test_a_deleted_pod_runs_nothing_further`, which has been failing
+in the scenario suite. It is `xfail(strict=True)` until this is fixed.
+
+## POD — pods, membership and roles
+
+### DEV-POD-005 — Is an organization owner exempt from the last-admin rule? The code and the commit that shipped it disagree
+**Violates:** *(question — the divergence may be deliberate, and the promise may
+be the thing that is wrong. Resolve it with a product decision before writing
+code. The promise in question is `PS-POD-041`.)*
+**Severity:** question
+**Where:** [`pod_member_service.py:286`](lemma-backend/app/modules/pod/services/pod_member_service.py#L286)
+
+**The disagreement.** `_refuse_if_last_administrator` returns early for an
+organization owner, and its docstring argues the case at length:
+
+> "Organization owners are exempt, and that is the difference between this and
+> the organization-level guard beside it. Zero organization owners is permanent
+> -- no path mints one. A pod without a POD_ADMIN is not stuck at all: its
+> organization's owners reach every pod in the organization [...] Refusing an
+> owner here would hand a sole operator advice they cannot follow."
+
+The commit that shipped the rule (#452) says the opposite in its own message:
+
+> "DEV-POD-002 (PS-POD-041): removing the last pod admin, or demoting them, is
+> refused — the rule is about the pod, so it applies **even when the requester
+> is an org owner** whose permission bypass would otherwise allow it."
+
+`PS-POD-041` itself says "at all times", with no exemption written down.
+
+**Why it matters:** an organization owner can today demote themselves to
+`POD_VIEWER` in a pod where they are the only admin, and it succeeds — verified
+against a running stack. Whether that is correct depends entirely on which of
+the two intents above is the real one, and nothing in the repository settles it.
+Until it is settled, no scenario should pin the behaviour: a test asserting the
+exemption would bless a possible bug, and one asserting the refusal would fail
+against shipped code that may well be right.
+
+**Fix:** a product decision, then one of two small changes. If owners are
+exempt, say so in `PS-POD-041` and add a scenario. If they are not, delete the
+early return and its docstring paragraph — the rest of the rule already works.
+
+**Found by:** rewriting `test_the_last_pod_admin_cannot_step_down`, which had
+been demoting an organization owner and so was exercising this exemption while
+reporting itself as proof of the rule.
