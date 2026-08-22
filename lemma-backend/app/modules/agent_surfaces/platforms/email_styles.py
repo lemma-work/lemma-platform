@@ -66,9 +66,7 @@ _STYLES: dict[str, str] = {
         "margin:0 0 14px;padding:2px 0 2px 14px;"
     ),
     "hr": f"border:0;border-top:1px solid {_LINE};margin:24px 0;",
-    "table": (
-        "border-collapse:collapse;margin:0 0 16px;width:100%;font-size:14px;"
-    ),
+    "table": ("border-collapse:collapse;margin:0 0 16px;width:100%;font-size:14px;"),
     "th": (
         f"background:{_WASH};border:1px solid {_LINE};color:{_INK};"
         "font-weight:600;padding:8px 10px;text-align:left;"

@@ -22,7 +22,7 @@
       "workers": 1,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": true,
-      "why_serial": "worker-subprocess coverage files race under xdist",
+      "why_serial": "UNVERIFIED since WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS=1 landed. The original reason -- 'worker-subprocess coverage files race under xdist' -- cannot happen by filename: .coveragerc sets parallel=true and relative_files=true, so every process writes .coverage.<host>.<pid>.<rand>. Flipping to 2 needs three measured runs agreeing to within 0.2 coverage points, not this reasoning; ~150s of shard time is at stake.",
       "serial_seconds": 314.0,
       "tests": 112
     },
