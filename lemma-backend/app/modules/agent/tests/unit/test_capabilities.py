@@ -156,14 +156,8 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
 
     # No extra (pod/image/audio) toolsets → no MCP/token path, no network.
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=None,
-        agent=SimpleNamespace(
-            toolsets=[AgentToolset.WEB_SEARCH, AgentToolset.WORKSPACE_CLI]
-        ),
         ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
         full_toolsets=[web_search_toolset, workspace_cli_toolset],
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=True,
     )
     assert any(
@@ -199,12 +193,8 @@ async def test_caching_capability_uses_the_lever_its_protocol_understands():
 
     async def settings_for(protocol: RuntimeProfileProtocol) -> dict[str, object]:
         capabilities = await build_lemma_harness_tooling(
-            uow_factory=None,
-            agent=SimpleNamespace(toolsets=[AgentToolset.WEB_SEARCH]),
             ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
             full_toolsets=[web_search_toolset],
-            agent_run_id=uuid4(),
-            model_name="m",
             enable_prompt_caching=True,
             protocol=protocol,
         )
@@ -707,7 +697,6 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -728,12 +717,8 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -785,7 +770,6 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -803,12 +787,8 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -836,7 +816,6 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
     from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
         view_image_toolset,
@@ -858,12 +837,8 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         if supports_vision:
             toolsets = [*full_toolsets, view_image_toolset]
         return await build_lemma_harness_tooling(
-            uow_factory=_FakeUoW,
-            agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
             ctx=deps,
             full_toolsets=toolsets,
-            agent_run_id=uuid4(),
-            model_name="m",
             enable_prompt_caching=False,
         )
 
@@ -917,7 +892,6 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(
@@ -935,12 +909,8 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 
@@ -1023,12 +993,8 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     )
     full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
     capabilities = await build_lemma_harness_tooling(
-        uow_factory=_FakeUoW,
-        agent=agent_entity,
         ctx=deps,
         full_toolsets=full_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
         enable_prompt_caching=False,
     )
 

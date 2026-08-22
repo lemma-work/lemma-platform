@@ -259,12 +259,8 @@ class AgentRunnerService:
                 # The in-process harness realizes every tool surface as a
                 # capability, so its toolset list is empty.
                 harness_capabilities = await build_lemma_harness_tooling(
-                    uow_factory=self.uow_factory,
-                    agent=agent,
                     ctx=ctx,
                     full_toolsets=full_toolsets,
-                    agent_run_id=agent_run_id,
-                    model_name=resolved_runtime.model_name_for_harness,
                     # Both protocols cache, by different mechanisms — see
                     # PromptCachingCapability.
                     enable_prompt_caching=(
