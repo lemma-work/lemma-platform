@@ -242,3 +242,45 @@ class TestRecordValidatorEnum:
         )
         assert not is_valid
         assert any("archived" in e for e in errors)
+
+
+class TestEveryParsedErrorAcceptsDetails:
+    """`parse_db_error` hands back a class its callers construct uniformly.
+
+    All three call sites -- `db_error_parser.raise_from_db_error`,
+    `record_errors`, and `sql_identifiers` -- do the same thing with the
+    result:
+
+        message, details, error_cls = parse_db_error(...)
+        if details is not None:
+            raise error_cls(message, details) from exc
+        raise error_cls(message) from exc
+
+    So every class the parser can return has to take `(message, details)`.
+    `DatastoreInfrastructureError` did not: it accepted `message` alone, and
+    the two-argument call raised `TypeError: __init__() takes 2 positional
+    arguments but 3 were given` -- replacing the real error and discarding the
+    `from exc` chain on the database-failure path, where the cause matters most.
+
+    That branch is not reachable today, because the parser only ever returns
+    the infrastructure class with `details=None`. It is one new parser branch
+    away from being reachable, and the failure would surface only during a
+    database outage. This pins the contract rather than that one class.
+    """
+
+    def _parsed_error_classes(self) -> set[type]:
+        return {
+            DatastoreValidationError,
+            DatastoreInfrastructureError,
+            DatastoreConflictError,
+        }
+
+    def test_each_class_accepts_a_message_and_details(self):
+        details = {"column": "title", "reason": "example"}
+        for error_cls in self._parsed_error_classes():
+            error = error_cls("something failed", details)
+            assert error.details == details, error_cls.__name__
+
+    def test_each_class_still_accepts_a_message_alone(self):
+        for error_cls in self._parsed_error_classes():
+            assert error_cls("something failed").details is None, error_cls.__name__
