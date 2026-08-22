@@ -85,7 +85,7 @@ async def load_authorized_agent_run(
     user_id: UUID,
     pod_id: UUID,
 ) -> AgentRun:
-    conversation = await service.get_conversation(
+    conversation = await service.queries.get_conversation(
         conversation_id=conversation_id,
         user_id=user_id,
         pod_id=pod_id,
