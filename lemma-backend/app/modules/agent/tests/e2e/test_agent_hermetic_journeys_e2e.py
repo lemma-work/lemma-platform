@@ -2815,3 +2815,113 @@ async def test_a_model_stream_that_keeps_dropping_fails_cleanly_once_retries_run
     )
     assert durable.status_code == status.HTTP_200_OK, durable.text
     assert durable.json()["status"] == "FAILED"
+
+
+async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    e2e_settings,
+    worker,
+):
+    """The whole MESSAGING toolset, in one run, against real notification rows.
+
+    Three tools that had no e2e coverage anywhere -- not a thin patch each, but
+    the sequence they exist to form, because that is where they can disagree:
+
+        list_pod_members -> who can I reach
+        message_user     -> reach them, and get a notification id back
+        check_messages   -> that id is a real row, and it is OPEN
+
+    The id round-trip is the assertion that matters. Each tool writing its own
+    row is provable in isolation; that the id `message_user` hands back is one
+    `check_messages` can actually find is not, and that is the join a caller
+    depends on.
+
+    Answering is the other half of this loop and lives in
+    `test_notification_response_e2e.py`: `respond_to_notification` is not part
+    of this toolset at all. It is injected by `OpenNotificationsCapability`,
+    only into the conversation a notification was delivered to -- so it cannot
+    be reached from the asking side, which is where this run stands.
+    """
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"messaging_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Run the scripted messaging steps.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["MESSAGING"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    notification_id = script_tool_result_ref("msg-1", "notification_id")
+    script = [
+        script_tool_call("list_pod_members", {}, tool_call_id="members-1"),
+        script_tool_call(
+            "message_user",
+            {
+                "to": fixed_test_user["email"],
+                "message": "Can you confirm the Q3 numbers?",
+                "background_instruction": "Record whatever they say.",
+            },
+            tool_call_id="msg-1",
+        ),
+        script_tool_call(
+            "check_messages",
+            {"notification_ids": [notification_id]},
+            tool_call_id="check-open",
+        ),
+        script_text("Asked; waiting on an answer."),
+    ]
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Messaging loop",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client, pod_id, conversation_id, "Ask about Q3 and record it."
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    assert returns["members-1"]["success"] is True
+    assert returns["members-1"]["members"], "the run's own owner is a pod member"
+
+    sent = returns["msg-1"]
+    assert sent["success"] is True, sent
+    assert sent["notification_id"], "no id came back, so nothing can check it"
+
+    still_open = returns["check-open"]
+    assert still_open["success"] is True, still_open
+    assert still_open["pending"] == 1
+    assert [m["status"] for m in still_open["messages"]] == ["OPEN"]
+
+    assert str(sent["notification_id"]) in str(still_open["messages"][0]), (
+        "check_messages found a row, but not the one message_user reported"
+    )
