@@ -14,7 +14,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import close_redis_clients
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     run_events_stream_key,
 )

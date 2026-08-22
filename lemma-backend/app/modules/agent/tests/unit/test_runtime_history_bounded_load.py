@@ -26,10 +26,8 @@ from app.modules.agent.domain.entities import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
-)
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 
 # Relative to now, not a fixed date: the surface age window is measured against

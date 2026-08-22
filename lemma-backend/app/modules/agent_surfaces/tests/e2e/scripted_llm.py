@@ -43,7 +43,7 @@ from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_service import suppress_agent_run_enqueue
+from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,

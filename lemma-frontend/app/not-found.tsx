@@ -27,6 +27,23 @@ export default function NotFound() {
             <Button asChild variant="primary" size="sm">
                 <Link href="/">Go to your workspace</Link>
             </Button>
+            {/* The sitemap and llms.txt are file/route responses, not pages, so
+                these are plain anchors rather than next/link. */}
+            <p className="text-xs text-[var(--text-tertiary)]">
+                Looking for something specific? Try the{' '}
+                <a className="underline" href="/sitemap.xml">
+                    sitemap
+                </a>
+                , the{' '}
+                <Link className="underline" href="/docs">
+                    docs
+                </Link>
+                , or{' '}
+                <a className="underline" href="/llms.txt">
+                    llms.txt
+                </a>
+                .
+            </p>
         </div>
     );
 }

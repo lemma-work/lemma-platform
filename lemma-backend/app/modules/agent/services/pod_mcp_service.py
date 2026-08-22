@@ -9,11 +9,10 @@ pod tools then enforce per-resource grants.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -27,9 +26,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.services.mcp_content import (
-    image_contents,
-    result_payload,
-    text_content,
+    tool_call_error,
+    tool_call_result,
 )
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.infrastructure.mcp import (
@@ -41,7 +39,6 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.tool_errors import (
-    format_tool_error,
     is_control_flow_exception,
 )
 
@@ -96,8 +93,8 @@ class PodMCPService:
                 "agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic",
                 exc_info=True,
             )
-            return self._mcp_error_result(tool_name, exc)
-        return self._mcp_result(result)
+            return tool_call_error(tool_name, exc)
+        return tool_call_result(result)
 
     async def _require_context(self, *, pod_id: UUID, token: str) -> BaseAgentContext:
         ctx = await self._context_from_token(pod_id=pod_id, token=token)
@@ -157,26 +154,6 @@ class PodMCPService:
             # and `_mcp_result`'s image handling could never fire, because no
             # image was ever produced to attach.
             vision_mode=AgentVisionMode.DIRECT,
-        )
-
-    def _mcp_result(self, result: object) -> CallToolResult:
-        # See `conversation_mcp_service._mcp_result`: images ride alongside the
-        # text so a vision-capable remote harness actually receives them.
-        images = image_contents(result)
-        payload = result_payload(result)
-        if isinstance(payload, dict):
-            return CallToolResult(
-                content=[text_content(payload), *images],
-                structuredContent=payload,
-            )
-        return CallToolResult(content=[text_content(payload), *images])
-
-    def _mcp_error_result(self, name: str, exc: Exception) -> CallToolResult:
-        payload = format_tool_error(name, exc)
-        return CallToolResult(
-            isError=True,
-            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
-            structuredContent=payload,
         )
 
 

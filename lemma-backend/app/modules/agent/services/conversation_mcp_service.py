@@ -8,11 +8,10 @@ the actual tool invocation.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -20,12 +19,14 @@ from supertokens_python.recipe.session.asyncio import (
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.services.surface_context import (
+    surface_context_from_conversation,
+)
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
-    image_contents,
-    result_payload,
-    text_content,
+    tool_call_error,
+    tool_call_result,
 )
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.infrastructure.mcp import (
@@ -36,7 +37,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
 from app.modules.agent.infrastructure.repositories import (
@@ -60,7 +61,6 @@ from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_ref
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
-    format_tool_error,
     is_control_flow_exception,
 )
 
@@ -220,7 +220,7 @@ class ConversationMCPService:
                 "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic",
                 exc_info=True,
             )
-            error = self._mcp_error_result(tool_name, exc)
+            error = tool_call_error(tool_name, exc)
             await self._close_if_it_did_not_wait(
                 tool_call_id=tool_call_id,
                 conversation_id=conversation_id,
@@ -236,7 +236,7 @@ class ConversationMCPService:
             tool_name=tool_name,
             result=result,
         )
-        return self._mcp_result(result)
+        return tool_call_result(result)
 
     async def _close_if_it_did_not_wait(
         self,
@@ -319,7 +319,7 @@ class ConversationMCPService:
                 workspace_cwd=workspace_location.cwd,
                 workspace_repo=workspace_location.repo,
                 pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
-                **_surface_context_from_conversation(conversation),
+                **surface_context_from_conversation(conversation),
             )
             return agent, conversation, ctx
 
@@ -379,28 +379,6 @@ class ConversationMCPService:
             return stored
         return resolved.public_snapshot()
 
-    def _mcp_result(self, result: object) -> CallToolResult:
-        # Images ride alongside the text. Remote harnesses (Codex, Claude Code)
-        # are vision-capable, but every result used to be flattened to text, so
-        # `view_image` and `pod_view_document_pages` reached them as JSON
-        # describing a picture they never received.
-        images = image_contents(result)
-        payload = result_payload(result)
-        if isinstance(payload, dict):
-            return CallToolResult(
-                content=[text_content(payload), *images],
-                structuredContent=payload,
-            )
-        return CallToolResult(content=[text_content(payload), *images])
-
-    def _mcp_error_result(self, name: str, exc: Exception) -> CallToolResult:
-        payload = format_tool_error(name, exc)
-        return CallToolResult(
-            isError=True,
-            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
-            structuredContent=payload,
-        )
-
 
 conversation_mcp_service = ConversationMCPService()
 
@@ -409,29 +387,3 @@ def _surface_platform(conversation: Conversation) -> str | None:
     metadata = conversation.metadata or {}
     platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
     return str(platform) if platform else None
-
-
-def _surface_context_from_conversation(conversation: Conversation) -> JsonObject:
-    metadata = conversation.metadata or {}
-    surface_id = metadata.get("surface_id")
-    surface_metadata_payload = metadata.get("surface_event_metadata")
-    surface_metadata = None
-    if isinstance(surface_metadata_payload, dict):
-        try:
-            from app.composition.agent_surface_runtime import (
-                parse_surface_event_metadata,
-            )
-
-            surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
-        except Exception:
-            surface_metadata = surface_metadata_payload
-    return {
-        "surface_id": UUID(str(surface_id)) if surface_id else None,
-        "surface_platform": metadata.get("surface_platform"),
-        "surface_metadata": surface_metadata,
-        "external_channel_id": metadata.get("external_channel_id"),
-        "external_thread_id": metadata.get("external_thread_id"),
-        "external_user_id": metadata.get("external_user_id"),
-        "external_message_id": metadata.get("external_message_id"),
-        "agent_display_name": metadata.get("agent_display_name"),
-    }

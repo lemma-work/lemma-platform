@@ -28,10 +28,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_control_updates import (
+from app.modules.agent.infrastructure.agent_host.control_updates import (
     apply_rejection,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 

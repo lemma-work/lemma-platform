@@ -32,7 +32,7 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )

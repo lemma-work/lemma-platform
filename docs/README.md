@@ -64,6 +64,7 @@ issue.
 |---|---|
 | [Contributing](../CONTRIBUTING.md) | Setup, architecture rules, and what a pull request needs |
 | [Working in this repository](../AGENTS.md) | A map of the components and the four rules broken most often |
+| [Agent context](../CLAUDE.md) | Loaded automatically by coding agents; carries the one rule that is wrong by default and points here |
 | [Testing strategy](testing.md) | The three suites, which one a change needs, and what gates what |
 | [Product scenario suite](../tests/scenarios/README.md) | The black-box suite that proves the product specification, and how to add to it |
 | [Backend module guide](../lemma-backend/docs/modules/README.md) | One document per backend module, and the tables each owns |

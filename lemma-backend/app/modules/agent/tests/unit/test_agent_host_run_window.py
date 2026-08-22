@@ -21,10 +21,10 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     AGENT_RUN_JOB_TIMEOUT_SECONDS,
 )
 from app.modules.agent.events.handlers import _ORPHANED_RUN_CUTOFF_SECONDS
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     CREDENTIAL_REFRESH_MARGIN_SECONDS,
     CREDENTIAL_SAFETY_MARGIN_SECONDS,
