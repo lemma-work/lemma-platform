@@ -27,6 +27,13 @@ export const COMPOSER_LAUNCH_PARAMS = [
 export const ASSISTANT_MESSAGE_PARAM = "assistantMessage";
 
 /**
+ * The third kind of arrival: nothing has been said yet, and the route should
+ * ask before anything is sent. Lives here with the other two so a route can
+ * see all three ways it may be entered in one place.
+ */
+export const POD_WELCOME_PARAM = "welcome";
+
+/**
  * The loud version's params. `assistantMessage` sends on arrival and the other
  * two are the framing that rides with it; all three are spent by that one send.
  */
