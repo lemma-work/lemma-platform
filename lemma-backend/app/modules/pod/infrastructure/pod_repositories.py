@@ -10,7 +10,11 @@ from sqlalchemy.orm import joinedload
 
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.authorization.models import RoleAssignmentModel, RoleModel
+from app.core.authorization.models import (
+    RoleAssignmentModel,
+    RoleModel,
+    RolePermissionModel,
+)
 from app.composition.pod_identity_wiring import OrganizationMember, User
 from app.modules.identity.contracts import normalize_identity_email
 from app.modules.pod.domain.ports import (
@@ -19,7 +23,6 @@ from app.modules.pod.domain.ports import (
     PodRepositoryPort,
 )
 from app.modules.pod.domain.errors import PodConflictError
-from app.modules.pod.domain.roles import PodRole
 from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodJoinRequestEntity,
@@ -415,10 +418,29 @@ class PodMemberRepository(PodMemberRepositoryPort):
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
 
-    async def count_members_with_role(self, pod_id: UUID, role: PodRole) -> int:
+    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int:
+        """How many members of ``pod_id`` hold a role granting ``permission_id``.
+
+        Three things this does not do, each of which was a way to get the wrong
+        number.
+
+        It does not match on a role *name*. A pod may define a custom role that
+        carries ``pod.member.manage``; its holder administers the pod as surely
+        as a ``POD_ADMIN`` does, and counting names would have refused to let
+        the last POD_ADMIN step down from a pod that has three other people who
+        can do the job.
+
+        It counts distinct members, not assignment rows -- a member assigned the
+        same role twice is one administrator, and counting rows would have
+        inflated the total and silently disarmed the guard it feeds.
+
+        It takes ``FOR UPDATE`` on the rows it counted. The callers are
+        check-then-act: two administrators leaving at the same moment would each
+        see the other and both be allowed through, which is precisely the state
+        the guard exists to prevent. Locking the members serialises them.
+        """
         stmt = (
-            select(func.count())
-            .select_from(PodMember)
+            select(PodMember.id)
             .join(
                 RoleAssignmentModel,
                 sa_and(
@@ -427,10 +449,19 @@ class PodMemberRepository(PodMemberRepositoryPort):
                 ),
             )
             .join(RoleModel, RoleModel.id == RoleAssignmentModel.role_id)
-            .where(PodMember.pod_id == pod_id, RoleModel.name == role.value)
+            .join(
+                RolePermissionModel,
+                RolePermissionModel.role_id == RoleModel.id,
+            )
+            .where(
+                PodMember.pod_id == pod_id,
+                RolePermissionModel.permission_id == permission_id,
+            )
+            .distinct()
+            .with_for_update(of=PodMember)
         )
         result = await self.session.execute(stmt)
-        return int(result.scalar_one())
+        return len(result.scalars().all())
 
 
 class PodJoinRequestRepository(PodJoinRequestRepositoryPort):

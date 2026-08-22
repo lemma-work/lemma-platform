@@ -106,12 +106,6 @@ class OrganizationRepository(OrganizationRepositoryPort):
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
-    async def get_by_name(self, name: str) -> Optional[OrganizationEntity]:
-        stmt = select(Organization).where(Organization.name == name)
-        result = await self.session.execute(stmt)
-        instance = result.scalars().first()
-        return instance.to_entity() if instance else None
-
     async def get_by_slug(self, slug: str) -> Optional[OrganizationEntity]:
         stmt = select(Organization).where(Organization.slug == slug)
         result = await self.session.execute(stmt)
@@ -276,18 +270,29 @@ class OrganizationRepository(OrganizationRepositoryPort):
         )
         return int(result.scalar_one())
 
-    async def count_members_with_role(
+    async def count_members_with_role_for_update(
         self, organization_id: UUID, role: OrganizationRole
     ) -> int:
+        """How many members hold ``role``, with those rows locked.
+
+        Selects the rows rather than asking the database to count them, because
+        the count feeds a check-then-act guard: two owners leaving at the same
+        moment would each see the other and both be allowed through, leaving an
+        organization with no owner -- which is permanent, since every path that
+        grants ORG_OWNER needs an existing owner to walk it. ``FOR UPDATE``
+        makes the second transaction wait for the first and then see the truth.
+        (Postgres refuses ``FOR UPDATE`` alongside an aggregate, so the count
+        happens here.)
+        """
         result = await self.session.execute(
-            select(func.count())
-            .select_from(OrganizationMember)
+            select(OrganizationMember.id)
             .where(
                 OrganizationMember.organization_id == organization_id,
                 OrganizationMember.role == role.value,
             )
+            .with_for_update()
         )
-        return int(result.scalar_one())
+        return len(result.scalars().all())
 
     async def get_user_organizations(
         self, user_id: UUID, limit: int = 100, cursor: Optional[str] = None

@@ -85,10 +85,15 @@ async def refuse_if_last_owner(
     ORG_OWNER requires an existing owner to walk it -- so zero owners is
     permanent. Demotion and removal both reach it, and removal includes the
     self-removal that reads as harmless. See PS-ONB-041.
+
+    The count locks the owner rows. A guard that reads a count and then writes
+    is only a guard against one caller at a time; two owners leaving together
+    would each be told the other is still there. See
+    ``count_members_with_role_for_update``.
     """
     if member.role != OrganizationRole.ORG_OWNER:
         return
-    owner_count = await repository.count_members_with_role(
+    owner_count = await repository.count_members_with_role_for_update(
         member.organization_id, OrganizationRole.ORG_OWNER
     )
     if owner_count <= 1:

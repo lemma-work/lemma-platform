@@ -50,9 +50,6 @@ async def test_create_organization_accepts_a_carried_name(
     organization_repository_mock: AsyncMock,
 ):
     """A name another organization carries is a label, not a conflict."""
-    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
-        name="Acme", slug="acme"
-    )
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
 
@@ -68,7 +65,6 @@ async def test_create_organization_raises_conflict_by_slug(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = OrganizationEntity(
         name="Other", slug="acme"
     )
@@ -88,7 +84,6 @@ async def test_create_organization_success_adds_owner_member(
     owner_id = uuid4()
     org = OrganizationEntity(name="Acme", slug="acme")
 
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.return_value = org
 
@@ -109,7 +104,6 @@ async def test_create_organization_generates_clean_slug_from_name(
     owner_id = uuid4()
     org = OrganizationEntity(name="Rahul's Research & Ops!", slug="")
 
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.return_value = org
 
@@ -127,8 +121,6 @@ async def test_create_organization_rejects_invalid_provided_slug(
     owner_id = uuid4()
     org = OrganizationEntity(name="Rahul Org", slug="rahul's-org")
 
-    organization_repository_mock.get_by_name.return_value = None
-
     with pytest.raises(IdentityValidationError):
         await organization_service.create_organization(org, owner_id)
 
@@ -142,8 +134,6 @@ async def test_create_organization_rejects_generated_slug_over_255_characters(
 ):
     org = OrganizationEntity(name="a" * 256, slug="")
 
-    organization_repository_mock.get_by_name.return_value = None
-
     with pytest.raises(IdentityValidationError, match="255 characters or fewer"):
         await organization_service.create_organization(org, uuid4())
 
@@ -156,9 +146,6 @@ async def test_create_organization_conflicts_slug_the_field_that_lost(
     organization_repository_mock: AsyncMock,
 ):
     """Names may be shared; the slug is the handle, and it must be free."""
-    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
-        name="Acme", slug="acme"
-    )
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
 
@@ -168,7 +155,6 @@ async def test_create_organization_conflicts_slug_the_field_that_lost(
     )
     assert created.name == "Acme"
 
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = OrganizationEntity(
         name="Other", slug="acme"
     )
@@ -924,7 +910,7 @@ async def test_remove_member_refuses_the_last_owner_even_by_their_own_hand(
     )
 
     organization_repository_mock.get_member_by_id.return_value = member
-    organization_repository_mock.count_members_with_role.return_value = 1
+    organization_repository_mock.count_members_with_role_for_update.return_value = 1
 
     with pytest.raises(OrganizationConflictError) as conflict:
         await organization_service.remove_member(
@@ -953,7 +939,7 @@ async def test_update_member_role_refuses_demoting_the_last_owner(
         organization_id=owner_member.organization_id,
         role=OrganizationRole.ORG_OWNER,
     )
-    organization_repository_mock.count_members_with_role.return_value = 1
+    organization_repository_mock.count_members_with_role_for_update.return_value = 1
 
     with pytest.raises(OrganizationConflictError) as conflict:
         await organization_service.update_member_role(
@@ -1237,7 +1223,6 @@ async def test_resolving_names_keeps_the_first_choice_when_it_is_free(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
 
@@ -1276,7 +1261,6 @@ async def test_resolving_names_steps_past_a_taken_slug_too(
     organization_repository_mock: AsyncMock,
 ):
     """A free name whose slug is taken is not a free identity."""
-    organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.side_effect = lambda slug: (
         OrganizationEntity(name="Other", slug=slug) if slug == "acme" else None
     )

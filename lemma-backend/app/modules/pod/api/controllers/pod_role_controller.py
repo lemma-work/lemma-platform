@@ -112,7 +112,9 @@ async def create_pod_role(
     except ValueError as exc:
         # A typo in a permission id is a mistake in the request, not a fault in
         # the platform -- the message already names what was wrong.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -158,7 +160,9 @@ async def update_pod_role(
             created_by_user_id=ctx.user_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,

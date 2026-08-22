@@ -197,14 +197,17 @@ class PodService:
         # kind of runaway: invisible by construction, and billed. See
         # PS-OPS-020, PS-POD-050, DEV-OPS-003.
         if self.schedule_teardown is not None:
-            # Unguarded on purpose. ``delete_all_for_pod`` is already
-            # best-effort per schedule -- an APScheduler or Composio teardown
-            # that fails still force-deletes the row -- so the only thing that
+            # Unguarded on purpose: this is one UPDATE, so the only thing that
             # reaches here is the database itself failing, and that must abort
             # the deletion rather than be logged under a pod we then report
             # deleted. Swallowing it would recreate the exact state this fix
             # exists to prevent: a gone pod with armed schedules.
-            await self.schedule_teardown.delete_all_for_pod(pod_id)
+            #
+            # Disarm, not delete. The rows are what the pod-deleted event needs
+            # to find the provider triggers behind them, and tearing those down
+            # inline would put an unbounded number of Composio round trips
+            # inside this transaction.
+            await self.schedule_teardown.disarm_all_for_pod(pod_id)
         return True
 
     async def list_pods_by_organization(

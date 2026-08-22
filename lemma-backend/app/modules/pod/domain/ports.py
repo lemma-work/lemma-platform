@@ -14,7 +14,6 @@ from app.modules.pod.domain.pod_entities import (
     PodJoinRequestStatus,
     PodMemberEntity,
 )
-from app.modules.pod.domain.roles import PodRole
 
 
 class PodRepositoryPort(Protocol):
@@ -74,18 +73,20 @@ class PodMemberRepositoryPort(Protocol):
         self, pod_id: UUID, org_member_id: UUID
     ) -> bool: ...
 
-    async def count_members_with_role(self, pod_id: UUID, role: PodRole) -> int: ...
+    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int: ...
 
 
 class PodScheduleTeardownPort(Protocol):
     """What pod deletion needs from the schedule module, stated locally.
 
-    Deleting a pod must take its standing work with it, in the same request --
-    an event-driven cleanup is a retry away from a deleted pod firing agents
-    nobody can see. See PS-OPS-020 and DEV-OPS-003.
+    Deleting a pod must stop its standing work in the same request -- an
+    event-driven cleanup is a retry away from a deleted pod firing agents
+    nobody can see. Stopping it is all the request does: the rows and the
+    provider triggers behind them are torn down on the pod-deleted event, which
+    needs those rows to know what to tear down. See PS-OPS-020 and DEV-OPS-003.
     """
 
-    async def delete_all_for_pod(self, pod_id: UUID) -> int: ...
+    async def disarm_all_for_pod(self, pod_id: UUID) -> int: ...
 
 
 class PodJoinRequestRepositoryPort(Protocol):
