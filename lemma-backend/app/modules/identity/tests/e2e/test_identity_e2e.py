@@ -1039,13 +1039,31 @@ async def test_organization_slug_is_globally_unique(
     assert first.status_code == 201, first.text
     assert first.json()["slug"] == "global-slug-collision"
 
+    # Neither of these owners typed a handle, and the two display names are not
+    # even the same -- they merely slugify alike. Refusing the second would
+    # refuse a *name*, which PS-ONB-014 says is theirs to carry. So the handle
+    # moves aside and stays unique, which is the property this test is for.
     second = await async_client.post(
         "/organizations",
         headers=_auth_headers(second_owner["token"]),
         json={"name": "Global-Slug Collision"},
     )
-    assert second.status_code == 409, second.text
-    assert "slug" in second.json()["message"].lower()
+    assert second.status_code == 201, second.text
+    assert second.json()["name"] == "Global-Slug Collision"
+    assert second.json()["slug"] != first.json()["slug"], (
+        "two organizations ended up sharing a handle; the handle is the address "
+        "people are given, and it has to resolve to one of them"
+    )
+
+    # The other half of the rule: a handle somebody *asked for* is refused when
+    # it is gone, rather than quietly seating them somewhere else.
+    chosen = await async_client.post(
+        "/organizations",
+        headers=_auth_headers(second_owner["token"]),
+        json={"name": "Something Else", "slug": "global-slug-collision"},
+    )
+    assert chosen.status_code == 409, chosen.text
+    assert "slug" in chosen.json()["message"].lower()
 
 
 @pytest.mark.asyncio
