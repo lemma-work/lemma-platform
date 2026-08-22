@@ -23,7 +23,6 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "app_archive_max_entries",
         "app_archive_max_uncompressed_bytes",
         "app_archive_max_compression_ratio",
-        "scheduler_api_url",
         "schedule_max_consecutive_failures",
     }
 

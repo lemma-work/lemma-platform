@@ -144,10 +144,13 @@ async def test_a_stranger_is_sent_nothing(world, a_watched_table):
                 {"title": "not for you"}, to_table=table["name"], in_pod=pod
             )
             leaked = await asyncio.wait_for(socket.recv(), timeout=8.0)
+    except TimeoutError:
+        # Must precede the OSError handler: `TimeoutError` is a *subclass* of
+        # `OSError`, so ordering it second makes it unreachable and collapses
+        # the two outcomes this scenario means to tell apart.
+        return  # connected, and told nothing
     except (websockets.exceptions.WebSocketException, OSError):
         return  # refused at the door, which is the stronger answer
-    except TimeoutError:
-        return  # connected, and told nothing
 
     raise AssertionError(
         f"someone with no access to the pod was sent one of its records: {leaked}"
