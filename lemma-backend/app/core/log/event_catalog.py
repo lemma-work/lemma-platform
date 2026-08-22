@@ -606,6 +606,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'surface.telegram.history_failed': EventSpec('debug', frozenset()),
     'surface.whatsapp.history_failed': EventSpec('debug', frozenset()),
     'surface.whatsapp.media_upload_rejected': EventSpec('debug', frozenset({'mime_type', 'status_code'})),
+    'usage.limit_overrides.not_a_list': EventSpec('warning', frozenset({'detail'})),
+    'usage.limit_overrides.unparseable': EventSpec('warning', frozenset({'detail'})),
     'usage.pricing.invalid_system_model_usage_metadata.failed': EventSpec('error', frozenset({'error_type'})),
     'usage.pricing.usage_pricing_not_registered_recording.observed': EventSpec('debug', frozenset()),
     'web_search.request.failed': EventSpec('debug', frozenset()),

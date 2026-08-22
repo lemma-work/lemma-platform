@@ -197,14 +197,14 @@ class PodService:
         # kind of runaway: invisible by construction, and billed. See
         # PS-OPS-020, PS-POD-050, DEV-OPS-003.
         if self.schedule_teardown is not None:
-            try:
-                await self.schedule_teardown.delete_all_for_pod(pod_id)
-            except Exception:  # noqa: BLE001 - the event-driven sweep retries
-                from app.core.log.log import get_logger
-
-                get_logger(__name__).debug(
-                    "pod.delete.schedule_teardown_failed", pod_id=pod_id
-                )
+            # Unguarded on purpose. ``delete_all_for_pod`` is already
+            # best-effort per schedule -- an APScheduler or Composio teardown
+            # that fails still force-deletes the row -- so the only thing that
+            # reaches here is the database itself failing, and that must abort
+            # the deletion rather than be logged under a pod we then report
+            # deleted. Swallowing it would recreate the exact state this fix
+            # exists to prevent: a gone pod with armed schedules.
+            await self.schedule_teardown.delete_all_for_pod(pod_id)
         return True
 
     async def list_pods_by_organization(

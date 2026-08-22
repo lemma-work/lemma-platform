@@ -74,9 +74,7 @@ class PodMemberRepositoryPort(Protocol):
         self, pod_id: UUID, org_member_id: UUID
     ) -> bool: ...
 
-    async def count_members_with_role(
-        self, pod_id: UUID, role: PodRole
-    ) -> int: ...
+    async def count_members_with_role(self, pod_id: UUID, role: PodRole) -> int: ...
 
 
 class PodScheduleTeardownPort(Protocol):

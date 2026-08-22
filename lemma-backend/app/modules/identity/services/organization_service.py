@@ -6,9 +6,12 @@ from uuid import UUID
 
 from app.core.helpers.slug import slugify
 from app.modules.identity.domain.email_domains import work_domain_from_email
+from app.modules.identity.services.membership_rules import (
+    refuse_if_last_owner,
+    resolve_pod_grant,
+)
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
-    IdentityConflictError,
     IdentityValidationError,
     OrganizationConflictError,
     OrganizationInvitationNotFoundError,
@@ -17,11 +20,9 @@ from app.modules.identity.domain.errors import (
     UserNotFoundError,
 )
 from app.modules.identity.domain.organization_identity import (
-    NoAvailableOrganizationName,
-    resolve_available_identity,
+    assign_organization_identity,
     resolve_email_domain_for_policy,
 )
-from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -106,10 +107,6 @@ class OrganizationService:
 
         return member
 
-    async def _identity_is_free(self, name: str, slug: str) -> bool:
-        # Names are labels and may be shared; the slug is the unique handle.
-        return await self.organization_repository.get_by_slug(slug) is None
-
     async def create_organization(
         self,
         entity: OrganizationEntity,
@@ -119,35 +116,18 @@ class OrganizationService:
     ) -> OrganizationEntity:
         """Create an organization owned by ``owner_user_id``.
 
-        ``resolve_name_conflicts`` is for a name the user did not choose -- the
-        one onboarding derives for a first workspace. Display names may be
-        shared, but the slug may not, so the walk picks a ``(name, slug)`` pair
-        whose handle is free rather than dead-ending someone who never typed a
-        name.
+        See :func:`assign_organization_identity` for what
+        ``resolve_name_conflicts`` settles.
         """
         owner = await self.user_repository.get(owner_user_id)
         if not owner:
             raise UserNotFoundError()
 
-        if resolve_name_conflicts:
-            try:
-                entity.name, entity.slug = await resolve_available_identity(
-                    entity.name, is_free=self._identity_is_free
-                )
-            except NoAvailableOrganizationName as exc:
-                raise OrganizationConflictError(
-                    "Could not find an available organization name",
-                    code=OrganizationConflictError.NAME_TAKEN,
-                ) from exc
-        else:
-            entity.slug = normalize_organization_slug(entity.slug, entity.name)
-
-            existing_slug = await self.organization_repository.get_by_slug(entity.slug)
-            if existing_slug:
-                raise OrganizationConflictError(
-                    "Organization slug already exists",
-                    code=OrganizationConflictError.SLUG_TAKEN,
-                )
+        await assign_organization_identity(
+            entity,
+            get_by_slug=self.organization_repository.get_by_slug,
+            resolve_conflicts=resolve_name_conflicts,
+        )
 
         entity.email_domain = await resolve_email_domain_for_policy(
             owner_email=str(owner.email),
@@ -538,34 +518,15 @@ class OrganizationService:
         if existing_member:
             raise OrganizationConflictError("User is already a member")
 
-        # Resolve everything the acceptance needs before writing anything, so
-        # an acceptance that cannot be honoured whole refuses with the
-        # invitation still pending — not a member row in the organization and
-        # the pod quietly dropped. See PS-ONB-021.
-        pod_grant: dict[str, object] | None = None
-        if invitation.pod_id is not None:
-            if self.pod_membership_port is None:
-                raise IdentityConflictError(
-                    "This invitation names a pod, but pod membership cannot be "
-                    "granted right now"
-                )
-            pod_org_id = await self.pod_membership_port.get_pod_organization_id(
-                invitation.pod_id
-            )
-            if pod_org_id is None:
-                raise IdentityConflictError(
-                    f"The pod named by this invitation no longer exists "
-                    f"({invitation.pod_id}); it cannot be granted"
-                )
-            if pod_org_id != invitation.organization_id:
-                raise IdentityValidationError(
-                    "The pod named by this invitation does not belong to the "
-                    "inviting organization"
-                )
-            pod_grant = {
-                "pod_id": invitation.pod_id,
-                "pod_role": invitation.pod_role or "POD_USER",
-            }
+        # Resolved before anything is written, so an acceptance that cannot be
+        # honoured whole refuses with the invitation still pending -- not a
+        # member row plus a pod quietly dropped. See PS-ONB-021.
+        pod_grant = await resolve_pod_grant(
+            pod_membership_port=self.pod_membership_port,
+            pod_id=invitation.pod_id,
+            pod_role=invitation.pod_role,
+            organization_id=invitation.organization_id,
+        )
 
         member = OrganizationMemberEntity(
             user_id=user_id,
@@ -583,15 +544,17 @@ class OrganizationService:
         await self.organization_repository.update_invitation(invitation)
 
         if pod_grant is not None:
-            user_name_parts = [part for part in [user.first_name, user.last_name] if part]
+            user_name_parts = [
+                part for part in [user.first_name, user.last_name] if part
+            ]
             user_name = " ".join(user_name_parts) or None
             await self.pod_membership_port.add_member_to_pod(
-                pod_id=pod_grant["pod_id"],
+                pod_id=pod_grant.pod_id,
                 organization_member_id=persisted_member.id,
                 user_id=user_id,
                 user_email=str(user.email),
                 user_name=user_name,
-                pod_role=pod_grant["pod_role"],
+                pod_role=pod_grant.pod_role,
             )
 
         return persisted_member
@@ -648,18 +611,10 @@ class OrganizationService:
             denied_message="Only owners can change roles",
         )
 
-        if (
-            member.role == OrganizationRole.ORG_OWNER
-            and new_role != OrganizationRole.ORG_OWNER
-        ):
-            owner_count = await self.organization_repository.count_members_with_role(
-                member.organization_id, OrganizationRole.ORG_OWNER
+        if new_role != OrganizationRole.ORG_OWNER:
+            await refuse_if_last_owner(
+                self.organization_repository, member, verb="demote"
             )
-            if owner_count <= 1:
-                raise OrganizationConflictError(
-                    "Cannot demote the last owner of the organization",
-                    code=OrganizationConflictError.LAST_OWNER,
-                )
 
         member.update_role(new_role)
         return await self.organization_repository.update_member(member)
@@ -696,18 +651,10 @@ class OrganizationService:
                     "Editors cannot remove organization owners"
                 )
 
-        # Applies to the self-removal path too: "leave organization" reads as
-        # harmless, which is exactly why it is the easier way to strand the
-        # organization with no owner and no way to mint one. See PS-ONB-041.
-        if member.role == OrganizationRole.ORG_OWNER:
-            owner_count = await self.organization_repository.count_members_with_role(
-                member.organization_id, OrganizationRole.ORG_OWNER
-            )
-            if owner_count <= 1:
-                raise OrganizationConflictError(
-                    "Cannot remove the last owner of the organization",
-                    code=OrganizationConflictError.LAST_OWNER,
-                )
+        # The self-removal path runs through here too: "leave organization"
+        # reads as harmless, which is exactly why it is the easier way to
+        # strand an organization with no owner. See PS-ONB-041.
+        await refuse_if_last_owner(self.organization_repository, member, verb="remove")
 
         deleted = await self.organization_repository.delete_member(member_id)
         if not deleted:

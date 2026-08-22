@@ -17,8 +17,8 @@ See PS-ONB-014 and DEV-ONB-002.
 from alembic import op
 
 
-revision = "0021_org_names_not_unique"
-down_revision = "0020_schedule_run_last_inspected"
+revision = "0022_org_names_not_unique"
+down_revision = "0021_approval_execution_claim"
 branch_labels = None
 depends_on = None
 

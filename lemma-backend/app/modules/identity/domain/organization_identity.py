@@ -1,9 +1,10 @@
 """What identity an organization may claim: its name, its slug, its domain.
 
-Organization names are globally unique. Onboarding used to walk that ladder from
-the browser — up to twenty sequential creates on the critical path of a signup,
-with the workspace renaming itself under the user while they watched — because a
-derived name has no one to arbitrate a collision. This does the walk in one call
+An organization's *slug* is globally unique; its display name is a label and
+may be shared (PS-ONB-014). Onboarding used to walk that ladder from the browser
+— up to twenty sequential creates on the critical path of a signup, with the
+workspace renaming itself under the user while they watched — because a derived
+name has no one to arbitrate a collision. This does the walk in one call
 instead.
 
 Kept out of ``organization_service`` deliberately: that file is already over the
@@ -106,3 +107,48 @@ async def resolve_email_domain_for_policy(
             "This email domain is already taken by another organization"
         )
     return owner_domain
+
+
+GetBySlug = Callable[[str], Awaitable[Any | None]]
+
+
+async def assign_organization_identity(
+    entity: Any,
+    *,
+    get_by_slug: GetBySlug,
+    resolve_conflicts: bool,
+) -> None:
+    """Settle ``entity``'s name and slug, or refuse.
+
+    ``resolve_conflicts`` is for a name the user did not choose -- the one
+    onboarding derives for a first workspace. There the walk picks a
+    ``(name, slug)`` pair whose *handle* is free rather than dead-ending
+    somebody who never typed a name. A slug the user did type still conflicts
+    loudly, because silently creating ``acme-2`` for someone who asked for
+    ``acme`` would be worse than telling them.
+
+    Only the slug is ever checked: two organizations may both be called "Acme".
+    """
+
+    async def _is_free(name: str, slug: str) -> bool:
+        del name  # `IsFree` is asked about the pair; the label is not scarce.
+        return await get_by_slug(slug) is None
+
+    if resolve_conflicts:
+        try:
+            entity.name, entity.slug = await resolve_available_identity(
+                entity.name, is_free=_is_free
+            )
+        except NoAvailableOrganizationName as exc:
+            raise OrganizationConflictError(
+                "Could not find an available organization name",
+                code=OrganizationConflictError.NAME_TAKEN,
+            ) from exc
+        return
+
+    entity.slug = normalize_organization_slug(entity.slug, entity.name)
+    if await get_by_slug(entity.slug):
+        raise OrganizationConflictError(
+            "Organization slug already exists",
+            code=OrganizationConflictError.SLUG_TAKEN,
+        )

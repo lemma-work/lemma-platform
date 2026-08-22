@@ -554,7 +554,7 @@ class Settings(BaseSettings):
     usage_org_limit_overrides_json: str = Field(
         default="",
         description=(
-            'JSON list of per-organization monthly limits overriding the '
+            "JSON list of per-organization monthly limits overriding the "
             'deployment-wide one, e.g. [{"slug": "acme", "monthly_limit_usd": '
             "5.0}]. Slugs are organization handles; 0 refuses all model work "
             "for that organization."

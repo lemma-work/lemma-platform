@@ -14,7 +14,11 @@ from app.modules.usage.domain.entities import (
     UsageRecord,
     UsageReservation,
 )
-from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
+from app.modules.usage.domain.ports import (
+    UsageLimitPort,
+    UsageLimitValues,
+    normalize_limit_values,
+)
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import (
     ModelUsageEvent,
@@ -538,26 +542,11 @@ class UsageService(UsagePricing):
         # opts into admission by implementing the usage-owned limit port.
         if self.usage_limit_port is None:
             return UsageLimitValues()
-        resolved = await self.usage_limit_port.resolve_limits(
-            organization_id=organization_id,
-            user_id=user_id,
-        )
-        if isinstance(resolved, UsageLimitValues):
-            return resolved
-        if resolved is None:
-            # The port's documented "unlimited": a configured provider may
-            # cover some organizations and not others. Unreachable before a
-            # provider existed at all -- which is also why the tuple fallback
-            # below never met it.
-            return UsageLimitValues()
-        # Backwards-compatible guard for older tests/adapters returning
-        # ``(org_monthly, user_weekly)``.
-        org_monthly, user_weekly = resolved
-        return UsageLimitValues(
-            org_monthly_limit_usd=org_monthly,
-            user_weekly_limit_usd=user_weekly,
-            user_monthly_limit_usd=None,
-            user_limit_scope="organization",
+        return normalize_limit_values(
+            await self.usage_limit_port.resolve_limits(
+                organization_id=organization_id,
+                user_id=user_id,
+            )
         )
 
     @staticmethod

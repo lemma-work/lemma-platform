@@ -1297,7 +1297,7 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
     organization_repository_mock: AsyncMock,
 ):
     """Every readable rung taken must still not fail a signup."""
-    readable = {f"acme"} | {f"acme-{n}" for n in range(2, 12)}
+    readable = {"acme"} | {f"acme-{n}" for n in range(2, 12)}
     organization_repository_mock.get_by_slug.side_effect = lambda slug: (
         OrganizationEntity(name="Other", slug=slug) if slug in readable else None
     )

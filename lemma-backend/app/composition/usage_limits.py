@@ -18,7 +18,10 @@ import json
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
+
+logger = get_logger(__name__)
 
 
 def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
@@ -27,15 +30,26 @@ def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
     Each entry carries either ``slug`` (exact handle) or ``slug_prefix`` (a
     handle prefix, so a family of organizations shares one cap), plus
     ``monthly_limit_usd``. Malformed input yields nothing rather than taking
-    spending decisions down with it.
+    spending decisions down with it -- but it warns, because a spend cap that
+    silently does not apply is worse than one that refuses to start.
     """
     if not raw.strip():
         return []
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning(
+            "usage.limit_overrides.unparseable",
+            detail="USAGE_ORG_LIMIT_OVERRIDES_JSON is not valid JSON; "
+            "per-organization spend caps are NOT in effect",
+        )
         return []
     if not isinstance(parsed, list):
+        logger.warning(
+            "usage.limit_overrides.not_a_list",
+            detail="USAGE_ORG_LIMIT_OVERRIDES_JSON must be a JSON list; "
+            "per-organization spend caps are NOT in effect",
+        )
         return []
     rules: list[tuple[str, float, bool]] = []
     for entry in parsed:
@@ -54,12 +68,16 @@ def _parse_overrides(raw: str) -> list[tuple[str, float, bool]]:
 
 
 def _limit_for(slug: str | None, rules: list[tuple[str, float, bool]]) -> float | None:
-    """The first matching rule's limit, last rule wins over earlier ones."""
+    """The limit from the last matching rule, or ``None`` if none match.
+
+    Last wins rather than first so a specific ``slug`` written after a broad
+    ``slug_prefix`` overrides it, which is the order people write these in.
+    """
     if slug is None:
         return None
     matched: float | None = None
     for value, limit, is_prefix in rules:
-        if (slug.startswith(value) if is_prefix else slug == value):
+        if slug.startswith(value) if is_prefix else slug == value:
             matched = limit
     return matched
 
