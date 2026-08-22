@@ -816,6 +816,45 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                     else "Configure an AI provider in Lemma Control Center"
                 ),
             }
+        # What this deployment is configured to *do*, for a client that has to
+        # decide whether a behaviour it depends on is reachable here at all. The
+        # product scenario suite reads this rather than a local `.env` file:
+        # pointed at a deployment, a local file describes a different machine,
+        # so a suite trusting it skips and runs for the wrong reasons.
+        #
+        # `environment` and `llm_mode` are reported everywhere. A deployment
+        # serving the scripted test model is misconfigured, and that is worth
+        # being visible rather than hidden.
+        #
+        # The rest is this deployment's security posture — whether signup is
+        # rate limited, whether a connector may reach a private address — and is
+        # withheld in production, where the honest answer to a stranger asking
+        # "are your gates on?" is that it is none of their business.
+        configuration: dict[str, object] = {
+            "environment": settings.environment,
+            "llm_mode": settings.e2e_llm_mode,
+        }
+        if settings.environment != "production":
+            configuration |= {
+                "abuse_protection": settings.auth_abuse_protection_enabled,
+                "altcha": settings.auth_altcha_enabled,
+                "email_verification_required": (
+                    settings.auth_email_verification_required
+                ),
+                "email_deliverability_checks": (
+                    settings.auth_email_deliverability_checks_enabled
+                ),
+                "disposable_email_domains": (
+                    settings.auth_disposable_email_domains_enabled
+                ),
+                "private_network_targets": (
+                    settings.connector_allow_private_network_targets
+                ),
+                "role_cache_ttl_seconds": (
+                    settings.authorization_role_cache_ttl_seconds
+                ),
+            }
+        payload["configuration"] = configuration
         if settings.lemma_runtime_instance_id:
             payload["instance_id"] = settings.lemma_runtime_instance_id
         return payload

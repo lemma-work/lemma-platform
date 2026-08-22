@@ -284,6 +284,170 @@ def test_stack_decides_how_the_product_behaves():
     )
 
 
+def test_a_target_is_vetted_before_any_scenario_can_write():
+    """Nothing reaches a deployment until the suite has agreed it may.
+
+    This suite creates real things and deletes most of them. Pointed at the
+    wrong host it does that inside somebody's real workspace, and the
+    organizations it leaves there are permanent — the product has no way to
+    delete one. So the check goes in front of the first write, not after the
+    first surprise.
+
+    Asserted structurally because the failure it prevents is somebody quietly
+    unhooking it: a `world` that no longer waits on `target`, or a `target` that
+    no longer asks.
+    """
+    conftest = SUITE / "conftest.py"
+    tree = ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+
+    assert "target" in functions, (
+        "conftest has no `target` fixture, so nothing asks the deployment what "
+        "it is or whether this run may write to it"
+    )
+    vets = any(
+        isinstance(node, ast.Call)
+        and getattr(node.func, "attr", getattr(node.func, "id", None))
+        == "confirm_writable"
+        for node in ast.walk(functions["target"])
+    )
+    assert vets, (
+        "the `target` fixture no longer calls confirm_writable, so the suite "
+        "would write to whatever host it was handed"
+    )
+
+    world_args = {argument.arg for argument in functions["world"].args.args}
+    assert "target" in world_args, (
+        "the `world` fixture no longer depends on `target`, so a scenario can "
+        "reach a deployment that was never vetted"
+    )
+
+
+def test_production_is_refused_unless_somebody_said_so():
+    """A production target is a decision, never a default."""
+    import os
+
+    from harness.environment import ALLOW_PRODUCTION, Deployment, Unreachable
+    from harness.environment import confirm_writable
+
+    production = Deployment(
+        base_url="https://lemma.example",
+        environment="production",
+        llm_mode="real",
+        instance_id="prod-1",
+        configuration={"environment": "production", "llm_mode": "real"},
+    )
+
+    os.environ.pop(ALLOW_PRODUCTION, None)
+    try:
+        confirm_writable(production)
+    except Unreachable as refusal:
+        assert ALLOW_PRODUCTION in str(refusal), refusal
+    else:
+        raise AssertionError(
+            "the suite would have written to a production deployment without "
+            "anybody saying it could"
+        )
+
+
+def test_a_target_pointed_somewhere_else_is_refused():
+    """Naming the instance is what turns a mistyped host into a stopped run."""
+    import os
+
+    from harness.environment import EXPECTED_INSTANCE, Deployment, Unreachable
+    from harness.environment import confirm_writable
+
+    somewhere_else = Deployment(
+        base_url="https://staging.example",
+        environment="development",
+        llm_mode="real",
+        instance_id="staging-9",
+        configuration={"llm_mode": "real"},
+    )
+
+    os.environ[EXPECTED_INSTANCE] = "dev-scenarios-1"
+    try:
+        confirm_writable(somewhere_else)
+    except Unreachable as refusal:
+        assert "staging-9" in str(refusal), refusal
+    else:
+        raise AssertionError("the suite wrote to an instance it was not pointed at")
+    finally:
+        os.environ.pop(EXPECTED_INSTANCE, None)
+
+
+def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
+    """Silence is not consent, and this is where that would go wrong quietly.
+
+    Production does not report its security posture — so every gate reads as
+    absent. The scenarios that need those gates relaxed must skip there. Read
+    the other way round, a missing fact would look like a satisfied one and the
+    suite would try to sign people up against a deployment that never agreed.
+    """
+    from harness.environment import LOOPBACK_REACHABLE, OPEN_SIGNUP, Deployment
+
+    silent = Deployment(
+        base_url="https://lemma.example",
+        environment="production",
+        llm_mode="real",
+        instance_id=None,
+        configuration={"environment": "production", "llm_mode": "real"},
+    )
+
+    assert OPEN_SIGNUP.missing_on(silent), (
+        "a deployment that said nothing about its signup gates was read as "
+        "having them open"
+    )
+    assert LOOPBACK_REACHABLE.missing_on(silent), (
+        "a deployment that said nothing was read as able to call back to this "
+        "machine"
+    )
+
+
+def test_a_target_too_old_to_describe_itself_stops_the_run():
+    """An older Lemma answers the probe without saying how it is configured.
+
+    Treated as a stop rather than a shrug: every scenario decides from that
+    answer whether it can prove anything, so a run against a target that cannot
+    give one is a run whose greenness means nothing.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from harness.environment import Unreachable, describe, forget
+
+    class OldLemma(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — http.server's spelling
+            body = json.dumps({"status": "ok", "capabilities": {}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), OldLemma)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address[:2]
+    try:
+        describe(f"http://{host}:{port}")
+    except Unreachable as refusal:
+        assert "how it is configured" in str(refusal), refusal
+    else:
+        raise AssertionError("the suite ran against a target it could not read")
+    finally:
+        server.shutdown()
+        server.server_close()
+        forget()
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 

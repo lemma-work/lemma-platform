@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -204,7 +205,14 @@ GITHUB_REPO = Capability(
 ALL = (REAL_MODEL, GITHUB, GOOGLE, COMPOSIO, TELEGRAM, SLACK)
 
 
-def needs(*capabilities: Capability) -> None:
+#: Anything `needs()` can be asked for. A `Capability` answers from this
+#: machine's configuration, an `environment.EnvironmentCapability` answers from
+#: the deployment's own — different questions, deliberately the same shape, so a
+#: scenario needing one of each still reads as one sentence.
+Requirement = Any
+
+
+def needs(*capabilities: Requirement) -> None:
     """Skip unless the deployment is configured for everything this drives.
 
     The reason names the settings and what they are for, so a skip in a nightly
