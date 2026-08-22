@@ -153,6 +153,23 @@ async def _maybe_deliver_to_surface(
     )
 
 
+def surface_can_pause_for_a_person(deps: BaseAgentContext) -> bool:
+    """Whether this conversation can hold a run open while somebody answers.
+
+    Email cannot. There is no card to tap and no thread to wait on, so pausing
+    strands the run in WAITING with nothing delivered — the person never learns
+    they were asked. Every pausing tool has to fail fast instead and say what to
+    do in the reply, which is why this is a shared predicate rather than a check
+    each tool remembers to copy. It was copied twice already.
+
+    The *message* stays with each tool: what to do instead of pausing depends on
+    what was being asked.
+    """
+    from app.composition.agent_surface_runtime import platform_is_email
+
+    return not platform_is_email(getattr(deps, "surface_platform", None))
+
+
 async def request_approval(
     ctx: RunContext[BaseAgentContext],
     tool_name: str,
@@ -218,12 +235,7 @@ async def request_approval(
             parked_tool_call_id=ctx.tool_call_id,
             message=f"Waiting for the user's decision on {tool_name}.",
         )
-    # Email surfaces are non-interactive — they can't pause for an approve/deny
-    # reply, and pausing would strand the run in WAITING with nothing delivered.
-    # Fail fast so the model proceeds and delivers via the email reply tool.
-    from app.composition.agent_surface_runtime import platform_is_email
-
-    if platform_is_email(getattr(deps, "surface_platform", None)):
+    if not surface_can_pause_for_a_person(deps):
         return RequestApprovalResponse(
             success=False,
             interaction_fallback=True,
@@ -408,12 +420,7 @@ async def ask_user(
             parked_tool_call_id=ctx.tool_call_id,
             message="Waiting for the user's answer.",
         )
-    # Email surfaces are non-interactive — they can't pause for an answer, and
-    # pausing would strand the run in WAITING with nothing delivered. Fail fast so
-    # the model inlines the question (or picks a sensible default) and continues.
-    from app.composition.agent_surface_runtime import platform_is_email
-
-    if platform_is_email(getattr(deps, "surface_platform", None)):
+    if not surface_can_pause_for_a_person(deps):
         return AskUserResponse(
             success=False,
             interaction_fallback=True,
