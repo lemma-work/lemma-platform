@@ -77,9 +77,7 @@ def resolve_provider_patch(
     ) != str(stored.base_url)
 
     next_headers = (
-        stored.headers
-        if isinstance(headers, UnsetType)
-        else normalize_headers(headers)
+        stored.headers if isinstance(headers, UnsetType) else normalize_headers(headers)
     )
     next_settings = (
         stored.model_settings

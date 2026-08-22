@@ -197,6 +197,5 @@ def _is_unpaired_tool_call(message: Message) -> bool:
     exempt from elision above.
     """
     return (
-        message.role is MessageRole.ASSISTANT
-        and message.kind is MessageKind.TOOL_CALL
+        message.role is MessageRole.ASSISTANT and message.kind is MessageKind.TOOL_CALL
     )

@@ -248,8 +248,8 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     )
 
     capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
-    ))
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -383,8 +383,8 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
-    ))
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -440,8 +440,8 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
-    ))
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -533,8 +533,8 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
     capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
-    ))
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
+    )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),

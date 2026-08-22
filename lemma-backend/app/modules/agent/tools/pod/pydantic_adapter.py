@@ -225,7 +225,9 @@ async def pod_query(
         )
         return {"success": True, "rows": to_json_value(rows), "total": total}
 
-    return await run_pod_tool(ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op)
+    return await run_pod_tool(
+        ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op
+    )
 
 
 pod_toolset = FunctionToolset[BaseAgentContext](

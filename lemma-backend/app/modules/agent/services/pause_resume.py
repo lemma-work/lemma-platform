@@ -188,4 +188,3 @@ class PauseResume:
             ]
         )
         await self.uow.commit()
-

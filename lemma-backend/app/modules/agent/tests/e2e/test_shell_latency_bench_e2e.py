@@ -104,7 +104,7 @@ async def _conversation(client, pod_id: str, agent_name: str) -> str:
     return response.json()["id"]
 
 
-async def run_pod_tool(client, pod_id, conversation_id, content, *, label, n_expected):
+async def _run(client, pod_id, conversation_id, content, *, label, n_expected):
     """Start a run and wait for it to reach a terminal state.
 
     Deliberately does NOT consume the SSE stream to completion. The run is
@@ -296,7 +296,7 @@ async def test_shell_tool_call_latency(
     ):
         # Warm the sandbox once so container cold start is not charged to the
         # measured runs. Recorded separately under the "warmup" label.
-        await run_pod_tool(
+        await _run(
             authenticated_client,
             pod["id"],
             conversation_id,
@@ -322,7 +322,7 @@ async def test_shell_tool_call_latency(
             conversation_id = await _conversation(
                 authenticated_client, pod["id"], agent["name"]
             )
-            await run_pod_tool(
+            await _run(
                 authenticated_client,
                 pod["id"],
                 conversation_id,

@@ -229,11 +229,6 @@ class ConversationService:
 
         return await self.conversation_repository.update_conversation(conversation)
 
-
-
-
-
-
     async def resolve_user_approval(
         self,
         *,

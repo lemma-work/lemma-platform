@@ -18,7 +18,7 @@ from app.modules.agent.services.conversation_retry_service import (
 )
 
 
-def run_pod_tool(
+def _run(
     *,
     status: AgentRunStatus,
     metadata: dict[str, object] | None = None,
@@ -73,9 +73,9 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message() -> No
         user_id=uuid4(),
         agent_id=uuid4(),
     )
-    failed_run = run_pod_tool(status=AgentRunStatus.FAILED)
+    failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
-    retry_run = run_pod_tool(status=AgentRunStatus.RUNNING)
+    retry_run = _run(status=AgentRunStatus.RUNNING)
     retry_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
     repository.run_has_only_user_messages.return_value = True
@@ -109,7 +109,7 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message() -> No
 async def test_retry_failed_run_rejects_non_failed_latest_run() -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    repository.get_latest_agent_run_for_conversation.return_value = run_pod_tool(
+    repository.get_latest_agent_run_for_conversation.return_value = _run(
         status=AgentRunStatus.COMPLETED
     )
     service._authorized_conversation = AsyncMock(return_value=conversation)
@@ -128,7 +128,7 @@ async def test_retry_failed_run_rejects_non_failed_latest_run() -> None:
 async def test_retry_failed_run_rejects_an_active_run() -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    repository.get_active_agent_run_for_update.return_value = run_pod_tool(
+    repository.get_active_agent_run_for_update.return_value = _run(
         status=AgentRunStatus.RUNNING
     )
     service._authorized_conversation = AsyncMock(return_value=conversation)
@@ -148,7 +148,7 @@ async def test_retry_failed_run_rejects_an_active_run() -> None:
 async def test_retry_failed_run_returns_active_manual_retry() -> None:
     service, repository, uow = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    active_retry = run_pod_tool(
+    active_retry = _run(
         status=AgentRunStatus.RUNNING,
         metadata={"source": "manual_retry"},
     )
@@ -173,7 +173,7 @@ async def test_retry_failed_run_returns_active_manual_retry() -> None:
 async def test_retry_failed_run_rejects_failed_run_with_non_user_activity() -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = run_pod_tool(status=AgentRunStatus.FAILED)
+    failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
     failed_run.messages.append(
@@ -203,7 +203,7 @@ async def test_retry_failed_run_rejects_failed_run_with_non_user_activity() -> N
 async def test_retry_failed_run_requires_a_persisted_user_turn() -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = run_pod_tool(status=AgentRunStatus.FAILED)
+    failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
     failed_run.messages = []
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
@@ -233,7 +233,7 @@ async def test_conversation_detail_reports_persisted_retryability(
 ) -> None:
     service, repository, _ = _service()
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = run_pod_tool(status=AgentRunStatus.FAILED)
+    failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
     if has_non_user_activity:
         failed_run.messages.append(

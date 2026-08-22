@@ -3168,9 +3168,9 @@ async def test_scripted_connector_tools_reach_a_real_agent_run(
 
     found = returns["search-1"]
     assert "error" not in found, found
-    assert any(
-        item.get("name") == "send_email" for item in found.get("items", [])
-    ), found
+    assert any(item.get("name") == "send_email" for item in found.get("items", [])), (
+        found
+    )
 
     described = returns["describe-1"]
     assert "error" not in described, described
@@ -3265,7 +3265,11 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
 
     created = await authenticated_client.post(
         f"/pods/{pod_id}/workflows",
-        json={"name": "expense-approval", "start": {"type": "MANUAL"}, "mode": "GLOBAL"},
+        json={
+            "name": "expense-approval",
+            "start": {"type": "MANUAL"},
+            "mode": "GLOBAL",
+        },
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
     workflow_name = created.json()["name"]
@@ -3371,8 +3375,7 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
         if item["kind"] == "TOOL_RETURN"
     }
     assert isinstance(returns.get("form-1"), dict), (
-        "the capability never offered submit_workflow_form: "
-        f"{returns.get('form-1')!r}"
+        f"the capability never offered submit_workflow_form: {returns.get('form-1')!r}"
     )
     assert returns["form-1"]["success"] is True, returns["form-1"]
 

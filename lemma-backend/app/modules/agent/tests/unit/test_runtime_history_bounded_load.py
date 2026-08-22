@@ -38,7 +38,7 @@ from app.modules.agent.services.runtime_history import select_runtime_history
 _BASE = datetime.now(timezone.utc) - timedelta(hours=1)
 
 
-def run_pod_tool(conversation_id: UUID, run_index: int, message_count: int) -> AgentRun:
+def _run(conversation_id: UUID, run_index: int, message_count: int) -> AgentRun:
     run_id = uuid4()
     return AgentRun(
         id=run_id,
@@ -128,21 +128,21 @@ def _shapes() -> list[list[AgentRun]]:
     conversation_id = uuid4()
     return [
         # Fewer runs than the full-history window: nothing is elided at all.
-        [run_pod_tool(conversation_id, i, 5) for i in range(3)],
+        [_run(conversation_id, i, 5) for i in range(3)],
         # Exactly the window.
-        [run_pod_tool(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT)],
+        [_run(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT)],
         # One over, which is where elision starts.
-        [run_pod_tool(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)],
+        [_run(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)],
         # The shape that hurt in production: a long tail of old runs.
-        [run_pod_tool(conversation_id, i, 8) for i in range(40)],
+        [_run(conversation_id, i, 8) for i in range(40)],
         # Runs at the elision boundary -- one and two messages stay whole.
-        [run_pod_tool(conversation_id, i, (i % 3) + 1) for i in range(12)],
+        [_run(conversation_id, i, (i % 3) + 1) for i in range(12)],
         # An empty run in the middle, which has no first or last message.
         [
-            run_pod_tool(conversation_id, 0, 4),
-            run_pod_tool(conversation_id, 1, 0),
-            run_pod_tool(conversation_id, 2, 6),
-            *[run_pod_tool(conversation_id, i, 3) for i in range(3, 9)],
+            _run(conversation_id, 0, 4),
+            _run(conversation_id, 1, 0),
+            _run(conversation_id, 2, 6),
+            *[_run(conversation_id, i, 3) for i in range(3, 9)],
         ],
     ]
 
@@ -189,7 +189,7 @@ def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) 
     now = datetime.now(timezone.utc)
 
     def _at(run_index: int, created_hours_ago: float, message_hours_ago: float):
-        run = run_pod_tool(conversation_id, run_index, 6)
+        run = _run(conversation_id, run_index, 6)
         run.started_at = now - timedelta(hours=created_hours_ago)
         for offset, message in enumerate(run.messages):
             message.created_at = now - timedelta(
@@ -221,7 +221,7 @@ def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
     """
     conversation_id = uuid4()
     runs = [
-        run_pod_tool(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)
+        _run(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)
     ]
     bounded = _as_bounded(runs)
 
@@ -238,12 +238,12 @@ def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
 
 def test_a_run_reports_its_real_size_not_the_loaded_one() -> None:
     conversation_id = uuid4()
-    run = run_pod_tool(conversation_id, 0, 9)
+    run = _run(conversation_id, 0, 9)
     assert run.message_count == 9  # nothing elided: falls back to what is loaded
 
     # Six distinct runs, so the first falls outside the full-history window and
     # comes back elided to its first and last message.
-    older = _as_bounded([run, *(run_pod_tool(conversation_id, i, 3) for i in range(1, 6))])[0]
+    older = _as_bounded([run, *(_run(conversation_id, i, 3) for i in range(1, 6))])[0]
     assert len(older.messages) == 2
     assert older.message_count == 9
 
@@ -305,7 +305,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
         conversation_id = uuid4()
         old = self._resume_run(conversation_id, 0)
         recent = [
-            run_pod_tool(conversation_id, index, 2)
+            _run(conversation_id, index, 2)
             for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
         ]
         return select_runtime_history([old, *recent], None), old.id
@@ -339,9 +339,9 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
     def test_a_leading_user_message_is_still_kept(self):
         """The ordinary shape is untouched: only an unpaired call is dropped."""
         conversation_id = uuid4()
-        old = run_pod_tool(conversation_id, 0, 6)
+        old = _run(conversation_id, 0, 6)
         recent = [
-            run_pod_tool(conversation_id, index, 2)
+            _run(conversation_id, index, 2)
             for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
         ]
 
