@@ -214,7 +214,7 @@ def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     a bug in a system that was working exactly as designed."""
     import httpx
 
-    from app.modules.agent.services.agent_runner_service import _run_failure_message
+    from app.modules.agent.services.run_finalizer import _run_failure_message
     from app.modules.usage.domain.errors import UsageLimitExceededError
 
     quota = _run_failure_message(UsageLimitExceededError("over limit"))

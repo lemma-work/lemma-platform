@@ -18,7 +18,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     HostHello,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_PAIRING_TTL_SECONDS,
     AgentHostNotFound,
     AgentHostPairingRejected,

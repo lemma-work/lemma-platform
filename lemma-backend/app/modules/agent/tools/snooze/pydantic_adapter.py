@@ -25,7 +25,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
-from app.modules.agent.infrastructure.agent_host_channels import poke_host
+from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )

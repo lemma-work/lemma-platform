@@ -30,12 +30,12 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
     run_state_progresses,
 )
-from app.modules.agent.infrastructure import agent_host_session_memory
-from app.modules.agent.infrastructure.agent_host_command_remint import (
+from app.modules.agent.infrastructure.agent_host import session_memory
+from app.modules.agent.infrastructure.agent_host.command_remint import (
     RemintOutcome,
     remint_for_current_revision,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_RUN_LEASE_SECONDS,
     AgentHostNotFound,
     AgentHostProtocolViolation,
@@ -96,9 +96,7 @@ async def apply_control_updates(
     changed = 0
     for checkpoint in checkpoints:
         try:
-            if await agent_host_session_memory.remember_provider_session(
-                uow, checkpoint
-            ):
+            if await session_memory.remember_provider_session(uow, checkpoint):
                 changed += 1
             _, advanced = await _apply_checkpoint(
                 session,

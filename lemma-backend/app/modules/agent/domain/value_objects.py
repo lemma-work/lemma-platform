@@ -531,7 +531,6 @@ class HarnessOptions:
     usage_limits: object | None = None
     output_type: object | None = None
     model_settings: JsonObject | None = None
-    history_processors: list[object] = field(default_factory=list)
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
     history_summarization_keep_messages: int = (

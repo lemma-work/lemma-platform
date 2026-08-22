@@ -18,13 +18,15 @@ import pytest
 
 from app.modules.agent.domain.agent_host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     StreamBatch,
     StreamedEvent,
 )
-from app.modules.agent.infrastructure.harnesses import agent_host
-from app.modules.agent.infrastructure.harnesses.agent_host import RemoteHarness
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host import (
+    harness as harness_module,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
 
@@ -104,7 +106,7 @@ def _stub_dispatch(harness: RemoteHarness, monkeypatch: pytest.MonkeyPatch) -> N
 
     # Dispatch lives in its own module now; the harness imported the name,
     # so that binding is what a stub has to replace.
-    monkeypatch.setattr(agent_host, "enqueue_run", _enqueue)
+    monkeypatch.setattr(harness_module, "enqueue_run", _enqueue)
 
 
 async def _drive(harness: RemoteHarness, agent_run_id):
@@ -196,7 +198,7 @@ class TestStreamDeletion:
         async def _refuse(**_kwargs):
             raise RuntimeError("Agent Host harness is unavailable")
 
-        monkeypatch.setattr(agent_host, "enqueue_run", _refuse)
+        monkeypatch.setattr(harness_module, "enqueue_run", _refuse)
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 
@@ -258,7 +260,7 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            agent_host,
+            harness_module,
             "run_suspended_on",
             _sleeping_since(tool_call_id="lemma-mcp-1"),
         )
@@ -282,7 +284,7 @@ class TestATurnEndedForASleepingAgent:
             stream_block_ms=1,
         )
         _stub_dispatch(harness, monkeypatch)
-        monkeypatch.setattr(agent_host, "run_suspended_on", _awake())
+        monkeypatch.setattr(harness_module, "run_suspended_on", _awake())
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 
@@ -306,7 +308,7 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            agent_host, "run_suspended_on", _sleeping_since(tool_call_id="x")
+            harness_module, "run_suspended_on", _sleeping_since(tool_call_id="x")
         )
 
         events = [event async for event in await _drive(harness, agent_run_id)]

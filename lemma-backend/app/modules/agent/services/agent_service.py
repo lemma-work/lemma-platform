@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.context import (
     ActorType,
     Context,
@@ -26,8 +27,6 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.ports import AgentRepository
-
-_UNSET = object()
 
 
 def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
@@ -200,19 +199,19 @@ class AgentService:
         *,
         pod_id: UUID,
         name: str,
-        description: str | None | object = _UNSET,
-        icon_url: str | None | object = _UNSET,
-        instruction: str | None | object = _UNSET,
-        agent_runtime: AgentRuntimeConfig | None | object = _UNSET,
-        toolsets: list[AgentToolset] | None | object = _UNSET,
-        input_schema: JsonObject | None | object = _UNSET,
-        output_schema: JsonObject | None | object = _UNSET,
-        visibility: ResourceVisibility | str | None | object = _UNSET,
-        metadata: JsonObject | None | object = _UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon_url: str | None | UnsetType = UNSET,
+        instruction: str | None | UnsetType = UNSET,
+        agent_runtime: AgentRuntimeConfig | None | UnsetType = UNSET,
+        toolsets: list[AgentToolset] | None | UnsetType = UNSET,
+        input_schema: JsonObject | None | UnsetType = UNSET,
+        output_schema: JsonObject | None | UnsetType = UNSET,
+        visibility: ResourceVisibility | str | None | UnsetType = UNSET,
+        metadata: JsonObject | None | UnsetType = UNSET,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
     ) -> Agent:
-        sentinel = _UNSET
+        sentinel = UNSET
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
         await self._require_action(
             requester_user_id=requester_user_id,

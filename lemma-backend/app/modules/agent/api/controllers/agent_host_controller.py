@@ -42,14 +42,14 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     effective_agent_host_status,
 )
-from app.modules.agent.infrastructure.agent_host_channels import host_poke_channel
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.channels import host_poke_channel
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
     AgentHostPairingRejected,
     AgentHostProtocolViolation,

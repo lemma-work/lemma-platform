@@ -21,10 +21,9 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.services.workspace_location import ProjectRepo
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
-)
+from app.modules.agent.services.conversation_access import resolve_agent
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
     _inline_schema,
@@ -120,11 +119,10 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
         agent_id=None,
     )
 
-    agent = await runner._resolve_agent(
-        uow=object(),
-        conversation=conversation,
+    agent = await resolve_agent(
+        conversation,
         user_id=conversation.user_id,
-        agent_name=None,
+        agent_repository=object(),
     )
     toolsets = await runner.tool_assembler.assemble(
         agent=agent,

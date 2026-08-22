@@ -19,6 +19,8 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.pod import pod_common
+from app.modules.agent.tools.pod import pod_file_tools as pod_files
 from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
 from app.modules.agent.tools.pod.models import (
     GetFileUrlRequest,
@@ -58,7 +60,7 @@ def _patch_services(monkeypatch, services) -> None:
         del deps
         yield services
 
-    monkeypatch.setattr(pod_adapter, "pod_services", fake_pod_services)
+    monkeypatch.setattr(pod_common, "pod_services", fake_pod_services)
 
 
 def test_pod_toolset_is_registered_under_pod_toolset_enum():
@@ -130,7 +132,7 @@ async def test_pod_write_record_without_grant_asks_for_approval(monkeypatch):
         )
         yield  # pragma: no cover - unreachable, makes this an async generator
 
-    monkeypatch.setattr(pod_adapter, "pod_services", denying_pod_services)
+    monkeypatch.setattr(pod_common, "pod_services", denying_pod_services)
 
     result = await pod_adapter.pod_write_record(
         _run_ctx(),
@@ -298,7 +300,7 @@ async def test_pod_read_file_markdown_returns_page_range(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(),
         PodReadFileRequest(path="/pod/report.pdf", page_start=2, page_end=2),
     )
@@ -323,7 +325,7 @@ async def test_pod_read_file_text_decodes_utf8(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/pod/notes.txt")
     )
     assert result["success"] is True
@@ -349,7 +351,7 @@ async def test_a_text_file_is_returned_as_its_own_original_content(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/me/notes.md")
     )
 
@@ -378,7 +380,7 @@ async def test_html_is_returned_as_html_not_as_prose(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/me/page.html")
     )
 
@@ -413,7 +415,7 @@ async def test_a_pdf_is_read_as_its_converted_text(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/me/toolcheck/toolcheck.pdf")
     )
 
@@ -450,7 +452,7 @@ async def test_a_binary_with_no_conversion_says_which_kind_of_missing(monkeypatc
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/me/photo.png")
     )
 
@@ -477,7 +479,7 @@ async def test_empty_search_says_when_files_are_still_being_processed(monkeypatc
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_search_files(
+    result = await pod_files.pod_search_files(
         _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
     )
 
@@ -504,7 +506,7 @@ async def test_an_empty_search_on_a_fully_indexed_pod_stays_a_plain_answer(monke
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_search_files(
+    result = await pod_files.pod_search_files(
         _run_ctx(), SearchFilesRequest(query="nothing here")
     )
 
@@ -527,9 +529,7 @@ async def test_a_search_with_hits_never_pays_for_the_pending_count(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_search_files(
-        _run_ctx(), SearchFilesRequest(query="a")
-    )
+    result = await pod_files.pod_search_files(_run_ctx(), SearchFilesRequest(query="a"))
 
     assert result["results"]
     assert "files_awaiting_processing" not in result
@@ -558,9 +558,9 @@ async def test_pod_view_document_pages_returns_images_and_url_refs(monkeypatch):
     async def fake_build_object_url(storage, key, expires_seconds=None):
         return f"https://signed/{key}", None
 
-    monkeypatch.setattr(pod_adapter, "build_object_url", fake_build_object_url)
+    monkeypatch.setattr(pod_files, "build_object_url", fake_build_object_url)
 
-    result = await pod_adapter.pod_view_document_pages(
+    result = await pod_files.pod_view_document_pages(
         _run_ctx(),
         ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
     )
@@ -591,9 +591,9 @@ async def test_pod_view_document_pages_non_pdf_returns_friendly_error(monkeypatc
         )
         yield  # pragma: no cover
 
-    monkeypatch.setattr(pod_adapter, "pod_services", denying)
+    monkeypatch.setattr(pod_common, "pod_services", denying)
 
-    result = await pod_adapter.pod_view_document_pages(
+    result = await pod_files.pod_view_document_pages(
         _run_ctx(),
         ViewDocumentPagesRequest(path="/pod/notes.docx", page_start=1),
     )
@@ -619,7 +619,7 @@ async def test_pod_get_file_url_returns_url(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_get_file_url(
+    result = await pod_files.pod_get_file_url(
         _run_ctx(), GetFileUrlRequest(path="/pod/report.pdf")
     )
 
@@ -645,7 +645,7 @@ async def test_pod_get_file_url_public_mints_signed_url(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_get_file_url(
+    result = await pod_files.pod_get_file_url(
         _run_ctx(),
         GetFileUrlRequest(
             path="/pod/report.pdf", url_type="public", expires_seconds=3600, max_hits=5
@@ -671,7 +671,7 @@ async def test_pod_write_file_creates_new_file(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(), PodWriteFileRequest(path="/me/report.md", content="hello")
     )
 
@@ -698,7 +698,7 @@ async def test_pod_write_file_relative_path_resolves_against_pod_cwd(monkeypatch
     _patch_services(monkeypatch, services)
 
     ctx = _run_ctx(pod_cwd="/me/c/2026-07-02/ab3f2k7q")
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         ctx, PodWriteFileRequest(path="notes.md", content="hey")
     )
 
@@ -719,7 +719,7 @@ async def test_pod_write_file_conflict_without_overwrite_returns_error(monkeypat
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(),
         PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=False),
     )
@@ -745,7 +745,7 @@ async def test_pod_write_file_conflict_with_overwrite_updates_existing(monkeypat
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(),
         PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=True),
     )
@@ -780,7 +780,7 @@ async def test_a_pod_whose_files_all_failed_does_not_search_clean(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_search_files(
+    result = await pod_files.pod_search_files(
         _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
     )
 
@@ -806,7 +806,7 @@ async def test_queued_and_failed_files_are_reported_as_the_different_things(
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_search_files(
+    result = await pod_files.pod_search_files(
         _run_ctx(), SearchFilesRequest(query="anything")
     )
 

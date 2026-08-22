@@ -20,6 +20,24 @@ would only let the two drift apart.
 Each component has its own checks. `CONTRIBUTING.md` has the table of what to
 run for the one you touched.
 
+## Running anything in the backend
+
+Always through `uv`, from `lemma-backend/`:
+
+```bash
+uv run python ...
+uv run pytest ...
+```
+
+Never bare `python3` or `pytest`. The backend is **Python 3.14**; `uv run` gets
+you that, and on macOS a bare `python3` is Xcode's 3.9. The root
+`.python-version` pins the version for `uv`, not for your `PATH`.
+
+This is not a style preference. 3.14 accepts syntax 3.9 rejects — see the PEP 758
+note under [Toolchain versions](CONTRIBUTING.md#toolchain-versions) — so the
+wrong interpreter does not fail with "module not found", it reports a
+`SyntaxError` in code that is correct and has been shipping for weeks.
+
 ## Read these before changing behaviour
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, architecture rules, and what a

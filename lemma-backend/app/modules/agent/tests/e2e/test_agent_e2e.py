@@ -36,14 +36,18 @@ from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.run_event_pump import RunOutcome
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     build_final_answer_toolset,
 )
-from app.modules.agent.infrastructure.agent_host_final_answer import (
+from app.modules.agent.infrastructure.agent_host.final_answer import (
     read_final_answer,
 )
 from app.modules.agent.tools.tool_errors import AgentInputRequired
@@ -612,6 +616,7 @@ class TestPodAgentLifecycle:
 
         assert response.status_code == 400, response.text
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_file_creation_tool_call_streams_tool_json_tokens(
@@ -771,7 +776,7 @@ class TestPodAgentLifecycle:
             harness_registry=object(),  # type: ignore[arg-type]
         )
 
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -780,10 +785,10 @@ class TestPodAgentLifecycle:
                     metadata={"is_final_answer": False, "harness_kind": "CODEX"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -794,10 +799,10 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -808,17 +813,17 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
                 data=MessageDraft.of_text("Final answer."),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
 
         messages = await authenticated_client.get(
@@ -1165,7 +1170,7 @@ class TestPodAgentLifecycle:
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fake_execute_as_user,
         )
@@ -1446,7 +1451,7 @@ class TestPodAgentLifecycle:
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fail_if_executed,
         )
@@ -1568,7 +1573,7 @@ class TestPodAgentLifecycle:
                 conversation_id
             )
             service = _build_conversation_service(uow)
-            live_deps = await service._build_resume_context(
+            live_deps = await service.resume_returns._build_resume_context(
                 conversation=conversation,
                 user_id=UUID(fixed_test_user["id"]),
                 agent_run_id=paused_run.id,
@@ -1728,6 +1733,7 @@ class TestPodAgentLifecycle:
         }
         assert new_run_ids and tool_return["agent_run_id"] not in new_run_ids
 
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_stopping_streaming_agent_run_does_not_wedge_worker(
         self,
@@ -1798,6 +1804,7 @@ class TestPodAgentLifecycle:
         )
         _assert_completed_without_error(followup_events)
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_task_conversation_waits_then_completes_with_real_worker_model(
@@ -1894,6 +1901,7 @@ class TestPodAgentLifecycle:
         assert completed_payload["status"] == ConversationStatus.COMPLETED.value
         assert "secret_code received" in str(completed_payload["output"])
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_agent_http_lifecycle_with_real_worker_model(
@@ -2279,6 +2287,7 @@ class TestAgentRoleVisibility:
 
 
 class TestPodAssistantLifecycle:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_assistant_http_lifecycle_with_real_worker_model(
         self,
@@ -2977,6 +2986,7 @@ class TestFinalAnswerToolset:
 
 
 class TestAgentToolApis:
+    @pytest.mark.provider
     async def test_agent_tool_http_apis(self, authenticated_client, db_session):
         await _seed_gmail_connector(db_session)
 
@@ -3160,6 +3170,7 @@ async def _wait_for_conversation_title(
 
 
 class TestConversationTitleGeneration:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_first_run_generates_title_with_real_worker_model(
         self,

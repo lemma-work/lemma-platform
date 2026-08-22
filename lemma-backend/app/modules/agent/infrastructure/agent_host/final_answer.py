@@ -30,7 +30,7 @@ from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.models import AgentRunModel
 
 if TYPE_CHECKING:
-    from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+    from app.modules.agent.infrastructure.harnesses.agent_host.events import (
         AgentHostEventNormalizer,
     )
 

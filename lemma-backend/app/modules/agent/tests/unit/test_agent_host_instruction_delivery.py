@@ -27,7 +27,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunSpec,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure import agent_host_session_memory as memory
+from app.modules.agent.infrastructure.agent_host import session_memory as memory
 
 
 def test_the_digest_moves_when_the_instructions_do() -> None:

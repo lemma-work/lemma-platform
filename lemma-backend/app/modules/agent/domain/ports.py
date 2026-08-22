@@ -30,7 +30,10 @@ class Harness(Protocol):
 
     kind: HarnessKind
 
-    async def run(
+    # Not `async def`: that would declare a coroutine *returning* an iterator,
+    # which is not what either harness is. Both are async generator functions and
+    # every caller iterates the return value directly, un-awaited.
+    def run(
         self,
         *,
         agent: Agent,
@@ -131,13 +134,6 @@ class ConversationRepository(Protocol):
     async def list_agent_runs_with_messages_by_run_id(
         self,
         agent_run_id: UUID,
-    ) -> list[AgentRun]: ...
-
-    async def load_runtime_history_by_run_id(
-        self,
-        agent_run_id: UUID,
-        *,
-        full_run_count: int,
     ) -> list[AgentRun]: ...
 
     async def append_message(

@@ -47,17 +47,15 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunSpec,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     agent_host_event_stream,
 )
-from app.modules.agent.infrastructure import (
-    agent_host_admission,
-    agent_host_control_updates,
-    agent_host_event_intake,
-    agent_host_recovery,
-)
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host import admission
+from app.modules.agent.infrastructure.agent_host import control_updates
+from app.modules.agent.infrastructure.agent_host import event_intake
+from app.modules.agent.infrastructure.agent_host import recovery
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
     DEFAULT_RUN_LEASE_SECONDS,
@@ -150,8 +148,8 @@ class AgentHostDispatchRepository:
         now: datetime | None = None,
         command_ttl_seconds: int = DEFAULT_COMMAND_TTL_SECONDS,
     ) -> AgentHostCommandModel:
-        """Admit one run onto a host; see agent_host_admission."""
-        return await agent_host_admission.enqueue_run(
+        """Admit one run onto a host; see admission."""
+        return await admission.enqueue_run(
             self.uow,
             host_id=host_id,
             harness_id=harness_id,
@@ -175,13 +173,13 @@ class AgentHostDispatchRepository:
         lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
     ) -> PolledCommands:
         timestamp = now or utcnow()
-        acknowledged = await agent_host_control_updates.acknowledge_commands(
+        acknowledged = await control_updates.acknowledge_commands(
             self.session,
             host_id=host_id,
             command_ids=acknowledged_command_ids,
             now=timestamp,
         )
-        applied = await agent_host_control_updates.apply_control_updates(
+        applied = await control_updates.apply_control_updates(
             self.session,
             self.uow,
             host_id=host_id,
@@ -257,8 +255,8 @@ class AgentHostDispatchRepository:
         host_id: UUID,
         batch: AgentHostEventBatch,
     ) -> AgentHostEventAck:
-        """Accept one ordered batch of run events; see agent_host_event_intake."""
-        return await agent_host_event_intake.append_events(
+        """Accept one ordered batch of run events; see event_intake."""
+        return await event_intake.append_events(
             self.session,
             self._events,
             host_id=host_id,
@@ -283,7 +281,7 @@ class AgentHostDispatchRepository:
         lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
     ) -> AgentHostRunLeaseModel | None:
         """Advance a run's state and extend its lease."""
-        return await agent_host_control_updates.apply_checkpoint(
+        return await control_updates.apply_checkpoint(
             self.session,
             host_id=host_id,
             checkpoint=checkpoint,
@@ -299,7 +297,7 @@ class AgentHostDispatchRepository:
         now: datetime | None = None,
     ) -> bool:
         """Persist one fenced pre-dispatch rejection atomically."""
-        return await agent_host_control_updates.apply_rejection(
+        return await control_updates.apply_rejection(
             self.session,
             host_id=host_id,
             rejection=rejection,
@@ -336,7 +334,7 @@ class AgentHostDispatchRepository:
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
         ):
             return None
-        if await agent_host_recovery.cancel_already_queued(
+        if await recovery.cancel_already_queued(
             self.session,
             run_id=run_id,
             lease_epoch=lease.lease_epoch,
@@ -440,7 +438,7 @@ class AgentHostDispatchRepository:
         run_id: UUID,
         now: datetime | None = None,
     ) -> AgentHostRunState | None:
-        return await agent_host_recovery.expire_unaccepted_run(
+        return await recovery.expire_unaccepted_run(
             self.session, run_id=run_id, now=now
         )
 
@@ -449,11 +447,9 @@ class AgentHostDispatchRepository:
         *,
         run_id: UUID,
         now: datetime | None = None,
-        recovery_grace_seconds: int = (
-            agent_host_recovery.DEFAULT_RECOVERY_GRACE_SECONDS
-        ),
+        recovery_grace_seconds: int = (recovery.DEFAULT_RECOVERY_GRACE_SECONDS),
     ) -> AgentHostRunLeaseModel | None:
-        return await agent_host_recovery.reconcile_expired_run(
+        return await recovery.reconcile_expired_run(
             self.session,
             run_id=run_id,
             now=now,
@@ -461,7 +457,7 @@ class AgentHostDispatchRepository:
         )
 
     async def cleanup_retained_state(self, *, now: datetime | None = None) -> None:
-        return await agent_host_recovery.cleanup_retained_state(self.session, now=now)
+        return await recovery.cleanup_retained_state(self.session, now=now)
 
     @staticmethod
     async def _wire_command(command: AgentHostCommandModel) -> AgentHostCommand:

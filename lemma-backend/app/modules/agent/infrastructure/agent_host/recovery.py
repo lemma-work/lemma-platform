@@ -20,7 +20,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
     utcnow,
 )
