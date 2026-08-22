@@ -920,8 +920,8 @@ async def test_org_domain_slug_availability_and_suggestions(
     assert available_after_resp.status_code == 200
     assert available_after_resp.json()["available"] is False
 
-    # Names are globally unique too, so the probe has to answer for the name a
-    # caller actually intends to create under — not just its slug.
+    # Names are not unique — the probe answers for the name a caller intends,
+    # and it is always available however many organizations carry it.
     name_taken_resp = await async_client.get(
         "/organizations/slug-availability",
         headers=owner_headers,
@@ -929,7 +929,7 @@ async def test_org_domain_slug_availability_and_suggestions(
     )
     assert name_taken_resp.status_code == 200
     assert name_taken_resp.json()["name"] == "Acme Auto Join"
-    assert name_taken_resp.json()["name_available"] is False
+    assert name_taken_resp.json()["name_available"] is True
 
     free_name = f"Acme Renamed {uuid4().hex[:6]}"
     name_free_resp = await async_client.get(

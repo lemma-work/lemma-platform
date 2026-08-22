@@ -326,7 +326,7 @@ async def on_identity_event(
             # Counted here rather than carried on the event: a count written at
             # publish time is already stale by the time it is consumed.
             async with uow_factory() as uow:
-                members = await OrganizationRepository(uow).list_members(
+                member_count = await OrganizationRepository(uow).count_members(
                     parsed_member.organization_id
                 )
             emit(
@@ -335,7 +335,7 @@ async def on_identity_event(
                 origin=origin,
                 organization_id=parsed_member.organization_id,
                 properties={
-                    "member_count_bucket": _bucket(len(members or ()), COUNT_EDGES)
+                    "member_count_bucket": _bucket(member_count, COUNT_EDGES)
                 },
             )
 

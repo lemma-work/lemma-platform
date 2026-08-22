@@ -8,6 +8,7 @@ import pytest
 
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
+    IdentityConflictError,
     IdentityValidationError,
     OrganizationConflictError,
     OrganizationInvitationNotFoundError,
@@ -23,6 +24,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationMemberEntity,
     OrganizationRole,
 )
+from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.organization_service import OrganizationService
 
@@ -43,19 +45,22 @@ def _member(
 
 
 @pytest.mark.asyncio
-async def test_create_organization_raises_conflict_by_name(
+async def test_create_organization_accepts_a_carried_name(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
+    """A name another organization carries is a label, not a conflict."""
     organization_repository_mock.get_by_name.return_value = OrganizationEntity(
         name="Acme", slug="acme"
     )
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
 
-    with pytest.raises(OrganizationConflictError):
-        await organization_service.create_organization(
-            OrganizationEntity(name="Acme", slug="acme"),
-            owner_user_id=uuid4(),
-        )
+    created = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug="acme"),
+        owner_user_id=uuid4(),
+    )
+    assert created.name == "Acme"
 
 
 @pytest.mark.asyncio
@@ -146,20 +151,22 @@ async def test_create_organization_rejects_generated_slug_over_255_characters(
 
 
 @pytest.mark.asyncio
-async def test_create_organization_conflicts_name_the_field_that_lost(
+async def test_create_organization_conflicts_slug_the_field_that_lost(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    """Onboarding retries a taken name but must not retry a taken domain."""
+    """Names may be shared; the slug is the handle, and it must be free."""
     organization_repository_mock.get_by_name.return_value = OrganizationEntity(
         name="Acme", slug="acme"
     )
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
 
-    with pytest.raises(OrganizationConflictError) as name_conflict:
-        await organization_service.create_organization(
-            OrganizationEntity(name="Acme", slug="acme"), owner_user_id=uuid4()
-        )
-    assert name_conflict.value.code == OrganizationConflictError.NAME_TAKEN
+    # A taken name no longer refuses: display names are labels.
+    created = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug="acme"), owner_user_id=uuid4()
+    )
+    assert created.name == "Acme"
 
     organization_repository_mock.get_by_name.return_value = None
     organization_repository_mock.get_by_slug.return_value = OrganizationEntity(
@@ -174,18 +181,11 @@ async def test_create_organization_conflicts_name_the_field_that_lost(
 
 
 @pytest.mark.asyncio
-async def test_is_name_available_answers_the_globally_unique_name(
+async def test_is_name_available_answers_true_names_are_not_unique(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    organization_repository_mock.get_by_name.return_value = None
     assert await organization_service.is_name_available("  Acme  ") is True
-    assert organization_repository_mock.get_by_name.await_args.args[0] == "Acme"
-
-    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
-        name="Acme", slug="acme"
-    )
-    assert await organization_service.is_name_available("Acme") is False
 
     with pytest.raises(IdentityValidationError):
         await organization_service.is_name_available("   ")
@@ -910,6 +910,62 @@ async def test_remove_member_blocks_editor_from_removing_owner(
 
 
 @pytest.mark.asyncio
+async def test_remove_member_refuses_the_last_owner_even_by_their_own_hand(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    """The self-removal path is the easy way to strand an organization with no
+    owner and no way to mint one — it gets the same guard. See PS-ONB-041."""
+    user_id = uuid4()
+    member = OrganizationMemberEntity(
+        user_id=user_id,
+        organization_id=uuid4(),
+        role=OrganizationRole.ORG_OWNER,
+    )
+
+    organization_repository_mock.get_member_by_id.return_value = member
+    organization_repository_mock.count_members_with_role.return_value = 1
+
+    with pytest.raises(OrganizationConflictError) as conflict:
+        await organization_service.remove_member(
+            member_id=member.id,
+            requester_user_id=user_id,
+        )
+    assert conflict.value.code == OrganizationConflictError.LAST_OWNER
+    organization_repository_mock.delete_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_member_role_refuses_demoting_the_last_owner(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    owner_member = OrganizationMemberEntity(
+        user_id=uuid4(),
+        organization_id=uuid4(),
+        role=OrganizationRole.ORG_OWNER,
+    )
+    requester = uuid4()
+
+    organization_repository_mock.get_member_by_id.return_value = owner_member
+    organization_repository_mock.get_member.return_value = _member(
+        user_id=requester,
+        organization_id=owner_member.organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    organization_repository_mock.count_members_with_role.return_value = 1
+
+    with pytest.raises(OrganizationConflictError) as conflict:
+        await organization_service.update_member_role(
+            owner_member.id,
+            OrganizationRole.ORG_MEMBER,
+            requester_user_id=requester,
+        )
+    assert conflict.value.code == OrganizationConflictError.LAST_OWNER
+    organization_repository_mock.update_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_invitation_with_pod_id_validates_pod_belongs_to_org(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
@@ -1104,12 +1160,14 @@ async def test_accept_invitation_defaults_pod_role_to_POD_USER(
 
 
 @pytest.mark.asyncio
-async def test_accept_invitation_skips_pod_when_pod_deleted(
+async def test_accept_invitation_to_a_vanished_pod_refuses_and_stays_pending(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
     user_repository_mock: AsyncMock,
     pod_membership_port_mock: AsyncMock,
 ):
+    """A pod that has gone since the invitation was sent cannot be granted, so
+    the acceptance refuses whole — no member row, invitation still usable."""
     org = OrganizationEntity(name="Acme", slug="acme")
     user = UserEntity(email="test+invitee@example.com")
     pod_id = uuid4()
@@ -1120,23 +1178,18 @@ async def test_accept_invitation_skips_pod_when_pod_deleted(
         pod_id=pod_id,
     )
 
-    persisted_member = OrganizationMemberEntity(
-        user_id=user.id,
-        organization_id=org.id,
-        role=OrganizationRole.ORG_MEMBER,
-    )
-
     organization_repository_mock.get_invitation_by_id.return_value = invitation
     user_repository_mock.get.return_value = user
     organization_repository_mock.get.return_value = org
     organization_repository_mock.get_member.return_value = None
-    organization_repository_mock.add_member.return_value = persisted_member
     pod_membership_port_mock.get_pod_organization_id.return_value = None
 
-    member = await organization_service.accept_invitation(invitation.id, user.id)
+    with pytest.raises(IdentityConflictError, match="no longer exists"):
+        await organization_service.accept_invitation(invitation.id, user.id)
 
+    organization_repository_mock.add_member.assert_not_awaited()
+    organization_repository_mock.update_invitation.assert_not_awaited()
     pod_membership_port_mock.add_member_to_pod.assert_not_awaited()
-    assert member.role == OrganizationRole.ORG_MEMBER
 
 
 @pytest.mark.asyncio
@@ -1199,14 +1252,11 @@ async def test_resolving_names_keeps_the_first_choice_when_it_is_free(
 
 
 @pytest.mark.asyncio
-async def test_resolving_names_steps_past_a_taken_name(
+async def test_resolving_names_keeps_a_name_another_org_carries(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    taken = {"Acme"}
-    organization_repository_mock.get_by_name.side_effect = lambda name: (
-        OrganizationEntity(name=name, slug="x") if name in taken else None
-    )
+    """Display names are not unique, so a carried name does not move the walk."""
     organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
 
@@ -1216,8 +1266,8 @@ async def test_resolving_names_steps_past_a_taken_name(
         resolve_name_conflicts=True,
     )
 
-    assert organization.name == "Acme 2"
-    assert organization.slug == "acme-2"
+    assert organization.name == "Acme"
+    assert organization.slug == "acme"
 
 
 @pytest.mark.asyncio
@@ -1247,11 +1297,10 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
     organization_repository_mock: AsyncMock,
 ):
     """Every readable rung taken must still not fail a signup."""
-    readable = {"Acme"} | {f"Acme {n}" for n in range(2, 12)}
-    organization_repository_mock.get_by_name.side_effect = lambda name: (
-        OrganizationEntity(name=name, slug="x") if name in readable else None
+    readable = {f"acme"} | {f"acme-{n}" for n in range(2, 12)}
+    organization_repository_mock.get_by_slug.side_effect = lambda slug: (
+        OrganizationEntity(name="Other", slug=slug) if slug in readable else None
     )
-    organization_repository_mock.get_by_slug.return_value = None
     organization_repository_mock.create.side_effect = lambda entity: entity
 
     organization = await organization_service.create_organization(
@@ -1261,22 +1310,21 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
     )
 
     assert organization.name.startswith("Acme ")
-    assert organization.name not in readable
+    assert normalize_organization_slug("", organization.name) not in readable
 
 
 @pytest.mark.asyncio
-async def test_a_typed_name_still_conflicts_loudly(
+async def test_a_typed_name_is_accepted_whatever_it_says(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    """Silently creating "Acme 2" for someone who asked for "Acme" would be
-    worse than telling them, so the default is unchanged."""
-    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
-        name="Acme", slug="acme"
-    )
+    """Display names are not unique, so a typed name is never refused — even
+    one another organization already carries. The slug is the handle."""
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
 
-    with pytest.raises(OrganizationConflictError):
-        await organization_service.create_organization(
-            OrganizationEntity(name="Acme", slug="acme"),
-            owner_user_id=uuid4(),
-        )
+    created = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug="acme"),
+        owner_user_id=uuid4(),
+    )
+    assert created.name == "Acme"

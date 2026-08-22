@@ -27,6 +27,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationInvitationStatus,
     OrganizationJoinPolicy,
     OrganizationMemberEntity,
+    OrganizationRole,
 )
 from app.modules.identity.domain.ports import OrganizationRepositoryPort
 from app.modules.identity.infrastructure.models import (
@@ -266,6 +267,27 @@ class OrganizationRepository(OrganizationRepositoryPort):
             members = members[:limit]
 
         return [m.to_entity() for m in members], next_cursor
+
+    async def count_members(self, organization_id: UUID) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(OrganizationMember)
+            .where(OrganizationMember.organization_id == organization_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_members_with_role(
+        self, organization_id: UUID, role: OrganizationRole
+    ) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(OrganizationMember)
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.role == role.value,
+            )
+        )
+        return int(result.scalar_one())
 
     async def get_user_organizations(
         self, user_id: UUID, limit: int = 100, cursor: Optional[str] = None
