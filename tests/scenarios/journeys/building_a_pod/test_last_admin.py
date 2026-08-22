@@ -8,7 +8,7 @@ from harness import capability, covers, journey, proves, scenario
 pytestmark = [journey("Building a pod"), capability("Change and remove membership")]
 
 
-async def _pod_whose_only_admin_is_not_an_owner(world):
+async def _pod_whose_only_admin_is_not_an_owner(world, run):
     """A pod administered by somebody who is not an organization owner.
 
     The distinction is the whole scenario. An organization's owners are exempt
@@ -17,18 +17,16 @@ async def _pod_whose_only_admin_is_not_an_owner(world):
     do the demoting exercises the *exemption* and passes while proving nothing
     about the rule it is named after.
     """
-    owner = await world.new_person("alice")
-    organization = await owner.creates_an_organization()
-    pod = await owner.creates_a_pod()
+    owner = await world.person("priya")
+    pod = await owner.creates_a_pod(named=run.name("lastadmin"))
 
-    administrator = await world.new_person("bob")
-    await administrator.accepts(await owner.invites(administrator, to=organization))
+    # Daniel is an ORG_EDITOR, not an owner, and that is the whole scenario.
+    administrator = await world.person("daniel")
     await owner.adds(administrator, to_pod=pod, as_role="POD_ADMIN")
 
     # Somebody else is in the pod, so this is not about the pod being empty —
     # it is about it being left with nobody who can administer it.
-    bystander = await world.new_person("carol")
-    await bystander.accepts(await owner.invites(bystander, to=organization))
+    bystander = await world.person("sofia")
     await owner.adds(bystander, to_pod=pod, as_role="POD_VIEWER")
 
     # The owner steps out of the pod, leaving exactly one administrator who
@@ -42,8 +40,8 @@ async def _pod_whose_only_admin_is_not_an_owner(world):
 @scenario("A pod cannot be left with no admin")
 @proves("PS-POD-041")
 @covers("pod.member.update_roles")
-async def test_the_last_pod_admin_cannot_step_down(world):
-    administrator, pod = await _pod_whose_only_admin_is_not_an_owner(world)
+async def test_the_last_pod_admin_cannot_step_down(world, run):
+    administrator, pod = await _pod_whose_only_admin_is_not_an_owner(world, run)
 
     # They demote *themselves*. Anyone else doing it would be refused for
     # lacking the permission, and the scenario would pass while proving nothing.
@@ -60,8 +58,8 @@ async def test_the_last_pod_admin_cannot_step_down(world):
 @scenario("The last pod admin cannot remove themselves either")
 @proves("PS-POD-041")
 @covers("pod.member.remove")
-async def test_the_last_pod_admin_cannot_remove_themselves(world):
-    administrator, pod = await _pod_whose_only_admin_is_not_an_owner(world)
+async def test_the_last_pod_admin_cannot_remove_themselves(world, run):
+    administrator, pod = await _pod_whose_only_admin_is_not_an_owner(world, run)
 
     refusal = await administrator.is_refused_removing(
         await administrator.membership_of(administrator, in_pod=pod), from_pod=pod

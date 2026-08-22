@@ -19,16 +19,24 @@ pytestmark = [
 
 
 @pytest.fixture
-async def team(world):
-    """An admin, an ordinary member, and an outsider, around one pod."""
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+async def team(world, run):
+    """An admin, an ordinary member, and an outsider, around one pod.
+
+    A pod of this run's own, because these scenarios change who may reach it and
+    a standing pod that kept every change would be a different pod for the run
+    after. The people are the standing cast, and that is what makes the outsider
+    mean something: Hannah is refused because she genuinely works at Calder
+    Retail, not because the harness made somebody who belongs nowhere.
+    """
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("access"))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_USER")
-    outsider = await world.new_person("outsider")
-    return alice, bob, outsider, pod
+    outsider = await world.person("hannah")
+    try:
+        yield alice, bob, outsider, pod
+    finally:
+        await alice.deletes_pod(pod)
 
 
 @scenario("A resource created without saying is reachable by the pod")
@@ -170,9 +178,13 @@ class TestGrantingOneThing:
     @scenario("A grant does not survive into another pod")
     @proves("PS-ACCESS-010")
     @covers("pod.resource_access.grant.replace", "table.get")
-    async def test_a_grant_is_scoped_to_its_pod(self, team):
+    async def test_a_grant_is_scoped_to_its_pod(self, team, run):
         alice, bob, _outsider, pod = team
-        elsewhere = await alice.creates_a_pod(named="Elsewhere")
+        # Run-scoped, because a pod's name lives in the organization rather than
+        # in the pod: the tables and roles below can keep their readable names
+        # because the pod holding them goes at the end of the scenario, and this
+        # cannot.
+        elsewhere = await alice.creates_a_pod(named=run.name("elsewhere"))
         secret = await alice.creates_a_table(
             in_pod=elsewhere, columns=[column("title")], shared=True
         )

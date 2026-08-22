@@ -27,10 +27,9 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_with_two_records(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def pod_with_two_records(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("approvals"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     first = await alice.adds_record(
         {"title": "first"}, to_table=table["name"], in_pod=pod
@@ -39,7 +38,10 @@ async def pod_with_two_records(world):
         {"title": "second"}, to_table=table["name"], in_pod=pod
     )
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD", "USER_INTERACTION"])
-    return alice, pod, table, first, second, agent
+    try:
+        yield alice, pod, table, first, second, agent
+    finally:
+        await alice.deletes_pod(pod)
 
 
 def _delete(table: dict, record: dict) -> dict:

@@ -27,16 +27,18 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_with_a_record(world):
+async def pod_with_a_record(world, run):
     """A pod, a table, and one record in it that a scenario can try to destroy."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("workload"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     record = await alice.adds_record(
         {"title": "the one that must survive"}, to_table=table["name"], in_pod=pod
     )
-    return alice, pod, table, record
+    try:
+        yield alice, pod, table, record
+    finally:
+        await alice.deletes_pod(pod)
 
 
 async def _still_there(person, *, record, table, pod) -> None:
@@ -114,9 +116,9 @@ async def test_a_destructive_attempt_asks_rather_than_failing_silently(
 @scenario("An agent can only reach the connectors it was granted")
 @proves("PS-CONN-033", "PS-AGENT-002")
 @covers("agent.create", "agent.conversation.create", "connector.operation.execute")
-async def test_an_agent_cannot_call_an_ungranted_connector(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run):
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url,
@@ -127,7 +129,7 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider):
         auth_config=auth_config,
         credentials={"access_token": "alice-provider-token"},
     )
-    pod = await alice.creates_a_pod()
+    pod = await alice.creates_a_pod(named=run.name("connectors"))
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])
     provider.clear()
 
@@ -158,12 +160,10 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider):
 @scenario("Removing a person stops the agents working in their name")
 @proves("PS-ACCESS-023")
 @covers("pod.member.remove", "agent.conversation.get", "agent.conversation.message.send")
-async def test_removing_a_person_stops_their_delegations(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+async def test_removing_a_person_stops_their_delegations(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("delegation"))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_EDITOR")
 
     # Bob delegates work to an agent, the way anyone would.

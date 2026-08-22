@@ -11,14 +11,15 @@ pytestmark = [journey("Sharing and permissions"), capability("Grant access to on
 
 
 @pytest.fixture
-async def team(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+async def team(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("grants"))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_VIEWER")
-    return alice, bob, pod
+    try:
+        yield alice, bob, pod
+    finally:
+        await alice.deletes_pod(pod)
 
 
 @scenario("A person can see what they may do before trying it")
