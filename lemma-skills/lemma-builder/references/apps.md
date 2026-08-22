@@ -45,6 +45,7 @@ a server-side `DATASTORE` schedule, which reacts by *doing work* (`schedules-and
 | Author | one `index.html`, vanilla/CDN JS | React + `lemma-sdk` + native blocks |
 | SDK | load `lemma-client.js` from `window.__LEMMA_CONFIG__.apiUrl` (see snippet) → `window.LemmaClient`; pod context from the same injected config | `import { LemmaClient } from "lemma-sdk"`, `import.meta.env.VITE_LEMMA_*`, `AuthGuard` |
 | Deploy | `lemma apps init ./d --html` → edit → `lemma apps deploy d ./d/index.html` — no build, no env | `lemma apps init` → `npm run dev` → `lemma apps deploy` (builds) |
+| Fetch back | `lemma apps pull <app> ./d` — writes `index.html` | `lemma apps pull <app> ./d` — writes the project |
 
 **Default to HTML for a single page** (the host injects pod context and the SDK
 loads from it — nothing to build); reach for **Vite** when the app genuinely needs
@@ -58,7 +59,14 @@ document without embed-only padding or height messaging — see the `lemma-widge
 lemma apps init ./board --html --title "Board"   # one polished, pod-aware index.html
 # edit ./board/index.html
 lemma apps deploy board ./board/index.html        # no build, no env — uploaded as-is
+lemma apps pull board ./board --force             # fetch back what is deployed
 ```
+
+`pull` is the other half of `deploy`: it writes the deployed app's **source** into a
+directory that `deploy` accepts unchanged, so pull → edit → deploy closes the loop from
+any machine. A Vite app arrives as its project; a no-build app arrives as one
+`index.html`. `--dist` pulls built output instead, which is all an app deployed before
+its source was stored has (`pull` falls back to it and says so).
 
 ```html
 <!-- Load the SDK from the API origin in the injected window.__LEMMA_CONFIG__,

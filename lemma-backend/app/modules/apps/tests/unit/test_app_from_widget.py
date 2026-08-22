@@ -106,7 +106,10 @@ async def test_service_uploads_single_standalone_index():
 
     assert result is created
     _, kwargs = svc.upload_bundle.call_args
-    assert kwargs["source_archive_bytes"] is None
+    # A no-build app's html IS its source. Storing only the dist left the app
+    # with no source archive, so exporting the pod wrote an opaque dist.zip
+    # instead of the html the author edits and re-imports.
+    assert kwargs["source_archive_bytes"] == kwargs["dist_archive_bytes"]
     with ZipFile(io.BytesIO(kwargs["dist_archive_bytes"])) as z:
         names = z.namelist()
         index = z.read("index.html").decode()
