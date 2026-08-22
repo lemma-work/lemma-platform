@@ -344,9 +344,7 @@ async def test_memory_section_never_fails_the_brief_when_reads_error(monkeypatch
 
     monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
-    monkeypatch.setattr(
-        brief_mod, "create_function_repository", lambda uow: _FakeListRepo(uow)
-    )
+    monkeypatch.setattr(brief_mod, "create_function_repository", _FakeListRepo)
     monkeypatch.setattr(
         brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
     )
