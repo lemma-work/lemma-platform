@@ -290,31 +290,37 @@ async def _run_if_exact_match_already_approved(
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         has_session_approval,
-        record_session_approval,
     )
 
     workload_actor_id = (
         f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
     )
-    approved = await has_session_approval(
-        session_id=str(deps.conversation_id),
-        workload_actor_id=workload_actor_id,
-        permission_id=exact_command_permission_id(tool_name, args),
-    )
-    if not approved:
-        return None
 
-    # Before executing, widen the session grant to whatever this call is asking
-    # about. `record_session_approval` is keyed on (session, actor, permission)
-    # and is idempotent, so re-recording one already held costs nothing.
-    for permission_id in permission_ids or []:
-        if isinstance(permission_id, str) and permission_id:
-            await record_session_approval(
-                session_id=str(deps.conversation_id),
-                workload_actor_id=workload_actor_id,
-                permission_id=permission_id,
-                resolved_by_user_id=deps.user_id,
-            )
+    # Every permission this call needs must ALREADY be granted -- the exact
+    # command key on its own is not enough. `permission_ids` is a tool argument,
+    # so it is whatever the model wrote, and a model that has read a poisoned
+    # web page or document writes whatever that page told it to. Recording them
+    # here would let one approval of `exec_command echo hi` be replayed with
+    # `permission_ids=["pod.delete"]` and silently mint that grant, with no
+    # pause and no card: the user approved a harmless command and lost the pod.
+    #
+    # Requiring instead of widening is also what actually fixes the
+    # approve-then-still-denied loop (DEV-ACCESS-002). The loop happened because
+    # this path SWALLOWED a second, differently-scoped request. Falling through
+    # when something is missing means the user is asked exactly once per new
+    # permission, and `record_session_approvals` writes it with a human behind
+    # it.
+    needed = [
+        exact_command_permission_id(tool_name, args),
+        *(p for p in (permission_ids or []) if isinstance(p, str) and p),
+    ]
+    for permission_id in needed:
+        if not await has_session_approval(
+            session_id=str(deps.conversation_id),
+            workload_actor_id=workload_actor_id,
+            permission_id=permission_id,
+        ):
+            return None
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory

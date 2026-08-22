@@ -100,22 +100,3 @@ def count_model_message_tokens(messages: Sequence[object]) -> int:
         for part in getattr(message, "parts", ()) or ():
             total += count_text_tokens(_part_text(part))
     return total
-
-
-def count_stored_message_tokens(messages: Sequence[object]) -> int:
-    """Token count for Lemma's own flat ``Message`` rows.
-
-    Used before the harness converts them, so a run's history can be budgeted at
-    run granularity — which is what keeps the prompt prefix stable.
-    """
-    total = 0
-    for message in messages:
-        total += _PER_MESSAGE_OVERHEAD_TOKENS
-        text = getattr(message, "text", None)
-        if isinstance(text, str):
-            total += count_text_tokens(text)
-        for attribute in ("tool_args", "tool_result"):
-            value = getattr(message, attribute, None)
-            if value is not None:
-                total += count_text_tokens(_stringify(value))
-    return total

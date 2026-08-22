@@ -323,14 +323,28 @@ class PydanticAIHarness:
             # waiting for the user. Graceful executes that sibling tool, which
             # is what raises AgentInputRequired and pauses the run.
             #
-            # This is load-bearing, not a workaround for a missing SDK feature.
-            # pydantic-ai's native deferral (`CallDeferred` +
-            # `DeferredToolRequests` in the output union) does NOT replace it:
+            # Pinned rather than load-bearing *today*: "graceful" became the
+            # pydantic-ai default after this was written against 1.x, where the
+            # default was "early" and this kwarg was the fix. It stays explicit
+            # because a default is not a promise, and the bug it prevents is
+            # silent — the run reports success and nobody is ever asked.
+            #
+            # It is also not the reason the pause survives. What outranks a
+            # co-emitted answer is that the pause RAISES: an exception abandons
+            # the run outright. pydantic-ai's native deferral (`CallDeferred`,
+            # or a tool declared `requires_approval=True`) cannot do that —
             # `_tool_execution._finalize_deferred` resolves deferred calls only
-            # `if not self.final_result`, so a validated final_answer in the same
-            # response discards the deferral and the run completes anyway. An
-            # exception is the only signal that outranks output validation.
-            # Pinned against the real SDK in test_pause_beats_final_answer.py.
+            # `if not self.final_result`, and a validated `final_answer` sets
+            # one, so the deferral is discarded under every end strategy.
+            #
+            # Precisely: an output *tool* in the same response wins. Text-based
+            # output (NativeOutput/PromptedOutput) does not preempt a deferral,
+            # because `_agent_graph` short-circuits on `if tool_calls:` before
+            # consulting the text processor. Switching `final_answer` to that
+            # shape would make native deferral viable — and would discard the
+            # status lifecycle TASK conversations drive through it, and still
+            # do nothing for the Agent Host harness, which is not pydantic-ai.
+            # See test_pause_beats_final_answer.py.
             "end_strategy": "graceful",
         }
         if options.toolsets:

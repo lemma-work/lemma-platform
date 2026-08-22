@@ -176,10 +176,15 @@ class TestTheSecondDenialOfTheSameCall:
     Reading a table needs two permissions and the authorizer stops at the first
     missing one, so the agent hits a second denial for the *same* call. The
     exact-command key is tool-name-plus-args, so that second attempt matches the
-    session approval recorded by the first and takes the fast path -- which used
-    to execute the tool and return without recording anything, discarding the
-    new permission the call was carrying. The agent then hit the same denial on
-    its own next attempt, forever.
+    session approval recorded by the first and reaches the auto-approve path --
+    which used to execute the tool and return, swallowing the request without
+    ever recording the new permission. The agent hit the same denial on its own
+    next attempt, forever.
+
+    The fix is that the fast path now *requires* every permission the call names,
+    rather than recording them. A call asking for something not yet granted
+    falls through to the pause, so the user is asked once and
+    `record_session_approvals` writes it with a human behind it.
     """
 
     @staticmethod
@@ -192,89 +197,149 @@ class TestTheSecondDenialOfTheSameCall:
             supports_pause_signal=True,
         )
 
+    @staticmethod
+    def _patch(monkeypatch, *, granted: set[str], executed: list[str]):
+        async def has_session_approval(*, session_id, workload_actor_id, permission_id):
+            return permission_id in granted
+
+        async def record_session_approval(**kwargs):  # pragma: no cover
+            raise AssertionError(
+                "the auto-approve path must never mint a grant; only a resolved "
+                f"approval may do that (tried to record {kwargs['permission_id']!r})"
+            )
+
+        async def execute_as_user(self, *, deps, tool_name, args):
+            executed.append(tool_name)
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.has_session_approval",
+            has_session_approval,
+        )
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.record_session_approval",
+            record_session_approval,
+        )
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+            execute_as_user,
+        )
+
     @pytest.mark.asyncio
-    async def test_the_second_permission_is_recorded_not_dropped(self, monkeypatch):
+    async def test_a_new_permission_falls_through_to_the_pause(self, monkeypatch):
+        """The loop, closed: the request is no longer swallowed."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
         from app.modules.agent.tools.user_interaction import (
             pydantic_adapter as approvals,
         )
 
-        recorded: list[dict] = []
-
-        async def fake_record(**kwargs):
-            recorded.append(kwargs)
-
-        async def already_approved(**_kwargs):
-            return True
-
-        async def fake_execute_as_user(self, *, deps, tool_name, args):
-            return {"rows": []}
-
-        monkeypatch.setattr(
-            "app.core.authorization.session_approvals.record_session_approval",
-            fake_record,
-        )
-        monkeypatch.setattr(
-            "app.core.authorization.session_approvals.has_session_approval",
-            already_approved,
-        )
-        monkeypatch.setattr(
-            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
-            fake_execute_as_user,
+        args = {"table": "orders"}
+        executed: list[str] = []
+        # The user approved this exact call earlier, but has never been asked
+        # about the permission the second denial named.
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("pod_get_records", args)},
+            executed=executed,
         )
 
-        conversation_id, user_id = uuid4(), uuid4()
         result = await approvals._run_if_exact_match_already_approved(
-            deps=self._deps(conversation_id, user_id),
+            deps=self._deps(uuid4(), uuid4()),
             tool_name="pod_get_records",
-            args={"table": "orders"},
-            # The denial that triggered this attempt was for a *different*
-            # permission than the one already approved.
+            args=args,
+            permission_ids=["datastore.record.read"],
+        )
+
+        assert result is None, "must pause and ask, not silently self-approve"
+        assert executed == [], "nothing may run before the user has been asked"
+
+    @pytest.mark.asyncio
+    async def test_a_fully_granted_call_still_auto_executes(self, monkeypatch):
+        """Once everything is granted, the repeat runs without re-prompting."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"table": "orders"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={
+                exact_command_permission_id("pod_get_records", args),
+                "datastore.record.read",
+            },
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="pod_get_records",
+            args=args,
             permission_ids=["datastore.record.read"],
         )
 
         assert result is not None and result.executed is True
-        assert [r["permission_id"] for r in recorded] == ["datastore.record.read"]
-        assert recorded[0]["session_id"] == str(conversation_id)
-        assert recorded[0]["resolved_by_user_id"] == user_id
+        assert executed == ["pod_get_records"]
 
     @pytest.mark.asyncio
-    async def test_a_call_carrying_no_permissions_records_nothing(self, monkeypatch):
-        """exec_command has no structured permission, so the fast path stays a
-        pure re-execution -- it must not invent a grant."""
+    async def test_the_model_cannot_mint_a_grant_it_was_never_given(self, monkeypatch):
+        """The escalation this path must not allow.
+
+        `permission_ids` is a tool argument, so a model that has read a poisoned
+        page writes whatever that page said. One approval of a harmless
+        `exec_command` must not become `pod.delete` without a card.
+        """
+        from app.core.authorization.session_approvals import exact_command_permission_id
         from app.modules.agent.tools.user_interaction import (
             pydantic_adapter as approvals,
         )
 
-        recorded: list[dict] = []
-
-        async def fake_record(**kwargs):
-            recorded.append(kwargs)
-
-        async def already_approved(**_kwargs):
-            return True
-
-        async def fake_execute_as_user(self, *, deps, tool_name, args):
-            return {"stdout": "ok"}
-
-        monkeypatch.setattr(
-            "app.core.authorization.session_approvals.record_session_approval",
-            fake_record,
-        )
-        monkeypatch.setattr(
-            "app.core.authorization.session_approvals.has_session_approval",
-            already_approved,
-        )
-        monkeypatch.setattr(
-            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
-            fake_execute_as_user,
+        args = {"cmd": "echo hi"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("exec_command", args)},
+            executed=executed,
         )
 
         result = await approvals._run_if_exact_match_already_approved(
             deps=self._deps(uuid4(), uuid4()),
             tool_name="exec_command",
-            args={"cmd": "ls"},
+            args=args,
+            permission_ids=["pod.delete", "datastore.table.delete"],
+        )
+
+        # `_patch` raises if anything tries to record a grant, so reaching here
+        # at all is half the assertion.
+        assert result is None
+        assert executed == []
+
+    @pytest.mark.asyncio
+    async def test_a_call_carrying_no_permissions_still_auto_executes(
+        self, monkeypatch
+    ):
+        """exec_command has no structured permission -- the exact-command key is
+        the whole grant, and that path must keep working."""
+        from app.core.authorization.session_approvals import exact_command_permission_id
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        args = {"cmd": "ls"}
+        executed: list[str] = []
+        self._patch(
+            monkeypatch,
+            granted={exact_command_permission_id("exec_command", args)},
+            executed=executed,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="exec_command",
+            args=args,
             permission_ids=None,
         )
 
         assert result is not None and result.executed is True
-        assert recorded == []
+        assert executed == ["exec_command"]
