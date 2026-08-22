@@ -128,7 +128,7 @@ rights than the person who asked.
 **Contracts:** `agent.conversation.approval.resolve`, `table.delete`, `record.bulk_delete`
 
 ### PS-ACCESS-022 — Approving for a session means that session only
-**Status:** gap
+**Status:** covered
 
 - When a person approves an action for the rest of a session, the system shall
   stop asking for that same action within that conversation.
@@ -136,12 +136,6 @@ rights than the person who asked.
   another agent, or another person's session.
 - The system shall expire a session approval, so a long-lived conversation does
   not become a standing grant by accident.
-
-> **Gap:** the scoping holds — a session approval does not reach another
-> conversation — but inside its own it is only remembered once. A second
-> approval for the same call is answered "yes" and its permissions are
-> discarded, so the agent is approved and refused in a loop. See
-> `DEV-ACCESS-002`; covered by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `agent.conversation.approval.resolve`, `agent.conversation.approval.list`
 
