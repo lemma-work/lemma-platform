@@ -315,4 +315,19 @@ class TurnCoordinator:
         )
         if limits["allowed"]:
             return
-        raise UsageLimitExceededError()
+        # Say which limit was reached, not just that one was: a person told
+        # only "limit exceeded" cannot tell whether to wait for the month to
+        # turn or to ask an admin for headroom. See PS-OPS-012.
+        reached = [
+            name
+            for name, key in (
+                ("organization monthly", "org_monthly"),
+                ("user weekly", "user_weekly"),
+                ("user monthly", "user_monthly"),
+            )
+            if not limits[key]["allowed"]
+        ]
+        raise UsageLimitExceededError(
+            "LLM usage limit exceeded: "
+            + ", ".join(f"{name} limit reached" for name in reached)
+        )
