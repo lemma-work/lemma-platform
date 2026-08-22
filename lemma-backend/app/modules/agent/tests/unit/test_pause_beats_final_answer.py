@@ -1,24 +1,28 @@
-"""A pause emitted alongside `final_answer` must win, and only one thing makes it.
+"""Why the pause is a raised exception and not pydantic-ai's native deferral.
 
-The model can emit `request_approval` and `final_answer` in a single response.
-When it does, the pause has to happen: the user is being asked something, and a
-run that "completes" instead leaves an approval card that nothing will ever
-resolve.
+That a pause emitted alongside `final_answer` must still pause is already
+pinned, over both pausing tools, by `TestPausingToolsBesideFinalAnswer` in
+`test_pydantic_ai_harness_stop.py` -- including the "early" leg that reproduces
+the original production bug. This file covers the question that comes *next*,
+and keeps coming up: the SDK now has a native pause (`CallDeferred` plus
+`DeferredToolRequests` in the output union), so could that replace the exception
+and let `end_strategy="graceful"` go?
 
-Two mechanisms could plausibly deliver that, and only one of them does. These
-tests pin which, because the losing one is the obvious-looking modernisation:
+It cannot, and the reason is one line of the SDK:
 
-* `end_strategy="graceful"` plus an exception (`AgentInputRequired`) -- what
-  LEMMA does. The exception aborts the run outright, so nothing can outrank it.
-* pydantic-ai's native `CallDeferred` with `DeferredToolRequests` in the
-  `output_type` union -- which reads like the SDK's own answer to this shape and
-  is not. `_tool_execution._finalize_deferred` resolves deferred calls only
-  `if not self.final_result`, so a validated `final_answer` in the same response
-  discards the deferral and the run completes. The pause is silently lost.
+    _tool_execution.py  ::  _finalize_deferred
+    if not self.final_result and self.deferred_calls:
 
-These run against a real `FunctionModel`, so they assert the SDK's actual
-behaviour rather than our belief about it, and they will fail loudly if a
-future pydantic-ai reverses either result.
+Deferred calls are resolved into the run's output only when nothing else has
+already produced a final result. A validated `final_answer` in the same response
+sets one, so the deferral is discarded and the run completes -- which is exactly
+the bug `graceful` exists to prevent. An exception outranks output validation
+because it abandons the run; an output value competes with the other output
+values, and loses.
+
+The second test is here because it is what makes the first easy to miss: the
+native path works perfectly when nothing outranks it, so every test that pauses
+in isolation passes.
 """
 
 from __future__ import annotations
@@ -30,10 +34,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.output import ToolOutput
 
-from app.modules.agent.tools.tool_errors import AgentInputRequired
-
 PAUSE_ID = "pause-1"
-ANSWER_ID = "answer-1"
 
 
 def _model_emitting(*parts: ToolCallPart) -> FunctionModel:
@@ -52,65 +53,15 @@ async def _final_answer(ctx: RunContext, output: str) -> str:
 
 
 _FINAL_ANSWER = ToolOutput(_final_answer, name="final_answer")
-_BOTH_IN_ONE_RESPONSE = (
-    ToolCallPart("pausing_tool", {}, tool_call_id=PAUSE_ID),
-    ToolCallPart("final_answer", {"output": "done"}, tool_call_id=ANSWER_ID),
-)
 
 
-@pytest.mark.asyncio
-async def test_the_pause_wins_when_it_raises_and_the_strategy_is_graceful():
-    """LEMMA's arrangement. The exception leaves the run no way to complete."""
-    ran: list[str] = []
-
-    async def pausing_tool(ctx: RunContext) -> str:
-        ran.append("pausing_tool")
-        raise AgentInputRequired(PAUSE_ID, "request_approval")
-
-    agent = Agent(
-        _model_emitting(*_BOTH_IN_ONE_RESPONSE),
-        output_type=[_FINAL_ANSWER],
-        end_strategy="graceful",
-        tools=[pausing_tool],
-    )
-
-    with pytest.raises(AgentInputRequired) as raised:
-        await agent.run("go")
-
-    assert raised.value.tool_call_id == PAUSE_ID
-    assert ran == ["pausing_tool"]
-
-
-@pytest.mark.asyncio
-async def test_early_skips_the_pause_entirely():
-    """Why `end_strategy` is set at all: under "early" the tool never runs."""
-    ran: list[str] = []
-
-    async def pausing_tool(ctx: RunContext) -> str:  # pragma: no cover - never called
-        ran.append("pausing_tool")
-        raise AgentInputRequired(PAUSE_ID, "request_approval")
-
-    agent = Agent(
-        _model_emitting(*_BOTH_IN_ONE_RESPONSE),
-        output_type=[_FINAL_ANSWER],
-        end_strategy="early",
-        tools=[pausing_tool],
-    )
-
-    result = await agent.run("go")
-
-    assert result.output == "done"
-    assert ran == [], "the pause was skipped, which is the bug graceful prevents"
+async def _deferring_tool(ctx: RunContext) -> str:
+    raise CallDeferred
 
 
 @pytest.mark.asyncio
 async def test_native_deferral_loses_to_final_answer_in_the_same_response():
-    """The reason `CallDeferred` is NOT adopted for the in-process dialect.
-
-    The tool runs and raises, `DeferredToolRequests` is in the output union, the
-    strategy is graceful -- every condition the native path asks for -- and the
-    run still ends on the final answer. The deferral is dropped.
-    """
+    """Every condition the native path asks for, and the pause is still dropped."""
     ran: list[str] = []
 
     async def pausing_tool(ctx: RunContext) -> str:
@@ -118,7 +69,10 @@ async def test_native_deferral_loses_to_final_answer_in_the_same_response():
         raise CallDeferred
 
     agent = Agent(
-        _model_emitting(*_BOTH_IN_ONE_RESPONSE),
+        _model_emitting(
+            ToolCallPart("pausing_tool", {}, tool_call_id=PAUSE_ID),
+            ToolCallPart("final_answer", {"output": "done"}, tool_call_id="answer-1"),
+        ),
         output_type=[_FINAL_ANSWER, DeferredToolRequests],
         end_strategy="graceful",
         tools=[pausing_tool],
@@ -133,20 +87,12 @@ async def test_native_deferral_loses_to_final_answer_in_the_same_response():
 
 @pytest.mark.asyncio
 async def test_native_deferral_does_pause_when_nothing_outranks_it():
-    """Stated for completeness: the native path works when it is unopposed.
-
-    Which is exactly why the failure above is easy to miss -- every test that
-    pauses on its own passes, and only a `final_answer` sibling exposes it.
-    """
-
-    async def pausing_tool(ctx: RunContext) -> str:
-        raise CallDeferred
-
+    """Unopposed, the native path is fine -- which is why the above is easy to miss."""
     agent = Agent(
-        _model_emitting(ToolCallPart("pausing_tool", {}, tool_call_id=PAUSE_ID)),
+        _model_emitting(ToolCallPart("_deferring_tool", {}, tool_call_id=PAUSE_ID)),
         output_type=[_FINAL_ANSWER, DeferredToolRequests],
         end_strategy="graceful",
-        tools=[pausing_tool],
+        tools=[_deferring_tool],
     )
 
     result = await agent.run("go")
