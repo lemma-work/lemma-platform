@@ -182,7 +182,6 @@ async def request_approval(
             conversation instead of re-prompting.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
-    del permission_ids  # read from the persisted tool call on resolution
     deps = ctx.deps
     if deps.agent_run_id is None:
         return RequestApprovalResponse(
@@ -207,7 +206,10 @@ async def request_approval(
                 error="request_approval requires a durable tool call id.",
             )
         auto_approved = await _run_if_exact_match_already_approved(
-            deps=deps, tool_name=tool_name, args=args
+            deps=deps,
+            tool_name=tool_name,
+            args=args,
+            permission_ids=permission_ids,
         )
         if auto_approved is not None:
             return auto_approved
@@ -240,7 +242,10 @@ async def request_approval(
         )
 
     auto_approved = await _run_if_exact_match_already_approved(
-        deps=deps, tool_name=tool_name, args=args
+        deps=deps,
+        tool_name=tool_name,
+        args=args,
+        permission_ids=permission_ids,
     )
     if auto_approved is not None:
         return auto_approved
@@ -260,6 +265,7 @@ async def _run_if_exact_match_already_approved(
     deps: BaseAgentContext,
     tool_name: str,
     args: JsonObject,
+    permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse | None:
     """Skip the pause when this exact call was approved for session earlier.
 
@@ -269,11 +275,22 @@ async def _run_if_exact_match_already_approved(
     exists for them — so this is the sole place their session-approval reuse
     can be honored. See session_approvals.exact_command_permission_id for why
     the match is exact-args-only, never a prefix.
+
+    ``permission_ids`` are recorded here as well, and that is the whole of
+    DEV-ACCESS-002. The exact-command key is tool-name-plus-args, so a second
+    denial of the *same* call for a *different* permission still matches it and
+    takes this path -- and the path used to return before anything recorded the
+    new permission. Reading a table needs two permissions and the authorizer
+    stops at the first missing one, so the agent looped: approve, still denied,
+    approve, still denied, forever. Changing one argument broke the exact match
+    and made the identical sequence succeed, which is what made it look like
+    magic rather than a bug.
     """
     from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         has_session_approval,
+        record_session_approval,
     )
 
     workload_actor_id = (
@@ -286,6 +303,18 @@ async def _run_if_exact_match_already_approved(
     )
     if not approved:
         return None
+
+    # Before executing, widen the session grant to whatever this call is asking
+    # about. `record_session_approval` is keyed on (session, actor, permission)
+    # and is idempotent, so re-recording one already held costs nothing.
+    for permission_id in permission_ids or []:
+        if isinstance(permission_id, str) and permission_id:
+            await record_session_approval(
+                session_id=str(deps.conversation_id),
+                workload_actor_id=workload_actor_id,
+                permission_id=permission_id,
+                resolved_by_user_id=deps.user_id,
+            )
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory

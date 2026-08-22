@@ -316,12 +316,21 @@ class PydanticAIHarness:
             # to self-correct from validation feedback before giving up.
             "retries": DEFAULT_TOOL_RETRIES,
             # A TASK conversation returns through the final_answer output tool.
-            # With pydantic-ai's v1 "early" strategy, a normal tool emitted in
-            # the same model response (notably request_approval and ask_user) is
-            # skipped once final_answer validates — so the pause never happens,
-            # the approval is never persisted, and the run silently completes
-            # instead of waiting for the user. Graceful executes that sibling
-            # tool, which is what raises AgentInputRequired and pauses the run.
+            # Under the "early" strategy a normal tool emitted in the same model
+            # response (notably request_approval and ask_user) is skipped once
+            # final_answer validates — so the pause never happens, the approval
+            # is never persisted, and the run silently completes instead of
+            # waiting for the user. Graceful executes that sibling tool, which
+            # is what raises AgentInputRequired and pauses the run.
+            #
+            # This is load-bearing, not a workaround for a missing SDK feature.
+            # pydantic-ai's native deferral (`CallDeferred` +
+            # `DeferredToolRequests` in the output union) does NOT replace it:
+            # `_tool_execution._finalize_deferred` resolves deferred calls only
+            # `if not self.final_result`, so a validated final_answer in the same
+            # response discards the deferral and the run completes anyway. An
+            # exception is the only signal that outranks output validation.
+            # Pinned against the real SDK in test_pause_beats_final_answer.py.
             "end_strategy": "graceful",
         }
         if options.toolsets:

@@ -168,3 +168,113 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
         tool_args={},
         user_id=uuid4(),
     )
+
+
+class TestTheSecondDenialOfTheSameCall:
+    """DEV-ACCESS-002: approve -> still denied -> approve -> still denied.
+
+    Reading a table needs two permissions and the authorizer stops at the first
+    missing one, so the agent hits a second denial for the *same* call. The
+    exact-command key is tool-name-plus-args, so that second attempt matches the
+    session approval recorded by the first and takes the fast path -- which used
+    to execute the tool and return without recording anything, discarding the
+    new permission the call was carrying. The agent then hit the same denial on
+    its own next attempt, forever.
+    """
+
+    @staticmethod
+    def _deps(conversation_id, user_id):
+        return SimpleNamespace(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            workload_id=None,
+            agent_run_id=uuid4(),
+            supports_pause_signal=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_second_permission_is_recorded_not_dropped(self, monkeypatch):
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        recorded: list[dict] = []
+
+        async def fake_record(**kwargs):
+            recorded.append(kwargs)
+
+        async def already_approved(**_kwargs):
+            return True
+
+        async def fake_execute_as_user(self, *, deps, tool_name, args):
+            return {"rows": []}
+
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.record_session_approval",
+            fake_record,
+        )
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.has_session_approval",
+            already_approved,
+        )
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+            fake_execute_as_user,
+        )
+
+        conversation_id, user_id = uuid4(), uuid4()
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(conversation_id, user_id),
+            tool_name="pod_get_records",
+            args={"table": "orders"},
+            # The denial that triggered this attempt was for a *different*
+            # permission than the one already approved.
+            permission_ids=["datastore.record.read"],
+        )
+
+        assert result is not None and result.executed is True
+        assert [r["permission_id"] for r in recorded] == ["datastore.record.read"]
+        assert recorded[0]["session_id"] == str(conversation_id)
+        assert recorded[0]["resolved_by_user_id"] == user_id
+
+    @pytest.mark.asyncio
+    async def test_a_call_carrying_no_permissions_records_nothing(self, monkeypatch):
+        """exec_command has no structured permission, so the fast path stays a
+        pure re-execution -- it must not invent a grant."""
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        recorded: list[dict] = []
+
+        async def fake_record(**kwargs):
+            recorded.append(kwargs)
+
+        async def already_approved(**_kwargs):
+            return True
+
+        async def fake_execute_as_user(self, *, deps, tool_name, args):
+            return {"stdout": "ok"}
+
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.record_session_approval",
+            fake_record,
+        )
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.has_session_approval",
+            already_approved,
+        )
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+            fake_execute_as_user,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(uuid4(), uuid4()),
+            tool_name="exec_command",
+            args={"cmd": "ls"},
+            permission_ids=None,
+        )
+
+        assert result is not None and result.executed is True
+        assert recorded == []
