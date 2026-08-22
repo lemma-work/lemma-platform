@@ -16,11 +16,14 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
-from app.modules.agent.services import agent_runner_service as runner_module
+from app.modules.agent.services import run_finalizer as finalizer_module
+from app.modules.agent.services.run_finalizer import (
+    finalize_safely,
+    rejected_run_error_message,
+)
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
-    _finalize_safely,
-    _rejected_run_error_message,
     _run_input_text,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
@@ -31,17 +34,17 @@ _GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try agai
 
 def test_rejected_run_error_message_uses_the_harness_supplied_detail():
     assert (
-        _rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
+        rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
         == "Harness snapshot is stale; refresh it"
     )
 
 
 def test_rejected_run_error_message_falls_back_for_malformed_data():
-    assert _rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
+    assert rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
     assert (
-        _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+        rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
     )
-    assert _rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
+    assert rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
 
 
 class _FailingContextManager:
@@ -70,9 +73,11 @@ async def test_finish_agent_run_rethrows_db_errors_for_boundary_retry() -> None:
     )
 
     with pytest.raises(RuntimeError, match="db connection lost"):
-        await service._finish_agent_run(
-            conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+        await service.finalizer.finish(
+            run=RunIdentity(
+                conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
+                agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+            ),
             status=AgentRunStatus.FAILED,
             error="Something went wrong",
         )
@@ -96,23 +101,22 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
     monkeypatch.setattr(
-        runner_module, "ConversationRepository", lambda _uow: repository
+        finalizer_module, "ConversationRepository", lambda _uow: repository
     )
     publish = AsyncMock()
-    monkeypatch.setattr(runner_module, "publish_conversation_event", publish)
+    monkeypatch.setattr(finalizer_module, "publish_conversation_event", publish)
 
     service = AgentRunnerService(
         uow_factory=_Factory(),
         harness_registry=HarnessRegistry({}),
     )
     publish_usage = AsyncMock()
-    monkeypatch.setattr(service, "_publish_usage_event", publish_usage)
+    monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
     conversation_id = UUID("00000000-0000-0000-0000-000000000101")
     run_id = UUID("00000000-0000-0000-0000-000000000102")
 
-    await service._finish_agent_run(
-        conversation_id=conversation_id,
-        agent_run_id=run_id,
+    await service.finalizer.finish(
+        run=RunIdentity(conversation_id=conversation_id, agent_run_id=run_id),
         status=AgentRunStatus.FAILED,
         conversation_status=ConversationStatus.FAILED,
         error="stale pre-transition error",
@@ -134,27 +138,27 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_exceptions() -> None:
-    """_finalize_safely must swallow all errors (DB, cancellation, etc)."""
+    """finalize_safely must swallow all errors (DB, cancellation, etc)."""
 
     async def boom() -> None:
         raise RuntimeError("DB gone away")
 
     # Should not raise.
-    await _finalize_safely(
+    await finalize_safely(
         boom(), agent_run_id=UUID("00000000-0000-0000-0000-000000000003")
     )
 
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_cancelled_error() -> None:
-    """_finalize_safely must swallow asyncio.CancelledError without propagating."""
+    """finalize_safely must swallow asyncio.CancelledError without propagating."""
 
     async def get_cancelled() -> None:
         raise asyncio.CancelledError()
 
     # Should not raise — this is the whole point: cancellation during
     # finalization must not crash the worker.
-    await _finalize_safely(
+    await finalize_safely(
         get_cancelled(), agent_run_id=UUID("00000000-0000-0000-0000-000000000004")
     )
 

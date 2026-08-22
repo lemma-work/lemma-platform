@@ -75,6 +75,20 @@ way a scenario says, do not edit the scenario.
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Nightly and before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | — | Weekly, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go. |
+| Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. In CI on request only, via `backend-real-llm-e2e.yml`. |
+
+The real-LLM lane is worth one paragraph, because its absence used to be
+invisible. Every `@pytest.mark.real_llm` test ran in **no** lane at all: the
+pull-request lane uses the deterministic model, and the weekly protected lane
+sets `E2E_REAL=1` *together with* `E2E_LLM_MODE=mock` — and `conftest.py` reads
+the explicit mode first, so they skipped there too. A test that runs nowhere
+still looks like coverage in a listing.
+
+It is `workflow_dispatch` only, with no schedule and above all no
+`pull_request`: this repository is public, so a fork must never be able to reach
+the credential. Its results deliberately do not feed `e2e-union.json` either — a
+coverage floor has to be reproducible from a pull request, and a number that
+moved because somebody spent money on a manual run is not.
 
 ### What may run in front of the merge button
 

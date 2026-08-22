@@ -21,14 +21,13 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.services.workspace_location import ProjectRepo
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
-)
+from app.modules.agent.services.conversation_access import resolve_agent
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
-    _inline_schema,
-    _normalize_json_schema,
+    inline_schema,
+    normalize_json_schema,
     _schema_preview,
 )
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
@@ -120,11 +119,10 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
         agent_id=None,
     )
 
-    agent = await runner._resolve_agent(
-        uow=object(),
-        conversation=conversation,
+    agent = await resolve_agent(
+        conversation,
         user_id=conversation.user_id,
-        agent_name=None,
+        agent_repository=object(),
     )
     toolsets = await runner.tool_assembler.assemble(
         agent=agent,
@@ -1086,7 +1084,7 @@ def test_connector_access_modes_use_account_ownership_names():
 @pytest.mark.parametrize("schema", [None, {}, "not-a-dict", [], 0])
 def test_normalize_json_schema_defaults_absent_or_malformed_input(schema):
     """None, empty, and non-dict schemas all fall back to the same open object."""
-    assert _normalize_json_schema(schema) == {
+    assert normalize_json_schema(schema) == {
         "type": "object",
         "properties": {},
         "additionalProperties": True,
@@ -1097,7 +1095,7 @@ def test_normalize_json_schema_forces_object_type():
     """A dynamic tool's declared schema is always exposed as an object, even
     when the stored schema (e.g. authored against a single scalar) says
     otherwise -- pydantic-ai tool parameters must be an object schema."""
-    normalized = _normalize_json_schema({"type": "string", "minLength": 1})
+    normalized = normalize_json_schema({"type": "string", "minLength": 1})
     assert normalized["type"] == "object"
     assert normalized["minLength"] == 1
     assert normalized["properties"] == {}
@@ -1113,7 +1111,7 @@ def test_normalize_json_schema_preserves_explicit_fields_and_does_not_mutate_inp
     }
     snapshot = dict(original)
 
-    normalized = _normalize_json_schema(original)
+    normalized = normalize_json_schema(original)
 
     # Existing values win over the defaults `setdefault` would otherwise apply.
     assert normalized["properties"] == {"name": {"type": "string"}}
@@ -1135,7 +1133,7 @@ def test_inline_schema_resolves_a_local_ref_and_drops_the_defs_bucket():
         },
     }
 
-    inlined = _inline_schema(schema)
+    inlined = inline_schema(schema)
 
     assert "$ref" not in str(inlined)
     assert inlined["properties"]["address"]["properties"]["city"] == {"type": "string"}
@@ -1148,7 +1146,7 @@ def test_inline_schema_is_a_no_op_for_a_schema_with_no_refs():
         "required": ["count"],
     }
 
-    assert _inline_schema(dict(schema)) == schema
+    assert inline_schema(dict(schema)) == schema
 
 
 @pytest.mark.parametrize("schema", [None, {}, "not-a-dict", 42])

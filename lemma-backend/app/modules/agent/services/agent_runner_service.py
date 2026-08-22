@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import suppress
-import asyncio
 import time
-from datetime import datetime
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
@@ -24,35 +21,26 @@ from app.core.observability.telemetry import (
     record_span_output,
 )
 from app.modules.agent.config import agent_settings
-from app.modules.agent.domain.vision import resolve_vision_mode
-from app.modules.agent.infrastructure.transport_errors import (
-    is_retryable_stream_error,
+from app.modules.agent.services.conversation_access import (
+    resolve_agent,
+    validate_conversation_access,
 )
-from app.modules.agent.services.vision_service import vision_delegate_available
-from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import (
-    AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
-    AgentEventType,
     AgentRuntimeConfig,
-    AgentRunUsage,
     AgentRunStatus,
-    ConversationStatus,
     ConversationType,
     HarnessKind,
     HarnessOptions,
     JsonObject,
-    JsonValue,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.domain.runtime_profiles import (
-    RuntimeModelCapability,
     RuntimeProfileProtocol,
 )
 from app.modules.agent.capabilities import build_lemma_harness_tooling
@@ -66,19 +54,6 @@ from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
 )
-from app.modules.agent.services.conversation_service import (
-    _POD_ASSISTANT_AGENT_ID,
-)
-from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.services.realtime import (
-    completed_payload,
-    error_payload,
-    message_payload,
-    publish_conversation_event,
-    status_payload,
-    token_payload,
-)
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     observe_first_output,
@@ -86,30 +61,35 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
-    FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
     apply_surface_history_window,
     runtime_full_run_ids,
     select_runtime_history,
 )
-from app.modules.agent.services.run_observer_delivery import notify_run_failed
+from app.modules.agent.services.run_context_builder import build_run_context
+from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
+from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.run_finalizer import (
+    is_usage_limit_error,
+    RunFinalizer,
+    finalize_safely,
+    run_failure_message,
+)
+from app.modules.agent.services.run_observer_delivery import (
+    notify_run_failed,
+    notify_run_finished,
+    notify_run_started,
+)
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
     UsageReservation,
     usage_context_from_agent_context,
     usage_execution_context,
 )
-from app.modules.agent.services.workspace_location import (
-    has_recorded_cwd,
-    pod_cwd_from_workspace_cwd,
-    resolve_workspace_location,
-)
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
-from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 
 logger = get_logger(__name__)
 
@@ -117,61 +97,6 @@ logger = get_logger(__name__)
 # takes and comfortably inside the worker's shutdown grace period, so a healthy
 # run always finalizes and a wedged one still lets the process exit.
 _FINALIZATION_TIMEOUT_SECONDS = 8.0
-
-
-def _run_failure_message(exc: BaseException) -> str:
-    """What the user reads when a run dies outside the harness's own handling.
-
-    Distinguishing these matters: a quota exhaustion and a dropped connection
-    are both "the run failed", but only one of them is worth investigating, and
-    neither is fixed by checking the runtime configuration.
-    """
-    if isinstance(exc, UsageLimitExceededError):
-        return (
-            "This run was not started because the workspace has used its "
-            "available usage allowance. Usage resets with the billing period, "
-            "or the plan limit can be raised."
-        )
-    if is_retryable_stream_error(exc):
-        return (
-            "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message, or press Retry to pick up "
-            "where it stopped."
-        )
-    if not isinstance(exc, Exception):
-        return "Agent run was interrupted (timeout or shutdown)"
-    return "Agent run failed. Please check the agent runtime configuration."
-
-
-async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
-    """Await a finalization coroutine, swallowing all errors.
-
-    Used inside ``asyncio.shield()`` so the coroutine completes even when the
-    caller is cancelled. Any exception (DB error, cancellation) is logged and
-    suppressed — finalization must never crash the worker.
-    """
-    try:
-        await coro
-    except asyncio.CancelledError:
-        logger.debug(
-            "agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic",
-            agent_run_id=agent_run_id,
-        )
-    except Exception:
-        logger.error(
-            "agent.agent_runner_service.agent_run_finalization_run_s.failed",
-            agent_run_id=agent_run_id,
-            exc_info=True,
-        )
-
-
-def _rejected_run_error_message(data: object) -> str:
-    """Build a user-facing message for a pre-dispatch harness rejection."""
-    if isinstance(data, dict):
-        detail = data.get("detail")
-        if isinstance(detail, str) and detail.strip():
-            return detail.strip()
-    return "The Agent Host rejected this run before dispatch. Try again."
 
 
 def _run_input_text(messages: Sequence[Message]) -> str | None:
@@ -183,7 +108,7 @@ def _run_input_text(messages: Sequence[Message]) -> str | None:
     reason: they are rows in the run, not the thing that started it.
     """
     for message in reversed(messages):
-        if message.role != MessageRole.USER.value:
+        if message.role is not MessageRole.USER:
             continue
         if message.kind is not MessageKind.TEXT:
             continue
@@ -254,6 +179,8 @@ class AgentRunnerService:
         self.tool_assembler = RunToolAssembler(uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
         self.message_writer = RunMessageWriter(uow_factory)
+        self.finalizer = RunFinalizer(uow_factory, self.usage_recorder)
+        self.event_pump = RunEventPump(self.message_writer, self.finalizer)
 
     async def execute(
         self,
@@ -270,10 +197,18 @@ class AgentRunnerService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
+        run = RunIdentity(
+            conversation_id=conversation.id,
+            agent_run_id=agent_run_id,
+            organization_id=conversation.organization_id,
+            pod_id=conversation.pod_id,
+            user_id=user_id,
+            agent_id=conversation.agent_id,
+            started_at=agent_run.started_at,
+        )
         if agent_run.status != AgentRunStatus.RUNNING:
-            await self._finish_agent_run(
-                conversation_id=conversation.id,
-                agent_run_id=agent_run_id,
+            await self.finalizer.finish(
+                run=run,
                 status=(
                     AgentRunStatus.STOPPED
                     if agent_run.status == AgentRunStatus.STOP_REQUESTED
@@ -291,78 +226,19 @@ class AgentRunnerService:
                 organization_id=conversation.organization_id,
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
-            output_data: JsonValue | None = None
-            final_status: ConversationStatus | None = None
-            final_error: str | None = None
-            usage_data: AgentRunUsage | None = None
-            surface_context = self._surface_context_from_conversation(conversation)
+            outcome = RunOutcome()
             runtime_profile_snapshot = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
-            workspace_location = resolve_workspace_location(conversation)
-            # Same rule the MCP bridge follows: a conversation that never had a
-            # cwd written down gets one now, so metadata is the source of truth
-            # in fact. Costs nothing on the common path -- creation stamps it,
-            # so this only opens a unit of work for a row that predates that.
-            if not has_recorded_cwd(conversation):
-                async with self.uow_factory() as uow:
-                    await ConversationRepository(uow).set_conversation_metadata_key(
-                        conversation.id, "cwd", workspace_location.cwd
-                    )
-                    await uow.commit()
-                conversation.metadata = {
-                    **(conversation.metadata or {}),
-                    "cwd": workspace_location.cwd,
-                }
-            pod_cwd = pod_cwd_from_workspace_cwd(workspace_location.cwd)
-            ctx = ConversationContext(
-                user_id=user_id,
-                org_id=conversation.organization_id,
-                pod_id=conversation.pod_id,
-                conversation_id=conversation.id,
-                agent_name=agent.name,
+            ctx = await build_run_context(
+                uow_factory=self.uow_factory,
+                conversation=conversation,
+                agent=agent,
                 agent_run_id=agent_run_id,
-                workload_type="agent",
-                workload_id=agent.id,
-                configured_accounts=await self._resolve_configured_accounts(
-                    agent=agent,
-                    user_id=user_id,
-                ),
-                runtime_profile=runtime_profile_snapshot,
+                user_id=user_id,
+                resolved_runtime=resolved_runtime,
+                runtime_profile_snapshot=runtime_profile_snapshot,
                 runtime_credentials=runtime_credentials,
-                workspace_id=workspace_location.workspace_id,
-                workspace_cwd=workspace_location.cwd,
-                workspace_repo=workspace_location.repo,
-                pod_cwd=pod_cwd,
-                # Only the in-process pydantic (LEMMA) harness catches the
-                # ask_user/request_approval pause signal; remote harnesses run the
-                # tools over MCP and own their own session, so they can't be paused
-                # mid tool-call and use the WAITING output contract instead.
-                supports_pause_signal=(
-                    resolved_runtime.harness_kind == HarnessKind.LEMMA
-                ),
-                is_pod_default_agent=(agent.id == _POD_ASSISTANT_AGENT_ID),
-                **surface_context,
-            )
-            with suppress(Exception):
-                ctx.context_brief = await AgentContextBriefBuilder(
-                    self.uow_factory
-                ).build(
-                    agent=agent,
-                    conversation=conversation,
-                    user_id=user_id,
-                    pod_id=conversation.pod_id,
-                )
-            # How image-returning tools answer on this run. Settled before the
-            # toolset is built, because the assembler needs it: `view_image` is
-            # offered whenever the mode can answer at all, and withholding it on
-            # a text-only model never protected anything -- `pod_view_document_
-            # pages` shipped image content to that same model anyway.
-            supports_vision = (
-                RuntimeModelCapability.VISION in resolved_runtime.capabilities
-            )
-            ctx.vision_mode = resolve_vision_mode(
-                model_supports_vision=supports_vision,
-                delegate_model_configured=vision_delegate_available(),
+                resolve_configured_accounts=self._resolve_configured_accounts,
             )
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
@@ -383,12 +259,8 @@ class AgentRunnerService:
                 # The in-process harness realizes every tool surface as a
                 # capability, so its toolset list is empty.
                 harness_capabilities = await build_lemma_harness_tooling(
-                    uow_factory=self.uow_factory,
-                    agent=agent,
                     ctx=ctx,
                     full_toolsets=full_toolsets,
-                    agent_run_id=agent_run_id,
-                    model_name=resolved_runtime.model_name_for_harness,
                     # Both protocols cache, by different mechanisms — see
                     # PromptCachingCapability.
                     enable_prompt_caching=(
@@ -407,6 +279,9 @@ class AgentRunnerService:
                 user_id=user_id,
                 runtime_profile=runtime_profile_snapshot,
             )
+            run_with_usage = run.with_runtime_profile(
+                runtime_profile_snapshot
+            ).with_reservation(usage_reservation)
             enforced_usage_limits = self.fixed_usage_limits
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
@@ -421,7 +296,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            terminal_event_seen = False
             observer_started = False
             harness_agent = self._agent_with_resolved_runtime_metadata(
                 agent,
@@ -456,15 +330,9 @@ class AgentRunnerService:
                     # grouped correctly and every row is blank, so finding the run
                     # you want means opening each one.
                     record_span_input(span, _run_input_text(messages))
-                    if observer is not None:
-                        try:
-                            await observer.on_run_started(conversation, ctx)
-                            observer_started = True
-                        except Exception:
-                            logger.debug(
-                                "agent.agent_runner_service.agent_run_observer_start_run.diagnostic",
-                                agent_run_id=agent_run_id,
-                            )
+                    observer_started = await notify_run_started(
+                        observer, conversation, ctx, agent_run_id
+                    )
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -472,86 +340,34 @@ class AgentRunnerService:
                             source_id=str(agent_run_id),
                         )
                         with usage_execution_context(run_usage_context):
-                            async for event in observe_first_output(
-                                harness.run(
-                                    agent=harness_agent,
-                                    conversation=conversation,
-                                    messages=messages,
-                                    ctx=ctx,
-                                    options=options,
-                                    agent_run_id=agent_run_id,
-                                )
-                            ):
-                                if terminal_event_seen:
-                                    continue
-                                if observer is not None:
-                                    try:
-                                        await observer.on_event(
-                                            event, conversation, ctx
-                                        )
-                                    except Exception:
-                                        logger.debug(
-                                            "agent.agent_runner_service.agent_run_observer_run_s.diagnostic",
-                                            agent_run_id=agent_run_id,
-                                        )
-                                if event.type == AgentEventType.USAGE:
-                                    if isinstance(event.data, AgentRunUsage):
-                                        usage_data = event.data
-                                    elif isinstance(event.data, dict):
-                                        usage_data = AgentRunUsage.model_validate(
-                                            event.data
-                                        )
-                                    continue
-                                should_stop = await self._handle_harness_event(
-                                    event=event,
-                                    conversation_id=conversation.id,
-                                    agent_run_id=agent_run_id,
-                                    output_data=output_data,
-                                    final_status=final_status,
-                                    final_error=final_error,
-                                    usage_data=usage_data,
-                                    organization_id=conversation.organization_id,
-                                    pod_id=conversation.pod_id,
-                                    user_id=user_id,
-                                    agent_id=conversation.agent_id,
-                                    started_at=agent_run.started_at,
-                                    runtime_profile=runtime_profile_snapshot,
-                                    usage_reservation=usage_reservation,
-                                )
-                                if event.type == AgentEventType.MESSAGE:
-                                    saved_output = (
-                                        self.message_writer.output_data_from_event(
-                                            event
-                                        )
+                            await self.event_pump.drive(
+                                observe_first_output(
+                                    harness.run(
+                                        agent=harness_agent,
+                                        conversation=conversation,
+                                        messages=messages,
+                                        ctx=ctx,
+                                        options=options,
+                                        agent_run_id=agent_run_id,
                                     )
-                                    if saved_output is not None:
-                                        output_data = saved_output
-                                    event_final_status, event_final_error = (
-                                        self.message_writer.final_status_from_event(
-                                            event
-                                        )
-                                    )
-                                    if event_final_status is not None:
-                                        final_status = event_final_status
-                                    if event_final_error:
-                                        final_error = event_final_error
-                                if should_stop:
-                                    terminal_event_seen = True
+                                ),
+                                run=run_with_usage,
+                                outcome=outcome,
+                                observer=observer,
+                                conversation=conversation,
+                                ctx=ctx,
+                            )
                     finally:
                         # In `finally`, because a run that failed or was
                         # cancelled part-way is the one worth reading, and it
                         # still has whatever the model produced before it went.
-                        record_span_output(span, output_data)
-                        if observer is not None and observer_started:
-                            try:
-                                await observer.on_run_finished(conversation, ctx)
-                            except Exception:
-                                logger.debug(
-                                    "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic",
-                                    agent_run_id=agent_run_id,
-                                )
+                        record_span_output(span, outcome.output_data)
+                        if observer_started:
+                            await notify_run_finished(
+                                observer, conversation, ctx, agent_run_id
+                            )
         except BaseException as exc:
-            if isinstance(exc, UsageLimitExceededError):
+            if is_usage_limit_error(exc):
                 # Not a crash: the organisation is out of plan quota. This was
                 # the single most common "error" in production (154 in a week),
                 # logged at ERROR with a stack trace and shown to the user as
@@ -602,19 +418,13 @@ class AgentRunnerService:
             # worker is not: the platform SIGKILLs it and every other in-flight
             # run on that process dies with it.
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                await _finalize_safely(
-                    self._finish_agent_run(
-                        conversation_id=conversation.id,
-                        agent_run_id=agent_run_id,
+                await finalize_safely(
+                    self.finalizer.finish(
+                        run=run.with_runtime_profile(
+                            runtime_profile_snapshot
+                        ).with_reservation(usage_reservation),
                         status=AgentRunStatus.FAILED,
-                        error=_run_failure_message(exc),
-                        organization_id=conversation.organization_id,
-                        pod_id=conversation.pod_id,
-                        user_id=user_id,
-                        agent_id=conversation.agent_id,
-                        started_at=agent_run.started_at,
-                        runtime_profile=runtime_profile_snapshot,
-                        usage_reservation=usage_reservation,
+                        error=run_failure_message(exc),
                     ),
                     agent_run_id=agent_run_id,
                 )
@@ -703,15 +513,15 @@ class AgentRunnerService:
                 runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
                 agent_run = self._find_agent_run(runs, agent_run_id)
                 conversation = await repo.get_conversation(agent_run.conversation_id)
-                self._validate_conversation_access(
+                validate_conversation_access(
                     conversation,
                     user_id=user_id,
                     pod_id=pod_id,
                 )
-                agent = await self._resolve_agent(
-                    uow=uow,
-                    conversation=conversation,
+                agent = await resolve_agent(
+                    conversation,
                     user_id=user_id,
+                    agent_repository=AgentRepository(uow),
                     agent_name=agent_name,
                 )
                 # Which runs survive the trim decides which need every message,
@@ -725,325 +535,6 @@ class AgentRunnerService:
                 messages = self._select_runtime_history(runs, conversation)
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
-
-    async def _handle_harness_event(
-        self,
-        *,
-        event: AgentEvent,
-        conversation_id: UUID,
-        agent_run_id: UUID,
-        output_data: JsonValue | None = None,
-        final_status: ConversationStatus | None = None,
-        final_error: str | None = None,
-        usage_data: AgentRunUsage | None = None,
-        organization_id: UUID | None = None,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        started_at: datetime | None = None,
-        runtime_profile: dict[str, object | None] | None = None,
-        usage_reservation: UsageReservation | None = None,
-    ) -> bool:
-        if event.type == AgentEventType.TOKEN:
-            token_kind = "text"
-            token_data = event.data
-            if isinstance(event.data, dict):
-                raw_kind = event.data.get("kind")
-                if raw_kind is not None:
-                    token_kind = str(raw_kind)
-                token_data = event.data.get("data", "")
-            await publish_conversation_event(
-                conversation_id,
-                token_payload(agent_run_id, str(token_data), kind=token_kind),
-            )
-            return False
-
-        if event.type == AgentEventType.MESSAGE:
-            saved_message = await self.message_writer.persist(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                data=event.data,
-            )
-            await publish_conversation_event(
-                conversation_id,
-                message_payload(agent_run_id, message_to_payload(saved_message)),
-            )
-            return False
-
-        if event.type == AgentEventType.STATUS:
-            await publish_conversation_event(
-                conversation_id,
-                status_payload(
-                    agent_run_id,
-                    event.data
-                    if isinstance(event.data, dict)
-                    else {"status": str(event.data)},
-                ),
-            )
-            return False
-
-        if event.type == AgentEventType.ERROR:
-            await self._finish_agent_run(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=AgentRunStatus.FAILED,
-                error=str(event.data),
-                usage_data=usage_data,
-                organization_id=organization_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                started_at=started_at,
-                runtime_profile=runtime_profile,
-                usage_reservation=usage_reservation,
-            )
-            return True
-
-        if event.type == AgentEventType.REJECTED:
-            # The remote harness refused this run before dispatch -- terminal,
-            # like ERROR, but with a more actionable message built from the
-            # event's structured data.
-            await self._finish_agent_run(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=AgentRunStatus.FAILED,
-                error=_rejected_run_error_message(event.data),
-                usage_data=usage_data,
-                organization_id=organization_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                started_at=started_at,
-                runtime_profile=runtime_profile,
-                usage_reservation=usage_reservation,
-            )
-            return True
-
-        if event.type == AgentEventType.WAITING:
-            # The agent paused for the user (ask_user / request_approval). Finish
-            # this run as COMPLETED but flip the conversation to WAITING — the
-            # proven final_answer pause shape. The pending tool call is already
-            # persisted; resolving it starts a fresh run that resumes from history.
-            await self._finish_agent_run(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=AgentRunStatus.COMPLETED,
-                conversation_status=ConversationStatus.WAITING,
-                output_data=output_data,
-                usage_data=usage_data,
-                organization_id=organization_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                started_at=started_at,
-                runtime_profile=runtime_profile,
-                usage_reservation=usage_reservation,
-            )
-            return True
-
-        if event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}:
-            await self._finish_agent_run(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=(
-                    AgentRunStatus.STOPPED
-                    if event.type == AgentEventType.STOPPED
-                    else AgentRunStatus.FAILED
-                    if final_status == ConversationStatus.FAILED
-                    else AgentRunStatus.COMPLETED
-                ),
-                conversation_status=final_status,
-                error=final_error,
-                output_data=output_data,
-                usage_data=usage_data,
-                organization_id=organization_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                started_at=started_at,
-                runtime_profile=runtime_profile,
-                usage_reservation=usage_reservation,
-            )
-            return True
-
-        return False
-
-    async def _finish_agent_run(
-        self,
-        *,
-        conversation_id: UUID,
-        agent_run_id: UUID,
-        status: AgentRunStatus,
-        conversation_status: ConversationStatus | None = None,
-        error: str | None = None,
-        output_data: JsonValue | None = None,
-        usage_data: AgentRunUsage | None = None,
-        organization_id: UUID | None = None,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        started_at: datetime | None = None,
-        runtime_profile: dict[str, object | None] | None = None,
-        usage_reservation: UsageReservation | None = None,
-    ) -> None:
-        try:
-            event: AgentRunCompletedEvent | None = None
-            event_data: JsonObject = {}
-            async with self.uow_factory() as uow:
-                finish_result = await ConversationRepository(uow).finish_agent_run(
-                    agent_run_id=agent_run_id,
-                    status=status,
-                    conversation_status=conversation_status,
-                    error=error,
-                    output_data=output_data,
-                )
-                if finish_result is not None and finish_result.updated:
-                    status = finish_result.status
-                    conversation_status = finish_result.conversation_status
-                    if status == AgentRunStatus.STOPPED:
-                        error = None
-                    if error:
-                        event_data["error"] = error
-                    if output_data is not None:
-                        event_data["output_data"] = output_data
-                    event_data["conversation_status"] = conversation_status.value
-                    event = AgentRunCompletedEvent(
-                        conversation_id=conversation_id,
-                        agent_run_id=agent_run_id,
-                        status=status,
-                        data=event_data or None,
-                    )
-                    uow.collect_events([event])
-            if finish_result is None or not finish_result.updated:
-                await self.usage_recorder.release(usage_reservation)
-                return
-            assert event is not None
-            if status == AgentRunStatus.FAILED:
-                await publish_conversation_event(
-                    conversation_id,
-                    error_payload(agent_run_id, error or "Agent run failed"),
-                )
-            await publish_conversation_event(
-                conversation_id,
-                completed_payload(
-                    conversation_id=conversation_id,
-                    agent_run_id=agent_run_id,
-                    status=status.value,
-                    data=event_data or None,
-                ),
-            )
-            await self._publish_usage_event(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=status,
-                usage_data=usage_data,
-                organization_id=organization_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                started_at=started_at,
-                runtime_profile=runtime_profile,
-                usage_reservation=usage_reservation,
-            )
-        except Exception:
-            logger.debug(
-                "agent.agent_runner_service.finalize_agent_run_run_s.propagated",
-                agent_run_id=agent_run_id,
-                exc_info=True,
-            )
-            try:
-                await self.usage_recorder.release(usage_reservation)
-            except Exception:
-                logger.debug(
-                    "agent.agent_runner_service.release_usage_reservation_run_s.diagnostic",
-                    agent_run_id=agent_run_id,
-                )
-            raise
-
-    async def _publish_usage_event(
-        self,
-        *,
-        conversation_id: UUID,
-        agent_run_id: UUID,
-        status: AgentRunStatus,
-        usage_data: AgentRunUsage | None,
-        organization_id: UUID | None,
-        pod_id: UUID | None,
-        user_id: UUID | None,
-        agent_id: UUID | None,
-        started_at: datetime | None,
-        runtime_profile: dict[str, object | None] | None,
-        usage_reservation: UsageReservation | None,
-    ) -> None:
-        if usage_data is None or pod_id is None or user_id is None:
-            await self.usage_recorder.release(usage_reservation)
-            return
-        if (
-            usage_data.input_tokens <= 0
-            and usage_data.output_tokens <= 0
-            and usage_data.units <= 0
-        ):
-            await self.usage_recorder.release(usage_reservation)
-            return
-        context = usage_context_from_agent_context(
-            ConversationContext(
-                user_id=user_id,
-                org_id=organization_id,
-                pod_id=pod_id,
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                workload_type="agent",
-                workload_id=agent_id,
-            ),
-            source_type="agent_run",
-            source_id=str(agent_run_id),
-        )
-        await self.usage_recorder.record(
-            ctx=context,
-            runtime_profile=runtime_profile,
-            usage_data=usage_data,
-            status=status.value,
-            reservation=usage_reservation,
-        )
-
-    async def _resolve_agent(
-        self,
-        *,
-        uow,
-        conversation: Conversation,
-        user_id: UUID,
-        agent_name: str | None,
-    ) -> Agent:
-        if conversation.agent_id is None:
-            return Agent(
-                id=_POD_ASSISTANT_AGENT_ID,
-                pod_id=conversation.pod_id,
-                user_id=user_id,
-                name=DEFAULT_POD_AGENT_NAME,
-                instruction="",
-                agent_runtime=conversation.agent_runtime,
-                toolsets=list(POD_DEFAULT_AGENT_TOOLSETS),
-            )
-        agent = await AgentRepository(uow).get(conversation.agent_id)
-        if agent is None:
-            raise AgentNotFoundError(str(conversation.agent_id))
-        if agent_name is not None and agent.name != agent_name:
-            raise AgentNotFoundError(agent_name)
-        return agent
-
-    def _validate_conversation_access(
-        self,
-        conversation: Conversation | None,
-        *,
-        user_id: UUID,
-        pod_id: UUID,
-    ) -> None:
-        if conversation is None:
-            raise ConversationNotFoundError()
-        if conversation.user_id != user_id:
-            raise ConversationNotFoundError()
-        if conversation.pod_id != pod_id:
-            raise ConversationNotFoundError()
 
     def _find_agent_run(self, runs: list[AgentRun], agent_run_id: UUID) -> AgentRun:
         for run in runs:
@@ -1060,36 +551,6 @@ class AgentRunnerService:
         self, runs: list[AgentRun], conversation: Conversation | None = None
     ) -> list[Message]:
         return select_runtime_history(runs, conversation)
-
-    def _surface_context_from_conversation(
-        self,
-        conversation: Conversation,
-    ) -> JsonObject:
-        metadata = conversation.metadata or {}
-        surface_id = metadata.get("surface_id")
-        surface_metadata_payload = metadata.get("surface_event_metadata")
-        surface_metadata = None
-        if isinstance(surface_metadata_payload, dict):
-            try:
-                from app.composition.agent_surface_runtime import (
-                    parse_surface_event_metadata,
-                )
-
-                surface_metadata = parse_surface_event_metadata(
-                    surface_metadata_payload
-                )
-            except Exception:
-                surface_metadata = surface_metadata_payload
-        return {
-            "surface_id": UUID(str(surface_id)) if surface_id else None,
-            "surface_platform": metadata.get("surface_platform"),
-            "surface_metadata": surface_metadata,
-            "external_channel_id": metadata.get("external_channel_id"),
-            "external_thread_id": metadata.get("external_thread_id"),
-            "external_user_id": metadata.get("external_user_id"),
-            "external_message_id": metadata.get("external_message_id"),
-            "agent_display_name": metadata.get("agent_display_name"),
-        }
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

@@ -26,11 +26,10 @@ from app.modules.agent.domain.entities import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
-)
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
+from app.modules.agent.services.runtime_history import select_runtime_history
 
 # Relative to now, not a fixed date: the surface age window is measured against
 # `datetime.now()`, so a hard-coded base silently stops exercising the window a
@@ -247,3 +246,106 @@ def test_a_run_reports_its_real_size_not_the_loaded_one() -> None:
     older = _as_bounded([run, *(_run(conversation_id, i, 3) for i in range(1, 6))])[0]
     assert len(older.messages) == 2
     assert older.message_count == 9
+
+
+class TestAnElidedRunNeverFabricatesAnInterruptedTool:
+    """The failure this guards is a duplicate send, not a cosmetic one.
+
+    Eliding an old run keeps its first and last message. That is fine until the
+    first message is an assistant tool call, which is the normal shape for a run
+    with no user message -- an approval resume and a snooze wake both create a
+    run and go straight into a tool. The call's return is elided away, the
+    history builder finds it unpaired, and synthesizes:
+
+        "This tool call was interrupted before a result was recorded, so it
+         returned nothing. Run it again if you still need the result."
+
+    So the model is told a `send_email` that succeeded never happened, and is
+    told to repeat it.
+
+    A pausing tool is never in this position -- its return is appended to the
+    run it ended, so such a run is two messages long and exempt from elision --
+    which is why the `PAUSING_TOOL_NAMES` exemption does not cover this.
+    """
+
+    @staticmethod
+    def _resume_run(conversation_id: UUID, run_index: int) -> AgentRun:
+        """A run with no user message that opens on a tool call that succeeded."""
+        run_id = uuid4()
+        base = run_index * 1000
+        return AgentRun(
+            id=run_id,
+            conversation_id=conversation_id,
+            agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+            started_at=_BASE + timedelta(minutes=run_index),
+            # Six in reality; the loader hands us only the first and last.
+            total_message_count=6,
+            messages=[
+                Message(
+                    conversation_id=conversation_id,
+                    sequence=base,
+                    agent_run_id=run_id,
+                    role=MessageRole.ASSISTANT.value,
+                    kind=MessageKind.TOOL_CALL,
+                    tool_name="send_email",
+                    tool_call_id="call-send-1",
+                ),
+                Message(
+                    conversation_id=conversation_id,
+                    sequence=base + 5,
+                    agent_run_id=run_id,
+                    role=MessageRole.ASSISTANT.value,
+                    kind=MessageKind.TEXT,
+                    text="Email sent.",
+                ),
+            ],
+        )
+
+    def _history(self) -> tuple[list[Message], UUID]:
+        conversation_id = uuid4()
+        old = self._resume_run(conversation_id, 0)
+        recent = [
+            _run(conversation_id, index, 2)
+            for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
+        ]
+        return select_runtime_history([old, *recent], None), old.id
+
+    def test_the_unpaired_call_is_dropped_rather_than_kept(self):
+        selected, old_run_id = self._history()
+
+        kept = [
+            message
+            for message in selected
+            if message.agent_run_id == old_run_id
+            and message.kind is MessageKind.TOOL_CALL
+        ]
+        assert kept == [], (
+            "an unpaired tool call survived elision, so the history builder "
+            "will tell the model to run it again"
+        )
+
+    def test_the_run_still_reports_what_it_did(self):
+        """Dropping the head must not cost the outcome or the summary."""
+        selected, old_run_id = self._history()
+
+        from_old = [m for m in selected if m.agent_run_id == old_run_id]
+        assert any(m.kind is MessageKind.NOTIFICATION for m in from_old), (
+            "the elision notice went missing"
+        )
+        assert any("Email sent." in (m.text or "") for m in from_old), (
+            "the run's own outcome went missing"
+        )
+
+    def test_a_leading_user_message_is_still_kept(self):
+        """The ordinary shape is untouched: only an unpaired call is dropped."""
+        conversation_id = uuid4()
+        old = _run(conversation_id, 0, 6)
+        recent = [
+            _run(conversation_id, index, 2)
+            for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
+        ]
+
+        selected = select_runtime_history([old, *recent], None)
+
+        from_old = [m for m in selected if m.agent_run_id == old.id]
+        assert len(from_old) == 3, from_old

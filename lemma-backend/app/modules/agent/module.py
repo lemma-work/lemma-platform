@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 async def _report_system_model_pricing(
     _context: object,
 ) -> AsyncIterator[None]:
-    from app.modules.agent.services.runtime_profile_service import (
+    from app.modules.agent.services.runtime_system_profiles import (
         system_lemma_openai_catalog_model_names,
     )
     from app.composition.agent_usage import (

@@ -24,6 +24,7 @@ from app.modules.agent.agent_runtime_defaults import (
     AgentRuntimeDefaultError,
     AgentRuntimeDefaultService,
 )
+from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
@@ -433,7 +434,6 @@ async def test_runtime_falls_back_when_model_not_in_selected_profile():
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):
     from app.core.config import settings
-    from app.modules.agent.services import runtime_profile_service
 
     monkeypatch.setattr(settings, "lemma_openai_api_key", None)
     monkeypatch.setattr(settings, "lemma_anthropic_api_key", None)
@@ -443,20 +443,19 @@ def test_system_runtime_profiles_return_empty_without_server_credentials(monkeyp
     # Keep the test hermetic: production loads the local ``.env`` for runtime
     # credentials, which would otherwise repopulate the keys we just cleared (and
     # make this depend on the developer's .env). Neutralize that reload here.
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
 
     assert AgentRuntimeProfileService().system_profiles() == []
 
 
 def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatch):
     from app.core.config import settings
-    from app.modules.agent.services import runtime_profile_service
 
     # Keep hermetic: the profile builder reloads the local ``.env`` and prefers
     # ``os.getenv`` over ``settings``, which would otherwise leak the developer's
     # real model list/credentials into this test. Neutralize the reload and clear
     # the env so the monkeypatched ``settings`` win.
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
@@ -507,11 +506,10 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
     image tools are withheld there."""
     from app.core.config import settings
     from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
-    from app.modules.agent.services import runtime_profile_service
 
     # Hermetic: neutralize the .env reload and clear env so the monkeypatched
     # ``settings`` drive the catalog (see the sibling test above).
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
@@ -643,8 +641,8 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     harness does not advertise — so an unpinned profile must dispatch with no
     model at all.
     """
-    from app.modules.agent.infrastructure.harnesses.agent_host import (
-        _agent_host_run_config,
+    from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+        agent_host_run_config,
     )
 
     org_id = uuid4()
@@ -662,7 +660,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
         extra={"runtime_profile": resolved.public_snapshot()},
     )
 
-    run_config = _agent_host_run_config(options)
+    run_config = agent_host_run_config(options)
     assert run_config.harness_id == pinned.harness_id
     assert run_config.runtime_profile_id == UUID(pinned.id)
     assert run_config.model_name == "grok-4"
@@ -677,7 +675,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     )
     assert resolved_unpinned.model_name_for_harness == "default"
     assert (
-        _agent_host_run_config(
+        agent_host_run_config(
             HarnessOptions(
                 model_name=resolved_unpinned.model_name_for_harness,
                 extra={"runtime_profile": resolved_unpinned.public_snapshot()},

@@ -2815,3 +2815,574 @@ async def test_a_model_stream_that_keeps_dropping_fails_cleanly_once_retries_run
     )
     assert durable.status_code == status.HTTP_200_OK, durable.text
     assert durable.json()["status"] == "FAILED"
+
+
+async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    e2e_settings,
+    worker,
+):
+    """The whole MESSAGING toolset, in one run, against real notification rows.
+
+    Three tools that had no e2e coverage anywhere -- not a thin patch each, but
+    the sequence they exist to form, because that is where they can disagree:
+
+        list_pod_members -> who can I reach
+        message_user     -> reach them, and get a notification id back
+        check_messages   -> that id is a real row, and it is OPEN
+
+    The id round-trip is the assertion that matters. Each tool writing its own
+    row is provable in isolation; that the id `message_user` hands back is one
+    `check_messages` can actually find is not, and that is the join a caller
+    depends on.
+
+    Answering is the other half of this loop and lives in
+    `test_notification_response_e2e.py`: `respond_to_notification` is not part
+    of this toolset at all. It is injected by `OpenNotificationsCapability`,
+    only into the conversation a notification was delivered to -- so it cannot
+    be reached from the asking side, which is where this run stands.
+    """
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"messaging_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Run the scripted messaging steps.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["MESSAGING"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    notification_id = script_tool_result_ref("msg-1", "notification_id")
+    script = [
+        script_tool_call("list_pod_members", {}, tool_call_id="members-1"),
+        script_tool_call(
+            "message_user",
+            {
+                "to": fixed_test_user["email"],
+                "message": "Can you confirm the Q3 numbers?",
+                "background_instruction": "Record whatever they say.",
+            },
+            tool_call_id="msg-1",
+        ),
+        script_tool_call(
+            "check_messages",
+            {"notification_ids": [notification_id]},
+            tool_call_id="check-open",
+        ),
+        script_text("Asked; waiting on an answer."),
+    ]
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Messaging loop",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client, pod_id, conversation_id, "Ask about Q3 and record it."
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    assert returns["members-1"]["success"] is True
+    assert returns["members-1"]["members"], "the run's own owner is a pod member"
+
+    sent = returns["msg-1"]
+    assert sent["success"] is True, sent
+    assert sent["notification_id"], "no id came back, so nothing can check it"
+
+    still_open = returns["check-open"]
+    assert still_open["success"] is True, still_open
+    assert still_open["pending"] == 1
+    assert [m["status"] for m in still_open["messages"]] == ["OPEN"]
+
+    assert str(sent["notification_id"]) in str(still_open["messages"][0]), (
+        "check_messages found a row, but not the one message_user reported"
+    )
+
+
+async def test_an_agent_closes_a_notification_delivered_into_its_conversation(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    e2e_settings,
+    worker,
+    db_session,
+):
+    """`respond_to_notification` closing a real row, reached the way agents reach it.
+
+    This tool is not in any toolset a user can grant. `OpenNotificationsCapability`
+    injects it at run assembly, and only into the conversation a notification was
+    *delivered* to -- so nothing in the agent module could reach it, and it had no
+    coverage anywhere. The HTTP `/respond` endpoint is covered in
+    `test_notifications_e2e.py`; the tool that shares its service was not.
+
+    The delivery itself is somebody else's test: it needs a real chat surface and
+    a real egress send, and `agent_surfaces` covers that. What is set up directly
+    here is the durable state a delivery leaves behind -- `delivery_conversation_id`
+    -- because that is the input this half actually consumes, and asserting on it
+    is what proves the capability keys on the right column.
+    """
+    from sqlalchemy import update
+
+    from app.modules.agent_surfaces.infrastructure.models import NotificationModel
+
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"responder_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Record what they tell you.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            # Deliberately empty: the responding tool must arrive from the
+            # capability, not from a grant. If it only works with MESSAGING
+            # attached, this fails.
+            "toolsets": [],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    notification = await authenticated_client.post(
+        f"/pods/{pod_id}/notifications",
+        json={
+            "recipient": fixed_test_user["email"],
+            "title": "Standup",
+            "body": "What did you ship yesterday?",
+            "background_instruction": "Record their update as the response summary.",
+            "expects_response": True,
+        },
+    )
+    assert notification.status_code == status.HTTP_201_CREATED, notification.text
+    notification_id = notification.json()["id"]
+    assert notification.json()["status"] == "OPEN"
+
+    script = [
+        script_tool_call(
+            "respond_to_notification",
+            {
+                "notification_id": notification_id,
+                "summary": "Shipped the importer and reviewed two PRs.",
+            },
+            tool_call_id="respond-1",
+        ),
+        script_text("Passed it on."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Standup reply",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    # What a delivery leaves behind. Without it the capability does not fire and
+    # the tool is not offered -- which is the behaviour asserted at the end.
+    await db_session.execute(
+        update(NotificationModel)
+        .where(NotificationModel.id == UUID(notification_id))
+        .values(delivery_conversation_id=UUID(conversation_id))
+    )
+    await db_session.commit()
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Shipped the importer and reviewed two PRs.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    # A tool the model asked for but was never offered comes back as an error
+    # string rather than a result dict, so the type is the assertion.
+    assert isinstance(returns.get("respond-1"), dict), (
+        "the capability never offered respond_to_notification, so the agent "
+        f"could not close a question it was holding: {returns.get('respond-1')!r}"
+    )
+    assert returns["respond-1"]["success"] is True, returns["respond-1"]
+
+    # The durable record, not the tool's own word for it.
+    closed = await authenticated_client.get(f"/pods/{pod_id}/notifications")
+    assert closed.status_code == status.HTTP_200_OK, closed.text
+    row = next(item for item in closed.json()["items"] if item["id"] == notification_id)
+    assert row["status"] == "RESPONDED"
+    assert row["response_summary"] == "Shipped the importer and reviewed two PRs."
+    assert row["awaiting_response"] is False
+
+
+async def test_scripted_connector_tools_reach_a_real_agent_run(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    db_session,
+    e2e_settings,
+    worker,
+):
+    """The connector discovery tools, driven from a conversation.
+
+    All four connector tools were tested only by calling the coroutines
+    directly with a hand-built run context
+    (`connectors/tests/e2e/test_agent_connector_toolset_e2e.py`) -- no
+    conversation, no `AgentRun`, no toolset assembly. So the half that could
+    break silently was the half nobody exercised: that `CONNECTORS` survives
+    `RunToolAssembler`, becomes a capability, and arrives at the tool with deps
+    carrying the run's organization.
+
+    That is what this covers, and only that. `run_connector_operation` needs a
+    live MCP server to say anything true, and the connectors module already
+    stands one up; duplicating it here would buy a slower copy of a better test.
+    """
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.api.dependencies import get_connector_service
+    from app.modules.connectors.domain.auth_config import AuthConfigSource
+
+    await _seed_connector_with_operation(db_session)
+    service = get_connector_service(SqlAlchemyUnitOfWork(db_session))
+    install = await service.create_auth_config(
+        user_id=UUID(str(fixed_test_user["id"])),
+        organization_id=UUID(str(fixed_test_org["id"])),
+        connector_id="e2e-mail",
+        config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+        config={},
+        name=f"mail-{uuid4().hex[:8]}",
+    )
+    await db_session.commit()
+
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"connectors_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Find the connector operation.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["CONNECTORS"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call("list_connectors", {}, tool_call_id="list-1"),
+        script_tool_call(
+            "search_connector_operations",
+            {"auth_config": install.name, "query": "email"},
+            tool_call_id="search-1",
+        ),
+        script_tool_call(
+            "describe_connector_operation",
+            {"auth_config": install.name, "operation": "send_email"},
+            tool_call_id="describe-1",
+        ),
+        script_text("Found what I needed."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Connector discovery",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client, pod_id, conversation_id, "What can you send mail with?"
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    # Each of the three must be a result, not the "Unknown tool name" string a
+    # toolset that never reached the run would produce.
+    for call_id in ("list-1", "search-1", "describe-1"):
+        assert isinstance(returns.get(call_id), dict), returns.get(call_id)
+
+    # These tools report failure as `{"error": ..., "message": ...}` rather
+    # than a success flag, so the absence of `error` is the success assertion.
+    listed = returns["list-1"]
+    assert "error" not in listed, listed
+    assert any(
+        item.get("auth_config") == install.name for item in listed.get("items", [])
+    ), f"the run's own organization's install is missing: {listed}"
+
+    found = returns["search-1"]
+    assert "error" not in found, found
+    assert any(item.get("name") == "send_email" for item in found.get("items", [])), (
+        found
+    )
+
+    described = returns["describe-1"]
+    assert "error" not in described, described
+    assert described.get("input_schema"), f"the schema never came back: {described}"
+
+
+async def _seed_connector_with_operation(db_session) -> None:
+    """A catalog entry an install can point at, with no provider behind it."""
+    from app.modules.connectors.infrastructure.models.connector import Connector
+    from app.modules.connectors.infrastructure.models.connector_operation import (
+        ConnectorOperation,
+    )
+
+    db_session.add(
+        Connector(
+            id="e2e-mail",
+            title="E2E Mail",
+            description="A connector for the agent-run journey.",
+            kinds=[{"kind": "package", "auth_scheme": "NOAUTH"}],
+            is_active=True,
+        )
+    )
+    db_session.add(
+        ConnectorOperation(
+            id="e2e-mail:send_email",
+            connector_id="e2e-mail",
+            name="send_email",
+            provider_operation_name="SEND_EMAIL",
+            display_name="Send Email",
+            description="Send an email message to one or more recipients.",
+            input_schema={
+                "type": "object",
+                "properties": {"to": {"type": "string"}},
+                "required": ["to"],
+            },
+            output_schema={"type": "object"},
+        )
+    )
+    await db_session.commit()
+
+
+async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    db_session,
+    e2e_settings,
+    worker,
+):
+    """`submit_workflow_form` closing a real FORM wait, through an agent run.
+
+    The HTTP route this shares a service with is covered
+    (`test_a_workflow_form_assignment_notifies_and_closes_on_submit`); the tool
+    was not covered anywhere. It is not in any grantable toolset either --
+    `OpenNotificationsCapability` injects it, and only into the conversation the
+    notification was delivered to -- so nothing in the agent suite could reach
+    it.
+
+    The run and node are deliberately *not* tool arguments: they are read from
+    the notification (`notification_form_action`), because letting a recipient's
+    agent name them would let it submit against any run whose ids it could
+    guess. So the agent passes only the id of the ask and the values, which is
+    what this drives.
+    """
+    from sqlalchemy import select, update
+
+    from app.modules.agent_surfaces.infrastructure.models import NotificationModel
+    from app.modules.identity.infrastructure.models.organization_models import (
+        OrganizationMember,
+    )
+    from app.modules.pod.infrastructure.models.pod_models import PodMember
+
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+
+    member_id = (
+        await db_session.execute(
+            select(PodMember.id)
+            .join(
+                OrganizationMember,
+                OrganizationMember.id == PodMember.organization_member_id,
+            )
+            .where(
+                PodMember.pod_id == UUID(pod_id),
+                OrganizationMember.user_id == UUID(str(fixed_test_user["id"])),
+            )
+        )
+    ).scalar_one()
+
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows",
+        json={
+            "name": "expense-approval",
+            "start": {"type": "MANUAL"},
+            "mode": "GLOBAL",
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    workflow_name = created.json()["name"]
+
+    graph = await authenticated_client.put(
+        f"/pods/{pod_id}/workflows/{workflow_name}/graph",
+        json={
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "approve",
+                    "type": "FORM",
+                    "label": "Approve the expense",
+                    "config": {
+                        "assignee_pod_member_id": str(member_id),
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"approved": {"type": "boolean"}},
+                            "required": ["approved"],
+                        },
+                    },
+                },
+                {"id": "end", "type": "END"},
+            ],
+            "edges": [{"id": "e1", "source": "approve", "target": "end"}],
+        },
+    )
+    assert graph.status_code == status.HTTP_200_OK, graph.text
+
+    run = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows/{workflow_name}/runs"
+    )
+    assert run.status_code == status.HTTP_201_CREATED, run.text
+    run_id = run.json()["id"]
+
+    inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
+    assert inbox.status_code == status.HTTP_200_OK, inbox.text
+    notification = next(
+        item
+        for item in inbox.json()["items"]
+        if item["origin_kind"] == "WORKFLOW_FORM" and item["origin_id"] == run_id
+    )
+    assert notification["responds_through_action"] is True
+
+    agent_name = f"formfiller_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Fill in what they tell you.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            # Empty: the tool must arrive from the capability, not a grant.
+            "toolsets": [],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "submit_workflow_form",
+            {
+                "notification_id": notification["id"],
+                "inputs": {"approved": True},
+            },
+            tool_call_id="form-1",
+        ),
+        script_text("Submitted."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Expense approval",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    # What a delivery leaves behind; without it the capability never fires.
+    await db_session.execute(
+        update(NotificationModel)
+        .where(NotificationModel.id == UUID(notification["id"]))
+        .values(delivery_conversation_id=UUID(conversation_id))
+    )
+    await db_session.commit()
+
+    events = await _send_message(
+        authenticated_client, pod_id, conversation_id, "Yes, approve it."
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    assert isinstance(returns.get("form-1"), dict), (
+        f"the capability never offered submit_workflow_form: {returns.get('form-1')!r}"
+    )
+    assert returns["form-1"]["success"] is True, returns["form-1"]
+
+    # The durable record on both sides: the ask is closed and the run moved on.
+    after = await authenticated_client.get(f"/pods/{pod_id}/notifications")
+    closed = next(
+        item for item in after.json()["items"] if item["id"] == notification["id"]
+    )
+    assert closed["status"] == "RESPONDED"
+    assert closed["awaiting_response"] is False

@@ -69,6 +69,6 @@ def execute_approval_jobs_inline(monkeypatch, request):
         approval_reconciliation, "queue_approval_reconciliation", _inline
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_service.queue_approval_reconciliation",
+        "app.modules.agent.services.conversation_approvals.queue_approval_reconciliation",
         _inline,
     )

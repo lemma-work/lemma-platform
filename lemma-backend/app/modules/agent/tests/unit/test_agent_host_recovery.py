@@ -22,8 +22,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCommandState,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure import agent_host_recovery
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host import recovery
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
 )
 from app.modules.agent.infrastructure.runtime_models import (
@@ -126,9 +126,7 @@ class _ExpireSession:
 async def test_expire_unaccepted_run_returns_none_when_lease_missing() -> None:
     session = _ExpireSession(lease=None)
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=uuid4(), now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=uuid4(), now=NOW)
 
     assert result is None
     assert session.flushed is False
@@ -143,9 +141,7 @@ async def test_expire_unaccepted_run_returns_none_when_already_accepted() -> Non
     )
     session = _ExpireSession(lease=lease)
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is None
     assert session.flushed is False
@@ -159,9 +155,7 @@ async def test_expire_unaccepted_run_returns_none_when_not_yet_expired() -> None
     )
     session = _ExpireSession(lease=lease)
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is None
     assert session.flushed is False
@@ -175,9 +169,7 @@ async def test_expire_unaccepted_run_returns_none_for_non_pre_dispatch_state() -
     )
     session = _ExpireSession(lease=lease)
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is None
     assert session.flushed is False
@@ -196,9 +188,7 @@ async def test_expire_unaccepted_run_times_out_queued_for_host() -> None:
     )
     session = _ExpireSession(lease=lease, commands=[stale_command])
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is AgentHostRunState.FAILED
     assert lease.state == AgentHostRunState.FAILED.value
@@ -221,9 +211,7 @@ async def test_expire_unaccepted_run_times_out_leased_as_dispatch_unknown() -> N
     )
     session = _ExpireSession(lease=lease, commands=[])
 
-    result = await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is AgentHostRunState.DISPATCH_UNKNOWN
     assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
@@ -242,9 +230,7 @@ async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight()
     )
     session = _ExpireSession(lease=lease, commands=[])
 
-    await agent_host_recovery.expire_unaccepted_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    await recovery.expire_unaccepted_run(session, run_id=lease.run_id, now=NOW)
 
     assert len(session.execute_calls) == 1
     sql = _compile(session.execute_calls[0])
@@ -259,24 +245,43 @@ async def test_expire_unaccepted_run_command_query_targets_start_run_in_flight()
 
 
 class _ReconcileRunSession:
-    def __init__(self, lease: AgentHostRunLeaseModel | None) -> None:
+    def __init__(
+        self,
+        lease: AgentHostRunLeaseModel | None,
+        *,
+        cancel_already_queued: bool = False,
+    ) -> None:
         self.lease = lease
         self.flushed = False
+        self.added: list[object] = []
+        self._cancel_already_queued = cancel_already_queued
 
     async def get(self, model, pk, *, with_for_update=False):
         return self.lease
 
+    async def scalar(self, _statement):
+        """Answers `cancel_already_queued`, the only scalar this path runs."""
+        return self._cancel_already_queued
+
+    def add(self, obj):
+        self.added.append(obj)
+
     async def flush(self):
         self.flushed = True
+
+    def queued_cancels(self) -> list[object]:
+        return [
+            command
+            for command in self.added
+            if getattr(command, "kind", None) == AgentHostCommandKind.CANCEL_RUN.value
+        ]
 
 
 @pytest.mark.asyncio
 async def test_reconcile_expired_run_returns_none_when_lease_missing() -> None:
     session = _ReconcileRunSession(lease=None)
 
-    result = await agent_host_recovery.reconcile_expired_run(
-        session, run_id=uuid4(), now=NOW
-    )
+    result = await recovery.reconcile_expired_run(session, run_id=uuid4(), now=NOW)
 
     assert result is None
     assert session.flushed is False
@@ -291,9 +296,7 @@ async def test_reconcile_expired_run_leaves_unexpired_lease_untouched() -> None:
     )
     session = _ReconcileRunSession(lease=lease)
 
-    result = await agent_host_recovery.reconcile_expired_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is lease
     assert lease.state == AgentHostRunState.RUNNING.value
@@ -310,9 +313,7 @@ async def test_reconcile_expired_run_leaves_terminal_lease_untouched() -> None:
     )
     session = _ReconcileRunSession(lease=lease)
 
-    result = await agent_host_recovery.reconcile_expired_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is lease
     assert lease.state == AgentHostRunState.FAILED.value
@@ -329,9 +330,7 @@ async def test_reconcile_expired_run_leaves_unaccepted_lease_untouched() -> None
     )
     session = _ReconcileRunSession(lease=lease)
 
-    result = await agent_host_recovery.reconcile_expired_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is lease
     assert lease.state == AgentHostRunState.LEASED.value
@@ -347,7 +346,7 @@ async def test_reconcile_expired_run_moves_running_lease_into_recovering() -> No
     )
     session = _ReconcileRunSession(lease=lease)
 
-    result = await agent_host_recovery.reconcile_expired_run(
+    result = await recovery.reconcile_expired_run(
         session,
         run_id=lease.run_id,
         now=NOW,
@@ -374,9 +373,7 @@ async def test_reconcile_expired_run_moves_recovering_lease_into_dispatch_unknow
     )
     session = _ReconcileRunSession(lease=lease)
 
-    result = await agent_host_recovery.reconcile_expired_run(
-        session, run_id=lease.run_id, now=NOW
-    )
+    result = await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
 
     assert result is lease
     assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
@@ -403,7 +400,7 @@ class _ScalarSession:
 async def test_cancel_already_queued_true_when_a_live_cancel_exists() -> None:
     session = _ScalarSession(True)
 
-    result = await agent_host_recovery.cancel_already_queued(
+    result = await recovery.cancel_already_queued(
         session, run_id=uuid4(), lease_epoch=3
     )
 
@@ -414,7 +411,7 @@ async def test_cancel_already_queued_true_when_a_live_cancel_exists() -> None:
 async def test_cancel_already_queued_false_when_none_exists() -> None:
     session = _ScalarSession(None)
 
-    result = await agent_host_recovery.cancel_already_queued(
+    result = await recovery.cancel_already_queued(
         session, run_id=uuid4(), lease_epoch=3
     )
 
@@ -426,9 +423,7 @@ async def test_cancel_already_queued_is_fenced_on_run_and_lease_epoch() -> None:
     run_id = uuid4()
     session = _ScalarSession(False)
 
-    await agent_host_recovery.cancel_already_queued(
-        session, run_id=run_id, lease_epoch=7
-    )
+    await recovery.cancel_already_queued(session, run_id=run_id, lease_epoch=7)
 
     assert len(session.scalar_calls) == 1
     sql = _compile(session.scalar_calls[0])
@@ -472,7 +467,7 @@ class _AbandonedSession:
 async def test_cancel_abandoned_host_runs_with_no_matches_returns_empty() -> None:
     session = _AbandonedSession(leases=[])
 
-    result = await agent_host_recovery.cancel_abandoned_host_runs(session, now=NOW)
+    result = await recovery.cancel_abandoned_host_runs(session, now=NOW)
 
     assert result == []
     assert session.added == []
@@ -491,7 +486,7 @@ async def test_cancel_abandoned_host_runs_queues_one_cancel_per_orphaned_lease()
     )
     session = _AbandonedSession(leases=[lease_a, lease_b])
 
-    result = await agent_host_recovery.cancel_abandoned_host_runs(session, now=NOW)
+    result = await recovery.cancel_abandoned_host_runs(session, now=NOW)
 
     assert result == [lease_a.host_id, lease_b.host_id]
     assert len(session.added) == 2
@@ -519,7 +514,7 @@ async def test_cancel_abandoned_host_runs_does_not_dedupe_repeated_hosts() -> No
     lease_b = _lease(host_id=host_id, lease_expires_at=NOW)
     session = _AbandonedSession(leases=[lease_a, lease_b])
 
-    result = await agent_host_recovery.cancel_abandoned_host_runs(session, now=NOW)
+    result = await recovery.cancel_abandoned_host_runs(session, now=NOW)
 
     assert result == [host_id, host_id]
 
@@ -528,7 +523,7 @@ async def test_cancel_abandoned_host_runs_does_not_dedupe_repeated_hosts() -> No
 async def test_cancel_abandoned_host_runs_query_shape() -> None:
     session = _AbandonedSession(leases=[])
 
-    await agent_host_recovery.cancel_abandoned_host_runs(session, now=NOW, limit=17)
+    await recovery.cancel_abandoned_host_runs(session, now=NOW, limit=17)
 
     assert len(session.execute_calls) == 1
     sql = _compile(session.execute_calls[0])
@@ -565,7 +560,7 @@ class _ReconcileLeasesSession:
 async def test_reconcile_expired_leases_returns_zero_with_no_expired_leases() -> None:
     session = _ReconcileLeasesSession(run_ids=[])
 
-    result = await agent_host_recovery.reconcile_expired_leases(session, now=NOW)
+    result = await recovery.reconcile_expired_leases(session, now=NOW)
 
     assert result == 0
 
@@ -591,12 +586,10 @@ async def test_reconcile_expired_leases_sweeps_expire_and_reconcile_per_run(
         reconcile_calls.append((run_id, now))
         return None
 
-    monkeypatch.setattr(agent_host_recovery, "expire_unaccepted_run", fake_expire)
-    monkeypatch.setattr(agent_host_recovery, "reconcile_expired_run", fake_reconcile)
+    monkeypatch.setattr(recovery, "expire_unaccepted_run", fake_expire)
+    monkeypatch.setattr(recovery, "reconcile_expired_run", fake_reconcile)
 
-    result = await agent_host_recovery.reconcile_expired_leases(
-        session, now=NOW, limit=50
-    )
+    result = await recovery.reconcile_expired_leases(session, now=NOW, limit=50)
 
     assert result == 3
     assert [run_id for run_id, _ in expire_calls] == run_ids
@@ -609,7 +602,7 @@ async def test_reconcile_expired_leases_sweeps_expire_and_reconcile_per_run(
 async def test_reconcile_expired_leases_query_shape() -> None:
     session = _ReconcileLeasesSession(run_ids=[])
 
-    await agent_host_recovery.reconcile_expired_leases(session, now=NOW, limit=64)
+    await recovery.reconcile_expired_leases(session, now=NOW, limit=64)
 
     assert len(session.execute_calls) == 1
     sql = _compile(session.execute_calls[0])
@@ -637,7 +630,7 @@ class _CleanupSession:
 async def test_cleanup_retained_state_issues_three_scoped_deletes_and_flushes() -> None:
     session = _CleanupSession()
 
-    await agent_host_recovery.cleanup_retained_state(session, now=NOW)
+    await recovery.cleanup_retained_state(session, now=NOW)
 
     assert len(session.execute_calls) == 3
     assert session.flushed is True
@@ -661,7 +654,76 @@ async def test_cleanup_retained_state_defaults_now_when_omitted() -> None:
     session = _CleanupSession()
 
     # Should not raise, and should still run all three deletes using utcnow().
-    await agent_host_recovery.cleanup_retained_state(session)
+    await recovery.cleanup_retained_state(session)
 
     assert len(session.execute_calls) == 3
     assert session.flushed is True
+
+
+class TestGivingUpOnARunTellsTheHostToStop:
+    """A run Lemma terminalizes must still be cancelled on the host.
+
+    Lemma waits 90s for a heartbeat plus 120s of recovery grace, then writes
+    DISPATCH_UNKNOWN and finalizes the agent run FAILED. The host, meanwhile, is
+    a laptop that woke up with its ACP turn still alive -- and nothing told it
+    to stop. `enqueue_cancel` refuses a terminal lease and
+    `cancel_abandoned_host_runs` only sweeps non-terminal ones, so once the
+    state flipped there was no path left. The agent kept calling pod tools until
+    its own run deadline, up to fifty minutes, against a run reported failed;
+    its checkpoints were dropped silently on reconnect, so it never found out.
+
+    The cancel is therefore queued *before* the state becomes terminal, which is
+    the only moment both facts are available.
+    """
+
+    @staticmethod
+    def _expired_recovering_lease():
+        return _lease(
+            state=AgentHostRunState.RECOVERING,
+            accepted_at=NOW - timedelta(seconds=300),
+            lease_expires_at=NOW - timedelta(seconds=1),
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminalizing_queues_exactly_one_cancel(self) -> None:
+        lease = self._expired_recovering_lease()
+        session = _ReconcileRunSession(lease=lease)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
+        cancels = session.queued_cancels()
+        assert len(cancels) == 1, "the host was never told to stop"
+        assert cancels[0].run_id == lease.run_id
+        # Fenced on the epoch: a cancel against a superseded lease says nothing
+        # about the run the host is executing now.
+        assert cancels[0].lease_epoch == lease.lease_epoch
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_pile_on_a_cancel_already_in_flight(self) -> None:
+        lease = self._expired_recovering_lease()
+        session = _ReconcileRunSession(lease=lease, cancel_already_queued=True)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.DISPATCH_UNKNOWN.value
+        assert session.queued_cancels() == []
+
+    @pytest.mark.asyncio
+    async def test_the_first_expiry_only_starts_recovery_and_cancels_nothing(
+        self,
+    ) -> None:
+        """A RUNNING lease that lapses gets a grace period, not a gravestone."""
+        lease = _lease(
+            state=AgentHostRunState.RUNNING,
+            accepted_at=NOW - timedelta(seconds=120),
+            lease_expires_at=NOW - timedelta(seconds=1),
+        )
+        session = _ReconcileRunSession(lease=lease)
+
+        await recovery.reconcile_expired_run(session, run_id=lease.run_id, now=NOW)
+
+        assert lease.state == AgentHostRunState.RECOVERING.value
+        assert session.queued_cancels() == [], (
+            "cancelling here would kill a host that is merely slow to heartbeat"
+        )

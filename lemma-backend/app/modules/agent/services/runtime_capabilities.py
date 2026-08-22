@@ -16,7 +16,7 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 
 
-def _with_harness_vision(
+def with_harness_vision(
     model: RuntimeModelCatalogEntry | None,
     *,
     harness_sees: bool,
@@ -37,14 +37,14 @@ def _with_harness_vision(
     )
 
 
-def _unselected_capabilities(
+def unselected_capabilities(
     profile: AgentRuntimeProfile,
     *,
     harness_sees: bool,
 ) -> list[RuntimeModelCapability]:
     """What the runtime can do when no catalog entry is selected.
 
-    An Agent Host profile routinely pins no model: `_agent_host_model_catalog`
+    An Agent Host profile routinely pins no model: `agent_host_model_catalog`
     documents an empty catalog as meaning "let the harness use its own default",
     and a populated catalog with no chosen entry means the same. Either way
     `_selected_model` returns None, and reading capabilities off that None was

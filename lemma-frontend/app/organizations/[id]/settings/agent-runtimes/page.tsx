@@ -1,65 +1,50 @@
 'use client';
 
-import { use } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { use, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { ModelsSettings } from '@/components/agents/models-settings';
 import { InlineLoader } from '@/components/brand/loader';
-import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
-import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
-import { ProductIcon } from '@/components/pod/product-icon';
-import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
-import { normalizeInternalReturnPath } from '@/lib/navigation/settings-return';
-import { useOrganizationDetails } from '@/lib/hooks/use-organizations';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
+import { useAccessiblePods } from '@/lib/hooks/use-pods';
 
+/**
+ * Models moved into the pod. This route only forwards.
+ *
+ * A provider key is still stored against the organization — one key, billed and
+ * rotated once — but that is where the rows live, not where they are read. The
+ * page that reads them is the pod's Models tab, because every question you
+ * bring to it ("what does this chat run on", "why can't this agent reach my
+ * laptop") is asked from inside a pod. Kept as a redirect rather than deleted
+ * so bookmarks and any in-flight link land somewhere useful.
+ */
 export default function OrganizationAgentRuntimesPage({ params }: { params: Promise<{ id: string }> }) {
     return (
         <ProtectedRoute>
-            <OrganizationAgentRuntimesPageContent params={params} />
+            <OrganizationAgentRuntimesRedirect params={params} />
         </ProtectedRoute>
     );
 }
 
-function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id: string }> }) {
+function OrganizationAgentRuntimesRedirect({ params }: { params: Promise<{ id: string }> }) {
     const { id: organizationId } = use(params);
-    const searchParams = useSearchParams();
-    const returnPath = normalizeInternalReturnPath(searchParams.get('returnTo'));
-    const { data: organization } = useOrganizationDetails(organizationId);
-    // ModelsSettings reads the management listing itself. This catalog query is
-    // what the rest of the app (the composer's model picker) shares, so keep
-    // refreshing it alongside — a rename here changes what that picker offers.
-    const {
-        data: runtimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(organizationId);
+    const router = useRouter();
+    const { data, isLoading } = useAccessiblePods();
+
+    // The most recently touched pod in this organization — the same one the
+    // sidebar would open. An organization with no pod yet has no model to run
+    // anywhere, so home (where a pod is created) is the honest destination.
+    const pods = data.groups.find((group) => group.organization.id === organizationId)?.pods ?? [];
+    const target = pods[0] ? podModelsHref(pods[0].id) : '/home';
+
+    useEffect(() => {
+        if (isLoading) return;
+        router.replace(target);
+    }, [isLoading, router, target]);
 
     return (
-        <PlainPageShell
-            title="Models"
-            icon={<ProductIcon kind="settings" size="sm" />}
-            backHref={returnPath || '/home'}
-            backLabel={returnPath ? 'Back to pod' : 'Home'}
-            meta={organization?.name || 'Organization'}
-            tabs={<OrganizationSettingsNav organizationId={organizationId} />}
-            contentWidthClassName="max-w-6xl"
-            contentAlign="left"
-            contentClassName="pb-16 sm:pb-20"
-        >
-            <section className="office-arrive">
-                {isLoadingRuntimeCatalog && !runtimeCatalog ? (
-                    <div className="mb-3 flex h-10 items-center gap-2 rounded-md px-2 text-sm text-[var(--text-tertiary)]">
-                        <InlineLoader size="xs" label="Loading models" />
-                    </div>
-                ) : null}
-                <ModelsSettings
-                    organizationId={organizationId}
-                    onRefresh={() => {
-                        void refetchRuntimeCatalog();
-                    }}
-                />
-            </section>
-        </PlainPageShell>
+        <div className="flex min-h-[60vh] items-center justify-center">
+            <InlineLoader label="Opening models" />
+        </div>
     );
 }

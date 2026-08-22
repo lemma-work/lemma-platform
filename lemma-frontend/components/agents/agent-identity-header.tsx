@@ -22,6 +22,7 @@ import {
 import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { usePod } from '@/lib/hooks/use-pods';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
 import { formatAgentName } from '@/lib/utils/agents';
 import type { Agent } from '@/lib/types';
 
@@ -152,7 +153,7 @@ export function AgentIdentityHeader({
                         title="Agent model"
                         description="The model this agent runs on, unless overridden in a conversation."
                         scopeHint="Default for this agent"
-                        manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+                        manageHref={podModelsHref(podId)}
                     />
                 </div>
 

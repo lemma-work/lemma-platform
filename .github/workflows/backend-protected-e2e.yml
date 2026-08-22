@@ -38,8 +38,6 @@ jobs:
           E2E_LLM_MODE: "mock"
           LEMMA_RUN_SURFACE_LIVE_E2E: "1"
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
-          LEMMA_E2E_MODEL_MAX_COST_USD: "1.00"
-          LEMMA_E2E_MODEL_TIMEOUT_SECONDS: "120"
       - name: Publish commit-linked evidence
         if: always()
         uses: actions/upload-artifact@v4

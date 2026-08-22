@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationMessage } from "../types.js";
 
-type RuntimeConversationMessage = ConversationMessage & { conversation_id?: string };
+type RuntimeConversationMessage = ConversationMessage & {
+  conversation_id?: string;
+  /** Set when this message arrived as the echo of a provisional turn. */
+  optimistic_id?: string;
+};
 
 export interface UseAssistantRuntimeOptions {
   conversationId?: string | null;
@@ -29,9 +33,21 @@ export interface UseAssistantRuntimeResult {
   ) => ConversationMessage;
   replaceLoadedMessages: (messages: ConversationMessage[]) => void;
   mergeMessages: (messages: ConversationMessage[]) => void;
+  /**
+   * Stamp every message still waiting for a conversation with this one. An
+   * optimistic turn can be appended before its conversation exists, and this is
+   * what settles it once the create returns.
+   */
+  adoptPendingMessages: (conversationId: string) => void;
+  /**
+   * Forget messages still waiting for a conversation. Called when the send that
+   * appended them failed, so an unsent turn cannot leak into the next
+   * conversation opened — nothing else in the store is touched.
+   */
+  dropPendingMessages: () => void;
   /** Whether this conversation's transcript is already in the store. */
   hasConversationMessages: (conversationId: string | null | undefined) => boolean;
-  clear: () => void;
+  clear: (options?: { keepPending?: boolean }) => void;
 }
 
 /**
@@ -64,7 +80,15 @@ function upsertRuntimeMessage(
   const directIndex = next.findIndex((message) => message.id === incoming.id);
 
   if (directIndex >= 0) {
-    next[directIndex] = incoming;
+    const held = next[directIndex];
+    // A later write to the same message must not forget which provisional turn
+    // it took the place of. The session mirrors its own view of the transcript
+    // over the store's when a run ends, and its copy has never carried the
+    // link — so overwriting wholesale dropped it, changed the turn's identity,
+    // and remounted the turn exactly as the agent's answer landed.
+    next[directIndex] = held.optimistic_id && !incoming.optimistic_id
+      ? { ...incoming, optimistic_id: held.optimistic_id }
+      : incoming;
     return next;
   }
 
@@ -94,7 +118,12 @@ function upsertRuntimeMessage(
       });
 
       if (optimisticIndex >= 0) {
-        next[optimisticIndex] = incoming;
+        // The echo takes the provisional turn's place *and* remembers whose
+        // place it took, so whoever keys turns can keep them the same one.
+        next[optimisticIndex] = {
+          ...incoming,
+          optimistic_id: next[optimisticIndex].id,
+        };
         return next;
       }
     }
@@ -205,10 +234,35 @@ export function useAssistantRuntime({
     return optimistic;
   }, [conversationId]);
 
-  const clear = useCallback(() => {
+  const adoptPendingMessages = useCallback((targetConversationId: string) => {
+    setRuntimeMessages((previous) => {
+      if (!previous.some((message) => !message.conversation_id)) return previous;
+      return previous.map((message) => (
+        message.conversation_id
+          ? message
+          : { ...message, conversation_id: targetConversationId }
+      ));
+    });
+  }, []);
+
+  const dropPendingMessages = useCallback(() => {
+    setRuntimeMessages((previous) => {
+      const next = previous.filter((message) => !!message.conversation_id);
+      return next.length === previous.length ? previous : next;
+    });
+  }, []);
+
+  const clear = useCallback((options?: { keepPending?: boolean }) => {
     const dropped = recentConversationIdsRef.current;
     recentConversationIdsRef.current = [];
-    setRuntimeMessages([]);
+    // `keepPending` is for the clear that runs as a conversation is created:
+    // the turn that triggered the create is already on screen and has not been
+    // sent yet, so it is the one thing in the store that is not history.
+    setRuntimeMessages((previous) => (
+      options?.keepPending
+        ? previous.filter((message) => !message.conversation_id)
+        : []
+    ));
     if (dropped.length > 0) {
       onConversationsDroppedRef.current?.(dropped);
     }
@@ -299,6 +353,8 @@ export function useAssistantRuntime({
     appendOptimisticUserMessage,
     replaceLoadedMessages,
     mergeMessages,
+    adoptPendingMessages,
+    dropPendingMessages,
     hasConversationMessages,
     clear,
   };

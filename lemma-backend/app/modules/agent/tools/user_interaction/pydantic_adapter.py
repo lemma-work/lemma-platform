@@ -153,6 +153,23 @@ async def _maybe_deliver_to_surface(
     )
 
 
+def surface_can_pause_for_a_person(deps: BaseAgentContext) -> bool:
+    """Whether this conversation can hold a run open while somebody answers.
+
+    Email cannot. There is no card to tap and no thread to wait on, so pausing
+    strands the run in WAITING with nothing delivered — the person never learns
+    they were asked. Every pausing tool has to fail fast instead and say what to
+    do in the reply, which is why this is a shared predicate rather than a check
+    each tool remembers to copy. It was copied twice already.
+
+    The *message* stays with each tool: what to do instead of pausing depends on
+    what was being asked.
+    """
+    from app.composition.agent_surface_runtime import platform_is_email
+
+    return not platform_is_email(getattr(deps, "surface_platform", None))
+
+
 async def request_approval(
     ctx: RunContext[BaseAgentContext],
     tool_name: str,
@@ -182,7 +199,6 @@ async def request_approval(
             conversation instead of re-prompting.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
-    del permission_ids  # read from the persisted tool call on resolution
     deps = ctx.deps
     if deps.agent_run_id is None:
         return RequestApprovalResponse(
@@ -207,7 +223,10 @@ async def request_approval(
                 error="request_approval requires a durable tool call id.",
             )
         auto_approved = await _run_if_exact_match_already_approved(
-            deps=deps, tool_name=tool_name, args=args
+            deps=deps,
+            tool_name=tool_name,
+            args=args,
+            permission_ids=permission_ids,
         )
         if auto_approved is not None:
             return auto_approved
@@ -216,12 +235,7 @@ async def request_approval(
             parked_tool_call_id=ctx.tool_call_id,
             message=f"Waiting for the user's decision on {tool_name}.",
         )
-    # Email surfaces are non-interactive — they can't pause for an approve/deny
-    # reply, and pausing would strand the run in WAITING with nothing delivered.
-    # Fail fast so the model proceeds and delivers via the email reply tool.
-    from app.composition.agent_surface_runtime import platform_is_email
-
-    if platform_is_email(getattr(deps, "surface_platform", None)):
+    if not surface_can_pause_for_a_person(deps):
         return RequestApprovalResponse(
             success=False,
             interaction_fallback=True,
@@ -240,7 +254,10 @@ async def request_approval(
         )
 
     auto_approved = await _run_if_exact_match_already_approved(
-        deps=deps, tool_name=tool_name, args=args
+        deps=deps,
+        tool_name=tool_name,
+        args=args,
+        permission_ids=permission_ids,
     )
     if auto_approved is not None:
         return auto_approved
@@ -260,6 +277,7 @@ async def _run_if_exact_match_already_approved(
     deps: BaseAgentContext,
     tool_name: str,
     args: JsonObject,
+    permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse | None:
     """Skip the pause when this exact call was approved for session earlier.
 
@@ -269,6 +287,16 @@ async def _run_if_exact_match_already_approved(
     exists for them — so this is the sole place their session-approval reuse
     can be honored. See session_approvals.exact_command_permission_id for why
     the match is exact-args-only, never a prefix.
+
+    ``permission_ids`` are recorded here as well, and that is the whole of
+    DEV-ACCESS-002. The exact-command key is tool-name-plus-args, so a second
+    denial of the *same* call for a *different* permission still matches it and
+    takes this path -- and the path used to return before anything recorded the
+    new permission. Reading a table needs two permissions and the authorizer
+    stops at the first missing one, so the agent looped: approve, still denied,
+    approve, still denied, forever. Changing one argument broke the exact match
+    and made the identical sequence succeed, which is what made it look like
+    magic rather than a bug.
     """
     from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
@@ -279,13 +307,32 @@ async def _run_if_exact_match_already_approved(
     workload_actor_id = (
         f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
     )
-    approved = await has_session_approval(
-        session_id=str(deps.conversation_id),
-        workload_actor_id=workload_actor_id,
-        permission_id=exact_command_permission_id(tool_name, args),
-    )
-    if not approved:
-        return None
+
+    # Every permission this call needs must ALREADY be granted -- the exact
+    # command key on its own is not enough. `permission_ids` is a tool argument,
+    # so it is whatever the model wrote, and a model that has read a poisoned
+    # web page or document writes whatever that page told it to. Recording them
+    # here would let one approval of `exec_command echo hi` be replayed with
+    # `permission_ids=["pod.delete"]` and silently mint that grant, with no
+    # pause and no card: the user approved a harmless command and lost the pod.
+    #
+    # Requiring instead of widening is also what actually fixes the
+    # approve-then-still-denied loop (DEV-ACCESS-002). The loop happened because
+    # this path SWALLOWED a second, differently-scoped request. Falling through
+    # when something is missing means the user is asked exactly once per new
+    # permission, and `record_session_approvals` writes it with a human behind
+    # it.
+    needed = [
+        exact_command_permission_id(tool_name, args),
+        *(p for p in (permission_ids or []) if isinstance(p, str) and p),
+    ]
+    for permission_id in needed:
+        if not await has_session_approval(
+            session_id=str(deps.conversation_id),
+            workload_actor_id=workload_actor_id,
+            permission_id=permission_id,
+        ):
+            return None
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -373,12 +420,7 @@ async def ask_user(
             parked_tool_call_id=ctx.tool_call_id,
             message="Waiting for the user's answer.",
         )
-    # Email surfaces are non-interactive — they can't pause for an answer, and
-    # pausing would strand the run in WAITING with nothing delivered. Fail fast so
-    # the model inlines the question (or picks a sensible default) and continues.
-    from app.composition.agent_surface_runtime import platform_is_email
-
-    if platform_is_email(getattr(deps, "surface_platform", None)):
+    if not surface_can_pause_for_a_person(deps):
         return AskUserResponse(
             success=False,
             interaction_fallback=True,

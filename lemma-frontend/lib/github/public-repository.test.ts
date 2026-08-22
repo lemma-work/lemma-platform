@@ -42,6 +42,89 @@ Useful detail.
         expect(result.body).not.toContain('# Research Desk');
     });
 
+    // The real gymmit README, reduced: its only line starting `# ` is a shell
+    // comment inside a fence. That line became the page title on lemma.work, and
+    // was then deleted out of the install instructions it belonged to.
+    it('does not read a title out of a fenced code block', () => {
+        const markdown = [
+            '<p align="center">',
+            '  <img src="./docs/demo.webp" alt="Demo" width="300" />',
+            '</p>',
+            '',
+            '<h1 align="center">Gymmit</h1>',
+            '',
+            '## Run your own',
+            '',
+            '```bash',
+            'cp apps/gymmit/source/.env.example apps/gymmit/source/.env.local',
+            '# set VITE_LEMMA_API_URL, VITE_LEMMA_AUTH_URL, VITE_LEMMA_POD_ID',
+            'npm run dev',
+            '```',
+        ].join('\n');
+
+        const result = extractReadmePresentation(markdown, 'gymmit');
+
+        expect(result.title).toBe('Gymmit');
+        expect(result.body).toContain(
+            '# set VITE_LEMMA_API_URL, VITE_LEMMA_AUTH_URL, VITE_LEMMA_POD_ID',
+        );
+        // The heading became the title, so it must not also be printed as body
+        // text — `cleanReadmeBody` keeps the contents of tags it strips, which
+        // is how a consumed `<h1>` surfaces as its own literal markup.
+        expect(result.body).not.toContain('<h1');
+        expect(result.body).not.toContain('Gymmit');
+    });
+
+    it('carries the width an author declared for the cover', () => {
+        const result = extractReadmePresentation(
+            '<img src="./docs/phone.png" alt="" width="300" />\n\n## Detail\n\nText.',
+            'gymmit',
+        );
+        expect(result.coverImage).toBe('./docs/phone.png');
+        expect(result.coverMaxWidth).toBe('300px');
+    });
+
+    // `width="100%"` is how a social banner asks for the whole column. Reading
+    // the leading digits off it capped a 1280px banner at 100px.
+    it('reads a percentage width as filling the column, not as pixels', () => {
+        const result = extractReadmePresentation(
+            '<p align="center">\n  <img src="./docs/social-preview.jpg" alt="" width="100%"/>\n</p>\n\n## Detail\n\nText.',
+            'panini',
+        );
+        expect(result.coverImage).toBe('./docs/social-preview.jpg');
+        expect(result.coverMaxWidth).toBe('100%');
+    });
+
+    it('leaves the cap to the caller when the width is a unit it cannot resolve', () => {
+        expect(
+            extractReadmePresentation('<img src="./a.png" width="20em" />', 'x').coverMaxWidth,
+        ).toBeNull();
+        expect(
+            extractReadmePresentation('<img src="./a.png" />', 'x').coverMaxWidth,
+        ).toBeNull();
+        expect(
+            extractReadmePresentation('<img src="./a.png" width="480px" />', 'x').coverMaxWidth,
+        ).toBe('480px');
+    });
+
+    it('keeps a real markdown title even when a fence contains one too', () => {
+        const markdown = [
+            '```sh',
+            '# not the title',
+            '```',
+            '',
+            '# Research Desk',
+            '',
+            'Source-backed research for teams.',
+        ].join('\n');
+
+        const result = extractReadmePresentation(markdown, 'research-desk');
+
+        expect(result.title).toBe('Research Desk');
+        expect(result.body).toContain('# not the title');
+        expect(result.body).not.toContain('# Research Desk');
+    });
+
     it('resolves relative assets and links against the repository branch', () => {
         expect(resolveReadmeAssetUrl('./docs/hero.png', 'acme', 'desk', 'trunk')).toBe(
             'https://raw.githubusercontent.com/acme/desk/trunk/docs/hero.png',

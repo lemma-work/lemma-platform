@@ -14,8 +14,10 @@ from typing import Annotated
 from uuid import UUID, uuid7
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from sqlalchemy.exc import DBAPIError
 
 from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.log.log import get_logger
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -42,14 +44,14 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     effective_agent_host_status,
 )
-from app.modules.agent.infrastructure.agent_host_channels import host_poke_channel
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.channels import host_poke_channel
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
+from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
     AgentHostPairingRejected,
     AgentHostProtocolViolation,
@@ -69,6 +71,8 @@ from app.modules.agent.services.agent_host_auth import (
 
 
 router = APIRouter(tags=["agent_host"])
+
+logger = get_logger(__name__)
 _uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 
 _LONG_POLL_SECONDS = 25.0
@@ -318,6 +322,53 @@ async def self_revoke_agent_host(
     return _host_response(revoked)
 
 
+def _is_deadlock(exc: DBAPIError) -> bool:
+    """Whether Postgres aborted this transaction to break a deadlock (40P01).
+
+    Read off the driver error rather than the message: asyncpg surfaces the
+    SQLSTATE, and matching on text would break the moment a locale or a driver
+    changes.
+    """
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
+
+
+async def _apply_host_control_updates(
+    *,
+    request: AgentHostPollRequest,
+    authorization: str | None,
+) -> tuple[str, AgentHostStatus, UUID, list]:
+    """Authenticate, heartbeat, and take the host's control updates up.
+
+    One transaction, and idempotent as a whole -- which is what lets the caller
+    retry it after a deadlock.
+    """
+    async with _uow_factory() as uow:
+        host = await _authenticated_host(authorization=authorization, uow=uow)
+        host = await AgentHostRepository(uow).mark_seen(
+            host_id=host.id,
+            hello=request.hello,
+            capacity=request.capacity.model_dump(mode="json"),
+        )
+        try:
+            commands = await AgentHostDispatchRepository(uow).poll_commands(
+                host_id=host.id,
+                limit=_MAX_COMMANDS_PER_POLL,
+                acknowledged_command_ids=request.acknowledged_command_ids,
+                checkpoints=request.checkpoints,
+                rejections=request.rejections,
+                available_run_slots=request.capacity.available_runs,
+            )
+        except AgentHostRepositoryError as exc:
+            raise _repository_error(exc) from exc
+        await uow.commit()
+    return (
+        host.protocol_version or AGENT_HOST_PROTOCOL_VERSION,
+        AgentHostStatus(host.status),
+        host.id,
+        commands,
+    )
+
+
 @router.post(
     "/agent-host/poll",
     response_model=AgentHostPollResponse,
@@ -339,28 +390,33 @@ async def poll_agent_host_commands(
 
     # First pass: authenticate, record the heartbeat, and apply the host's
     # acknowledgements, checkpoints, and rejections.
-    async with _uow_factory() as uow:
-        host = await _authenticated_host(authorization=authorization, uow=uow)
-        host = await AgentHostRepository(uow).mark_seen(
-            host_id=host.id,
-            hello=request.hello,
-            capacity=request.capacity.model_dump(mode="json"),
-        )
-        negotiated_protocol = host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
-        host_status = AgentHostStatus(host.status)
-        host_id = host.id
+    #
+    # Retried once on a deadlock. This pass and the five-minute dispatch cron
+    # both walk leases and commands, and the cron's two sweeps were split into
+    # separate transactions precisely so they cannot hold a lease lock across a
+    # command acquisition. That removes the cycle we know about; this catches
+    # one we do not. A deadlock aborts the whole transaction, so the retry
+    # re-runs the block rather than resuming inside it -- which is safe because
+    # everything in it is idempotent: `mark_seen` is a heartbeat write, and
+    # acknowledgements, checkpoints and rejections are all keyed and re-appliable.
+    for attempt in range(2):
         try:
-            commands = await AgentHostDispatchRepository(uow).poll_commands(
-                host_id=host_id,
-                limit=_MAX_COMMANDS_PER_POLL,
-                acknowledged_command_ids=request.acknowledged_command_ids,
-                checkpoints=request.checkpoints,
-                rejections=request.rejections,
-                available_run_slots=request.capacity.available_runs,
+            (
+                negotiated_protocol,
+                host_status,
+                host_id,
+                commands,
+            ) = await _apply_host_control_updates(
+                request=request, authorization=authorization
             )
-        except AgentHostRepositoryError as exc:
-            raise _repository_error(exc) from exc
-        await uow.commit()
+            break
+        except DBAPIError as exc:
+            if attempt or not _is_deadlock(exc):
+                raise
+            logger.warning(
+                "agent.agent_host_controller.poll_deadlock_retried.degraded",
+                exc_info=True,
+            )
 
     # Only a control update that *changed* something is a reason to cut the
     # long poll short. A non-terminal checkpoint is the run's lease heartbeat,

@@ -121,8 +121,7 @@ def _assistant_text_from_event(event: AgentEvent) -> str | None:
     data = event.data
     if not isinstance(data, MessageDraft):
         return None
-    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
-    if role != MessageRole.ASSISTANT.value:
+    if data.role is not MessageRole.ASSISTANT:
         return None
     if data.kind != MessageKind.TEXT:
         return None
@@ -148,8 +147,7 @@ def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
     data = event.data
     if not isinstance(data, MessageDraft):
         return False
-    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
-    if role != MessageRole.ASSISTANT.value or data.kind != MessageKind.TEXT:
+    if data.role is not MessageRole.ASSISTANT or data.kind is not MessageKind.TEXT:
         return False
     raw = (data.text or "").strip()
     return bool(raw) and not strip_thinking_tokens(raw)

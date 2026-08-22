@@ -214,15 +214,15 @@ def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     a bug in a system that was working exactly as designed."""
     import httpx
 
-    from app.modules.agent.services.agent_runner_service import _run_failure_message
+    from app.modules.agent.services.run_finalizer import run_failure_message
     from app.modules.usage.domain.errors import UsageLimitExceededError
 
-    quota = _run_failure_message(UsageLimitExceededError("over limit"))
+    quota = run_failure_message(UsageLimitExceededError("over limit"))
     assert "usage allowance" in quota
     assert "runtime configuration" not in quota
 
-    dropped = _run_failure_message(httpx.ReadError("connection reset"))
+    dropped = run_failure_message(httpx.ReadError("connection reset"))
     assert "Nothing you sent was lost" in dropped
 
-    generic = _run_failure_message(ValueError("something else"))
+    generic = run_failure_message(ValueError("something else"))
     assert "Agent run failed" in generic

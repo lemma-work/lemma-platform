@@ -330,7 +330,7 @@ export default function FunctionDetailPage({
                     aside={canShowTestPanel ? (
                         // The dock is a card on the canvas, like every other
                         // resource page — not a slab bolted to the window edge.
-                        <div className="agent-dock">
+                        <div className="agent-dock agent-dock-single">
                             <FunctionTestPanel
                                 podId={podId}
                                 functionId={functionId}

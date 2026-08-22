@@ -1,11 +1,8 @@
-from typing import Any, List, Dict
-import csv
-import io
+from typing import List
 import re
 
 from app.modules.agent.tools.workspace_entities import (
     PythonExecutionResult,
-    ShellCommandResult,
 )
 
 CHARACTER_LIMIT_STDOUT = 30000
@@ -107,68 +104,3 @@ def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
         execution_count=result.execution_count,
         data=result.data,  # Keep data as is (rich outputs)
     )
-
-
-def trim_shell_command_result(result: ShellCommandResult) -> ShellCommandResult:
-    """Trim the shell command result to remove unnecessary details and limit size"""
-    return ShellCommandResult(
-        success=result.success,
-        exit_code=result.exit_code,
-        stderr=result.stderr[:CHARACTER_LIMIT_STDERR]
-        if result.stderr
-        else None,  # Limit stderr to first 2000 characters
-        stdout=result.stdout[:CHARACTER_LIMIT_STDOUT]
-        if result.stdout
-        else None,  # Limit stdout to first 5000 characters
-        error=result.error[:CHARACTER_LIMIT_OUTPUT]
-        if result.error
-        else None,  # Limit error to first 2000 characters
-        current_working_directory=result.current_working_directory,  # Keep current working directory as is
-    )
-
-
-def convert_to_csv_string(data: List[Dict[str, Any]]) -> str:
-    """
-    Convert a list of dictionaries to a CSV string representation.
-    This is more token-efficient than JSON for tabular data.
-
-    Args:
-        data: List of dictionaries with consistent keys
-
-    Returns:
-        CSV string representation of the data
-    """
-    if not data:
-        return ""
-
-    # Get all unique keys from all dictionaries
-    all_keys = set()
-    for row in data:
-        all_keys.update(row.keys())
-
-    # Sort keys for consistent output
-    fieldnames = sorted(all_keys)
-
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
-
-    # Write header
-    writer.writeheader()
-
-    # Write rows, converting None and datetime to strings
-    for row in data:
-        # Convert all values to strings, handling None and datetime
-        clean_row = {}
-        for key in fieldnames:
-            value = row.get(key)
-            if value is None:
-                clean_row[key] = ""
-            else:
-                clean_row[key] = str(value)
-        writer.writerow(clean_row)
-
-    csv_string = output.getvalue()
-    output.close()
-
-    return csv_string

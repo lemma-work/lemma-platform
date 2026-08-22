@@ -9,7 +9,7 @@ twice across the two languages and nothing used to check that the copies agree:
   and this process re-accumulates it with the other, reconciling the two
   buffers at every segment boundary. A disagreement raises nothing. It
   silently truncates a persisted message, which is precisely how the
-  seal-and-clear bug in ``_Segment`` stayed invisible.
+  seal-and-clear bug in ``Segment`` stayed invisible.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     event_text,

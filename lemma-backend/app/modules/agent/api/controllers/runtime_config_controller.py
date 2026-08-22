@@ -25,7 +25,7 @@ from app.modules.agent.api.schemas import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -74,6 +74,22 @@ def _profile_response(profile, availability=None) -> AgentRuntimeProfileResponse
     if availability is not None:
         data["availability_status"] = availability.value
     return AgentRuntimeProfileResponse.model_validate(data)
+
+
+def _is_own_machine_profile(data: CreateAgentRuntimeProfileRequest) -> bool:
+    """Is this create request nothing but the caller registering their own machine?
+
+    A PERSONAL Agent Host profile shares nothing: ``create_agent_host_profile``
+    proves through ``require_ready_harness`` that the harness runs on a computer
+    this caller paired, and a personal profile is selectable only by its owner.
+    Every other create writes shared configuration - an org-wide provider
+    credential, or a machine opened to the whole organization - and takes the
+    org edit gate instead.
+    """
+    return (
+        isinstance(data, CreateAgentHostRuntimeProfileRequest)
+        and data.scope is RuntimeProfileScope.PERSONAL
+    )
 
 
 async def _require_profile_editor(
@@ -181,7 +197,13 @@ async def create_runtime_profile(
     # Creating an ORGANIZATION-scoped runtime profile registers an org-wide model
     # provider (a caller-controlled base_url/api_key) usable by every member's
     # agent runs, so it must require org editor/owner — not mere membership.
-    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
+    # Registering your own paired computer is the one create that shares
+    # nothing, and gating it here meant a member could see the models page from
+    # their pod without being able to add the machine sitting in front of them.
+    if _is_own_machine_profile(data):
+        await _ensure_org_member(org_id=org_id, user=user, uow=uow)
+    else:
+        await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
     service = _runtime_profile_service(uow)
     try:
         if isinstance(data, CreateAgentHostRuntimeProfileRequest):

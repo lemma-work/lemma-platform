@@ -20,7 +20,7 @@ Pass payloads with `--data '<json>'` or `--file <path.json>`. Target a pod with 
 
 ## Pod files
 
-Paths: `/me/...` is the user's private tree; everything else is pod-shared under top-level folders like `/knowledge`. **There is no `/pod` prefix** — a path is shared unless it is under `/me`. Put user-facing deliverables in `/me/<topic>/...` and present the pod path, never the sandbox path.
+Paths: `/me/...` is the user's private tree; everything else is pod-shared under top-level folders like `/knowledge` and `/memory`. **There is no `/pod` prefix** — a path is shared unless it is under `/me`. Put user-facing deliverables in `/me/<topic>/...` and present the pod path, never the sandbox path.
 
 ```bash
 lemma files ls /me; lemma files tree /knowledge
@@ -43,6 +43,17 @@ LiteParse is the fallback for files the pod has **not** indexed — web download
 ```bash
 lit parse input.pdf --target-pages "1-5,10" --format json -o out.json
 lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
+```
+
+## Memory
+
+Durable facts belong in files, not chat — this pod's shared knowledge goes in `/memory`, what you know about the current user goes in `/me`. Layout: `/memory/*.md` and `/memory/agents/<agent-name>/` for pod-wide and per-agent shared state; `/me/*.md` and `/me/agents/<agent-name>/` mirror that, private to this user only.
+
+Check the relevant file before answering if past context could change your answer. The moment you learn a durable fact, preference, or correction — not a one-off detail — write it immediately, without being asked. One topic per file: check for an existing file to update before creating a near-duplicate. Never write transient chat content or secrets.
+
+```bash
+lemma files write /memory/pricing.md "..."      # pod-shared — every agent in this pod sees it
+lemma files write /me/preferences.md "..."      # private — visible only to this user
 ```
 
 ## Long-running commands
