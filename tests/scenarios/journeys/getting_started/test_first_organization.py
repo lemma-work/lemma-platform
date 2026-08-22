@@ -26,6 +26,31 @@ async def test_new_person_signs_up_and_is_known(world):
     assert str(profile["id"]) == str(alice.user_id), profile
 
 
+@scenario("A person who signed up comes back and signs in")
+@proves("PS-ONB-001")
+@covers("user.current.get")
+async def test_a_person_comes_back_and_signs_in(world):
+    """The half of "sign up and sign in" that nothing used to prove.
+
+    Every person this suite had ever made was brand new, so the product's most
+    repeated action — somebody who already has an account coming back — was the
+    one action no scenario exercised. The specification also promises the
+    address is matched case-insensitively, which is checked here rather than
+    taken on trust: `Ada@…` signing in as `ADA@…` has to be the same person and
+    not a second account quietly created alongside the first.
+    """
+    ada = await world.new_person("Ada")
+
+    returning = await world.returning(ada, using=ada.email.upper())
+
+    assert str(returning.user_id) == str(ada.user_id), (
+        f"signing in as {ada.email.upper()} reached user {returning.user_id}, "
+        f"but signing up as {ada.email} made user {ada.user_id} — an address's "
+        f"case decided who you are"
+    )
+    assert str((await returning.profile())["id"]) == str(ada.user_id)
+
+
 @scenario("A person who has joined nothing sees an empty start, not an error")
 @proves("PS-ONB-002")
 @covers("org.list", "org.navigation", "user.current.get", "user.profile.get")

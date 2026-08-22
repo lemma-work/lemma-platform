@@ -40,6 +40,10 @@ cd tests/scenarios && uv run pytest --base-url http://localhost:8000
 | Piece | What it does |
 |---|---|
 | `harness/stack.py` | Boots the system under test and hands back a URL |
+| `harness/environment.py` | Asks the target what it is configured to do, and whether this run may write to it |
+| `harness/tenant.py` | Who the standing cast are, and what they are to each other |
+| `harness/provision.py` | Builds that tenant on a deployment, or puts it back |
+| `harness/run.py` | The mark one run leaves on a tenant shared with every other run |
 | `harness/world.py` | `World` and `Person` — a scenario asks the world for people, and people do things |
 | `harness/steps/` | The product verbs, one module per noun. `alice.creates_a_pod(...)` |
 | `harness/drivers/api.py` | The only place that knows about paths, verbs and status codes |
@@ -96,9 +100,10 @@ Four things to hold to:
 - **Steps are product verbs.** If a scenario contains a path or a status code,
   the step is missing — add it to `harness/steps/` instead. That is what will
   let these same scenarios run through the CLI and the SDKs.
-- **Create everything you assert on.** The stack is shared across the session,
-  so another scenario's pods are in the same database. Never assert on a total.
-  `world.new_person()` makes uniqueness the default.
+- **Create everything you assert on, and name it through `run.name()`.** The
+  stack is shared across the session and the tenant is shared across every run,
+  so another scenario's pods — and last night's — are in the same database.
+  Never assert on a total; filter to what this run made.
 - **Move the promise to `covered` in the same pull request**, once you have seen
   it pass. If it does not pass, the finding is a `gap` in the specification and
   a fix to the code — not an edit to the assertion.
@@ -166,6 +171,45 @@ is worse than one that says where it stops:
 - **The client conformance is a subset**, not a mirror of every journey. A
   process per call is too slow for that, and the point is that the clients
   agree on the core path.
+
+## The standing tenant
+
+Most scenarios do not want a stranger. They want somebody who already works
+somewhere, in a pod that already has things in it — which is the situation every
+real user is in, and the one a suite that starts the world over for every test
+can never reach.
+
+So there is a **cast**: five colleagues at Vantage Freight, plus Hannah at
+Calder Retail, who is the outsider every refusal scenario needs. They are
+declared in [`harness/tenant.py`](harness/tenant.py) and they sign **in**:
+
+```python
+daniel = await world.person("daniel")          # already here, already ORG_EDITOR
+pod = await daniel.works_in("sales")           # opens it; makes it only if absent
+table = await daniel.creates_a_table(named=run.name("orders"), in_pod=pod)
+```
+
+`world.new_person()` is still there for a scenario that genuinely needs somebody
+brand new — onboarding, invitations, being refused as a stranger.
+
+**Everything durable is named through `run.name()`.** The tenant is shared with
+every run before and after this one, so `orders` alone collides and `orders` in a
+pod holding forty other tables cannot be asserted on. `run.name("orders")` gives
+`orders_scn7f3a1`: an assertion filters to it, cleanup can tell the suite's
+leavings from a person's work, and a failure says which run to go and look at.
+
+Against a deployment, the tenant is built once and deliberately, by a person:
+
+```bash
+make scenarios-provision TARGET=https://your-lemma
+make scenarios-deployment TARGET=https://your-lemma
+```
+
+A run never registers anybody. That is what lets the same suite run against a
+deployment whose signup gates are on — signing in passes none of them — and it
+is why a run leaves no new organizations behind, which matters because the
+product has no way to delete one. A stack the suite boots itself is the
+exception: it starts empty, so the tenant is built in it on first use.
 
 ## The two lanes
 

@@ -125,6 +125,12 @@ class Stack:
     database_url: str
     log_path: str = ""
 
+    #: Did this process start it? A stack the suite booted is empty and
+    #: disposable, so the run builds the standing tenant in it as a matter of
+    #: course. A deployment is somebody's, and a run must never quietly
+    #: register accounts there — it says the tenant is missing and stops.
+    ours: bool = True
+
     def tail(self, lines: int = 80, *, match: str = "") -> str:
         """The end of the server and worker log.
 

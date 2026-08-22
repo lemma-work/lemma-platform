@@ -20,7 +20,37 @@ JSON = dict[str, Any]
 #: common action in the product is undocumented.
 SIGNUP_PATH = "/st/auth/signup"
 
+#: The other half of the capability the specification calls "Sign up and sign
+#: in". Nothing proved it until the standing cast needed it: every person the
+#: suite had ever made was brand new, so the product's most repeated action —
+#: an existing person coming back — was the one action never exercised.
+SIGNIN_PATH = "/st/auth/signin"
+
 PASSWORD = "ScenarioPassword@123"
+
+
+def _already_registered(payload: JSON) -> bool:
+    """Is this address simply already here?
+
+    Two shapes mean the same thing, and only one of them is the name you would
+    guess. SuperTokens has an `EMAIL_ALREADY_EXISTS_ERROR` status, but Lemma
+    answers a taken address as a `FIELD_ERROR` against the email field — which
+    is the friendlier thing to put in front of a person, and the reason
+    provisioning has to read both.
+
+    Deliberately narrow: a `FIELD_ERROR` about the *password* is a real
+    failure, and treating it as "already here" would send provisioning off to
+    sign in with a password the account does not have.
+    """
+    if payload.get("status") == "EMAIL_ALREADY_EXISTS_ERROR":
+        return True
+    if payload.get("status") != "FIELD_ERROR":
+        return False
+    return any(
+        field.get("id") == "email" and "exist" in str(field.get("error", "")).lower()
+        for field in payload.get("formFields", [])
+        if isinstance(field, dict)
+    )
 
 
 class IdentitySteps:
@@ -29,40 +59,82 @@ class IdentitySteps:
     # --- account ---------------------------------------------------------
 
     async def signs_up(self) -> JSON:
-        # Deliberately `call` rather than `expect`: the access token comes back
-        # as a response *header*, so the decoded body alone is not enough. A
-        # person who has just registered is signed in — there is no second step.
-        response = await self.api.call(
-            "POST",
-            SIGNUP_PATH,
-            json={
-                "formFields": [
-                    {"id": "email", "value": self.email},
-                    {"id": "password", "value": PASSWORD},
-                ]
-            },
+        """Register, which also signs the person in — there is no second step."""
+        return await self._enters(SIGNUP_PATH, doing="sign up")
+
+    async def signs_in(self) -> JSON:
+        """Come back to an account that already exists.
+
+        This is what a standing cast does at the start of every run, and it is
+        why the cast can work against a deployment that a fresh signup could
+        not: signing in passes none of the gates a real deployment keeps in
+        front of registration.
+        """
+        return await self._enters(SIGNIN_PATH, doing="sign in")
+
+    async def arrives(self) -> bool:
+        """Register if this address is new, sign in if it is not. New?
+
+        What provisioning uses, and the order it tries them in is the point.
+        Signing in first and reading the failure as "no account yet" would spend
+        a real sign-in failure per person — and a deployment counts those: ten
+        put a proof-of-work challenge in front of the next attempt and twenty
+        block outright. Registering first costs one request either way and never
+        fails on a person who is simply already here.
+        """
+        response = await self.api.call("POST", SIGNUP_PATH, json=self._credentials())
+        payload = response.json() if response.content else {}
+        if response.status_code == 200 and payload.get("status") == "OK":
+            self._admitted(response, payload, doing="sign up")
+            return True
+        if _already_registered(payload):
+            await self.signs_in()
+            return False
+        raise AssertionError(
+            f"{self.label} could not take a seat on this deployment: "
+            f"{response.status_code} {payload.get('status')!r}\n"
+            f"  body: {response.text[:2000]}"
         )
+
+    def _credentials(self) -> JSON:
+        return {
+            "formFields": [
+                {"id": "email", "value": self.email},
+                {"id": "password", "value": PASSWORD},
+            ]
+        }
+
+    async def _enters(self, path: str, *, doing: str) -> JSON:
+        # Deliberately `call` rather than `expect`: the access token comes back
+        # as a response *header*, so the decoded body alone is not enough.
+        response = await self.api.call("POST", path, json=self._credentials())
         if response.status_code != 200:
             raise AssertionError(
-                f"{self.label} could not sign up: {response.status_code}\n"
+                f"{self.label} could not {doing}: {response.status_code}\n"
                 f"  body: {response.text[:2000]}"
             )
         payload = response.json()
         if payload.get("status") != "OK":
             raise AssertionError(
-                f"{self.label} could not sign up: {payload.get('status')!r} — {payload}"
+                f"{self.label} could not {doing}: {payload.get('status')!r} — {payload}"
             )
+        self._admitted(response, payload, doing=doing)
+        return payload
+
+    def _admitted(self, response: Any, payload: JSON, *, doing: str) -> None:
         token = response.headers.get("st-access-token") or response.cookies.get(
             "sAccessToken"
         )
         if not token:
             raise AssertionError(
-                f"{self.label} signed up but received no access token; "
+                f"{self.label} completed {doing} but received no access token; "
                 f"headers were {dict(response.headers)}"
             )
         self.api.authenticate(token)
+        # From here on this person can let themselves back in, so a session
+        # ageing out mid-run is the driver's problem rather than a scenario's.
+        self.api.renews_with(self.signs_in)
         self.user_id = payload["user"]["id"]
-        return payload
 
     async def profile(self) -> JSON:
         return await self.api.get("/users/me")
