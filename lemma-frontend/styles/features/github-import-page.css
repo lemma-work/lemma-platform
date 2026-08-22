@@ -1,4 +1,8 @@
-.github-import-page {
+/* Two selectors, one palette. Radix portals `SelectContent` to `<body>`, so a
+   scope that named only the page would leave every open dropdown reading the
+   global theme while its trigger read this one. */
+.github-import-page,
+.github-import-select-content {
   --import-bg: #f4f0e8;
   --import-card: #fffdf8;
   --import-ink: #202124;
@@ -22,14 +26,35 @@
   --surface-1: var(--import-card);
   --surface-2: var(--import-soft);
   --delight: var(--import-ink);
+  /* A custom property resolves against the element that *declares* it, not the
+     one that uses it. `--field-bg` and friends are declared on `:root` in terms
+     of `--surface-*`, so they were already computed against the global theme by
+     the time they inherited down here -- remapping the surfaces alone left the
+     workspace field with a dark fill under this page's dark ink, and the chosen
+     workspace unreadable. Restating them here is what puts them in this scope. */
+  --field-bg: var(--import-card);
+  --field-bg-hover: var(--import-soft);
+  --field-bg-focus: var(--import-card);
+  --field-border: var(--import-rule);
+  --field-border-hover: var(--import-faint);
+  --field-border-focus: var(--import-ink);
+  --text-soft: var(--import-faint);
+  color: var(--import-ink);
+  color-scheme: light;
+}
+
+.github-import-page {
   position: relative;
   isolation: isolate;
   min-height: 100vh;
   overflow-x: clip;
   background: var(--import-bg);
-  color: var(--import-ink);
   font-family: var(--font-display-family);
-  color-scheme: light;
+}
+
+.github-import-select-content {
+  background: var(--import-card);
+  font-family: var(--font-display-family);
 }
 
 .github-import-stationery {
@@ -273,7 +298,11 @@
 
 .github-import-cover {
   overflow: hidden;
-  margin: 1.5rem 1.5rem 0;
+  /* `auto` on the inline sides centres the cover once an author-declared width
+     makes it narrower than the column; the width keeps the old 1.5rem inset on
+     a screen too narrow for the cap to bite. */
+  width: calc(100% - 3rem);
+  margin: 1.5rem auto 0;
   border: 1px solid var(--import-rule);
   border-radius: var(--radius-lg);
   background: var(--import-soft);
@@ -564,6 +593,14 @@
 .github-import-target-summary strong {
   color: var(--import-ink);
   font-weight: 500;
+}
+
+.github-import-target-error {
+  margin-top: 0.6rem;
+  color: #a4352a;
+  font-family: var(--font-document-family);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
 }
 
 .github-import-continue {

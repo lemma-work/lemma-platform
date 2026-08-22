@@ -6,23 +6,19 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
-import {
-  useCreateOrganization,
-  useJoinSuggestedOrganization,
-} from "@/lib/hooks/use-organizations";
 import { useUpdateProfile } from "@/lib/hooks/use-user";
-import { trackPodReady, type OnboardingEntryKind } from "@/lib/analytics/onboarding";
+import { trackPodReady } from "@/lib/analytics/onboarding";
 import { buildNewPodWelcomeHref } from "@/lib/pods/new-pod-conversation";
-import { OrganizationJoinPolicy, type Organization } from "@/lib/types";
+import { type Organization } from "@/lib/types";
 import { normalizeEmailDomain, workDomainFromEmail } from "@/lib/utils/organization-slugs";
 
 import {
   firstPodName,
   hasUsableProfileName,
   inferFullName,
-  organizationNameCandidate,
   splitName,
 } from "./account-onboarding-helpers";
+import { useEnsureOrganization } from "./use-ensure-organization";
 
 /**
  * Only failure is state.
@@ -67,8 +63,7 @@ export function useFirstPodProvisioning({
   const router = useRouter();
   const queryClient = useQueryClient();
   const updateProfile = useUpdateProfile();
-  const createOrganization = useCreateOrganization();
-  const joinSuggestedOrganization = useJoinSuggestedOrganization();
+  const ensureOrganization = useEnsureOrganization();
   const [failed, setFailed] = useState(false);
   // Set before the navigation, not after. Creating the pod invalidates the pods
   // query, which re-renders the caller with `needsFirstPod` already false — and
@@ -100,32 +95,21 @@ export function useFirstPodProvisioning({
           }
         }
 
+        // Still needed below: the welcome door greets a work address by name.
         const workDomain = normalizeEmailDomain(workDomainFromEmail(email));
-        let entryKind: OnboardingEntryKind = "new_org";
-        let organization = organizations[0] || null;
 
-        if (!organization && suggestedOrganization) {
-          // A colleague already claimed this domain. Joining them beats
-          // fragmenting the company across two workspaces.
-          organization = await joinSuggestedOrganization.mutateAsync(
-            suggestedOrganization.id,
-          );
-          entryKind = "domain_join";
-        } else if (!organization) {
-          organization = await createOrganization.mutateAsync({
-            name: organizationNameCandidate({ email, workDomain }),
-            join_policy: workDomain
-              ? OrganizationJoinPolicy.EMAIL_DOMAIN
-              : OrganizationJoinPolicy.INVITE_ONLY,
-            email_domain: workDomain || null,
-            resolve_name_conflicts: true,
-          });
-        }
+        const ensured = await ensureOrganization({
+          email,
+          organizationIds: organizations.map((org) => org.id),
+          suggestedOrganizationId: suggestedOrganization?.id ?? null,
+        });
 
-        if (!organization) {
+        if (!ensured) {
           setFailed(true);
           return;
         }
+
+        const { organizationId, entryKind } = ensured;
 
         // Joining an existing organization still earns a pod of your own:
         // otherwise you land in a workspace where everything belongs to someone
@@ -136,7 +120,7 @@ export function useFirstPodProvisioning({
           name: firstPodName(profile),
           description:
             "A private workspace for apps, surface agents, knowledge, and operating loops.",
-          organization_id: organization.id,
+          organization_id: organizationId,
         });
 
         setNavigated(true);
@@ -170,9 +154,8 @@ export function useFirstPodProvisioning({
       }
     })();
   }, [
-    createOrganization,
     enabled,
-    joinSuggestedOrganization,
+    ensureOrganization,
     organizations,
     profile,
     queryClient,
