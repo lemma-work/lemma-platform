@@ -101,10 +101,12 @@ def test_agent_has_toolset_detects_todo():
 
 
 def test_web_search_capability_bundles_tool_and_prompt():
-    from app.modules.agent.capabilities.web_search import WebSearchCapability
+    from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.tools.graceful_toolset import GracefulToolset
 
-    cap = WebSearchCapability()
+    # Built the way the assembler builds it. Web search used to have a bespoke
+    # capability class that did exactly what the generic instructed path does.
+    cap = _visible_capability(web_search_toolset)
     # The toolset is graceful-wrapped so a web-search failure becomes a tool
     # response rather than aborting the run.
     toolset = cap.get_toolset()
@@ -148,7 +150,6 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
     from app.modules.agent.capabilities.prompt_caching import (
         PromptCachingCapability as _PC,
     )
-    from app.modules.agent.capabilities.web_search import WebSearchCapability
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
@@ -165,7 +166,11 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
         model_name="m",
         enable_prompt_caching=True,
     )
-    assert any(isinstance(c, WebSearchCapability) for c in capabilities)
+    assert any(
+        isinstance(c, InstructedToolsetCapability)
+        and c.get_serialization_name() == "web_search"
+        for c in capabilities
+    )
     # The workspace CLI toolset is wrapped as an instructed capability that carries
     # its usage fragment.
     assert any(
@@ -243,7 +248,8 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {"is_sub_agent": True}  # a sibling metadata key
@@ -251,7 +257,9 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
 
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
+    ))
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -376,14 +384,17 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
+    ))
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -430,14 +441,17 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
+    ))
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
@@ -520,14 +534,17 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     from pydantic_ai.usage import RunUsage
 
     from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.todo import build_todo_capability
+    from app.modules.agent.capabilities.assembler import _visible_capability
+    from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
     monkeypatch.setattr(
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
     )
-    capability = build_todo_capability(uow_factory=_FakeUoW, conversation_id=uuid4())
+    capability = _visible_capability(
+        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4()
+    ))
     toolset = capability.get_toolset()
     run_ctx = RunContext(
         deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),

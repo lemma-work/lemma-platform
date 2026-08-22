@@ -41,7 +41,6 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
-from app.modules.agent.capabilities.web_search import WebSearchCapability
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
@@ -49,6 +48,7 @@ from app.modules.agent.domain.prompts import (
     load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_web_search_prompt,
     load_user_interaction_prompt,
     load_workspace_cli_prompt,
 )
@@ -90,6 +90,7 @@ _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 # matched by predicate rather than identity, so it is handled separately in
 # ``_instructions_for``.
 _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
+    (web_search_toolset, "web_search", load_web_search_prompt),
     (skills_toolset, "skills", load_skills_prompt),
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
@@ -161,13 +162,11 @@ def _visible_capability(toolset: object) -> object:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
-    (web search and todo have bespoke ones; the rest use the generic
-    ``InstructedToolsetCapability``); everything else is a plain toolset
-    capability. Every wrapped toolset is made graceful first so a tool failure
-    never crashes the run.
+    (todo has a bespoke one, because its instructions depend on the
+    conversation; the rest use the generic ``InstructedToolsetCapability``);
+    everything else is a plain toolset capability. Every wrapped toolset is made
+    graceful first so a tool failure never crashes the run.
     """
-    if toolset is web_search_toolset:
-        return WebSearchCapability()
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
     guidance = _instructions_for(toolset)
