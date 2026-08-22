@@ -40,8 +40,8 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType, JsonObject
 from app.modules.agent.tools.callable_tool_factory import (
-    _inline_schema,
-    _normalize_json_schema,
+    inline_schema,
+    normalize_json_schema,
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
@@ -178,7 +178,7 @@ def _description(has_schema: bool) -> str:
 
 def _final_answer_input_schema(output_schema: JsonObject | None) -> JsonObject:
     output = (
-        _inline_schema(_normalize_json_schema(output_schema))
+        inline_schema(normalize_json_schema(output_schema))
         if output_schema
         else {"type": "string"}
     )

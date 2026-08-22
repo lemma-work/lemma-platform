@@ -26,9 +26,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
-    _Segment,
-    _integer,
-    _number,
+    Segment,
+    integer,
+    number,
     error_event,
     event_text,
     is_terminal_event,
@@ -99,8 +99,8 @@ class AgentHostEventNormalizer:
         self.agent_run_id = agent_run_id
         self.model_name = model_name
         self.harness_key = harness_key
-        self._message = _Segment(kind="text")
-        self._thought = _Segment(kind="thinking")
+        self._message = Segment(kind="text")
+        self._thought = Segment(kind="thinking")
         self.token_buffer = TextStreamBuffer()
         self._token_kind: str | None = None
         self.tool_calls = ToolCallLedger()
@@ -184,7 +184,7 @@ class AgentHostEventNormalizer:
 
     def _chunk(
         self,
-        segment: _Segment,
+        segment: Segment,
         row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
@@ -198,7 +198,7 @@ class AgentHostEventNormalizer:
 
     def _upsert(
         self,
-        segment: _Segment,
+        segment: Segment,
         row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
@@ -206,7 +206,7 @@ class AgentHostEventNormalizer:
 
         The host sends these at every segment boundary so the durable lane
         alone rebuilds the transcript, which means a message that contains a
-        tool call arrives as several. See :class:`_Segment`.
+        tool call arrives as several. See :class:`Segment`.
         """
         delta = segment.seal(event_text(payload), row.object_id)
         return self._stream_delta(delta, kind=segment.kind)
@@ -480,11 +480,11 @@ class AgentHostEventNormalizer:
             type=AgentEventType.USAGE,
             data=AgentRunUsage(
                 model_name=str(usage.get("model_name") or self.model_name),
-                input_tokens=_integer(usage.get("input_tokens")),
-                output_tokens=_integer(usage.get("output_tokens")),
-                request_count=_integer(usage.get("request_count"), default=1),
-                tool_call_count=_integer(usage.get("tool_call_count")),
-                units=_number(usage.get("units")),
+                input_tokens=integer(usage.get("input_tokens")),
+                output_tokens=integer(usage.get("output_tokens")),
+                request_count=integer(usage.get("request_count"), default=1),
+                tool_call_count=integer(usage.get("tool_call_count")),
+                units=number(usage.get("units")),
                 metadata=metadata,
             ),
             agent_run_id=self.agent_run_id,

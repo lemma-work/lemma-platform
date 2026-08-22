@@ -140,7 +140,7 @@ def _openai_compat_model_capabilities(
     return capabilities
 
 
-def _system_lemma_profile() -> AgentRuntimeProfile | None:
+def system_lemma_profile() -> AgentRuntimeProfile | None:
     _load_runtime_env()
     model_type = (
         os.getenv("LEMMA_DEFAULT_MODEL_TYPE") or settings.lemma_default_model_type
@@ -222,9 +222,9 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     )
 
 
-def _system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
+def system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
     if profile_id == SYSTEM_LEMMA_PROFILE_ID:
-        return _system_lemma_profile()
+        return system_lemma_profile()
     return None
 
 
@@ -256,7 +256,7 @@ def _display_model_name(model_name: str) -> str:
     return model_name.replace("-", " ").replace("_", " ").title()
 
 
-def _agent_host_model_catalog(
+def agent_host_model_catalog(
     config_options: list[Any],
     *,
     supports_images: bool = False,

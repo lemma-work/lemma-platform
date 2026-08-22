@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 138 |
-| `gap` | 19 |
+| `covered` | 140 |
+| `gap` | 17 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -44,7 +44,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `gap` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
+| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent` |
@@ -195,7 +195,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ACCESS-012` A person can see what they may do before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
 | `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
 | `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
-| `PS-ACCESS-022` Approving for a session means that session only | `gap` | `test_a_session_approval_stops_repeat_asking`, `test_a_session_approval_does_not_leak_to_another_conversation` |
+| `PS-ACCESS-022` Approving for a session means that session only | `covered` | `test_a_session_approval_stops_repeat_asking`, `test_a_session_approval_does_not_leak_to_another_conversation` |
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `gap` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |

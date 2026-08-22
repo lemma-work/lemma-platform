@@ -324,7 +324,16 @@ async def test_gmail_final_answer_contract(fake_gmail, message_store):
     assert email["Subject"] == "Re: Contract Subject"
     assert email["In-Reply-To"] == "<gmail-message-1@example.test>"
     assert email["References"] == "<gmail-root@example.test>"
-    assert "Contract reply" in email.get_payload()
+    # An agent's reply now goes out as markdown, so the message is
+    # multipart/alternative: the text part carries the source and the HTML part
+    # carries the rendered, styled version. A client shows whichever it can.
+    assert email.is_multipart(), "an HTML alternative should be offered"
+    parts = {part.get_content_type(): part for part in email.get_payload()}
+    assert set(parts) == {"text/plain", "text/html"}
+    assert "Contract reply" in parts["text/plain"].get_payload()
+    html_part = parts["text/html"].get_payload()
+    assert "Contract reply" in html_part
+    assert "font-family:" in html_part, "the HTML part reached the client unstyled"
 
 
 async def test_outlook_final_answer_contract(fake_outlook, message_store):
@@ -343,14 +352,12 @@ async def test_outlook_final_answer_contract(fake_outlook, message_store):
     assert payload["_path"] == "/v1.0/me/messages/outlook-message-1/reply"
     assert payload["_authorization"] == "Bearer outlook-contract-token"
     assert payload["message_id"] == "outlook-message-1"
-    assert payload["body"] == {
-        "message": {
-            "body": {
-                "contentType": "Text",
-                "content": "Contract reply",
-            }
-        }
-    }
+    # HTML rather than Text: an agent writes markdown, and Graph is told which
+    # it is being given. See email_render / email_styles.
+    body = payload["body"]["message"]["body"]
+    assert body["contentType"] == "HTML"
+    assert "Contract reply" in body["content"]
+    assert "font-family:" in body["content"], "Graph got an unstyled body"
 
 
 async def test_resend_final_answer_contract(fake_resend, message_store):
@@ -690,7 +697,10 @@ def test_render_email_content_html_and_markdown_fallback(monkeypatch):
         content="a < b && b > c", content_type="markdown"
     )
     assert plain_md == "a < b && b > c"
-    assert html_md == "<pre>a &lt; b &amp;&amp; b &gt; c</pre>"
+    assert "<pre>a &lt; b &amp;&amp; b &gt; c</pre>" in html_md
+    # Even the fallback is wrapped, so a deployment without the optional
+    # dependency still gets a readable width and font rather than the client's.
+    assert html_md.startswith("<div style=")
 
 
 def test_render_email_content_appends_display_resource_plans():

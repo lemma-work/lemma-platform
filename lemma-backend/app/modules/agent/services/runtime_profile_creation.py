@@ -50,18 +50,18 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.services import runtime_provider_discovery as discovery
 from app.modules.agent.services.runtime_system_profiles import (
-    _agent_host_model_catalog,
+    agent_host_model_catalog,
 )
 
 
-def _normalize_profile_name(name: str) -> str:
+def normalize_profile_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
         raise ValueError("Profile name cannot be empty")
     return normalized
 
 
-def _normalized_headers(headers: dict[str, str] | None) -> dict[str, str]:
+def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for key, value in (headers or {}).items():
         header_name = key.strip()
@@ -134,7 +134,7 @@ class RuntimeProfileCreation:
                 "Agent Host profile scope must be ORGANIZATION or PERSONAL"
             )
 
-        normalized_name = _normalize_profile_name(name)
+        normalized_name = normalize_profile_name(name)
         harness = await self.require_ready_harness(
             harness_id=harness_id,
             organization_id=organization_id,
@@ -161,7 +161,7 @@ class RuntimeProfileCreation:
             name=normalized_name,
             description=description.strip() if description else None,
             default_model_name=selected_model,
-            model_catalog=_agent_host_model_catalog(
+            model_catalog=agent_host_model_catalog(
                 config_options,
                 # ``images`` is the one harness capability the server branches
                 # on: it is what puts view_image in the run's toolset.
@@ -198,8 +198,8 @@ class RuntimeProfileCreation:
     ) -> AgentRuntimeProfile:
         if self.repository is None:
             raise RuntimeError("Runtime profile repository is required")
-        normalized_name = _normalize_profile_name(name)
-        normalized_headers = _normalized_headers(headers)
+        normalized_name = normalize_profile_name(name)
+        normalized_headers = normalize_headers(headers)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -264,8 +264,8 @@ class RuntimeProfileCreation:
     ) -> AgentRuntimeProfile:
         if self.repository is None:
             raise RuntimeError("Runtime profile repository is required")
-        normalized_name = _normalize_profile_name(name)
-        normalized_headers = _normalized_headers(headers)
+        normalized_name = normalize_profile_name(name)
+        normalized_headers = normalize_headers(headers)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes

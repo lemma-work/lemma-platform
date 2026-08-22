@@ -47,7 +47,7 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
     RemoteHarness,
-    _AgentHostRunConfig,
+    AgentHostRunConfig,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     _resumed_tool_call_id,
@@ -185,7 +185,7 @@ async def _drive(harness, *, run_id, agent, conversation, ctx) -> list:
         ctx=ctx,
         conversation=conversation,
         options=HarnessOptions(model_name="gpt-5-codex"),
-        run_config=_AgentHostRunConfig(
+        run_config=AgentHostRunConfig(
             harness_id=uuid7(),
             runtime_profile_id=uuid7(),
             config_selections={},
@@ -520,7 +520,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
             ),
             conversation=_conversation(conversation_id, pod_id),
             options=HarnessOptions(model_name="gpt-5-codex"),
-            run_config=_AgentHostRunConfig(
+            run_config=AgentHostRunConfig(
                 harness_id=uuid7(),
                 runtime_profile_id=uuid7(),
                 config_selections={},

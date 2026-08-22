@@ -18,8 +18,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.services import run_finalizer as finalizer_module
 from app.modules.agent.services.run_finalizer import (
-    _finalize_safely,
-    _rejected_run_error_message,
+    finalize_safely,
+    rejected_run_error_message,
 )
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.agent_runner_service import (
@@ -34,17 +34,17 @@ _GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try agai
 
 def test_rejected_run_error_message_uses_the_harness_supplied_detail():
     assert (
-        _rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
+        rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
         == "Harness snapshot is stale; refresh it"
     )
 
 
 def test_rejected_run_error_message_falls_back_for_malformed_data():
-    assert _rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
+    assert rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
     assert (
-        _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+        rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
     )
-    assert _rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
+    assert rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
 
 
 class _FailingContextManager:
@@ -138,27 +138,27 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_exceptions() -> None:
-    """_finalize_safely must swallow all errors (DB, cancellation, etc)."""
+    """finalize_safely must swallow all errors (DB, cancellation, etc)."""
 
     async def boom() -> None:
         raise RuntimeError("DB gone away")
 
     # Should not raise.
-    await _finalize_safely(
+    await finalize_safely(
         boom(), agent_run_id=UUID("00000000-0000-0000-0000-000000000003")
     )
 
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_cancelled_error() -> None:
-    """_finalize_safely must swallow asyncio.CancelledError without propagating."""
+    """finalize_safely must swallow asyncio.CancelledError without propagating."""
 
     async def get_cancelled() -> None:
         raise asyncio.CancelledError()
 
     # Should not raise — this is the whole point: cancellation during
     # finalization must not crash the worker.
-    await _finalize_safely(
+    await finalize_safely(
         get_cancelled(), agent_run_id=UUID("00000000-0000-0000-0000-000000000004")
     )
 

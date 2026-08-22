@@ -47,7 +47,7 @@ logger = get_logger(__name__)
 _SUBAGENT_TOOL_TIMEOUT_SECONDS = 300
 
 
-def _normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(schema, dict) or not schema:
         return {"type": "object", "properties": {}, "additionalProperties": True}
     normalized = dict(schema)
@@ -58,7 +58,7 @@ def _normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return normalized
 
 
-def _inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
+def inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return InlineDefsJsonSchemaTransformer(schema, strict=False).walk()
 
 
@@ -117,7 +117,7 @@ def _schema_preview(schema: dict[str, Any] | None) -> str:
     if not isinstance(schema, dict) or not schema:
         return ""
     return json.dumps(
-        _normalize_json_schema(schema), ensure_ascii=False, separators=(",", ":")
+        normalize_json_schema(schema), ensure_ascii=False, separators=(",", ":")
     )
 
 
@@ -211,7 +211,7 @@ class AgentCallableToolFactory:
     def _build_function_tool(
         self, function: FunctionEntity, *, parent_agent: Agent
     ) -> Tool:
-        schema = _inline_schema(_normalize_json_schema(function.input_schema))
+        schema = inline_schema(normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
         function_name = f"function_{function.name}"
         parent_agent_id = parent_agent.id
@@ -282,7 +282,7 @@ class AgentCallableToolFactory:
         has_input_schema = bool(agent.input_schema)
         has_output_schema = bool(agent.output_schema)
         schema = (
-            _inline_schema(_normalize_json_schema(agent.input_schema))
+            inline_schema(normalize_json_schema(agent.input_schema))
             if has_input_schema
             else _single_string_input_schema()
         )

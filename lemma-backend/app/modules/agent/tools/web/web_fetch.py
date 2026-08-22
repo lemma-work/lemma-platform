@@ -57,7 +57,7 @@ from app.modules.agent.tools.web.page_extract import (
     render_document,
 )
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
-    _get_workspace_session,
+    get_workspace_session,
     workspace_runtime_context,
 )
 
@@ -195,7 +195,7 @@ async def web_fetch_internal(
         # sandbox has to be provisioned before the first capture, and that wait
         # is part of what the caller is sitting through.
         async with asyncio.timeout(_BATCH_BUDGET_SECONDS):
-            session = await _get_workspace_session(
+            session = await get_workspace_session(
                 ctx,
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,

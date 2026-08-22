@@ -46,7 +46,7 @@ def history_and_prompt(
     history_messages = list(ordered)
     if (
         ordered
-        and ordered[-1].role == MessageRole.USER.value
+        and ordered[-1].role is MessageRole.USER
         and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
     ):
         user_prompt = _user_prompt_text(ordered[-1])

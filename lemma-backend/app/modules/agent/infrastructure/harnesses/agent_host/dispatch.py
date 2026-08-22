@@ -33,9 +33,9 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
-    _AgentHostRunConfig,
-    _joined_prompt,
-    _json_object,
+    AgentHostRunConfig,
+    joined_prompt,
+    json_object,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
@@ -126,7 +126,7 @@ async def enqueue_run(
     ctx: AgentContext,
     options: HarnessOptions,
     agent_run_id: UUID,
-    run_config: _AgentHostRunConfig,
+    run_config: AgentHostRunConfig,
 ) -> DispatchedRun:
     # Resolved first, because it decides what the prompt has to contain: a
     # run that will not even try to resume a session is talking to an agent
@@ -162,13 +162,13 @@ async def enqueue_run(
         carries_history=resume_session_id is None,
         resumed_tool_call_id=_resumed_tool_call_id(run),
     )
-    prompt = _json_object(payload.get("prompt"))
+    prompt = json_object(payload.get("prompt"))
     mcp = await mcp_payload(
         agent_run_id=agent_run_id,
         conversation_id=conversation.id,
         ctx=ctx,
         options=options,
-        prompt=_joined_prompt(prompt),
+        prompt=joined_prompt(prompt),
         # final_answer is served by the MCP route but is not in
         # options.toolsets (the in-process harness gets it via output_type),
         # so name it explicitly.

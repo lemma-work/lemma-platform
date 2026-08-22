@@ -254,7 +254,7 @@ async def test_conversation_detail_reports_persisted_retryability(
     )
     monkeypatch.setattr(queries, "require_agent_action", AsyncMock())
 
-    result = await service.get_conversation(
+    result = await service.queries.get_conversation(
         conversation_id=conversation.id,
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,

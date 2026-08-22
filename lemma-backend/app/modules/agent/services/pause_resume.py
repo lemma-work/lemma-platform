@@ -30,7 +30,6 @@ from app.modules.agent.domain.pausing_tools import (
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     MessageDraft,
-    MessageKind,
 )
 from app.modules.agent.services.realtime import (
     message_payload,
@@ -144,9 +143,10 @@ class PauseResume:
         serializes this so two near-simultaneous resolutions don't each start one.
         """
         await self.conversation_repository.lock_conversation(conversation.id)
-        remaining = await self._unresolved_pausing_call_ids(
+        remaining = await self.conversation_repository.unresolved_pausing_call_ids(
             conversation_id=conversation.id,
             agent_run_id=paused_run_id,
+            pausing_tool_names=PAUSING_TOOL_NAMES,
         )
         if remaining:
             # Still paused on something else; that resolution will start the run.
@@ -188,42 +188,3 @@ class PauseResume:
             ]
         )
         await self.uow.commit()
-
-    async def _unresolved_pausing_call_ids(
-        self,
-        *,
-        conversation_id: UUID,
-        agent_run_id: UUID,
-    ) -> list[str]:
-        """Pausing tool calls in the paused run that are still outstanding.
-
-        A call counts as resolved once it has *either* a recorded approval
-        decision or a persisted tool return. Approvals record the decision first
-        and build the return second, so the decision is what unblocks them; a
-        snooze has no decision at all and is resolved purely by its return. Taking
-        the union means one check serves both without either knowing about the
-        other.
-        """
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation_id
-        )
-        messages, _ = await self.conversation_repository.list_messages(
-            conversation_id=conversation_id,
-            limit=500,
-        )
-        returned_ids = {
-            message.tool_call_id
-            for message in messages
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id is not None
-        }
-        resolved = set(resolved_ids) | returned_ids
-        return [
-            message.tool_call_id
-            for message in messages
-            if message.kind == MessageKind.TOOL_CALL
-            and message.tool_name in PAUSING_TOOL_NAMES
-            and message.agent_run_id == agent_run_id
-            and message.tool_call_id is not None
-            and message.tool_call_id not in resolved
-        ]

@@ -75,6 +75,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/pod/[id]/settings",
     "/pod/[id]/settings/automation",
     "/pod/[id]/settings/members",
+    "/pod/[id]/settings/models",
     "/pod/[id]/settings/usage",
     "/pod/[id]/surfaces",
     "/pod/[id]/widgets/view",

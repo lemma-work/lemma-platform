@@ -25,7 +25,6 @@ from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
 
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.capabilities.current_time import CurrentTimeCapability
 from app.modules.agent.capabilities.deferred_hint import (
@@ -41,7 +40,6 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
-from app.modules.agent.capabilities.web_search import WebSearchCapability
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
@@ -49,6 +47,7 @@ from app.modules.agent.domain.prompts import (
     load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_web_search_prompt,
     load_user_interaction_prompt,
     load_workspace_cli_prompt,
 )
@@ -90,6 +89,7 @@ _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 # matched by predicate rather than identity, so it is handled separately in
 # ``_instructions_for``.
 _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
+    (web_search_toolset, "web_search", load_web_search_prompt),
     (skills_toolset, "skills", load_skills_prompt),
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
@@ -161,13 +161,11 @@ def _visible_capability(toolset: object) -> object:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
-    (web search and todo have bespoke ones; the rest use the generic
-    ``InstructedToolsetCapability``); everything else is a plain toolset
-    capability. Every wrapped toolset is made graceful first so a tool failure
-    never crashes the run.
+    (todo has a bespoke one, because its instructions depend on the
+    conversation; the rest use the generic ``InstructedToolsetCapability``);
+    everything else is a plain toolset capability. Every wrapped toolset is made
+    graceful first so a tool failure never crashes the run.
     """
-    if toolset is web_search_toolset:
-        return WebSearchCapability()
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
     guidance = _instructions_for(toolset)
@@ -200,24 +198,23 @@ def _deferred_capability(toolset: object) -> object:
 
 async def build_lemma_harness_tooling(
     *,
-    uow_factory: UnitOfWorkFactory,
-    agent: Agent,
     ctx: AgentContext,
     full_toolsets: list[object],
-    agent_run_id: object,
-    model_name: str,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
 ) -> list[object]:
-    """Return the full capability list for the in-process LEMMA harness."""
+    """Return the full capability list for the in-process LEMMA harness.
+
+    It used to take an agent, a unit of work and a run id as well, and discard
+    all four on the first line of the body. Tool selection -- todo included --
+    moved to `RunToolAssembler`, so `full_toolsets` already reflects the agent's
+    toolsets. A parameter nobody reads is a claim about what this depends on,
+    and it was a false one; every caller had to keep supplying them.
+    """
     with run_phase("capabilities") as span:
         capabilities = await _build_lemma_harness_tooling(
-            uow_factory=uow_factory,
-            agent=agent,
             ctx=ctx,
             full_toolsets=full_toolsets,
-            agent_run_id=agent_run_id,
-            model_name=model_name,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
         )
@@ -227,18 +224,11 @@ async def build_lemma_harness_tooling(
 
 async def _build_lemma_harness_tooling(
     *,
-    uow_factory: UnitOfWorkFactory,
-    agent: Agent,
     ctx: AgentContext,
     full_toolsets: list[object],
-    agent_run_id: object,
-    model_name: str,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
 ) -> list[object]:
-    # agent/uow_factory/run-id reserved: tool selection (incl. todo) now happens in
-    # RunToolAssembler, so full_toolsets already reflects the agent's toolsets.
-    _ = (agent, uow_factory, agent_run_id, model_name)
     core, extra = _partition_core_extra(
         full_toolsets, is_pod_default=ctx.is_pod_default_agent
     )
