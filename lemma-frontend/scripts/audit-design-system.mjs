@@ -498,7 +498,11 @@ const checks = [
   {
     id: 'staticSurfacePanelBlur',
     label: 'static surface-panel blur effects',
-    pattern: /(?:^|[\s"'`])surface-panel(?=\s)[^"'`]*\bbackdrop-blur-(?:sm|md|lg|xl)\b|\bbackdrop-blur-(?:sm|md|lg|xl)\b[^"'`]*(?:^|[\s"'`])surface-panel(?=\s)/g,
+    // The second alternative deliberately has no `^` branch: it is preceded by
+    // `backdrop-blur-…`, so a caret there can never match and CodeQL flags the
+    // whole assertion as dead. A leading `surface-panel` is already covered by
+    // the first alternative.
+    pattern: /(?:^|[\s"'`])surface-panel(?=\s)[^"'`]*\bbackdrop-blur-(?:sm|md|lg|xl)\b|\bbackdrop-blur-(?:sm|md|lg|xl)\b[^"'`]*[\s"'`]surface-panel(?=\s)/g,
     allowed(path) {
       return (
         path.endsWith('app/globals.css') ||
