@@ -152,7 +152,8 @@ def select_runtime_history(
         # run to its first and last message, so len(messages) is 2 here and
         # would report nothing was skipped.
         skipped_count = max(0, run.message_count - 2)
-        selected.append(messages[0])
+        if not _is_unpaired_tool_call(messages[0]):
+            selected.append(messages[0])
         selected.append(
             Message(
                 conversation_id=run.conversation_id,
@@ -173,3 +174,29 @@ def select_runtime_history(
         )
         selected.append(messages[-1])
     return selected
+
+
+def _is_unpaired_tool_call(message: Message) -> bool:
+    """A tool call whose result this elision is about to throw away.
+
+    Eliding a run to its first and last message is fine until the first message
+    is an assistant tool call -- which is the normal shape for a run with no
+    user message: an approval resume and a snooze wake both create a run and go
+    straight into a tool (`pause_resume.start_resume_run_if_ready`).
+
+    Keeping that call without its return is worse than dropping it. The history
+    builder pairs calls with returns, finds none, and synthesizes "This tool
+    call was interrupted before a result was recorded... Run it again if you
+    still need the result." So the model is told a send that *succeeded* never
+    happened, and instructed to repeat it -- a duplicate email, a duplicate
+    record write.
+
+    Dropping the head instead costs one line of transcript the summary notice
+    already accounts for. A pausing tool is never in this position: its return
+    is appended to the run it ended, so such a run is two messages long and is
+    exempt from elision above.
+    """
+    return (
+        message.role is MessageRole.ASSISTANT
+        and message.kind is MessageKind.TOOL_CALL
+    )

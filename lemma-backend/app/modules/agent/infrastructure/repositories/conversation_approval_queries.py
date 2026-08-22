@@ -11,6 +11,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.modules.agent.domain.entities import (
     Message as MessageEntity,
@@ -40,17 +41,23 @@ class ConversationApprovalQueriesMixin:
         response: JsonObject | None,
         resolved_by_user_id: UUID,
     ) -> bool:
-        """Persist a decision once. Returns False if already recorded."""
-        existing = await self.session.execute(
-            select(AgentApprovalDecisionModel.id).where(
-                AgentApprovalDecisionModel.conversation_id == conversation_id,
-                AgentApprovalDecisionModel.approval_id == approval_id,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            return False
-        self.session.add(
-            AgentApprovalDecisionModel(
+        """Persist a decision once. Returns False if already recorded.
+
+        The insert decides, not a preceding read. Two genuinely overlapping
+        resolves both miss a SELECT, and the loser's flush then raises
+        `IntegrityError` against `uq_agent_approval_decision` -- which nothing
+        on this path catches, so it surfaced as a 500, its `_reconcile_resume`
+        never ran, and the session was left poisoned. Worse, the caller's
+        "somebody else won, adopt their decision" branch was unreachable for
+        exactly the race it was written for: it only saw `False` when the SELECT
+        found a row, i.e. on a *sequential* retry.
+
+        `ON CONFLICT DO NOTHING` moves the decision into the one place the
+        database can arbitrate it, and `rowcount` reports which caller won.
+        """
+        result = await self.session.execute(
+            insert(AgentApprovalDecisionModel)
+            .values(
                 conversation_id=conversation_id,
                 approval_id=approval_id,
                 agent_run_id=agent_run_id,
@@ -59,9 +66,12 @@ class ConversationApprovalQueriesMixin:
                 response=response or {},
                 resolved_by_user_id=resolved_by_user_id,
             )
+            .on_conflict_do_nothing(
+                index_elements=["conversation_id", "approval_id"],
+            )
         )
         await self.session.flush()
-        return True
+        return result.rowcount > 0
 
     async def get_approval_decision(
         self,

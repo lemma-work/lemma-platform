@@ -108,7 +108,7 @@ def _run_input_text(messages: Sequence[Message]) -> str | None:
     reason: they are rows in the run, not the thing that started it.
     """
     for message in reversed(messages):
-        if message.role != MessageRole.USER.value:
+        if message.role is not MessageRole.USER:
             continue
         if message.kind is not MessageKind.TEXT:
             continue

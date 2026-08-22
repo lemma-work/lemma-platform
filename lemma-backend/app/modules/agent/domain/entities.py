@@ -60,7 +60,12 @@ class Message(CreatedEntity):
     conversation_id: UUID
     sequence: int
     agent_run_id: UUID | None = None
-    role: str
+    # An enum, like `kind`. It used to be a bare `str` while `kind` next to it
+    # was an enum, so every reader had to know which of the two it was holding
+    # and normalize accordingly -- and one that forgot compared `str(kind)`
+    # against a value and silently never matched. `MessageRole` subclasses
+    # `str`, so `role == "user"` still holds and nothing downstream had to move.
+    role: MessageRole
     kind: MessageKind
     text: str | None = None
     tool_name: str | None = None
@@ -85,12 +90,11 @@ class Message(CreatedEntity):
         tool_result: JsonValue | None = None,
         metadata: JsonObject | None = None,
     ) -> "Message":
-        role_value = role.value if isinstance(role, MessageRole) else str(role)
         return cls(
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
-            role=role_value,
+            role=MessageRole(role),
             kind=kind,
             text=text,
             tool_name=tool_name,
@@ -113,7 +117,7 @@ class Message(CreatedEntity):
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
-            role=draft.role.value,
+            role=draft.role,
             kind=draft.kind,
             text=draft.text,
             tool_name=draft.tool_name,
@@ -211,7 +215,7 @@ class AgentRun(Entity):
         return (
             self.status == AgentRunStatus.FAILED
             and bool(self.messages)
-            and all(message.role == MessageRole.USER.value for message in self.messages)
+            and all(message.role is MessageRole.USER for message in self.messages)
         )
 
     def ordered_messages(self) -> list[Message]:
