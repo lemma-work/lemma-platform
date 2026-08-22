@@ -24,7 +24,6 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
     )
 
 
-
 def test_the_scheduler_api_url_is_gone(monkeypatch):
     """``SCHEDULER_API_URL`` addressed the scheduler service, which was deleted.
 
