@@ -19,6 +19,7 @@ JSON = dict[str, Any]
 #: first thing every person does, which is worth noticing: the single most
 #: common action in the product is undocumented.
 SIGNUP_PATH = "/st/auth/signup"
+SIGNIN_PATH = "/st/auth/signin"
 
 PASSWORD = "ScenarioPassword@123"
 
@@ -58,6 +59,46 @@ class IdentitySteps:
         if not token:
             raise AssertionError(
                 f"{self.label} signed up but received no access token; "
+                f"headers were {dict(response.headers)}"
+            )
+        self.api.authenticate(token)
+        self.user_id = payload["user"]["id"]
+        return payload
+
+    async def signs_in(self) -> JSON:
+        """Authenticate as an account that already exists.
+
+        Same response shape as ``signs_up`` — SuperTokens returns the access
+        token as a header on a successful sign-in too — so this mirrors it
+        exactly. Only ``World``'s account-pool mode calls this; every scenario
+        that proves what happens after signing up still calls ``signs_up``.
+        """
+        response = await self.api.call(
+            "POST",
+            SIGNIN_PATH,
+            json={
+                "formFields": [
+                    {"id": "email", "value": self.email},
+                    {"id": "password", "value": PASSWORD},
+                ]
+            },
+        )
+        if response.status_code != 200:
+            raise AssertionError(
+                f"{self.label} could not sign in: {response.status_code}\n"
+                f"  body: {response.text[:2000]}"
+            )
+        payload = response.json()
+        if payload.get("status") != "OK":
+            raise AssertionError(
+                f"{self.label} could not sign in: {payload.get('status')!r} — {payload}"
+            )
+        token = response.headers.get("st-access-token") or response.cookies.get(
+            "sAccessToken"
+        )
+        if not token:
+            raise AssertionError(
+                f"{self.label} signed in but received no access token; "
                 f"headers were {dict(response.headers)}"
             )
         self.api.authenticate(token)

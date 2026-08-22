@@ -35,6 +35,12 @@ To iterate against a Lemma you are already running:
 cd tests/scenarios && uv run pytest --base-url http://localhost:8000
 ```
 
+Against a real, persistent deployment rather than a throwaway local stack, add
+`SCENARIOS_ACCOUNT_POOL_SIZE=5` (or similar): the suite otherwise signs up a
+fresh account for nearly every scenario, and a real deployment rate-limits
+signup by IP for exactly this reason. With it set, scenarios sign in to that
+many reused accounts instead — see `World._pooled_person` in `harness/world.py`.
+
 ## How it is put together
 
 | Piece | What it does |

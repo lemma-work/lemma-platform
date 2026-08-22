@@ -18,7 +18,9 @@ pytestmark = [
 @proves("PS-ONB-001")
 @covers("user.current.get", "auth.signed_up")
 async def test_new_person_signs_up_and_is_known(world):
-    alice = await world.new_person("alice")
+    # pool=False: the whole point of this scenario is the signup act itself —
+    # a reused pool account would prove nothing.
+    alice = await world.new_person("alice", pool=False)
 
     profile = await alice.profile()
 
@@ -30,7 +32,10 @@ async def test_new_person_signs_up_and_is_known(world):
 @proves("PS-ONB-002")
 @covers("org.list", "org.navigation", "user.current.get", "user.profile.get")
 async def test_person_with_no_organization_sees_an_empty_start(world):
-    newcomer = await world.new_person("newcomer")
+    # pool=False: this asserts the account has joined literally nothing, which
+    # only a genuinely fresh account can promise — a reused pool account may
+    # carry organizations from an earlier run.
+    newcomer = await world.new_person("newcomer", pool=False)
 
     await newcomer.belongs_to_no_organization()
 
