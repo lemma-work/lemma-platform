@@ -34,7 +34,7 @@ import {
 import { useDatastoreFiles, useTables } from "@/lib/hooks/use-datastores";
 import { cn } from "@/lib/utils";
 import { getConversationStatusView, type ConversationStatusView } from "@/lib/utils/conversations";
-import { useAIAssistant } from "./ai-assistant-context";
+import { useAIAssistant, useAIAssistantTranscript } from "./ai-assistant-context";
 
 const ASSISTANT_PREFILL_EVENT = "lemma-assistant-prefill-draft";
 const DEFAULT_DATASTORE_NAME = "default";
@@ -136,9 +136,10 @@ export function AssistantToolIcon({
 
 function buildControllerView(
   assistant: ReturnType<typeof useAIAssistant>,
+  transcript: ReturnType<typeof useAIAssistantTranscript>,
 ): AssistantControllerView {
   return {
-    messages: assistant.messages,
+    messages: transcript.messages,
     conversations: assistant.conversations,
     activeConversationId: assistant.openedConversationId,
     availableModels: assistant.availableModels,
@@ -158,7 +159,7 @@ function buildControllerView(
     canRetryFailedMessage: assistant.canRetryFailedMessage,
     pendingActions: assistant.pendingActions,
     completedActions: assistant.completedActions,
-    streamingTool: assistant.streamingTool,
+    streamingTool: transcript.streamingTool,
     selectConversation: assistant.selectConversation,
     sendMessage: assistant.sendMessage,
     retryFailedMessage: assistant.retryFailedMessage,
@@ -243,7 +244,10 @@ function PodAssistantSurface({
     DEFAULT_DATASTORE_NAME,
     { directory_path: "/", limit: 50 },
   );
-  const controller = buildControllerView(assistant);
+  // Subscribed separately from the rest of the assistant: this is the surface
+  // that draws the transcript, so it is the one that should re-render per flush.
+  const transcript = useAIAssistantTranscript();
+  const controller = buildControllerView(assistant, transcript);
   const resourceMentions = useMemo<AssistantResourceMention[]>(() => {
     const tableMentions = (tablesData?.items || []).map((table) => ({
       id: `table:${table.name}`,

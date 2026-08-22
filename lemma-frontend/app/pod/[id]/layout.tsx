@@ -317,6 +317,17 @@ function PodShell({
     const isPodHome = pathname === `/pod/${pod.id}` || pathname === `/pod/${pod.id}/`;
     const isAppViewRoute = pathname.startsWith(`/pod/${pod.id}/app/view`);
     const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
+    // Keyed so that moving between the pod's sections mounts a fresh surface and
+    // replays `pod-page-enter`. Every conversation is one section, not one
+    // surface each: the id enters the path the moment a send creates the
+    // conversation, and keying on the whole pathname tore the transcript, the
+    // composer and the caret down at exactly that moment — then played the
+    // route-enter animation over the message that had just landed. Switching
+    // between two conversations is a transcript swap, which carries its own
+    // motion; it does not need the route's.
+    const pageSurfaceKey = isConversationRoute
+        ? `/pod/${pod.id}/conversations`
+        : pathname;
     const appSlug = isAppViewRoute ? searchParams.get("page") : null;
     const isConversationStageEmbed =
         searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
@@ -768,7 +779,7 @@ function PodShell({
                         )}
                     >
                         <div
-                            key={pathname}
+                            key={pageSurfaceKey}
                             className={cn(
                                 "pod-page-surface",
                                 isConversationRoute && "pod-conversation-workspace-surface",
