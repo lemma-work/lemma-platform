@@ -1,0 +1,215 @@
+/**
+ * The welcome door a new pod opens behind.
+ *
+ * The controls here are all `Button` and `Input` from `components/ui`, so what
+ * lives in this file is only what a variant cannot say: the tone wash on the
+ * portrait, the row geometry a two-line choice needs, and the tile that carries
+ * each option's colour. Skinning those inline would have put `bg-[…]` and
+ * `border-[…]` on the primitives, which is the drift the design audit exists to
+ * catch — a named class is how this repo says "this control is genuinely not a
+ * default", and it keeps the audit honest about the rest.
+ *
+ * Every colour is `--lm-identity-*`, set on the element by the `lm-identity-hue-N`
+ * class the identity system already publishes. `hue` and not `tone`: the wash and
+ * the mark take the colour, and the title and the note stay ink.
+ */
+
+/* ── Lem's half ─────────────────────────────────────────────────────────── */
+
+.pod-welcome-portrait {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-4);
+    padding: var(--space-7);
+    /* `soft` rather than a percentage of `tone`: a fixed wash of a saturated
+       colour is legible on paper and invisible on the dark sheet, and `soft` is
+       already the per-theme answer to "this tone, as a ground". */
+    background: color-mix(in srgb, var(--lm-identity-soft) 62%, var(--surface-1));
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+@media (min-width: 640px) {
+    .pod-welcome-portrait {
+        border-bottom: 0;
+        border-right: 1px solid var(--border-subtle);
+    }
+}
+
+.pod-welcome-title {
+    font-size: var(--text-lg);
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.012em;
+    color: var(--text-primary);
+    text-wrap: balance;
+}
+
+.pod-welcome-lede {
+    margin-top: var(--space-2-5);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+/* The one control that asks for nothing, so it sits with the introduction. */
+.pod-welcome-surprise {
+    align-self: flex-start;
+    margin-top: var(--space-1);
+    border-color: color-mix(in srgb, var(--lm-identity-tone) 32%, var(--border-default));
+    background: var(--surface-1);
+    color: var(--text-primary);
+}
+
+.pod-welcome-surprise:hover {
+    border-color: var(--lm-identity-tone);
+    background: var(--surface-1);
+}
+
+.pod-welcome-surprise-arrow {
+    color: var(--lm-identity-tone);
+    transition: transform 160ms ease;
+}
+
+.pod-welcome-surprise:hover .pod-welcome-surprise-arrow {
+    transform: translateX(2px);
+}
+
+/* ── The menu half ──────────────────────────────────────────────────────── */
+
+.pod-welcome-menu {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+}
+
+.pod-welcome-eyebrow {
+    /* Clear of the dialog's own close control, which sits at the same height. */
+    padding-right: var(--space-7);
+    font-size: var(--text-xs);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+}
+
+.pod-welcome-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+/* A choice, not a command: two lines and a mark, so the button's own height and
+   centred layout have to give way. */
+.pod-welcome-option {
+    height: auto;
+    width: 100%;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    text-align: left;
+    border: 1px solid transparent;
+}
+
+.pod-welcome-option:hover {
+    border-color: var(--border-subtle);
+}
+
+.pod-welcome-option-mark {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--lm-identity-tone) 15%, var(--surface-1));
+    color: var(--lm-identity-tone);
+    transition: background 160ms ease;
+}
+
+.pod-welcome-option:hover .pod-welcome-option-mark {
+    background: color-mix(in srgb, var(--lm-identity-tone) 24%, var(--surface-1));
+}
+
+.pod-welcome-option-title {
+    display: block;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.pod-welcome-option-note {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+/* ── The way out, for people who arrived knowing what they want ─────────── */
+
+.pod-welcome-tail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: auto;
+    padding-top: var(--space-1);
+}
+
+.pod-welcome-field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2-5);
+    padding: 0 var(--space-1-5) 0 var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+}
+
+.pod-welcome-field:focus-within {
+    border-color: color-mix(in srgb, var(--action-primary) 55%, var(--border-default));
+}
+
+/* The field's own chrome is the wrapper above, so the control inside gives up
+   its border and its ground rather than drawing a second box inside the first. */
+.pod-welcome-field-input {
+    height: 36px;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    font-size: var(--text-sm);
+}
+
+.pod-welcome-send {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    min-width: 0;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-1);
+    color: var(--text-tertiary);
+}
+
+.pod-welcome-send:not(:disabled):hover {
+    border-color: var(--action-primary);
+    color: var(--action-primary);
+    background: var(--surface-1);
+}
+
+.pod-welcome-skip {
+    align-self: flex-start;
+    height: auto;
+    padding: 0;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    color: var(--text-soft);
+    text-decoration: underline;
+    text-decoration-color: var(--border-default);
+    text-underline-offset: 3px;
+}
+
+.pod-welcome-skip:hover {
+    color: var(--text-secondary);
+}
