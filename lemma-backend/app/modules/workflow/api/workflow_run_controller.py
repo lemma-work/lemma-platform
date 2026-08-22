@@ -415,9 +415,9 @@ async def visualize_flow_run(
     )
 
     return templates.TemplateResponse(
+        request,
         "workflow_run_view.html",
         {
-            "request": request,
             "run": run.model_dump(mode="json"),
             "workflow": workflow.model_dump(mode="json") if workflow else None,
         },
