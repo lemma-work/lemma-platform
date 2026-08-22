@@ -116,6 +116,17 @@ export interface ActiveToolBanner {
   activeCount: number;
 }
 
+/** How long typing has to pause before the draft is written to localStorage. */
+const DRAFT_PERSIST_DEBOUNCE_MS = 400;
+
+function writeDraft(key: string, draft: string) {
+  if (draft) {
+    localStorage.setItem(key, draft);
+  } else {
+    localStorage.removeItem(key);
+  }
+}
+
 const SPARSE_HISTORY_ROW_TARGET = 8;
 const SPARSE_HISTORY_AUTO_LOAD_LIMIT = 3;
 
@@ -180,6 +191,7 @@ export function AssistantExperienceView({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftRestoredRef = useRef(false);
+  const pendingDraftWriteRef = useRef<{ key: string; draft: string } | null>(null);
   const autoLoadedOlderConversationRef = useRef<string | null>(null);
   const autoLoadedOlderPageCountRef = useRef(0);
   const transcriptScroll = useTranscriptScroll({
@@ -212,19 +224,33 @@ export function AssistantExperienceView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId]);
 
-  // Persist draft to localStorage on change (skip the write immediately after a restore)
+  // Persist draft to localStorage on change (skip the write immediately after a
+  // restore). Deferred rather than written inline: `localStorage` is
+  // synchronous, and this used to run once per keystroke — a main-thread write
+  // between the keypress and the frame that draws it. The draft only has to
+  // survive a reload, so a pause in typing is soon enough, and the cleanup
+  // flushes it if the composer goes away first.
   useEffect(() => {
+    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
+    // Recorded on every commit, debounced or not, so the unmount flush below
+    // always has the latest draft and the key it belongs to.
+    pendingDraftWriteRef.current = { key, draft };
     if (draftRestoredRef.current) {
       draftRestoredRef.current = false;
       return;
     }
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    if (draft) {
-      localStorage.setItem(key, draft);
-    } else {
-      localStorage.removeItem(key);
-    }
+    const timer = window.setTimeout(() => writeDraft(key, draft), DRAFT_PERSIST_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [draft, activeConversationId]);
+
+  // A draft still sitting in the debounce when the composer unmounts would
+  // otherwise be lost, so the last one is written out on the way down.
+  useEffect(() => () => {
+    const pending = pendingDraftWriteRef.current;
+    if (pending) writeDraft(pending.key, pending.draft);
+  }, []);
   const hasOlderMessages = controller.hasOlderMessages;
   const isLoadingMessages = controller.isLoadingMessages;
   const isLoadingOlderMessages = controller.isLoadingOlderMessages;
@@ -271,12 +297,20 @@ export function AssistantExperienceView({
     const minHeight = density === "compact" ? 32 : 32;
     const maxHeight = density === "compact" ? 112 : 220;
 
+    // An empty composer is always one row, and reading `scrollHeight` after
+    // resetting the height is a forced synchronous layout — so the common
+    // keystroke, the one that leaves the box a single line, no longer pays for
+    // one. Only text that could wrap measures.
+    if (draft.trim().length === 0) {
+      textarea.style.height = `${minHeight}px`;
+      textarea.style.overflowY = "hidden";
+      return;
+    }
+
     textarea.style.height = "auto";
-    const nextHeight = draft.trim().length === 0
-      ? minHeight
-      : Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    const scrollHeight = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(maxHeight, Math.max(minHeight, scrollHeight))}px`;
+    textarea.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
   }, [density, draft]);
 
   useEffect(() => {
@@ -290,11 +324,19 @@ export function AssistantExperienceView({
     () => buildChatTurns({
       rows: displayMessageRows,
       messages: controllerMessages,
-      isRunActive,
+      // A send in flight counts as live, not just a run the server has already
+      // confirmed. The turn goes on screen the moment you press enter, but the
+      // conversation is not reported RUNNING for a few hundred milliseconds
+      // after that — and the transcript's arrival motion is keyed off the
+      // turn's liveness, so the gap meant your message painted solid and then
+      // replayed its entrance once the status caught up. That flicker was the
+      // whole of it: nothing remounted, a CSS rule simply started matching an
+      // element that was already on screen.
+      isRunActive: isConversationBusy,
       podId: displayResourcePodId,
       conversationId: activeConversationId,
     }),
-    [displayMessageRows, controllerMessages, isRunActive, displayResourcePodId, activeConversationId],
+    [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId],
   );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);

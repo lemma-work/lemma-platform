@@ -16,11 +16,14 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
-from app.modules.agent.services import agent_runner_service as runner_module
-from app.modules.agent.services.agent_runner_service import (
-    AgentRunnerService,
+from app.modules.agent.services import run_finalizer as finalizer_module
+from app.modules.agent.services.run_finalizer import (
     _finalize_safely,
     _rejected_run_error_message,
+)
+from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.agent_runner_service import (
+    AgentRunnerService,
     _run_input_text,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
@@ -70,9 +73,11 @@ async def test_finish_agent_run_rethrows_db_errors_for_boundary_retry() -> None:
     )
 
     with pytest.raises(RuntimeError, match="db connection lost"):
-        await service._finish_agent_run(
-            conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+        await service.finalizer.finish(
+            run=RunIdentity(
+                conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
+                agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+            ),
             status=AgentRunStatus.FAILED,
             error="Something went wrong",
         )
@@ -96,23 +101,22 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
     monkeypatch.setattr(
-        runner_module, "ConversationRepository", lambda _uow: repository
+        finalizer_module, "ConversationRepository", lambda _uow: repository
     )
     publish = AsyncMock()
-    monkeypatch.setattr(runner_module, "publish_conversation_event", publish)
+    monkeypatch.setattr(finalizer_module, "publish_conversation_event", publish)
 
     service = AgentRunnerService(
         uow_factory=_Factory(),
         harness_registry=HarnessRegistry({}),
     )
     publish_usage = AsyncMock()
-    monkeypatch.setattr(service, "_publish_usage_event", publish_usage)
+    monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
     conversation_id = UUID("00000000-0000-0000-0000-000000000101")
     run_id = UUID("00000000-0000-0000-0000-000000000102")
 
-    await service._finish_agent_run(
-        conversation_id=conversation_id,
-        agent_run_id=run_id,
+    await service.finalizer.finish(
+        run=RunIdentity(conversation_id=conversation_id, agent_run_id=run_id),
         status=AgentRunStatus.FAILED,
         conversation_status=ConversationStatus.FAILED,
         error="stale pre-transition error",

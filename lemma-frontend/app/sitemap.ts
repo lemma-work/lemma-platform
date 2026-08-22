@@ -12,6 +12,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
         { url: `${base}/templates`, changeFrequency: 'weekly', priority: 0.9 },
         { url: `${base}/download`, changeFrequency: 'weekly', priority: 0.9 },
         { url: `${base}/docs`, changeFrequency: 'weekly', priority: 0.8 },
+        { url: `${base}/about`, changeFrequency: 'monthly', priority: 0.5 },
+        { url: `${base}/contact`, changeFrequency: 'monthly', priority: 0.5 },
     ];
     const docs: MetadataRoute.Sitemap = docsPages
         .filter((page) => page.slug !== 'overview')

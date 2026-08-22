@@ -53,7 +53,7 @@ async def exec_command(
     build alongside the first. If you lose a `process_id`, `action="list"`
     recovers it.
     """
-    return await workspace_cli.exec_command(ctx.deps, request)
+    return await workspace_cli.exec_command_internal(ctx.deps, request)
 
 
 async def manage_process(
@@ -69,7 +69,7 @@ async def manage_process(
     `list` need `process_id`.
     """
     if request.action == "list":
-        return await workspace_cli.list_processes(
+        return await workspace_cli.list_processes_internal(
             ctx.deps, ListProcessesRequest(comment=request.comment)
         )
     if not request.process_id:
@@ -79,7 +79,7 @@ async def manage_process(
             error=("process_id is required for action='input', 'kill', and 'resize'."),
         )
     if request.action == "resize":
-        return await workspace_cli.resize_terminal(
+        return await workspace_cli.resize_terminal_internal(
             ctx.deps,
             ResizeTerminalRequest(
                 process_id=request.process_id,
@@ -89,14 +89,14 @@ async def manage_process(
             ),
         )
     if request.action == "kill":
-        return await workspace_cli.terminate_process(
+        return await workspace_cli.terminate_process_internal(
             ctx.deps,
             TerminateProcessRequest(
                 process_id=request.process_id, comment=request.comment
             ),
         )
     # action == "input"
-    return await workspace_cli.write_stdin(
+    return await workspace_cli.write_stdin_internal(
         ctx.deps,
         WriteStdinRequest(
             process_id=request.process_id,
@@ -119,7 +119,7 @@ async def execute_python(
     in shell. Kernel state — imports, variables, objects — persists across calls,
     so build up an analysis stepwise instead of repeating setup.
     """
-    return await workspace_cli.execute_python(ctx.deps, request)
+    return await workspace_cli.execute_python_internal(ctx.deps, request)
 
 
 async def view_image(
@@ -137,7 +137,7 @@ async def view_image(
     - Always pass a relative path such as `images/output.png`.
     - Do not pass absolute paths or paths outside the current workspace directory.
     """
-    return await workspace_cli.view_image(ctx.deps, request)
+    return await workspace_cli.view_image_internal(ctx.deps, request)
 
 
 _WORKSPACE_CLI_BASE_TOOLS = [

@@ -1,8 +1,8 @@
 {
   "broad_catches": {
-    "agent:count": 65,
-    "agent:max": 4,
-    "agent:total": 81,
+    "agent:count": 64,
+    "agent:max": 3,
+    "agent:total": 76,
     "agent_surfaces:count": 106,
     "agent_surfaces:max": 5,
     "agent_surfaces:total": 122,
@@ -41,9 +41,9 @@
     "workspace:total": 9
   },
   "complex_functions": {
-    "agent:count": 15,
-    "agent:max": 42,
-    "agent:total": 371,
+    "agent:count": 8,
+    "agent:max": 20,
+    "agent:total": 141,
     "connectors:count": 8,
     "connectors:max": 24,
     "connectors:total": 152,
@@ -82,13 +82,6 @@
   },
   "module_cycles": [],
   "oversized_files": {
-    "app/modules/agent/infrastructure/harnesses/pydantic_ai.py": 1299,
-    "app/modules/agent/infrastructure/repositories.py": 1117,
-    "app/modules/agent/services/agent_runner_service.py": 1115,
-    "app/modules/agent/services/conversation_service.py": 1557,
-    "app/modules/agent/services/runtime_profile_service.py": 952,
-    "app/modules/agent/tools/pod/pydantic_adapter.py": 609,
-    "app/modules/agent/tools/workspace_cli/workspace_cli.py": 754,
     "app/modules/agent_surfaces/api/controllers/surface_controller.py": 627,
     "app/modules/agent_surfaces/api/schemas.py": 610,
     "app/modules/agent_surfaces/platforms/whatsapp/service.py": 623,

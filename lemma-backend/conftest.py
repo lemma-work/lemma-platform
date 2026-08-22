@@ -28,17 +28,6 @@ WORKSPACE_FIXTURES = {
 }
 FAST_WORKSPACE_MARKER = "fast_workspace"
 
-AGENT_PROVIDER_TESTS = {
-    "test_file_creation_tool_call_streams_tool_json_tokens",
-    "test_stopping_streaming_agent_run_does_not_wedge_worker",
-    "test_task_conversation_waits_then_completes_with_real_worker_model",
-    "test_pod_agent_http_lifecycle_with_real_worker_model",
-    "test_pod_assistant_http_lifecycle_with_real_worker_model",
-    "test_first_run_generates_title_with_real_worker_model",
-    "test_agent_tool_http_apis",
-}
-
-
 def _e2e_real_llm() -> bool:
     """True when e2e hits the real model (needs a key); default is the mock."""
     mode = os.getenv("E2E_LLM_MODE", "").lower()
@@ -93,19 +82,6 @@ def pytest_collection_modifyitems(config, items):
         # in the dedicated test-e2e-indexing job instead.
         if "kreuzberg_url" in fixture_names:
             item.add_marker(pytest.mark.indexing)
-        if (
-            (
-                item.path.name == "test_agent_usage_e2e.py"
-                and item.originalname
-                == "test_agent_run_records_usage_and_usage_apis_filter_it"
-            )
-            or (
-                item.path.name == "test_agent_e2e.py"
-                and item.originalname in AGENT_PROVIDER_TESTS
-            )
-        ):
-            item.add_marker(pytest.mark.provider)
-
         marker_names = {marker.name for marker in item.iter_markers()}
         # Tests that need the real Docker sandbox (workspace fixtures) or are
         # explicitly real-sandbox-only: skip unless running in real sandbox mode.

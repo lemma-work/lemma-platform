@@ -22,7 +22,7 @@ from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     event_text,

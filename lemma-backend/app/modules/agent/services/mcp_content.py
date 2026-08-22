@@ -16,8 +16,10 @@ import base64
 import json
 from typing import Any
 
-from mcp.types import ImageContent, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic_ai import ToolReturn
+
+from app.modules.agent.tools.tool_errors import format_tool_error
 
 from app.modules.agent.domain.value_objects import to_json_value
 
@@ -104,3 +106,31 @@ def result_payload(result: object) -> Any:
 def text_content(payload: Any) -> TextContent:
     text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
     return TextContent(type="text", text=text)
+
+
+def tool_call_result(result: object) -> CallToolResult:
+    """A successful tool result as MCP content.
+
+    Images ride alongside the text. Remote harnesses (Codex, Claude Code) are
+    vision-capable, but every result used to be flattened to text, so
+    `view_image` and `pod_view_document_pages` reached them as JSON describing a
+    picture they never received.
+    """
+    images = image_contents(result)
+    payload = result_payload(result)
+    if isinstance(payload, dict):
+        return CallToolResult(
+            content=[text_content(payload), *images],
+            structuredContent=payload,
+        )
+    return CallToolResult(content=[text_content(payload), *images])
+
+
+def tool_call_error(name: str, exc: Exception) -> CallToolResult:
+    """A failed tool call as MCP content, in the shape the model reads."""
+    payload = format_tool_error(name, exc)
+    return CallToolResult(
+        isError=True,
+        content=[TextContent(type="text", text=json.dumps(payload, default=str))],
+        structuredContent=payload,
+    )

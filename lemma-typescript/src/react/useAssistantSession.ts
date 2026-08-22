@@ -79,6 +79,12 @@ export interface SendAssistantMessageOptions {
   conversationId?: string | null;
   metadata?: Record<string, unknown> | null;
   syncOnTurnEnd?: boolean;
+  /**
+   * The conversation record the caller is already holding. Supplying it is what
+   * keeps a send from re-reading a conversation the caller just opened or
+   * created — the session's own copy is a render behind at that point.
+   */
+  knownConversation?: Conversation | null;
 }
 
 export interface ResumeAssistantOptions {
@@ -316,6 +322,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const [error, setError] = useState<Error | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  // Shadows `conversation` so a send that follows a create in the same tick can
+  // see it. React state is a render behind by design, and the controller drives
+  // create-then-send without ever going back through a render — which is how
+  // sending the first message used to re-fetch the conversation the create call
+  // had just handed back.
+  const conversationRecordRef = useRef<Conversation | null>(null);
   const conversationIdRef = useRef<string | null>(externalConversationId);
   const statusRef = useRef<string | undefined>(undefined);
   const streamingTextRef = useRef("");
@@ -332,7 +344,28 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const consumeRef = useRef<(opts: any) => Promise<void>>(null!);
   const streamReconnectCountRef = useRef(0);
 
+  // The only way the conversation record is written, so the ref above can never
+  // drift from the state it shadows.
+  const rememberConversation = useCallback((next: Conversation | null) => {
+    conversationRecordRef.current = next;
+    setConversation(next);
+  }, []);
+
   const setConversationId = useCallback((nextConversationId: string | null) => {
+    // Only a genuine switch cancels an in-flight stream.
+    //
+    // This used to abort unconditionally, above the check — so the effect that
+    // mirrors an externally-owned conversation id would cancel the stream a
+    // send had *just* opened, in the case where the id had only moved from "no
+    // conversation" to the one being streamed into. Nothing caught it for as
+    // long as the send happened to do a spare network round-trip first: that
+    // delay was what let React commit before the request installed its
+    // controller, so the abort landed on nothing.
+    //
+    // Compared against the ref rather than the state, because `createConversation`
+    // moves the id within the tick it is called in, and state is a render behind.
+    if (conversationIdRef.current === nextConversationId) return;
+    conversationIdRef.current = nextConversationId;
     abortRef.current?.abort();
     abortRef.current = null;
     setConversationIdState((currentConversationId) => {
@@ -348,6 +381,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       setStreamingText("");
       setStreamingThinking("");
       setStreamingTool(null);
+      conversationRecordRef.current = null;
       setConversation(null);
       setStatus(undefined);
       statusRef.current = undefined;
@@ -534,8 +568,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       const created = await scopedClient.conversations.create(payload);
 
       if (input.setActive !== false) {
+        // Kept in step with the state, so the effect mirroring the external id
+        // recognises this conversation as the one already open rather than as a
+        // switch away from it.
+        conversationIdRef.current = created.id;
         setConversationIdState(created.id);
-        setConversation(created);
+        rememberConversation(created);
         setConversationStatus(created.status ?? undefined);
         setMessages([]);
         clearStreamingText();
@@ -575,7 +613,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         pod_id: scope.podId ?? undefined,
       });
 
-      setConversation(nextConversation);
+      rememberConversation(nextConversation);
       const nextStatus = typeof nextConversation.status === "string"
         ? nextConversation.status
         : undefined;
@@ -656,6 +694,11 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     clearStreamingText();
     clearStreamingThinking();
     let sawTerminalStatus = false;
+    // A clean finish needs nothing from the server that the stream did not
+    // already say. A failed one does: `last_run_error` and `last_run_retryable`
+    // live on the conversation record, and they are what decides whether the
+    // transcript offers a Retry.
+    let sawFailedStatus = false;
     let streamFailure: unknown = null;
 
     try {
@@ -674,6 +717,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           onErrorRef.current?.(streamError);
           setConversationStatus(parsed.status ?? "FAILED");
           sawTerminalStatus = true;
+          sawFailedStatus = true;
           clearStreamingText();
           clearStreamingThinking();
           clearStreamingTool();
@@ -719,6 +763,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           setConversationStatus(parsed.status);
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
+            if (parsed.status === "FAILED") sawFailedStatus = true;
             clearStreamingText();
             clearStreamingThinking();
             clearStreamingTool();
@@ -776,12 +821,22 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
               streamFailure = reconnectError;
             }
           }
-        } else if (
-          syncConversationId
-          && (sawTerminalStatus || (syncAfterStream ?? syncOnTurnEnd))
-        ) {
-          await refreshConversation(syncConversationId);
-          await loadMessages({ conversationId: syncConversationId, limit: 100 });
+        } else if (syncConversationId) {
+          // A stream that ran to a terminal status delivered every durable
+          // message on its way there, so re-listing the transcript here asked
+          // the server to repeat itself once per turn — and the runtime store
+          // discarded the answer anyway, because it dedups on the last message
+          // id and that id had not moved. Only an explicit opt-in re-lists now.
+          const shouldReloadMessages = syncAfterStream ?? syncOnTurnEnd;
+          // The record is still worth re-reading after a failure: the retry
+          // affordance is driven by `last_run_retryable`, which only the
+          // conversation carries.
+          if (shouldReloadMessages || sawFailedStatus || streamFailure) {
+            await refreshConversation(syncConversationId);
+          }
+          if (shouldReloadMessages) {
+            await loadMessages({ conversationId: syncConversationId, limit: 100 });
+          }
         }
 
         if (!controller.signal.aborted && streamFailure) {
@@ -821,10 +876,21 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
   const ensureConversation = useCallback(async (
     overrideConversationId?: string | null,
+    knownConversation?: Conversation | null,
   ): Promise<Conversation> => {
     const existingId = overrideConversationId ?? conversationId;
     if (existingId) {
-      // Avoid a network roundtrip on every send when we already have this conversation in state.
+      // Three ways to already know this record, cheapest first. The caller's
+      // copy comes from a controller that opened the conversation and is still
+      // holding it; the ref is our own, and unlike the state it shadows it is
+      // current within the tick a create happened in.
+      if (knownConversation?.id === existingId) {
+        rememberConversation(knownConversation);
+        return knownConversation;
+      }
+      if (conversationRecordRef.current?.id === existingId) {
+        return conversationRecordRef.current;
+      }
       if (conversation?.id === existingId) {
         return conversation;
       }
@@ -835,7 +901,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
 
     throw new Error("conversationId is required. Create a conversation before sending a message.");
-  }, [conversation, conversationId, refreshConversation]);
+  }, [conversation, conversationId, refreshConversation, rememberConversation]);
 
   const sendMessage = useCallback(async (
     content: string,
@@ -843,7 +909,10 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   ): Promise<Conversation> => {
     setError(null);
     try {
-      const resolvedConversation = await ensureConversation(input.conversationId);
+      const resolvedConversation = await ensureConversation(
+        input.conversationId,
+        input.knownConversation,
+      );
       const resolvedConversationId = requireConversationId(resolvedConversation.id);
 
       cancel();
@@ -999,7 +1068,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
     if (knownConversation) {
       if (!isConversationRunningStatus(knownConversation.status)) return false;
-      setConversation(knownConversation);
+      rememberConversation(knownConversation);
       setConversationStatus(statusKey);
     } else if (!isConversationRunningStatus(statusRef.current)) {
       const latestConversation = await refreshConversation(id);

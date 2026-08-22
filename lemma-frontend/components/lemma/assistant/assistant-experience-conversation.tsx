@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, type ReactNode, type RefObject } from "react";
+import { Fragment, memo, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { useLoadingGate } from "@/components/shared/loading";
 import { InlineLoader } from "@/components/brand/loader";
@@ -18,6 +18,36 @@ import { AssistantTurnView } from "./assistant-turn";
 
 /** How long a transcript stays silently empty before it admits it is fetching. */
 const TRANSCRIPT_WAIT_DELAY_MS = 600;
+
+/**
+ * The key the transcript column is mounted under.
+ *
+ * Keyed by conversation, so moving between two of them mounts a fresh column
+ * rather than diffing one transcript into another. A conversation created from
+ * the new-conversation screen is not such a move: the turn that created it is
+ * already in this column, and re-keying under it unmounts that turn mid-flight
+ * and replays the column's entrance animation over it — the message you just
+ * sent blinking out and back. So an id arriving where there was none is the
+ * same column, and only a move between two conversations is a new one.
+ *
+ * Adjust-during-render rather than a ref, which is the pattern React documents
+ * for state derived from a prop change (and the one `AssistantTurnView` already
+ * uses for `seenLive`).
+ */
+function useTranscriptColumnKey(activeConversationId: string | null): string {
+  const [columnKey, setColumnKey] = useState(() => activeConversationId ?? "new-conversation");
+  const [seenConversationId, setSeenConversationId] = useState(activeConversationId);
+
+  if (seenConversationId !== activeConversationId) {
+    const adoptedByNewConversation = seenConversationId === null && activeConversationId !== null;
+    setSeenConversationId(activeConversationId);
+    if (!adoptedByNewConversation) {
+      setColumnKey(activeConversationId ?? "new-conversation");
+    }
+  }
+
+  return columnKey;
+}
 
 export interface AssistantExperienceConversationProps {
   messagesContainerRef: RefObject<HTMLDivElement | null>;
@@ -103,6 +133,7 @@ export const AssistantExperienceConversation = memo(function AssistantExperience
   // centre the empty state and the composer together as one group, instead of
   // stranding the empty state at one end of a tall blank page.
   const shrinkToContent = fillEmptyState && showEmptyState;
+  const transcriptColumnKey = useTranscriptColumnKey(activeConversationId);
 
   // Far longer than the 120ms a skeleton waits, because the two are answering
   // different questions. A skeleton appears once a wait is long enough to be
@@ -167,7 +198,7 @@ export const AssistantExperienceConversation = memo(function AssistantExperience
           announce a load. Arrival motion belongs to a message as it appears, not
           to the transcript as a whole. */}
       <div
-        key={activeConversationId || "new-conversation"}
+        key={transcriptColumnKey}
         className="lchat-col"
       >
       {turns.map((turn, index) => {

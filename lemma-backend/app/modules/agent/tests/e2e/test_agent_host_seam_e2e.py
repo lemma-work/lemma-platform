@@ -42,17 +42,17 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     MessageKind,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host import (
+from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
     RemoteHarness,
     _AgentHostRunConfig,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_dispatch import (
+from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     _resumed_tool_call_id,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
@@ -359,7 +359,7 @@ class _RecordingArtifactWriter:
         self.mime_types: list[str] = []
 
     async def materialize_event(self, *, payload, **_kwargs):
-        from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+        from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
             AgentHostArtifactMaterialization,
             _inline_images,
         )
