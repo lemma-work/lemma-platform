@@ -544,6 +544,12 @@ class UsageService(UsagePricing):
         )
         if isinstance(resolved, UsageLimitValues):
             return resolved
+        if resolved is None:
+            # The port's documented "unlimited": a configured provider may
+            # cover some organizations and not others. Unreachable before a
+            # provider existed at all -- which is also why the tuple fallback
+            # below never met it.
+            return UsageLimitValues()
         # Backwards-compatible guard for older tests/adapters returning
         # ``(org_monthly, user_weekly)``.
         org_monthly, user_weekly = resolved

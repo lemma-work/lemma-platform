@@ -398,6 +398,15 @@ class SearchClient:
     def __init__(self, search_engine: AvailableSearchEngines | None = None):
         self._pinned = search_engine
         self.search_engine = self._get_client(search_engine)
+        # True when nothing is configured and the choice fell through to the
+        # keyless scraper. A caller deserves to know the difference between a
+        # provider that answered "nothing" and no provider being looked at at
+        # all -- see PS-OPS-030 and DEV-OPS-005.
+        self.is_unconfigured_fallback = (
+            search_engine is None
+            and settings.web_search_provider.strip().lower() == "auto"
+            and isinstance(self.search_engine, DuckDuckGoSearchClient)
+        )
 
     def _get_client(self, engine: AvailableSearchEngines | None) -> BaseSearchClient:
         if engine is not None:

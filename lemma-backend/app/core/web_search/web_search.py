@@ -96,6 +96,22 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
             exclude_domains=request.exclude_domains,
         )
 
+        # An empty answer from a deployment with no provider is not a
+        # successful search -- it is a facility that was never available. The
+        # caller cannot tell "nothing exists" from "nothing was looked at", and
+        # the two lead to opposite decisions. See PS-OPS-030, DEV-OPS-005.
+        if not results and search_client.is_unconfigured_fallback:
+            return WebSearchResponse(
+                success=False,
+                results=[],
+                message="Web search is unavailable on this deployment",
+                error=(
+                    "No web-search provider is configured. Set "
+                    "LEMMA_WEB_SEARCH_PROVIDER, or configure SearXNG or Brave "
+                    "for this deployment."
+                ),
+            )
+
         return WebSearchResponse(
             success=True,
             results=results,
