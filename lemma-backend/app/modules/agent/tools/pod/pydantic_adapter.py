@@ -9,98 +9,35 @@ action through ``request_approval``.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-from pydantic_ai import BinaryContent, ToolReturn
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
-from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.tools.vision_delegation import describe_document_pages
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.models import (
-    GetFileUrlRequest,
     PodGetRecordsRequest,
-    PodListFilesRequest,
-    PodReadFileRequest,
     PodTablesRequest,
-    PodWriteFileRequest,
     PodWriteRecordRequest,
     QueryRequest,
-    SearchFilesRequest,
-    ViewDocumentPagesRequest,
 )
 from app.modules.agent.tools.pod.pod_data_access import (
     PodServices,
     empty_data_error,
-    pod_services,
 )
-from app.modules.agent.tools.tool_errors import approval_error_result
-from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
-from app.modules.agent.tools.pod.pod_paths import normalize_json_paths, to_me_path
+from app.modules.agent.tools.pod.pod_common import _has_meaningful_data, _run
+from app.modules.agent.tools.pod.pod_file_tools import (
+    pod_get_file_url,
+    pod_list_files,
+    pod_read_file,
+    pod_search_files,
+    pod_view_document_pages,
+    pod_write_file,
+)
 from app.modules.datastore.contracts import (
-    DatastoreConflictError,
-    DatastoreFileUpdateEntity,
     TableContext,
 )
-from app.composition.agent_datastore import build_file_app_url, build_object_url
-
-
-def _resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
-    """Resolve a possibly-relative pod path against the agent's pod cwd."""
-    if path.startswith("/"):
-        return path
-    cwd = deps.get_pod_cwd().rstrip("/")
-    return f"{cwd}/{path}" if path else cwd
-
-
-def _split_pod_path(path: str) -> tuple[str, str]:
-    """Split an absolute pod path into (directory_path, name)."""
-    normalized = path if path.startswith("/") else f"/{path}"
-    trimmed = normalized.rstrip("/") or "/"
-    if trimmed == "/":
-        raise ValueError("A file path must include a file name.")
-    directory, _, name = trimmed.rpartition("/")
-    return (directory or "/", name)
-
-
-def _has_meaningful_data(data: JsonObject | None) -> bool:
-    """True if ``data`` has at least one non-null, non-blank value.
-
-    Rejects ``None``, ``{}``, and payloads whose values are all null or empty/
-    whitespace strings — the shapes that would otherwise write a blank row. ``0``
-    and ``False`` are real values and count as meaningful.
-    """
-    if not data:
-        return False
-    for value in data.values():
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return True
-    return False
-
-
-async def _run(
-    deps: BaseAgentContext,
-    *,
-    tool_name: str,
-    args: JsonObject,
-    op: Callable[[PodServices], Awaitable["JsonObject | ToolReturn"]],
-) -> "JsonObject | ToolReturn":
-    """Run a pod operation, mapping authorization 403s to ``needs_approval``.
-
-    Most ops return a ``JsonObject``; image tools return a ``ToolReturn`` so the
-    model receives inline image content while only a reference is persisted.
-    """
-    try:
-        async with pod_services(deps) as services:
-            return await op(services)
-    except DomainError as exc:
-        return approval_error_result(exc, tool_name=tool_name, args=args)
 
 
 def _table_summary(table: Any) -> JsonObject:
@@ -128,28 +65,6 @@ def _table_summary(table: Any) -> JsonObject:
             }
             for column in table.columns
         ],
-    }
-
-
-def _file_summary(entity: Any, user_id: Any) -> JsonObject:
-    """Curated view of a file for listings — surfaces whether it's an indexed
-    document and how many pages it has, so the agent knows what to read/view."""
-    metadata = getattr(entity, "metadata", None) or {}
-    status = getattr(entity, "status", None)
-    status_value = status.value if hasattr(status, "value") else status
-    kind = getattr(entity, "kind", None)
-    kind_value = kind.value if hasattr(kind, "value") else kind
-    return {
-        "path": to_me_path(entity.path, user_id),
-        "name": entity.name,
-        "kind": kind_value,
-        "mime_type": getattr(entity, "mime_type", None),
-        "size_bytes": getattr(entity, "size_bytes", None),
-        "status": status_value,
-        "indexed": status_value == "COMPLETED",
-        "page_count": metadata.get("page_count"),
-        "has_markdown": metadata.get("has_markdown", False),
-        "description": getattr(entity, "description", None),
     }
 
 
@@ -311,286 +226,6 @@ async def pod_query(
         return {"success": True, "rows": to_json_value(rows), "total": total}
 
     return await _run(ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op)
-
-
-# --- Files ------------------------------------------------------------------
-
-
-async def pod_write_file(
-    ctx: RunContext[BaseAgentContext],
-    request: PodWriteFileRequest,
-) -> JsonObject:
-    """Write text content to a pod file, creating or overwriting it.
-
-    Without an absolute path, the file lands in your default pod working
-    directory (`/me/c/{date}/{slug}`) — a stable, private location scoped to
-    this conversation. Writes under your own `/me/...` (including that default
-    location) never need approval; writes to a shared pod path may.
-    """
-
-    async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        directory_path, name = _split_pod_path(resolved_path)
-        content_bytes = request.content.encode("utf-8")
-        try:
-            entity = await services.file.create_file(
-                services.ctx.pod_id,
-                name,
-                content_bytes,
-                services.ctx,
-                description=request.description,
-                directory_path=directory_path,
-            )
-            return {
-                "success": True,
-                "path": to_me_path(entity.path, services.ctx.user_id),
-                "size_bytes": entity.size_bytes,
-                "created": True,
-            }
-        except DatastoreConflictError:
-            if not request.overwrite:
-                return {
-                    "success": False,
-                    "path": resolved_path,
-                    "error": (
-                        f"A file already exists at '{resolved_path}'. Pass "
-                        "overwrite=true to replace it."
-                    ),
-                }
-            update_entity = DatastoreFileUpdateEntity(
-                path=resolved_path,
-                content=content_bytes,
-                description=request.description,
-            )
-            plan = await services.file.resolve_update_file(
-                services.ctx.pod_id, update_entity, services.ctx
-            )
-            await services.file.write_update_storage(plan, update_entity)
-            updated = await services.file.persist_update_file(plan)
-            await services.file.finalize_update_file(plan, updated)
-            return {
-                "success": True,
-                "path": to_me_path(updated.path, services.ctx.user_id),
-                "size_bytes": updated.size_bytes,
-                "created": False,
-            }
-
-    return await _run(
-        ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
-    )
-
-
-async def pod_list_files(
-    ctx: RunContext[BaseAgentContext],
-    request: PodListFilesRequest,
-) -> JsonObject:
-    """List pod files under a path.
-
-    ``recursive=false`` (default) lists the immediate files and folders in
-    ``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders
-    plus a sample of files per directory). Without an absolute path, resolves
-    against your default pod working directory (`/me/c/{date}/{slug}`).
-    """
-
-    async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        if request.recursive:
-            tree = await services.file.get_directory_tree(
-                services.ctx.pod_id,
-                services.ctx,
-                root_path=resolved_path,
-                files_per_directory=request.files_per_directory,
-            )
-            return {
-                "success": True,
-                "tree": normalize_json_paths(to_json_value(tree), services.ctx.user_id),
-            }
-        files, cursor = await services.file.list_files(
-            services.ctx.pod_id,
-            services.ctx,
-            directory_path=resolved_path,
-            limit=request.limit,
-        )
-        return {
-            "success": True,
-            "files": [_file_summary(f, services.ctx.user_id) for f in files],
-            "next_cursor": cursor,
-        }
-
-    return await _run(
-        ctx.deps,
-        tool_name="pod_list_files",
-        args=request.model_dump(),
-        op=op,
-    )
-
-
-async def pod_read_file(
-    ctx: RunContext[BaseAgentContext],
-    request: PodReadFileRequest,
-) -> JsonObject:
-    """Read a pod file's text.
-
-    A file that has text of its own -- markdown, plain text, HTML, CSV, code,
-    email -- is returned exactly as it is. A file that has none, because it is a
-    binary document like a PDF or a DOCX, is returned as the markdown it was
-    converted into at upload.
-
-    Use ``pod_view_document_pages`` to *see* pages rather than read them.
-    """
-
-    async def op(services: PodServices) -> JsonObject:
-        return await read_file_text(
-            services, request, _resolve_pod_path(ctx.deps, request.path)
-        )
-
-    return await _run(
-        ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
-    )
-
-
-async def pod_view_document_pages(
-    ctx: RunContext[BaseAgentContext],
-    request: ViewDocumentPagesRequest,
-) -> "JsonObject | ToolReturn":
-    """Render PDF pages as images so you can *see* them (layout, tables, figures).
-
-    Pages are 1-based. Only PDFs can be rendered visually; for other document
-    types use ``pod_read_file`` to read the page text.
-
-    Set ``instructions`` to say what you need from the pages. If this agent's
-    model reads images itself you get the page images inline; otherwise a vision
-    model reads them and returns a description, so this tool works either way.
-    """
-
-    async def op(services: PodServices) -> "JsonObject | ToolReturn":
-        entity, pages = await services.file.render_document_page_images(
-            services.ctx.pod_id,
-            request.path,
-            services.ctx,
-            page_start=request.page_start,
-            page_end=request.page_end,
-        )
-        if not pages:
-            return {
-                "success": False,
-                "path": entity.path,
-                "error": "No pages rendered — the requested pages are out of range.",
-            }
-
-        page_refs = []
-        for page in pages:
-            url, _expires = await build_object_url(
-                services.file.storage, page.storage_key
-            )
-            page_refs.append({"page_number": page.page_number, "url": url})
-
-        # This tool used to hand BinaryContent to whatever model was running.
-        # `view_image` was withheld from text-only models for exactly that
-        # reason; this one was not, so a text-only model asked for a PDF page
-        # and the provider rejected the entire request.
-        if getattr(ctx.deps, "vision_mode", None) is not AgentVisionMode.DIRECT:
-            return await describe_document_pages(
-                ctx.deps,
-                path=entity.path,
-                pages=pages,
-                page_refs=page_refs,
-                instructions=request.instructions,
-            )
-
-        return ToolReturn(
-            return_value={
-                "success": True,
-                "path": entity.path,
-                "pages": page_refs,
-                "rendered_pages": [p.page_number for p in pages if not p.cached],
-                "cached_pages": [p.page_number for p in pages if p.cached],
-            },
-            content=[
-                BinaryContent(data=page.jpeg_bytes, media_type="image/jpeg")
-                for page in pages
-            ],
-        )
-
-    return await _run(
-        ctx.deps,
-        tool_name="pod_view_document_pages",
-        args=request.model_dump(),
-        op=op,
-    )
-
-
-async def pod_get_file_url(
-    ctx: RunContext[BaseAgentContext],
-    request: GetFileUrlRequest,
-) -> JsonObject:
-    """Get a URL for a pod file, to share a link or embed an image.
-
-    ``app`` (default) returns an in-app link for a signed-in member plus a
-    short-lived download url. ``public`` mints a signed link anyone can open —
-    it expires and dies after ``max_hits`` downloads."""
-
-    async def op(services: PodServices) -> JsonObject:
-        if request.url_type == "public":
-            (
-                entity,
-                signed_url,
-                expires_at,
-                max_hits,
-            ) = await services.file.create_signed_url(
-                services.ctx.pod_id,
-                request.path,
-                services.ctx,
-                expires_seconds=request.expires_seconds,
-                max_hits=request.max_hits,
-            )
-            return {
-                "success": True,
-                "path": to_me_path(entity.path, services.ctx.user_id),
-                "url_type": "public",
-                "signed_url": signed_url,
-                "expires_at": expires_at.isoformat(),
-                "max_hits": max_hits,
-            }
-
-        entity, url, expires_at = await services.file.get_file_url(
-            services.ctx.pod_id,
-            request.path,
-            services.ctx,
-            expires_seconds=request.expires_seconds,
-        )
-        return {
-            "success": True,
-            "path": to_me_path(entity.path, services.ctx.user_id),
-            "url_type": "app",
-            "url": url,
-            "app_url": build_file_app_url(services.ctx.pod_id, entity.path),
-            "expires_at": expires_at.isoformat(),
-        }
-
-    return await _run(
-        ctx.deps,
-        tool_name="pod_get_file_url",
-        args=request.model_dump(),
-        op=op,
-    )
-
-
-async def pod_search_files(
-    ctx: RunContext[BaseAgentContext],
-    request: SearchFilesRequest,
-) -> JsonObject:
-    """Semantic/keyword search across indexed pod files."""
-
-    async def op(services: PodServices) -> JsonObject:
-        return await search_files(services, request)
-
-    return await _run(
-        ctx.deps,
-        tool_name="pod_search_files",
-        args=request.model_dump(),
-        op=op,
-    )
 
 
 pod_toolset = FunctionToolset[BaseAgentContext](

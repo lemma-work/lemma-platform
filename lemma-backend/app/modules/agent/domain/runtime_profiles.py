@@ -70,26 +70,6 @@ class RuntimeProfileAvailability(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
-class _UnsetType:
-    """Distinguishes "the caller did not mention this field" from "null".
-
-    A PATCH that omits ``api_key`` must keep the stored one; a PATCH that sends
-    ``null`` must clear it. Both arrive as absent-or-None without a sentinel,
-    and defaulting either way silently destroys or ignores a credential.
-    """
-
-    __slots__ = ()
-
-    def __bool__(self) -> bool:
-        return False
-
-    def __repr__(self) -> str:
-        return "UNSET"
-
-
-UNSET = _UnsetType()
-
-
 class RuntimeModelCapability(str, Enum):
     TEXT = "TEXT"
     TOOLS = "TOOLS"

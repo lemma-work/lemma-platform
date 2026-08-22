@@ -9,7 +9,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.conversation_service import ConversationService
+import app.modules.agent.services.conversation_queries as queries
 
 
 class _ConversationRepository:
@@ -45,17 +45,20 @@ async def test_list_conversations_resolves_agent_selection(
     expected_scope,
     expected_agent_id,
     resolve_count,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _ConversationRepository()
     resolved_agent_id = uuid4()
-    service = ConversationService.__new__(ConversationService)
-    service.conversation_repository = repository
-    service._expected_agent_id = AsyncMock(
-        side_effect=lambda *, pod_id, agent_name: (
+    # The real query object: `list_conversations` lives there now, and a
+    # half-built service would only prove the test's own wiring.
+    service = queries.ConversationQueries(None, repository, None)
+    resolve_expected = AsyncMock(
+        side_effect=lambda _repo, *, pod_id, agent_name: (
             resolved_agent_id if agent_name is not None else None
         )
     )
-    service._require_agent_action = AsyncMock()
+    monkeypatch.setattr(queries, "resolve_expected_agent_id", resolve_expected)
+    monkeypatch.setattr(queries, "require_agent_action", AsyncMock())
 
     await service.list_conversations(
         pod_id=uuid4(),
@@ -69,7 +72,7 @@ async def test_list_conversations_resolves_agent_selection(
     repository_selection = repository.kwargs["agent_selection"]
     assert repository_selection.scope is expected_scope
     assert repository_selection.value == resolved_expected_agent_id
-    assert service._expected_agent_id.await_count == resolve_count
+    assert resolve_expected.await_count == resolve_count
 
 
 class _Result:

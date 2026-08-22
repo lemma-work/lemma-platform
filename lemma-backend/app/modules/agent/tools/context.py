@@ -7,10 +7,8 @@ without importing anything from the old agent module.
 
 from __future__ import annotations
 
-import os
 from uuid import UUID
 
-import aiofiles
 from pydantic import BaseModel, Field
 
 from app.modules.agent.domain.context import AgentContext
@@ -110,11 +108,3 @@ class BaseToolResponse(BaseModel):
         default=None,
         description="Human-readable status or follow-up information for the tool call.",
     )
-
-
-async def get_prompt(prompt_name: str) -> str:
-    """Load an Agent prompt by name."""
-    current_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    path = os.path.join(current_dir, f"prompts/{prompt_name}.md")
-    async with aiofiles.open(path, "r") as file:
-        return await file.read()

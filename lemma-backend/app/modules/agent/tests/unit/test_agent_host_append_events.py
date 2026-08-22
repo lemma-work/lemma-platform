@@ -22,13 +22,13 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEventType,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
     AgentHostProtocolViolation,
 )

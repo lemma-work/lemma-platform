@@ -33,40 +33,40 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
 )
-from app.modules.agent.infrastructure.agent_host_channels import poke_host
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.channels import poke_host
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     StreamedEvent,
     agent_host_event_stream,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import (
+from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
     AgentHostArtifactWriter,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     error_event,
     event_text,
     is_terminal_event,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_dispatch import (
+from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     enqueue_run,
     refresh_credential,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_config import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     _AgentHostRunConfig,
     _agent_host_run_config,
     _resolve_pod_cwd,
 )
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.services.run_suspension import run_suspended_on
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
     DispatchedRun,
@@ -77,11 +77,11 @@ from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
     failure_events,
     terminal_checkpoint_state,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_stream_reader import (
+from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import (
     StreamReader,
     StreamUnavailable,
 )
-from app.modules.agent.infrastructure.agent_host_final_answer import (
+from app.modules.agent.infrastructure.agent_host.final_answer import (
     adopt_recorded_final_answer,
 )
 from app.modules.agent.tools.final_answer.final_answer_toolset import (

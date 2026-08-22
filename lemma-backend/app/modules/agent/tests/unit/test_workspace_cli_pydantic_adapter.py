@@ -23,7 +23,7 @@ async def test_workspace_cli_pydantic_wrapper_uses_docstring_description(
         )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.workspace_cli.workspace_cli.exec_command",
+        "app.modules.agent.tools.workspace_cli.workspace_cli.exec_command_internal",
         fake_exec_command,
     )
     run_ctx = RunContext(

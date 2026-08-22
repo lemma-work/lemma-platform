@@ -70,14 +70,14 @@ class SnoozeWakeService:
         token = set_current_context(ctx)
         try:
             service = self._conversation_service()
-            await service.append_pause_tool_return(
+            await service.pauses.append_pause_tool_return(
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 tool_call_id=claimed.tool_call_id,
                 tool_name=SNOOZE_TOOL_NAME,
                 tool_result=self._tool_result(claimed, reason),
             )
-            await service.start_resume_run_if_ready(
+            await service.pauses.start_resume_run_if_ready(
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 resumed_tool_call_id=claimed.tool_call_id,

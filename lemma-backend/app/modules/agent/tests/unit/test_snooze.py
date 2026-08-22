@@ -8,6 +8,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.services.pause_resume import PauseResume
+
+import app.modules.agent.services.conversation_turns as turns
 import app.modules.agent.tools.snooze.pydantic_adapter as adapter
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
@@ -480,7 +483,6 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     it. So Stop returned success, the conversation stayed WAITING, and the timer
     still fired later and resumed the agent the user had just stopped.
     """
-    from app.modules.agent.services import conversation_service as cs
 
     wait = _wait(external_ref=str(uuid4()), spec={"note_to_self": "post it"})
     removed: list[str] = []
@@ -505,12 +507,13 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     async def _fake_cancel(timer_id):
         removed.append(timer_id)
 
-    monkeypatch.setattr(cs, "AgentConversationWaitRepository", _Waits)
-    monkeypatch.setattr(cs, "cancel_snooze_wake", _fake_cancel)
+    monkeypatch.setattr(turns, "AgentConversationWaitRepository", _Waits)
+    monkeypatch.setattr(turns, "cancel_snooze_wake", _fake_cancel)
 
-    service = cs.ConversationService.__new__(cs.ConversationService)
-    service.uow = None
-    service.conversation_repository = _Conversations()
+    conversations = _Conversations()
+    service = turns.TurnCoordinator(
+        None, conversations, None, None, PauseResume(None, conversations, None), None
+    )
 
     async def _append(**kwargs):
         appended.append(kwargs)
@@ -519,16 +522,16 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     async def _resume(**kwargs):
         resumed.append("resumed")
 
-    monkeypatch.setattr(service, "append_pause_tool_return", _append)
-    monkeypatch.setattr(service, "start_resume_run_if_ready", _resume)
+    monkeypatch.setattr(service.pauses, "append_pause_tool_return", _append)
+    monkeypatch.setattr(service.pauses, "start_resume_run_if_ready", _resume)
 
     conversation = SimpleNamespace(id=wait.conversation_id, status=None)
     await service._cancel_active_snooze(conversation=conversation)
 
     assert wait.status is AgentWaitStatus.CANCELLED
     assert removed == [wait.external_ref]
-    assert statuses == [cs.ConversationStatus.STOPPED]
-    assert conversation.status is cs.ConversationStatus.STOPPED
+    assert statuses == [turns.ConversationStatus.STOPPED]
+    assert conversation.status is turns.ConversationStatus.STOPPED
 
     # The paused call still gets a return: a tool call with no return is dropped
     # when history is rebuilt, and the model would see a turn ending mid-thought.

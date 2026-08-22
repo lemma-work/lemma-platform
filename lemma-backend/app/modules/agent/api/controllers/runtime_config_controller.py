@@ -25,7 +25,7 @@ from app.modules.agent.api.schemas import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )

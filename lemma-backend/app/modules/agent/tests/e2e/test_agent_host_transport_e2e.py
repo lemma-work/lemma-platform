@@ -33,10 +33,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_session_memory import (
+from app.modules.agent.infrastructure.agent_host.session_memory import (
     remember_provider_session,
     resume_session_id,
 )

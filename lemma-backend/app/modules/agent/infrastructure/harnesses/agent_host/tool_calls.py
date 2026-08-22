@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.modules.agent.domain.value_objects import JsonObject, MessageDraft
-from app.modules.agent.infrastructure.harnesses.agent_host_tool_payload import (
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
     raw_tool_args,
     tool_args,
     tool_metadata,

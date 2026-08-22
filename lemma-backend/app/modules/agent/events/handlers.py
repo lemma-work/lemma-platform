@@ -49,7 +49,7 @@ from app.modules.agent.infrastructure.harnesses import (
     PydanticAIHarness,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
     PodFileAgentHostArtifactWriter,
 )
 from app.modules.agent.infrastructure.repositories import (
@@ -445,8 +445,8 @@ async def reconcile_agent_host_dispatch() -> None:
     leases whose heartbeat lapsed, which otherwise stay non-terminal forever and
     are never collected by retention.
     """
-    from app.modules.agent.infrastructure import agent_host_recovery
-    from app.modules.agent.infrastructure.agent_host_channels import poke_host
+    from app.modules.agent.infrastructure.agent_host import recovery
+    from app.modules.agent.infrastructure.agent_host.channels import poke_host
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     # Only database trouble is swallowed here: it is the transient failure this
@@ -454,8 +454,8 @@ async def reconcile_agent_host_dispatch() -> None:
     # bug and surfaces through the worker's own job-failure path.
     try:
         async with worker_ctx.uow() as uow:
-            host_ids = await agent_host_recovery.cancel_abandoned_host_runs(uow.session)
-            await agent_host_recovery.reconcile_expired_leases(uow.session)
+            host_ids = await recovery.cancel_abandoned_host_runs(uow.session)
+            await recovery.reconcile_expired_leases(uow.session)
             await uow.commit()
     except SQLAlchemyError:
         logger.error(
@@ -476,12 +476,12 @@ async def cleanup_agent_host_retained_state() -> None:
     accumulated for the lifetime of the deployment and consumed pairing codes
     were never purged.
     """
-    from app.modules.agent.infrastructure import agent_host_recovery
+    from app.modules.agent.infrastructure.agent_host import recovery
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     try:
         async with worker_ctx.uow() as uow:
-            await agent_host_recovery.cleanup_retained_state(uow.session)
+            await recovery.cleanup_retained_state(uow.session)
             await uow.commit()
     except SQLAlchemyError:
         logger.error(
