@@ -93,6 +93,37 @@ class UsageLimitPort(Protocol):
         *,
         organization_id: UUID | None,
         user_id: UUID,
-    ) -> UsageLimitValues:
-        """Return applicable spend limits; ``None`` means unlimited."""
+    ) -> UsageLimitValues | None:
+        """Return applicable spend limits; ``None`` means unlimited.
+
+        The annotation said ``UsageLimitValues`` while this line said ``None``
+        was allowed. No provider existed to return either, so nothing caught
+        the disagreement -- see :func:`normalize_limit_values`.
+        """
         ...
+
+
+def normalize_limit_values(resolved: object) -> UsageLimitValues:
+    """What a limit port returned, as ``UsageLimitValues``.
+
+    Three shapes reach this. ``UsageLimitValues`` is the contract. ``None`` is
+    the documented "unlimited" -- a provider may cover some organizations and
+    not others. A two-tuple is an older adapter shape kept working here rather
+    than in the service.
+
+    It exists because the caller used to unpack whatever arrived as a tuple, so
+    the documented ``None`` raised ``TypeError`` and 500'd every conversation
+    start. That was unreachable while no provider was ever registered, which is
+    exactly why it survived until one was.
+    """
+    if resolved is None:
+        return UsageLimitValues()
+    if isinstance(resolved, UsageLimitValues):
+        return resolved
+    org_monthly, user_weekly = resolved  # type: ignore[misc]
+    return UsageLimitValues(
+        org_monthly_limit_usd=org_monthly,
+        user_weekly_limit_usd=user_weekly,
+        user_monthly_limit_usd=None,
+        user_limit_scope="organization",
+    )

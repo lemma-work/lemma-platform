@@ -79,7 +79,7 @@ async def create_table(
     operation_id="table.list",
     summary="List Tables",
     description="List tables in a datastore.",
-    dependencies=[require_pod_membership("list tables")],
+    dependencies=[require_pod_membership("list tables", enumerates=True)],
 )
 async def list_tables(
     pod_id: UUID,

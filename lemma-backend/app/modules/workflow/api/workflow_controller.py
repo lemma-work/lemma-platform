@@ -387,6 +387,7 @@ async def visualize_workflow(
     _verify_pod(workflow, pod_id)
 
     return templates.TemplateResponse(
+        request,
         "workflow_view.html",
-        {"request": request, "workflow": workflow.model_dump(mode="json")},
+        {"workflow": workflow.model_dump(mode="json")},
     )

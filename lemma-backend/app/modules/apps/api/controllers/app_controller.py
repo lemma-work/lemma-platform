@@ -138,7 +138,7 @@ async def create_app_from_widget(
     status_code=status.HTTP_200_OK,
     operation_id="app.list",
     summary="List Apps",
-    dependencies=[require_pod_membership("list apps")],
+    dependencies=[require_pod_membership("list apps", enumerates=True)],
 )
 async def list_apps(
     pod_id: UUID,
@@ -169,6 +169,7 @@ async def list_apps(
     response_model=AppDetailResponse,
     status_code=status.HTTP_200_OK,
     operation_id="app.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App",
 )
 async def get_app(
@@ -312,6 +313,7 @@ async def upload_app_bundle(
     "/{app_name}/assets",
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.root.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App Root Asset",
 )
 async def get_app_root_asset(
@@ -336,6 +338,7 @@ async def get_app_root_asset(
     "/{app_name}/assets/{asset_path:path}",
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App Asset",
 )
 async def get_app_asset(
@@ -364,6 +367,7 @@ async def get_app_asset(
     summary="Download App Source Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("download an app's source")],
 )
 async def download_app_source_archive(
     pod_id: UUID,
@@ -389,6 +393,7 @@ async def download_app_source_archive(
     summary="Download App Dist Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("download an app's build")],
 )
 async def download_app_dist_archive(
     pod_id: UUID,

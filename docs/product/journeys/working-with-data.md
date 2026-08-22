@@ -248,7 +248,7 @@ put it there having to think about it on every operation.
 ## Capability: Make documents readable and searchable
 
 ### PS-DATA-040 — An uploaded document becomes readable text
-**Status:** gap
+**Status:** covered
 
 - When a person uploads a document, the system shall convert it to Markdown and
   attach that to the file, so a person or an agent can read it without handling
@@ -259,11 +259,6 @@ put it there having to think about it on every operation.
   does not block the person who uploaded them.
 - Where a person supplies their own Markdown for a file, the system shall use it
   in place of what it would have extracted.
-
-> **Gap:** conversion, status reporting and background processing all hold.
-> Supplying your own Markdown does not, where the file was uploaded with
-> indexing off: the call answers 200 and stores nothing. See `DEV-DATA-001`;
-> held by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `file.upload`, `file.get`, `file.markdown.attach`, `file.markdown.detach`, `file.child.get`
 

@@ -554,7 +554,13 @@ async def test_list_pod_members_requires_membership(
     "org_role,pod_member_role,required_role,expected",
     [
         (OrganizationRole.ORG_OWNER, None, PodRole.ADMIN, True),
-        (OrganizationRole.ORG_EDITOR, None, PodRole.ADMIN, True),
+        # An organization editor is not a pod member here, and reaches nothing:
+        # ownership reaches every pod, everybody else reaches the pods they
+        # belong to. One rule, the same one ``PodService.get_pod`` applies --
+        # an editor who could administer a pod they cannot open was the other
+        # half of PS-POD-030.
+        (OrganizationRole.ORG_EDITOR, None, PodRole.ADMIN, False),
+        (OrganizationRole.ORG_EDITOR, PodRole.ADMIN, PodRole.ADMIN, True),
         (OrganizationRole.ORG_MEMBER, PodRole.ADMIN, PodRole.EDITOR, True),
         (OrganizationRole.ORG_MEMBER, PodRole.EDITOR, PodRole.USER, True),
         (OrganizationRole.ORG_MEMBER, PodRole.USER, PodRole.VIEWER, True),

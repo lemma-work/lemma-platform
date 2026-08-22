@@ -27,6 +27,7 @@ this for the CLI suite.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import socket
 import subprocess
@@ -71,6 +72,14 @@ FUNCTION_IMAGE = "lemma-function:scenarios"
 #: download, for one) points here rather than at the port the server is really
 #: on. `ApiDriver` rewrites those back; see `drivers/api.py`.
 PUBLIC_API_URL = "https://scenarios.lemma.example"
+
+#: Organizations whose slug starts with this are capped at zero monthly spend by
+#: the stack's configuration below. PS-OPS-012 promises work over a limit is
+#: refused, and until a deployment could state a limit at all there was nowhere
+#: that promise could run. Scoped by slug prefix so the cap lands on the probe
+#: organization a scenario creates and on nothing else -- every other
+#: organization on the stack stays unlimited.
+SPEND_CAP_PROBE_SLUG_PREFIX = "spend-cap-probe"
 
 #: The domain this stack's email surfaces get their addresses under.
 RESEND_INBOUND_DOMAIN = "scenarios.lemma.example"
@@ -329,6 +338,12 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
         "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
         "AUTH_ABUSE_PROTECTION_ENABLED": "false",
+        # A deployment that states its own spend limits, so the refusal path in
+        # PS-OPS-012 has somewhere to run. Only the probe organization is
+        # capped; see SPEND_CAP_PROBE_SLUG_PREFIX.
+        "USAGE_ORG_LIMIT_OVERRIDES_JSON": json.dumps(
+            [{"slug_prefix": SPEND_CAP_PROBE_SLUG_PREFIX, "monthly_limit_usd": 0}]
+        ),
         "AUTH_ALTCHA_ENABLED": "false",
         # The one substitution the stack makes, and it is deliberate: agent runs
         # use a deterministic scripted model rather than a real provider. It is a

@@ -1,12 +1,7 @@
-"""Building a pod → a pod always has somebody who can administer it.
-
-Written to the behaviour we want and marked `xfail(strict=True)`: it fails the
-build when the code catches up, so the marker cannot outlive the bug.
-"""
+"""Building a pod → a pod always has somebody who can administer it."""
 
 from __future__ import annotations
 
-import pytest
 
 from harness import capability, covers, journey, proves, scenario
 
@@ -16,14 +11,6 @@ pytestmark = [journey("Building a pod"), capability("Change and remove membershi
 @scenario("A pod cannot be left with no admin")
 @proves("PS-POD-041")
 @covers("pod.member.remove", "pod.member.update_roles")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-POD-002: neither removal nor a role change checks whether the pod "
-        "would be left without an admin. Recoverable — an organization owner "
-        "bypasses pod roles — but nothing says so at the time."
-    ),
-)
 async def test_the_last_pod_admin_cannot_step_down(world):
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()

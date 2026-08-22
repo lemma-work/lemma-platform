@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 
 pytestmark = [journey("Automating work"), capability("Build a workflow")]
@@ -123,10 +124,6 @@ async def test_answering_a_run_that_is_not_waiting_is_refused(pod):
     )
 
 
-@pytest.mark.xfail(
-    reason="DEV-FLOW-001: both visualize endpoints 500 — the two-argument TemplateResponse was removed",
-    strict=True,
-)
 @scenario("A person sees the path a run actually took")
 @proves("PS-FLOW-002")
 @covers("workflow.run.visualize")

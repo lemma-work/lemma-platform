@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 140 |
-| `gap` | 17 |
+| `covered` | 157 |
+| `gap` | 0 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 336.
+Scenario tests declaring a promise: 342.
 
 ## Contract coverage
 
@@ -50,7 +50,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent` |
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
-| `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_an_unpaired_host_is_refused` |
+| `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_dispatched_work_is_claimed_exactly_once`, `test_an_unpaired_host_is_refused` |
 
 ## [Automating work](journeys/automating-work.md)
 
@@ -64,11 +64,11 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `covered` | `test_a_sleeping_function_is_stopped`, `test_a_spinning_function_is_stopped` |
 | `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_runs_to_completion`, `test_an_unrunnable_graph_is_refused`, `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it`, `test_a_workflow_can_be_changed` |
-| `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised`, `test_a_run_can_be_visualised` |
+| `PS-FLOW-002` A person can see the shape of a workflow before running it | `covered` | `test_a_workflow_can_be_visualised`, `test_a_run_can_be_visualised` |
 | `PS-FLOW-010` A person starts a workflow and follows it | `covered` | `test_a_workflow_runs_to_completion`, `test_workflow_runs_are_recorded`, `test_a_workflows_runs_are_listed` |
 | `PS-FLOW-011` A run that waits survives the wait | `covered` | `test_a_waiting_run_is_held`, `test_answering_resumes_the_run`, `test_a_repeated_answer_resumes_once` |
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
-| `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_finished_run_is_refused` |
+| `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_an_outsider_cannot_create_a_workflow` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 
@@ -82,15 +82,15 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_a_member_can_be_found`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `gap` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
+| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
 | `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions` |
-| `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
+| `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
-| `PS-POD-040` Removing someone from a pod takes their access away immediately | `gap` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
-| `PS-POD-041` A pod always has at least one admin | `gap` | `test_the_last_pod_admin_cannot_step_down` |
-| `PS-POD-050` Deleting a pod stops the work it was doing | `gap` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
+| `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
+| `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down` |
+| `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
@@ -120,17 +120,17 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
-| `PS-ONB-014` Two organizations may share a display name | `gap` | `test_two_organizations_may_share_a_display_name` |
+| `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-020` An invited person joins with the role they were offered | `gap` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
-| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `gap` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
+| `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
+| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_a_person_sees_their_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join` |
 | `PS-ONB-040` An owner changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles` |
-| `PS-ONB-041` An organization always has at least one owner | `gap` | `test_the_last_owner_cannot_step_down` |
+| `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 
@@ -143,10 +143,10 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too` |
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
 | `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
-| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `gap` | — |
-| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
+| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `covered` | `test_work_over_the_limit_is_refused_clearly` |
+| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `covered` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
-| `PS-OPS-030` The platform reports its own health honestly | `gap` | `test_web_search_says_when_it_is_unavailable` |
+| `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
 
@@ -164,7 +164,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
-| `PS-PACK-031` An app reaches the people it is meant for | `gap` | `test_an_asset_without_a_release_is_not_found`, `test_an_outsider_cannot_read_apps` |
+| `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest` |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
@@ -196,7 +196,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
 | `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
 | `PS-ACCESS-022` Approving for a session means that session only | `covered` | `test_a_session_approval_stops_repeat_asking`, `test_a_session_approval_does_not_leak_to_another_conversation` |
-| `PS-ACCESS-023` Revoking a person's access revokes their software's too | `gap` | `test_removing_a_person_stops_their_delegations` |
+| `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 
@@ -216,7 +216,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused` |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
-| `PS-SURF-030` A person has one place to see what needs them | `gap` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications` |
+| `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
 
@@ -239,7 +239,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-DATA-030` A person uploads a file and it lands where they put it | `covered` | `test_a_file_lands_where_it_was_put`, `test_a_file_lands_in_a_folder`, `test_an_outsider_cannot_read_files` |
 | `PS-DATA-031` A person browses a pod's files as a tree | `covered` | `test_a_folder_lists_its_contents`, `test_a_file_lands_in_a_folder`, `test_the_file_tree_is_browsable` |
 | `PS-DATA-032` A person moves, renames, and deletes files | `covered` | `test_moving_a_file_keeps_its_identity`, `test_deleting_a_file_removes_it` |
-| `PS-DATA-040` An uploaded document becomes readable text | `gap` | `test_supplied_markdown_is_used`, `test_attaching_to_an_unindexed_file_is_refused` |
+| `PS-DATA-040` An uploaded document becomes readable text | `covered` | `test_supplied_markdown_is_used`, `test_attaching_to_an_unindexed_file_is_refused` |
 | `PS-DATA-041` A document that fails to convert is not lost | `covered` | `test_an_unavailable_converter_does_not_burn_attempts`, `test_the_original_bytes_survive` |
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |

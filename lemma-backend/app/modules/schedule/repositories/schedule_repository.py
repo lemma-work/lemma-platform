@@ -365,6 +365,23 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             ], next_cursor
         return [row[0].to_entity() for row in rows], next_cursor
 
+    async def deactivate_all_by_pod(self, pod_id: UUID) -> int:
+        """Disarm every schedule in a pod in one statement.
+
+        System-level, no RBAC filtering, includes internal schedules — the
+        counterpart of ``list_all_by_pod`` for the deleting request, which has
+        to stop schedules firing without paying for a per-schedule external
+        teardown while it holds a transaction open.
+        """
+        stmt = (
+            update(Schedule)
+            .where(Schedule.pod_id == pod_id, Schedule.is_active.is_(True))
+            .values(is_active=False)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return int(result.rowcount or 0)
+
     async def list_all_by_pod(self, pod_id: UUID) -> List[ScheduleEntity]:
         """List every schedule in a pod without RBAC filtering.
 

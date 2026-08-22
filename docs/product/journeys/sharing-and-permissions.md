@@ -140,17 +140,12 @@ rights than the person who asked.
 **Contracts:** `agent.conversation.approval.resolve`, `agent.conversation.approval.list`
 
 ### PS-ACCESS-023 — Revoking a person's access revokes their software's too
-**Status:** gap
+**Status:** covered
 
 - When a person is removed from a pod, the system shall stop honouring
   delegations made in their name, on the next request.
 - The system shall not let work already dispatched on a removed person's behalf
   continue to act with their access.
-
-> **Gap:** a removed member can still read *and still drive* the agent
-> conversations they started — the pod closes to them, the delegation does
-> not. See `DEV-ACCESS-001`. The scenario is written and marked
-> `xfail(strict=True)`, so fixing it turns the build red.
 
 **Contracts:** `pod.member.remove`, `agent.conversation.get`, `function.run`
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
 from harness.waiting import eventually
@@ -104,10 +105,6 @@ class TestApps:
 
         assert app["name"] not in {a["name"] for a in await alice.apps_in(the_pod)}
 
-    @pytest.mark.xfail(
-        reason="DEV-PACK-001: app.get has no pod-membership guard",
-        strict=True,
-    )
     @scenario("Someone outside the pod cannot read its apps")
     @proves("PS-PACK-031")
     @covers("app.list", "app.get")

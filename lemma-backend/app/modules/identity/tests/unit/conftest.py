@@ -26,7 +26,6 @@ def user_repository_mock() -> AsyncMock:
 @pytest.fixture
 def organization_repository_mock() -> AsyncMock:
     mock = AsyncMock()
-    mock.get_by_name.return_value = None
     mock.get_by_slug.return_value = None
     mock.get_email_domain_org.return_value = None
     mock.list_auto_join_organizations_by_email_domain.return_value = ([], None)

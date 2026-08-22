@@ -117,15 +117,26 @@ class OrganizationListResponse(BaseSchema):
 class OrganizationSlugAvailabilityResponse(BaseSchema):
     """Organization slug availability response.
 
-    ``available`` answers only for the slug. When the caller also passes a
-    candidate name, ``name_available`` answers for the globally-unique name; a
-    create succeeds only when both are true.
+    ``available`` answers for the slug, which is the handle and is unique across
+    the deployment. It is the only field that can refuse a create.
+
+    ``name_available`` is answered whenever a candidate name is passed, and is
+    now always ``true``: display names are labels and two organizations may
+    share one (PS-ONB-014). Kept so callers that probe both fields keep one
+    response shape, and deprecated -- do not gate a create on it.
     """
 
     slug: str
     available: bool
     name: str | None = None
-    name_available: bool | None = None
+    name_available: bool | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Always true when a name is supplied: organization display names "
+            "are not unique. Gate creates on `available` instead."
+        ),
+    )
 
 
 class OrganizationMemberListResponse(BaseSchema):

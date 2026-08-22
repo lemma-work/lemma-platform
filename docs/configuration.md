@@ -456,6 +456,36 @@ BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
 
+## Spend limits
+
+Nothing is limited by default: usage is metered but never refused. Set any of
+these and model work that would take an organization or a person past the limit
+is refused with `USAGE_LIMIT_EXCEEDED`, naming which limit was reached. A
+billing or plan module, where one is installed, takes precedence over all of it.
+
+```dotenv
+# USD. Unset means unlimited.
+USAGE_ORG_MONTHLY_LIMIT_USD=
+USAGE_USER_WEEKLY_LIMIT_USD=
+USAGE_USER_MONTHLY_LIMIT_USD=
+
+# Per-organization monthly caps, overriding USAGE_ORG_MONTHLY_LIMIT_USD.
+# A JSON list; each entry names either an exact `slug` or a `slug_prefix`.
+USAGE_ORG_LIMIT_OVERRIDES_JSON=
+```
+
+An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
+`{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
+organizations at once. Slugs are organization handles, not display names.
+`0` refuses all model work for that organization, which is how you park one
+without deleting it.
+
+The most specific rule wins, not the last one written: an exact `slug` beats
+any `slug_prefix`, and a longer prefix beats a shorter one. Two rules of equal
+specificity are settled by the later one. Malformed JSON applies **no**
+per-organization caps and logs a warning at startup — check for
+`usage.limit_overrides.unparseable` if a cap you expected is not biting.
+
 ## Document processing
 
 ```dotenv

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from harness import capability, covers, journey, proves, scenario
 from harness.waiting import eventually, never
 
@@ -144,10 +145,6 @@ async def test_supplied_markdown_is_used(pod_with_file):
 @scenario("Supplying text for a file that is not indexed is refused, not discarded")
 @proves("PS-DATA-040")
 @covers("file.markdown.attach", "file.children.list")
-@pytest.mark.xfail(
-    reason="DEV-DATA-001: attach answers 200 and stores nothing when indexing is off",
-    strict=True,
-)
 async def test_attaching_to_an_unindexed_file_is_refused(pod_with_file):
     alice, pod, _uploaded = pod_with_file
     await alice.uploads(

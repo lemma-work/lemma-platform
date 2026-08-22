@@ -1,9 +1,10 @@
 """What identity an organization may claim: its name, its slug, its domain.
 
-Organization names are globally unique. Onboarding used to walk that ladder from
-the browser — up to twenty sequential creates on the critical path of a signup,
-with the workspace renaming itself under the user while they watched — because a
-derived name has no one to arbitrate a collision. This does the walk in one call
+An organization's *slug* is globally unique; its display name is a label and
+may be shared (PS-ONB-014). Onboarding used to walk that ladder from the browser
+— up to twenty sequential creates on the critical path of a signup, with the
+workspace renaming itself under the user while they watched — because a derived
+name has no one to arbitrate a collision. This does the walk in one call
 instead.
 
 Kept out of ``organization_service`` deliberately: that file is already over the
@@ -106,3 +107,88 @@ async def resolve_email_domain_for_policy(
             "This email domain is already taken by another organization"
         )
     return owner_domain
+
+
+GetBySlug = Callable[[str], Awaitable[Any | None]]
+
+
+async def assign_organization_identity(
+    entity: Any,
+    *,
+    get_by_slug: GetBySlug,
+    resolve_conflicts: bool,
+) -> None:
+    """Settle ``entity``'s name and slug, or refuse.
+
+    ``resolve_conflicts`` is for a name the user did not choose -- the one
+    onboarding derives for a first workspace. There the walk picks a
+    ``(name, slug)`` pair whose *handle* is free rather than dead-ending
+    somebody who never typed a name. A slug the user did type still conflicts
+    loudly, because silently creating ``acme-2`` for someone who asked for
+    ``acme`` would be worse than telling them.
+
+    Only the slug is ever checked: two organizations may both be called "Acme".
+    """
+
+    async def _is_free(name: str, slug: str) -> bool:
+        del name  # `IsFree` is asked about the pair; the label is not scarce.
+        return await get_by_slug(slug) is None
+
+    if resolve_conflicts:
+        try:
+            entity.name, entity.slug = await resolve_available_identity(
+                entity.name, is_free=_is_free
+            )
+        except NoAvailableOrganizationName as exc:
+            raise OrganizationConflictError(
+                "Could not find an available organization name",
+                code=OrganizationConflictError.NAME_TAKEN,
+            ) from exc
+        return
+
+    # Whether the person typed a handle, asked before it is derived from the
+    # name. It decides who the conflict below belongs to.
+    handle_was_chosen = bool(str(entity.slug or "").strip())
+
+    entity.slug = normalize_organization_slug(entity.slug, entity.name)
+    if not await get_by_slug(entity.slug):
+        return
+
+    if handle_was_chosen:
+        # They asked for this handle by name. Handles are scarce and this one is
+        # gone; say so rather than quietly seating them somewhere else.
+        raise OrganizationConflictError(
+            "Organization slug already exists",
+            code=OrganizationConflictError.SLUG_TAKEN,
+        )
+
+    # They typed only a display name, and the handle was derived from it.
+    # Refusing here refuses the *name* -- which PS-ONB-014 says is theirs to
+    # share, because names are how people recognise their own organization and
+    # not how the system tells organizations apart. So the name stands and the
+    # handle moves.
+    entity.slug = await _free_handle_near(entity.slug, get_by_slug)
+
+
+async def _free_handle_near(base: str, get_by_slug: GetBySlug) -> str:
+    """A free handle as close to ``base`` as possible.
+
+    ``acme`` taken becomes ``acme-2``, then ``acme-3``. Past a handful the
+    numbering stops being recognisable, so it falls back to a suffix that
+    cannot realistically collide -- the same shape, and the same reasoning, as
+    :func:`resolve_available_identity`.
+    """
+    for attempt in range(2, READABLE_ATTEMPTS + 2):
+        candidate = f"{base}-{attempt}"
+        if not await get_by_slug(candidate):
+            return candidate
+
+    for _ in range(SUFFIXED_ATTEMPTS):
+        candidate = f"{base}-{uuid4().hex[:6]}"
+        if not await get_by_slug(candidate):
+            return candidate
+
+    raise OrganizationConflictError(
+        "Could not find an available organization handle",
+        code=OrganizationConflictError.SLUG_TAKEN,
+    )

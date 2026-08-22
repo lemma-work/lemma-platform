@@ -10,6 +10,7 @@ from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
 from app.modules.pod.services.pod_join_request_service import PodJoinRequestService
 from app.composition.icons import create_icon_service
+from app.composition.pod_schedules import create_pod_schedule_teardown
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
     PodRepository,
@@ -35,6 +36,7 @@ def get_pod_service(
         pod_role_service=PodRoleService(uow),
         authorization_service=create_authorization_service(uow),
         icon_service=create_icon_service(),
+        schedule_teardown=create_pod_schedule_teardown(uow),
     )
 
 

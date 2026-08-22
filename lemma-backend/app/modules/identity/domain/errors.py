@@ -71,6 +71,7 @@ class OrganizationConflictError(IdentityConflictError):
 
     NAME_TAKEN = "ORGANIZATION_NAME_CONFLICT"
     SLUG_TAKEN = "ORGANIZATION_SLUG_CONFLICT"
+    LAST_OWNER = "ORGANIZATION_LAST_OWNER"
 
     def __init__(self, message: str, code: str = "ORGANIZATION_CONFLICT"):
         super().__init__(message, code=code)
