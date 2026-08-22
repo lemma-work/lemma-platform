@@ -6,6 +6,7 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
 )
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
+    DatastoreAccessDeniedError,
     DatastoreConflictError,
     DatastoreFileNotFoundError,
 )
@@ -14,6 +15,7 @@ from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.files.paths import normalize_datastore_name
 
 __all__ = [
+    "DatastoreAccessDeniedError",
     "DatastoreConflictError",
     "DatastoreFileNotFoundError",
     "DatastoreFileUpdateEntity",

@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
@@ -104,8 +106,16 @@ class _FakeTableService:
 
 
 class _FakeFileService:
+    def __init__(self, agents_md: dict[str, str] | None = None):
+        self._agents_md = agents_md or {}
+
     async def get_directory_tree(self, *args, **kwargs):
         return {}
+
+    async def download_file_content_by_path(self, pod_id, path, ctx):
+        if path not in self._agents_md:
+            raise DatastoreFileNotFoundError()
+        return object(), self._agents_md[path].encode("utf-8")
 
 
 @pytest.fixture
@@ -123,7 +133,13 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(
         brief_mod, "build_table_service", lambda uow: _FakeTableService()
     )
-    monkeypatch.setattr(brief_mod, "build_file_service", lambda uow: _FakeFileService())
+    # A mutable dict a test can populate before calling builder.build(...) —
+    # the closure reads it live, so tests set content on the same object the
+    # fixture already wired in rather than needing a second monkeypatch.
+    agents_md: dict[str, str] = {}
+    monkeypatch.setattr(
+        brief_mod, "build_file_service", lambda uow: _FakeFileService(agents_md)
+    )
     # Fake the Redis brief cache with an in-process dict (fresh per test). TTL<=0
     # disables caching exactly as in production, so the cache accessor returns None.
     fake = _FakeBriefCache()
@@ -134,7 +150,7 @@ def stubbed(monkeypatch):
         return fake
 
     monkeypatch.setattr(brief_mod, "_get_brief_cache", _fake_get_cache)
-    yield
+    yield agents_md
 
 
 def _named_agent():
@@ -264,3 +280,106 @@ async def test_brief_cache_disabled_with_zero_ttl(stubbed, monkeypatch):
     await builder.build(agent=agent, conversation=conv, user_id=uid, pod_id=pid)
 
     assert factory.opened > opened_after_first  # no caching: rebuilt
+
+
+async def test_memory_section_states_scoped_folders_even_with_nothing_written(
+    stubbed,
+):
+    """The 'where to write' grounding must show up before any AGENTS.md exists.
+
+    It's the thing that tells a brand-new agent where its own writes should
+    land — waiting for content to exist first would make it useless on
+    exactly the run that needs it most.
+    """
+    builder = AgentContextBriefBuilder(RecordingUoWFactory())
+    agent = _named_agent()
+
+    brief = await builder.build(
+        agent=agent,
+        conversation=_conversation(False),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+    )
+
+    assert "## Your Memory" in brief
+    assert f"/memory/agents/{agent.name}" in brief
+    assert f"/me/agents/{agent.name}" in brief
+    # Nothing written yet -> no per-scope content blocks.
+    assert "Pod (shared) —" not in brief
+
+
+async def test_memory_section_surfaces_agents_md_content(stubbed):
+    """Each scope's AGENTS.md, when present, is rendered under its own label."""
+    agents_md = stubbed
+    agents_md["/memory/AGENTS.md"] = "- pricing: see memory/pricing.md"
+    agents_md["/me/AGENTS.md"] = "- prefers async updates over calls"
+
+    builder = AgentContextBriefBuilder(RecordingUoWFactory())
+    brief = await builder.build(
+        agent=_named_agent(),
+        conversation=_conversation(False),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+    )
+
+    assert "### Pod (shared) — `/memory/AGENTS.md`" in brief
+    assert "- pricing: see memory/pricing.md" in brief
+    assert "### This user (private) — `/me/AGENTS.md`" in brief
+    assert "- prefers async updates over calls" in brief
+
+
+async def test_memory_section_never_fails_the_brief_when_reads_error(monkeypatch):
+    """A missing/ungranted AGENTS.md degrades to nothing, not a broken brief.
+
+    Every one of these four paths raises the same way an agent's very first
+    run does, before it has written anything: DatastoreFileNotFoundError.
+    """
+
+    class _ExplodingFileService:
+        async def get_directory_tree(self, *args, **kwargs):
+            return {}
+
+        async def download_file_content_by_path(self, *args, **kwargs):
+            raise DatastoreFileNotFoundError()
+
+    monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
+    monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
+    monkeypatch.setattr(brief_mod, "create_function_repository", _FakeListRepo)
+    monkeypatch.setattr(
+        brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+    )
+    monkeypatch.setattr(
+        brief_mod, "build_table_service", lambda uow: _FakeTableService()
+    )
+    monkeypatch.setattr(
+        brief_mod, "build_file_service", lambda uow: _ExplodingFileService()
+    )
+    monkeypatch.setattr(brief_mod, "_get_brief_cache", lambda: None)
+
+    builder = AgentContextBriefBuilder(RecordingUoWFactory())
+    brief = await builder.build(
+        agent=_named_agent(),
+        conversation=_conversation(False),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+    )
+
+    assert "# Runtime Context" in brief  # the rest of the brief still built
+    assert "## Your Memory" in brief
+    assert "###" not in brief  # no scope's content survived the failure
+
+
+async def test_lem_gets_the_same_slug_as_any_other_agent(stubbed):
+    """Lem needs no special-casing: its agent.name is already 'pod_default'."""
+    lem = SimpleNamespace(id=uuid4(), name=DEFAULT_POD_AGENT_NAME, description=None)
+    builder = AgentContextBriefBuilder(RecordingUoWFactory())
+
+    brief = await builder.build(
+        agent=lem,
+        conversation=_conversation(True),  # pod assistant
+        user_id=uuid4(),
+        pod_id=uuid4(),
+    )
+
+    assert "/memory/agents/pod-default/" in brief
+    assert "/me/agents/pod-default/" in brief

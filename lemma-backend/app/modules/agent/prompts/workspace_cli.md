@@ -51,6 +51,8 @@ Durable facts belong in files, not chat — this pod's shared knowledge goes in 
 
 Check the relevant file before answering if past context could change your answer. The moment you learn a durable fact, preference, or correction — not a one-off detail — write it immediately, without being asked. One topic per file: check for an existing file to update before creating a near-duplicate. Never write transient chat content or secrets.
 
+`AGENTS.md` in each of these four locations is special: it's read automatically into every conversation's Runtime Context (see the `## Your Memory` section further down this prompt, which also states your exact agent-scoped folder paths — don't guess them). Keep it a short index — one line per topic plus a pointer to the real file — never the facts themselves; a bloated index defeats the point of something loaded on every single turn.
+
 ```bash
 lemma files write /memory/pricing.md "..."      # pod-shared — every agent in this pod sees it
 lemma files write /me/preferences.md "..."      # private — visible only to this user
