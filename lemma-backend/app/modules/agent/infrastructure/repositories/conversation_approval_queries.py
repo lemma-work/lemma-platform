@@ -8,6 +8,7 @@ repository that the approval reconciliation path uses on its own.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -172,6 +173,56 @@ class ConversationApprovalQueriesMixin:
         )
         row = result.scalar_one_or_none()
         return row.to_entity() if row is not None else None
+
+    async def unresolved_pausing_call_ids(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[str]:
+        """Pausing calls in one run that nothing has answered yet.
+
+        A call counts as answered once it has *either* a recorded approval
+        decision or a persisted tool return. Approvals write the decision first
+        and the return second, so the decision is what unblocks them; a snooze
+        has no decision at all and is answered purely by its return. The union
+        lets one query serve both without either knowing about the other.
+
+        Scoped to the run in SQL. This used to read up to 500 of the
+        conversation's messages and filter them in Python, on the hot path of
+        every approval click -- and past five hundred messages the run's own
+        calls could fall outside the window entirely, which is a wrong answer
+        rather than a slow one.
+        """
+        returns = (
+            select(MessageModel.tool_call_id)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.kind == MessageKind.TOOL_RETURN.value,
+                MessageModel.tool_call_id.is_not(None),
+            )
+            .scalar_subquery()
+        )
+        decisions = (
+            select(AgentApprovalDecisionModel.approval_id)
+            .where(AgentApprovalDecisionModel.conversation_id == conversation_id)
+            .scalar_subquery()
+        )
+        result = await self.session.execute(
+            select(MessageModel.tool_call_id)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.agent_run_id == agent_run_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_name.in_(list(pausing_tool_names)),
+                MessageModel.tool_call_id.is_not(None),
+                MessageModel.tool_call_id.not_in(returns),
+                MessageModel.tool_call_id.not_in(decisions),
+            )
+            .order_by(MessageModel.sequence)
+        )
+        return list(result.scalars())
 
     async def list_resolved_approval_ids(
         self,
