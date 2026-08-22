@@ -2925,3 +2925,131 @@ async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
     assert str(sent["notification_id"]) in str(still_open["messages"][0]), (
         "check_messages found a row, but not the one message_user reported"
     )
+
+
+async def test_an_agent_closes_a_notification_delivered_into_its_conversation(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    e2e_settings,
+    worker,
+    db_session,
+):
+    """`respond_to_notification` closing a real row, reached the way agents reach it.
+
+    This tool is not in any toolset a user can grant. `OpenNotificationsCapability`
+    injects it at run assembly, and only into the conversation a notification was
+    *delivered* to -- so nothing in the agent module could reach it, and it had no
+    coverage anywhere. The HTTP `/respond` endpoint is covered in
+    `test_notifications_e2e.py`; the tool that shares its service was not.
+
+    The delivery itself is somebody else's test: it needs a real chat surface and
+    a real egress send, and `agent_surfaces` covers that. What is set up directly
+    here is the durable state a delivery leaves behind -- `delivery_conversation_id`
+    -- because that is the input this half actually consumes, and asserting on it
+    is what proves the capability keys on the right column.
+    """
+    from sqlalchemy import update
+
+    from app.modules.agent_surfaces.infrastructure.models import NotificationModel
+
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"responder_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Record what they tell you.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            # Deliberately empty: the responding tool must arrive from the
+            # capability, not from a grant. If it only works with MESSAGING
+            # attached, this fails.
+            "toolsets": [],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    notification = await authenticated_client.post(
+        f"/pods/{pod_id}/notifications",
+        json={
+            "recipient": fixed_test_user["email"],
+            "title": "Standup",
+            "body": "What did you ship yesterday?",
+            "background_instruction": "Record their update as the response summary.",
+            "expects_response": True,
+        },
+    )
+    assert notification.status_code == status.HTTP_201_CREATED, notification.text
+    notification_id = notification.json()["id"]
+    assert notification.json()["status"] == "OPEN"
+
+    script = [
+        script_tool_call(
+            "respond_to_notification",
+            {
+                "notification_id": notification_id,
+                "summary": "Shipped the importer and reviewed two PRs.",
+            },
+            tool_call_id="respond-1",
+        ),
+        script_text("Passed it on."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Standup reply",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    # What a delivery leaves behind. Without it the capability does not fire and
+    # the tool is not offered -- which is the behaviour asserted at the end.
+    await db_session.execute(
+        update(NotificationModel)
+        .where(NotificationModel.id == UUID(notification_id))
+        .values(delivery_conversation_id=UUID(conversation_id))
+    )
+    await db_session.commit()
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Shipped the importer and reviewed two PRs.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    # A tool the model asked for but was never offered comes back as an error
+    # string rather than a result dict, so the type is the assertion.
+    assert isinstance(returns.get("respond-1"), dict), (
+        "the capability never offered respond_to_notification, so the agent "
+        f"could not close a question it was holding: {returns.get('respond-1')!r}"
+    )
+    assert returns["respond-1"]["success"] is True, returns["respond-1"]
+
+    # The durable record, not the tool's own word for it.
+    closed = await authenticated_client.get(f"/pods/{pod_id}/notifications")
+    assert closed.status_code == status.HTTP_200_OK, closed.text
+    row = next(item for item in closed.json()["items"] if item["id"] == notification_id)
+    assert row["status"] == "RESPONDED"
+    assert row["response_summary"] == "Shipped the importer and reviewed two PRs."
+    assert row["awaiting_response"] is False
