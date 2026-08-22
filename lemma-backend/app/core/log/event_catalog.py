@@ -433,7 +433,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'events.quarantine.dead_letter_write_failed': EventSpec('error', frozenset({'error_type', 'message_id', 'original_stream'})),
     'events.quarantine.message_dead_lettered': EventSpec('warning', frozenset({'consumer_groups', 'dead_letter_stream', 'error_message', 'error_type', 'message_id', 'original_stream'})),
     'function.dispatcher.runtime_cancellation.failed': EventSpec('warning', frozenset({'run_id'})),
-    'function.function_dispatcher.execution_failed': EventSpec('warning', frozenset({'error_type', 'run_id'})),
+    'function.function_dispatcher.execution_failed': EventSpec('warning', frozenset({'error', 'error_type', 'run_id'})),
     'function.handlers.cron.failed': EventSpec('error', frozenset({'task_name'})),
     'function.handlers.function_run_job.propagated': EventSpec('debug', frozenset({'run_id'})),
     'function.handlers.prune_function_runs.observed': EventSpec('debug', frozenset({'deleted_count'})),

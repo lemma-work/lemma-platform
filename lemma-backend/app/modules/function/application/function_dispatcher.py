@@ -185,6 +185,12 @@ class FunctionDispatcher:
                 "function.function_dispatcher.execution_failed",
                 run_id=str(run_id),
                 error_type=type(exc).__name__,
+                # The type alone is not enough to act on: a bare `DBAPIError`
+                # names the wrapper, not the driver error inside it, and the
+                # message stored on the run is the generic one built above. A
+                # CI failure here was undiagnosable for exactly that reason.
+                error=str(exc),
+                exc_info=exc,
             )
             async with self._uow_factory() as uow:
                 failed = await FunctionExecutionRepository(uow).fail_dispatch(
