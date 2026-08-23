@@ -204,3 +204,37 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
     write("")
     summary = f"{passed}/{passed + failed} scenarios passing"
     terminalreporter.write_line(summary, bold=True, red=bool(failed), green=not failed)
+
+    _waiting_on_a_person(terminalreporter)
+
+
+def _waiting_on_a_person(terminalreporter) -> None:
+    """What nobody could do for the suite, and what to do about it.
+
+    Its own section rather than a line in the skip list, because a skip reads as
+    "not applicable here" and this is "somebody needs to go and click
+    something". Left in the skip list it becomes a number that quietly goes down
+    — a suite proving less each month and never saying so, which is the same rot
+    the stand-ins had by a different route.
+    """
+    from harness import consent
+
+    outstanding = consent.outstanding()
+    if not outstanding:
+        return
+
+    write = terminalreporter.write_line
+    write("")
+    terminalreporter.write_sep("=", "waiting on a person", bold=True, yellow=True)
+    for action in outstanding:
+        write("")
+        write(f"  {action.name}", bold=True)
+        write(f"    do    {action.how}")
+        write("    then  re-run `make scenarios-provision TARGET=…` to confirm")
+    write("")
+    write(
+        f"{len(outstanding)} thing{'' if len(outstanding) == 1 else 's'} only a "
+        f"person can do. Until then the scenarios that need them are not "
+        f"running — and not failing either, which is why this says so here.",
+        yellow=True,
+    )

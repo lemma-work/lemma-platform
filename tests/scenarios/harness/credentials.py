@@ -223,12 +223,22 @@ def needs(*capabilities: Requirement) -> None:
     absent = [capability for capability in capabilities if not capability.available]
     if not absent:
         return
-    pytest.skip(
-        "this deployment is not configured for it. "
-        + "; ".join(
-            f"{capability.name}: set {', '.join(capability.missing)} — {capability.how}"
-            for capability in absent
-        )
+    pytest.skip("; ".join(_why(capability) for capability in absent))
+
+
+def _why(capability: Requirement) -> str:
+    """One sentence saying what is missing and what to do about it.
+
+    A capability may phrase its own, because not everything reads as a setting.
+    "set a connected gmail account" is not something anybody can do — that one
+    is a person opening a browser, and the sentence should say so.
+    """
+    written = getattr(capability, "sentence", None)
+    if written is not None:
+        return str(written)
+    return (
+        f"this deployment is not configured for it. {capability.name}: set "
+        f"{', '.join(capability.missing)} — {capability.how}"
     )
 
 

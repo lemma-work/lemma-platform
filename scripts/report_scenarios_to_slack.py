@@ -31,6 +31,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 #: Enough detail to be useful, short enough that Slack does not collapse it.
+#: Kept in step with `tests/scenarios/harness/consent.py`. Copied rather than
+#: imported: this runs from the repo root in CI, without the suite on its path.
+WAITING = "waiting on a person:"
+
 MAX_LISTED = 8
 
 
@@ -103,14 +107,26 @@ def compose(outcome: Outcome, *, lane: str, run_url: str, ref: str) -> str:
         if len(outcome.failed) > MAX_LISTED:
             lines.append(f"• …and {len(outcome.failed) - MAX_LISTED} more")
 
-    if outcome.skipped:
+    # Two different things wear the same pytest outcome. "Not applicable on this
+    # deployment" is information; "somebody has to go and click something" is a
+    # task, and burying it among the former is how a suite quietly proves less
+    # each month. The lead comes from `harness/consent.py`.
+    waiting = [pair for pair in outcome.skipped if pair[1].startswith(WAITING)]
+    not_run = [pair for pair in outcome.skipped if not pair[1].startswith(WAITING)]
+
+    for heading, group in (("*Not run:*", not_run), ("*Waiting on a person:*", waiting)):
+        if not group:
+            continue
         # Grouped by reason: twelve scenarios skipped for one expired token is
         # one problem, and listing it twelve times buries it.
         by_reason: dict[str, int] = {}
-        for _name, reason in outcome.skipped:
-            key = reason.split(".")[0].strip() or "no reason given"
+        for _name, reason in group:
+            # The lead is what sorted it into this section; repeating it in
+            # every bullet underneath is noise.
+            said = reason[len(WAITING):] if reason.startswith(WAITING) else reason
+            key = said.split(".")[0].strip() or "no reason given"
             by_reason[key] = by_reason.get(key, 0) + 1
-        lines.append("\n*Not run:*")
+        lines.append(f"\n{heading}")
         lines += [
             f"• {count}× {reason}"
             for reason, count in sorted(by_reason.items(), key=lambda item: -item[1])[

@@ -27,7 +27,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from harness import environment, tenant
+from harness import consent, environment, tenant
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
@@ -118,10 +118,11 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
                 await _uninstall_run_connectors(owner, ledger, mine=made_by_a_run)
                 await _only_the_cast(owner, ledger)
 
-        return ledger.report(
+        written = ledger.report(
             f"{'Reset' if reset else 'Provisioned'} {base_url} "
             f"({target.environment})"
         )
+        return written + await _still_needs_a_person(boss)
     finally:
         await world.aclose()
 
@@ -389,6 +390,42 @@ async def _clear_run_pods(
         if mine(name):
             await owner.deletes_pod(pod)
             ledger.did(f"removed leftover pod {name!r}")
+
+
+async def _still_needs_a_person(owner: Person) -> str:
+    """What provisioning cannot do, spelled out for whoever can.
+
+    Gmail, GitHub and Slack are OAuth2, and the product has no way to store one
+    without a browser — correctly, because consenting in a browser is what a
+    real person does. So this cannot connect them, and the useful thing it can
+    do is say exactly what is left and how, once, at the end.
+
+    Reported rather than raised. A tenant with no Gmail account is perfectly
+    usable for the ninety per cent of scenarios that never ask for one.
+    """
+    connected = {
+        str(account.get("connector_id") or "")
+        for account in await owner.accounts_in(owner.organization)
+    }
+    waiting = [action for action in consent.EVERY if action.connector not in connected]
+    if not waiting:
+        return "\n\nEvery third party this suite drives is connected."
+
+    lines = [
+        "",
+        "",
+        f"Still needs a person ({len(waiting)} of {len(consent.EVERY)}):",
+        "",
+    ]
+    for number, action in enumerate(waiting, start=1):
+        lines.append(f"  {number}. {action.name}")
+        lines.append(f"     {action.how}")
+        lines.append("")
+    lines.append(
+        "Scenarios needing these skip until they are done — they do not fail, "
+    )
+    lines.append("which is why this is printed rather than left to be noticed.")
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
