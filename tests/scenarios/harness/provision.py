@@ -50,7 +50,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from harness import consent, environment, tenant
+from harness import consent, credentials, environment, tenant
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
@@ -516,26 +516,72 @@ async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
     """
     for declared in tenant.STANDING_CONNECTORS:
         name = tenant.standing_auth_config_name(declared.connector)
-        existing = {
-            config.get("name")
+        installed = {
+            str(config.get("name")): config
             for config in await owner.auth_configs_in(owner.organization)
         }
-        if name in existing:
+        config = installed.get(name)
+        if config is None:
+            try:
+                config = await owner.installs_connector(
+                    declared.connector,
+                    in_organization=owner.organization,
+                    named=name,
+                    kind=declared.kind,
+                )
+                ledger.did(f"installed {declared.connector} as {name!r}")
+            except Exception as exc:
+                # Not fatal. A deployment with no Slack credentials configured
+                # cannot install Slack, and every scenario that does not need
+                # Slack is unaffected — `_still_needs_a_person` says so at the
+                # end.
+                ledger.did(f"could not install {declared.connector}: {_one_line(exc)}")
+                continue
+        else:
             ledger.already(f"{declared.connector} installed as {name!r}")
-            continue
-        try:
-            await owner.installs_connector(
-                declared.connector,
-                in_organization=owner.organization,
-                named=name,
-                kind=declared.kind,
-            )
-            ledger.did(f"installed {declared.connector} as {name!r}")
-        except Exception as exc:
-            # Not fatal. A deployment with no Slack credentials configured
-            # cannot install Slack, and every scenario that does not need
-            # Slack is unaffected — `_still_needs_a_person` says so at the end.
-            ledger.did(f"could not install {declared.connector}: {_one_line(exc)}")
+        if not declared.consented:
+            await _connect_without_a_person(owner, declared, config, ledger)
+
+
+async def _connect_without_a_person(
+    owner: Person, declared: tenant.StandingConnector, config: JSON, ledger: Ledger
+) -> None:
+    """Connect the ones that need no browser, so the tenant is whole.
+
+    Telegram authenticates as a bot token, so nothing about it needs a person —
+    and until this existed, provisioning installed the auth config, left the
+    account unconnected, and therefore never built the standing surface either.
+    The live Telegram scenario then skipped saying the surface was missing,
+    which was true and told nobody why.
+    """
+    if await owner.account_for(declared.connector, in_organization=owner.organization):
+        ledger.already(f"{declared.connector} account is connected")
+        return
+    secret = CREDENTIALS_WITHOUT_A_PERSON.get(declared.connector)
+    if secret is None:
+        return
+    capability, field, setting = secret
+    if not capability.available:
+        ledger.did(f"no {setting} configured, so {declared.connector} is not connected")
+        return
+    try:
+        await owner.connects_account(
+            in_organization=owner.organization,
+            auth_config=config,
+            credentials={field: capability.value(setting)},
+        )
+        ledger.did(f"connected {declared.connector} from {setting}")
+    except Exception as exc:
+        ledger.did(f"could not connect {declared.connector}: {_one_line(exc)}")
+
+
+#: What a connector needs when it needs no person: the capability that carries
+#: the secret, the credential field the product wants it in, and the setting it
+#: is read from. Only bot-token style connectors belong here — an OAuth2 one
+#: cannot be filled in this way and `connector_service` refuses to try.
+CREDENTIALS_WITHOUT_A_PERSON = {
+    "telegram": (credentials.TELEGRAM, "bot_token", "TELEGRAM_BOT_TOKEN"),
+}
 
 
 def _one_line(exc: Exception) -> str:
