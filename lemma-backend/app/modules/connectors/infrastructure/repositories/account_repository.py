@@ -89,6 +89,7 @@ class AccountRepository(
             "is_default": instance.is_default,
             "status": instance.status,
             "provider_account_id": instance.provider_account_id,
+            "external_ref": instance.external_ref,
             "email": instance.email,
             "display_name": instance.display_name,
             "credentials": credentials,

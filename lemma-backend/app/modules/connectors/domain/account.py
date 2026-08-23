@@ -99,6 +99,13 @@ class AccountEntity(Entity):
     provider_account_id: Optional[str] = Field(
         None, description="Provider-side user/account identifier"
     )
+    external_ref: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque upstream id this account's events arrive under, used to "
+            "route an inbound delivery back to it."
+        ),
+    )
 
     email: Optional[str] = Field(None, description="Email associated with the account")
     display_name: Optional[str] = Field(

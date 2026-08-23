@@ -34,6 +34,7 @@ from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
+from app.modules.connectors.domain.install_binding import resolve_external_ref
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
@@ -892,6 +893,7 @@ class ConnectorService:
                 is_default=is_default,
                 credentials=stored_credentials,
                 provider_account_id=provider_account_id,
+                external_ref=resolve_external_ref(connector.id, stored_credentials),
                 email=email,
                 display_name=display_name,
                 preferences=preferences,
@@ -1042,6 +1044,10 @@ class ConnectorService:
 
         if account:
             account.credentials = credentials
+            # Re-derived on every re-auth: a reconnect is how an account moves
+            # to a different workspace or installation, and a stale routing key
+            # would keep sending that account another tenant's events.
+            account.external_ref = resolve_external_ref(connector.id, credentials)
             if provider_account_id:
                 account.provider_account_id = provider_account_id
             if email:
@@ -1065,6 +1071,7 @@ class ConnectorService:
                     is_default=has_existing is None,
                     credentials=credentials,
                     provider_account_id=provider_account_id,
+                    external_ref=resolve_external_ref(connector.id, credentials),
                     email=email,
                     display_name=display_name,
                 )

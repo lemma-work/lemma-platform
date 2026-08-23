@@ -35,6 +35,14 @@ class Account(UUIDAuditBase):
     provider_account_id: Mapped[str | None] = mapped_column(
         String(255), default=None, nullable=True, index=True
     )
+    # The opaque upstream id this account's events arrive under: a Composio
+    # `connection_id`, a Slack `authed_user.id`. Distinct from
+    # `provider_account_id`, which is the human's handle on the provider and is
+    # what the uniqueness index is about. Plaintext and indexed because
+    # `credentials` is encrypted JSONB and inbound routing has to query this.
+    external_ref: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True, index=True
+    )
 
     # Multiple accounts are allowed per (user, auth_config); exactly one is the
     # default, used when a caller resolves an account without an explicit id.
