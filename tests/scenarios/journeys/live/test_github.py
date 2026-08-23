@@ -20,7 +20,6 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.credentials import GITHUB_REPO, needs
-from harness.steps.agent import answers, attempts, result_of
 
 pytestmark = [
     journey("Connectors and accounts"),
@@ -121,30 +120,29 @@ async def test_an_issue_is_created_and_closed(github):
 @scenario("An agent granted GitHub uses it, and one without it cannot")
 @proves("PS-CONN-033", "PS-AGENT-002")
 @covers("connector.operation.execute", "agent.conversation.create")
-async def test_an_agent_uses_github_only_when_granted(github):
+async def test_an_agent_uses_github_only_when_granted(github, run):
     alice, organization, auth_config, _account = github
-    pod = await alice.creates_a_pod()
+    del organization, auth_config
+    pod = await alice.creates_a_pod(named=run.name("github"))
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])
 
+    # The scripted turns this used to carry were already dead: the live lane
+    # runs `E2E_LLM_MODE=real`, so the deterministic model is never built and
+    # the metadata was ignored. The scenario passed on an assertion that would
+    # have held whether or not the agent ever tried — which is worse than not
+    # having it.
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "run_connector_operation",
-                remembered_as="ungranted",
-                auth_config=auth_config["name"],
-                operation="users_get_authenticated",
-                arguments={},
-            ),
-            answers(result_of("ungranted", "error")),
-        ],
-        saying="Who am I on GitHub?",
+        saying="Use GitHub to look up which account I am signed in as, and tell me the login.",
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
+    # The agent holds no connector grant, so the identity must not come back —
+    # and `login` is GitHub's own field name for it, which is the thing that
+    # would appear if the call had gone out and returned.
     transcript = await alice.transcript_of(conversation, in_pod=pod)
-    assert "login" not in transcript, (
+    assert "login" not in transcript.lower(), (
         "an agent with no connector grant read the GitHub identity anyway; the "
         f"transcript is {transcript[-1500:]}"
     )

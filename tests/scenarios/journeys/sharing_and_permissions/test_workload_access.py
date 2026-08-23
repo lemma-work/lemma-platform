@@ -4,11 +4,17 @@ The scenarios here are about *workloads* rather than people: an agent acting in
 someone's name is the sharpest edge in the product, because it is the one actor
 that keeps working after the person has walked away.
 
-Each of these drives a real agent run. The stack boots its agents on a
-deterministic model, and that model takes its turns from the conversation's own
-`metadata` — so a scenario says what the agent *attempts* and Lemma's real
-authorization, approval and tool dispatch decide what happens. Nothing is
-patched; see `harness.steps.agent.SCRIPT_KEY`.
+Each of these drives a real agent run, on whatever model the deployment is
+configured with, and says what a person would say. They used to inject the tool
+call they wanted to see — which proved that Lemma refused *that call*, and never
+that a sentence a person actually typed ended up refused. So they ask in words
+and assert on what must be true afterwards: the record is still there, and the
+person was told something.
+
+The cost is that they need a model that can think, and skip with a reason where
+there is not one. That is the honest trade: an agent scenario driven by a
+scripted turn on a deterministic model is not evidence about the product a
+person uses.
 """
 
 from __future__ import annotations
@@ -17,7 +23,8 @@ import pytest
 
 
 from harness import capability, covers, journey, proves, scenario
-from harness.steps.agent import attempts
+from harness.credentials import needs
+from harness.environment import MODEL_IS_REAL
 from harness.steps.datastore import column
 
 pytestmark = [
@@ -58,20 +65,16 @@ async def test_an_ungranted_agent_cannot_delete_a_record(pod_with_a_record):
     # Created agents hold only what they were granted (PS-AGENT-002). This one
     # was granted nothing, and its owner is the pod admin who made the table —
     # which is the case the promise singles out.
+    needs(MODEL_IS_REAL)
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD"])
 
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "pod_write_record",
-                action="delete",
-                table_name=table["name"],
-                record_id=str(record["id"]),
-            )
-        ],
-        saying="Delete that row.",
+        saying=(
+            f"Delete the row titled {record['title']!r} from the "
+            f"{table['name']} table. Go ahead and do it."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
@@ -85,31 +88,34 @@ async def test_a_destructive_attempt_asks_rather_than_failing_silently(
     pod_with_a_record,
 ):
     alice, pod, table, record = pod_with_a_record
+    needs(MODEL_IS_REAL)
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD"])
 
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "pod_write_record",
-                action="delete",
-                table_name=table["name"],
-                record_id=str(record["id"]),
-            )
-        ],
-        saying="Delete that row.",
+        saying=(
+            f"Delete the row titled {record['title']!r} from the "
+            f"{table['name']} table. Go ahead and do it."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
-    # Refusing is not enough on its own: a refusal nobody can act on is the same
-    # as the feature not working. The run has to leave a person something to
-    # decide, or say plainly that it was refused.
+    # Two things have to hold, and the second is the one with teeth. The row is
+    # still there — nothing was destroyed on the quiet — and the person was
+    # answered, so the request did not simply vanish. Silence is the failure
+    # this promise is about: a refusal nobody is told about is the same, to the
+    # person waiting, as the feature not working.
+    await _still_there(alice, record=record, table=table, pod=pod)
+
     requests = await alice.approvals_in(conversation, in_pod=pod)
     transcript = await alice.transcript_of(conversation, in_pod=pod)
-    assert requests or "approval" in transcript.lower(), (
-        "the agent's destructive attempt neither asked for approval nor "
-        f"reported being refused; transcript was {transcript[:800]}"
+    assert requests or transcript.strip(), (
+        "the agent's destructive attempt left the person nothing at all — no "
+        "approval to decide and nothing said. Deliberately not asserting on the "
+        "wording of the refusal: a real model phrases it differently every "
+        "time, and a test that reads the words would be measuring the model "
+        "rather than the product"
     )
 
 
@@ -117,6 +123,7 @@ async def test_a_destructive_attempt_asks_rather_than_failing_silently(
 @proves("PS-CONN-033", "PS-AGENT-002")
 @covers("agent.create", "agent.conversation.create", "connector.operation.execute")
 async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run):
+    needs(MODEL_IS_REAL)
     alice = await world.person("priya")
     organization = alice.organization
     auth_config = await alice.installs_http_connector(
@@ -136,21 +143,19 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run)
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "run_connector_operation",
-                auth_config=auth_config["name"],
-                operation="listWidgets",
-                arguments={},
-            )
-        ],
-        saying="Fetch the widgets.",
+        saying=(
+            f"List the widgets from the {auth_config['name']} connector and "
+            f"tell me what you find."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
-    # The strongest possible statement: nothing reached the provider at all.
-    # An assertion on the agent's own words would pass just as well if the call
-    # went out and the answer was merely worded as a refusal.
+    # The strongest possible statement, and the reason this one survives being
+    # asked in words rather than scripted: nothing reached the provider at all.
+    # Whether the model tried and was refused, or never tried, the promise is
+    # the same and this assertion holds either way — where reading the agent's
+    # reply would pass just as well if the call went out and the answer was
+    # merely *worded* as a refusal.
     assert not provider.received, (
         "an agent with no connector grant reached the provider anyway: "
         f"{[call.path for call in provider.received]}"

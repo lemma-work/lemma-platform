@@ -122,22 +122,49 @@ cannot be imported from Node at all — was found here and by nothing else.
 
 ## Standing in for other people's servers
 
-Two things are not Lemma and cannot be run for real on every change: the model
-behind an agent, and the messaging platform behind a surface. Both are stood in
-for, and in both cases through a **supported product setting** rather than a
-patch:
+Two things are not Lemma: the model behind an agent, and the messaging platform
+behind a surface. They are handled differently now, and one of them is on its
+way out.
 
-- **The model** — `E2E_LLM_MODE=mock` swaps in a deterministic scripted model.
-  The production code path runs to the model boundary.
-- **The platform** — `harness/fake_platform.py` is a small HTTP server that
-  answers as Telegram. A scenario points a surface at it with `api_base_url` on
-  the connected account, which exists so a deployment can use a self-hosted Bot
-  API server. Lemma itself runs entirely for real: it registers the webhook,
-  verifies the secret on delivery, resolves the sender, runs the agent, and
-  sends the reply — and the fake records what it said.
+**The model is real.** Scenarios that drive an agent say what a person would say
+and assert on what must be true afterwards — the row is still there, an approval
+was raised, the work completed. They take `needs(MODEL_IS_REAL)` and skip with a
+reason where no model is configured.
 
-Everything else is real, including the Docker sandboxes that functions execute
-in.
+There used to be a seam for scripting the model's turns through a conversation's
+`metadata`, and it is gone. It proved Lemma refused *that call*; it could not
+prove a person typing a sentence ended up refused. Against a deployment it was
+worse: `e2e_llm_mode` is `real` there, so the script was ignored in silence and
+the scenario asserted a scripted model's behaviour against a thinking one — one
+scenario in the live lane had been doing exactly that, and passing, for months.
+The agent is *told how to behave* with an `instruction`, which is what a person
+does when they set one up, and what it then does is the thing under test.
+
+**The platform is still stood in for on localhost, and should not be.**
+`harness/fake_platform.py` runs small HTTP servers that answer as Telegram, as a
+generic OpenAPI provider, and as Resend, and a scenario points a surface at one
+using `api_base_url` — a supported product setting. It works, and it is the
+wrong shape for this suite:
+
+- A deployment cannot reach a server on the machine running the tests, so ~40
+  scenarios skip remotely behind `needs(LOOPBACK_REACHABLE)` — the largest hole
+  in what a deployment run proves.
+- It needs `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS=true`, which production does
+  not have and should not, so those scenarios exercise a configuration nobody
+  runs.
+- It is not what a person does. Nobody points their Telegram surface at a bot
+  API on their laptop.
+
+**Where this is going: real providers, no callback.** The live lane already
+shows the shape. `journeys/live/test_telegram.py` uses a real bot in *polling*
+mode — `ENABLE_TELEGRAM_POLLING_MODE`, which is a supported deployment mode and
+the one a self-hosted install behind a firewall uses — so no public URL and no
+loopback is involved at all. GitHub sidesteps it too: a fine-grained PAT is a
+real way to connect, and the deployment calls out rather than being called.
+
+The work is to move the surfaces journey onto that footing and delete
+`fake_platform.py`, gating on `needs(TELEGRAM)` the way the live lane already
+does. Until then those scenarios are honest about where they cannot run.
 
 ## Measuring it
 

@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 158 |
-| `gap` | 0 |
+| `covered` | 157 |
+| `gap` | 1 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **161** |
 
-Scenario tests declaring a promise: 347.
+Scenario tests declaring a promise: 349.
 
 ## Contract coverage
 
@@ -90,7 +90,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
-| `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down` |
+| `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down`, `test_the_last_pod_admin_cannot_remove_themselves` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 
@@ -115,7 +115,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ONB-001` A new person signs up and becomes a known user | `covered` | `test_new_person_signs_up_and_is_known` |
+| `PS-ONB-001` A new person signs up and becomes a known user | `covered` | `test_new_person_signs_up_and_is_known`, `test_a_person_comes_back_and_signs_in` |
 | `PS-ONB-002` A person who has joined nothing sees an empty start, not an error | `covered` | `test_person_with_no_organization_sees_an_empty_start` |
 | `PS-ONB-003` A signed-in person is identified consistently everywhere | `covered` | `test_a_credential_identifies_its_owner` |
 | `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
@@ -145,7 +145,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
 | `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `covered` | `test_work_over_the_limit_is_refused_clearly` |
-| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `covered` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
+| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |

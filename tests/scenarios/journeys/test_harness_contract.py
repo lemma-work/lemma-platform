@@ -492,6 +492,46 @@ def test_a_pod_or_an_organization_cannot_be_named_untraceably():
         raise AssertionError("a literal name was accepted for a durable resource")
 
 
+def test_no_scenario_scripts_the_model():
+    """The agent is asked in words, never handed the tool call to make.
+
+    The seam that allowed it is gone from the harness, and this is what stops it
+    coming back — because it is genuinely tempting. Scripting a turn is the only
+    way to *guarantee* an agent tries the dangerous thing, and a real model asked
+    politely might not.
+
+    What it costs is the thing this suite exists for. A scripted turn proves
+    Lemma refused *that call*; it cannot prove that a person typing a sentence
+    ends up refused. And against a deployment it is worse than nothing:
+    `e2e_llm_mode` is `real` there, so the script is ignored in silence and the
+    scenario asserts a scripted model's behaviour against a thinking one. A
+    scenario in the live lane had been doing exactly that, and passing, for
+    months.
+
+    What replaced it is the product's own lever: tell the agent how to behave
+    with an `instruction`, then assert on what happened.
+    """
+    import harness.steps.agent as agent_steps
+
+    for gone in ("attempts", "answers", "result_of", "SCRIPT_KEY"):
+        assert not hasattr(agent_steps, gone), (
+            f"harness.steps.agent.{gone} is back. Scripting the model makes a "
+            f"scenario a statement about the script; give the agent an "
+            f"`instruction` and assert on what happens instead"
+        )
+
+    offenders = [
+        f"{path.relative_to(SUITE)}:{node.lineno}"
+        for path in _scenario_files()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.keyword) and node.arg == "where_the_agent"
+    ]
+    assert not offenders, (
+        "these scenarios hand the agent its turns instead of asking it:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 
