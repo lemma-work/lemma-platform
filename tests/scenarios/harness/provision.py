@@ -119,12 +119,20 @@ async def provision(
                 colleague.label: world.arriving(colleague.label, colleague.email)
                 for colleague in tenant.CAST
             }
+            newcomers: list[str] = []
             for colleague in tenant.CAST:
                 person = people[colleague.label]
                 if await person.arrives():
+                    newcomers.append(colleague.email)
                     ledger.did(f"registered {colleague.full_name} <{colleague.email}>")
                 else:
                     ledger.already(f"{colleague.full_name} already has an account")
+            if os.getenv("SCENARIOS_ALLOW_NEW_CAST", "").lower() not in {
+                "1",
+                "true",
+                "yes",
+            }:
+                _refuse_a_second_cast(newcomers, target)
 
         companies: dict[str, JSON] = {}
         for company in tenant.COMPANIES:
@@ -173,6 +181,41 @@ async def provision(
         return written + await _still_needs_a_person(holder)
     finally:
         await world.aclose()
+
+
+def _refuse_a_second_cast(newcomers: list[str], target) -> None:
+    """Stop a run inventing a parallel cast on a tenant that already has one.
+
+    The addresses are computed from settings, so two machines can disagree — a
+    laptop with SCENARIOS_MAILBOX set and a CI job without it produce different
+    casts for the same tenant. Nothing refused it: the second cast signed up,
+    made its own organization under the same display name, and the next
+    `--reset` evicted the first as strangers.
+
+    The signal is that *every* colleague was new. One is somebody being added;
+    all five, on a deployment, is a different cast arriving. Read from what
+    registration already returned rather than by signing in to look: a sign-in
+    failure per person is a real failure a deployment counts, and ten of them
+    put a proof-of-work challenge in front of the next attempt.
+
+    Raised before any organization exists, which is the part that matters —
+    accounts are cheap and an organization cannot be deleted.
+    """
+    if target.environment in {"testing", "unknown"}:
+        return
+    if len(newcomers) < len(tenant.CAST):
+        return
+    raise AssertionError(
+        f"every one of the cast was new on {target.base_url}, which is not a "
+        f"stack this suite booted. Either it has never been provisioned — run "
+        f"again with SCENARIOS_ALLOW_NEW_CAST=1 — or it already has a cast "
+        f"under different addresses, and these would join it as a second, "
+        f"parallel one:\n\n  " + "\n  ".join(newcomers) + "\n\n"
+        f"The addresses come from {tenant.MAILBOX_SETTING} and "
+        f"{tenant.DOMAIN_SETTING}. Set them to what the tenant was built with, "
+        f"rather than letting each machine choose. Stopped before any "
+        f"organization was made, because an organization cannot be deleted."
+    )
 
 
 async def _company(owner: Person, company: tenant.Company, ledger: Ledger) -> JSON:

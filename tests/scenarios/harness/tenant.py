@@ -59,20 +59,17 @@ def domain() -> str:
 def mailbox() -> str:
     """The real mailbox the cast sub-addresses into, if there is one.
 
-    Read from the deployment's own `.env` as well as the environment, because
-    that is where somebody putting a mailbox down will naturally put it — and a
-    setting that is quietly ignored where you wrote it is worse than one that
-    does not exist.
-    """
-    from harness.stack import load_deployment_env
+    The environment only. This briefly also read `lemma-backend/.env`, on the
+    reasoning that it is where somebody would naturally write it — and that was
+    a mistake, because it makes *who the cast is* depend on a file belonging to
+    the backend rather than to this suite. A laptop with that file computes
+    `you+priya.raman@…` while CI computes `priya.raman@…`; both then provision
+    the same deployment, and it ends up with two parallel casts and five users
+    nobody meant to create.
 
-    direct = os.getenv(MAILBOX_SETTING, "").strip()
-    if direct:
-        return direct
-    try:
-        return (load_deployment_env().get(MAILBOX_SETTING, "") or "").strip()
-    except Exception:  # noqa: BLE001 — no .env is the ordinary case, not a failure
-        return ""
+    One source, so the same command means the same thing everywhere.
+    """
+    return os.getenv(MAILBOX_SETTING, "").strip()
 
 
 def an_address_for(tag: str) -> str:
