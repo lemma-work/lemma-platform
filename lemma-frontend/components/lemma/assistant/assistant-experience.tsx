@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
 import { LEM_SEED } from "@/lib/identity/seeded-identity";
 import { ResourceIdentity } from "@/components/shared/resource-identity";
+import { Button } from "@/components/ui/button";
 import type {
   AssistantRenderableMessage,
 } from "lemma-sdk/react";
@@ -566,15 +567,17 @@ export function AssistantExperienceView({
   const composerStatus = (
     <>
       {interactionPending ? (
-        <button
+        <Button
           type="button"
+          variant="link"
+          size="xs"
           onClick={scrollToPendingInteraction}
-          className="focus-ring -mx-1 rounded-md px-1 py-0.5 text-left text-xs text-[var(--action-primary)] hover:underline"
+          className="h-auto px-0 text-xs font-normal"
         >
           {pendingInteractionIsAsk
             ? "Answer the question to continue"
             : "Approve or reject to continue"}
-        </button>
+        </Button>
       ) : null}
       {showComposerStatus && runStatusModel ? (
         <LiveRunStatusLine status={runStatusModel} />
