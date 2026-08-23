@@ -15,7 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
-from app.modules.agent_surfaces.platforms.whatsapp.service import (
+from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WHATSAPP_APPROVAL_HEADER,
     WHATSAPP_INTERACTION_SEP,
 )

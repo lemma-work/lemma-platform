@@ -30,6 +30,13 @@ from app.modules.agent_surfaces.platforms.rendering import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent_surfaces.services.progress_display import (
+    ProgressDisplayMixin,
+)
+from app.modules.agent_surfaces.services.progress_plan import (
+    SurfacePlan,
+    plan_from_event,
+)
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
     _assistant_text_from_event,
@@ -39,7 +46,6 @@ from app.modules.agent_surfaces.services.progress_events import (
     _is_final_answer_event,
     _is_tool_activity_event,
     _join_text,
-    _progress_text_from_event,
     _safe_run_error_text,
     _surface_platform,
 )
@@ -49,22 +55,13 @@ logger = get_logger(__name__)
 _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.TELEGRAM.value: 4.0,
     SurfacePlatform.TEAMS.value: 10.0,
+    # WhatsApp couples mark-as-read and the typing bubble into one call, and the
+    # bubble expires after ~25s. Refreshed inside that window it is the cheapest
+    # honest "still working" the platform has — it costs no conversation message
+    # and no attention, unlike the posted updates that back it up.
+    SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
-# Slack/Telegram/Teams render progress as a live, edited message (streaming):
-# Slack via chat.update, Telegram via editMessageText, Teams via PUT activity.
-# WhatsApp has no message-edit API, so it gets no per-step progress (the inbound
-# reaction indicator signals work) and email gets a single composed reply.
-_TEXT_PROGRESS_PLATFORMS: set[str] = set()
-# Slack is deliberately absent: it streams the answer token by token, and a
-# step chunk appended into that same stream lands *inside* the sentence being
-# written — splitting it mid-word. The streamed text is the progress indicator,
-# so a separate step timeline is both redundant and destructive.
-_STREAM_PROGRESS_PLATFORMS = {
-    SurfacePlatform.TELEGRAM.value,
-    SurfacePlatform.TEAMS.value,
-}
-_MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
 # Email recipients should get one composed reply, not a stream of chat
 # messages. Agents reply via the platform reply tools; the observer only
 # falls back to emailing the final assistant text if no reply was sent.
@@ -79,17 +76,26 @@ _EMAIL_PLATFORMS = {
 }
 
 
-class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
+class SurfaceAgentRunProgressObserver(
+    ProgressWaitingMixin, ProgressDisplayMixin, TokenStreamMixin
+):
     """Reflect agent run progress through platform-native surface indicators.
 
     A surface conversation should receive exactly one content message per run:
     the agent's final answer. The agent's intermediate narration, reasoning
     (``ThinkingContent``) and tool activity (``ToolCallContent`` /
     ``ToolReturnContent``) must never be delivered as chat messages — they only
-    drive progress indicators (typing for Telegram/Teams, a status string for
-    Slack). To achieve this the observer buffers assistant text during the run
-    and delivers the final answer once on ``on_run_finished``, resetting the
-    buffer whenever a tool runs so only the post-final-tool text survives.
+    drive progress indicators. To achieve this the observer buffers assistant
+    text during the run and delivers the final answer once on
+    ``on_run_finished``, resetting the buffer whenever a tool runs so only the
+    post-final-tool text survives.
+
+    What "progress indicator" means is the platform's ``ProgressStyle``: Slack
+    streams the answer as it is written, Telegram and Teams keep one live message
+    and rewrite it, WhatsApp can only post a new message and so is rationed to a
+    plan that has moved, and email shows nothing before the reply. The one thing
+    they share is what they show — the agent's ``write_todos`` checklist, which
+    is the only account of a long run the person ever gets.
     """
 
     def __init__(
@@ -138,6 +144,16 @@ class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
         # written. See ``_deliver_final_answer``.
         self._answer_was_all_reasoning = False
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
+        # The agent's checklist, as of the last ``write_todos`` return, plus the
+        # snapshot that was last actually shown. Kept apart so a plan rewritten
+        # with the same contents does not spend an update.
+        self._plan: SurfacePlan | None = None
+        self._shown_plan_signature: tuple[tuple[str, bool], ...] | None = None
+        # Rationing for platforms that can only post a *new* message.
+        self._run_started_at = time.monotonic()
+        self._posted_updates = 0
+        self._last_post_at = 0.0
+        self._heartbeat_posted = False
 
     async def on_run_started(
         self,
@@ -145,22 +161,30 @@ class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
         ctx: ConversationContext,
     ) -> None:
         del ctx
+        self._run_started_at = time.monotonic()
         platform = _surface_platform(conversation)
         if platform is None:
             return
         capabilities = PLATFORM_CAPABILITIES.get(platform or "")
-        if capabilities is not None and capabilities.finishes_stream_with_answer:
+        if capabilities is None or not capabilities.shows_live_progress:
+            # Email: one composed reply and nothing before it.
+            return
+        if capabilities.finishes_stream_with_answer:
             # Open the stream up front. Slack shows a live indicator on an open
             # stream, which is the only "working on it" signal a *channel* gets
             # — setStatus is assistant-DM only, and waiting for the first token
             # leaves a tool-heavy run looking dead. An empty stream is disposed
-            # of by end_progress if no answer ever arrives.
+            # of by end_progress if no answer ever arrives. That open stream *is*
+            # the acknowledgement, so nothing else is sent here.
             await self._open_stream(conversation)
-        interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
-        if interval is None:
             return
+        # Acknowledge first, refresh second. These were behind one guard keyed on
+        # the refresh interval, so a platform absent from the refresh table never
+        # got the opening acknowledgement either — which is how WhatsApp came to
+        # have a read-receipt-and-typing call that nothing ever invoked.
         sent = await self._send_indicator(conversation_id=conversation.id)
-        if not sent:
+        interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
+        if not sent or interval is None:
             return
         self._typing_task = create_inherited_task(
             self._refresh_typing_loop(
@@ -227,52 +251,11 @@ class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
             self._reset_text_on_next = True
             if _email_reply_tool_called(event):
                 self._email_reply_tool_called = True
+            plan = plan_from_event(event)
+            if plan is not None:
+                self._plan = plan
 
         await self._maybe_send_text_progress(event, platform, conversation.id)
-
-    async def _maybe_send_text_progress(
-        self,
-        event: AgentEvent,
-        platform: str | None,
-        conversation_id,
-    ) -> None:
-        """Reflect thinking/tool activity as a status string where supported.
-
-        Telegram/Teams show a typing indicator (refreshed by the loop started in
-        on_run_started); Slack is the only platform that renders a status text.
-        """
-        streams = platform in _STREAM_PROGRESS_PLATFORMS
-        if platform not in _TEXT_PROGRESS_PLATFORMS and not streams:
-            return
-        progress_text = _progress_text_from_event(event)
-        if not progress_text:
-            return
-        now = time.monotonic()
-        if (
-            progress_text == self._last_text_progress
-            or now - self._last_text_progress_at < _MIN_TEXT_PROGRESS_INTERVAL_SECONDS
-        ):
-            return
-        self._last_text_progress = progress_text
-        self._last_text_progress_at = now
-        if streams:
-            await self._stream_progress(conversation_id, progress_text)
-        else:
-            await self._send_indicator(
-                conversation_id=conversation_id,
-                metadata={"progress_text": progress_text},
-            )
-
-    async def _stream_progress(self, conversation_id, progress_text: str) -> None:
-        async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            handle = await service.send_progress_update_for_conversation(
-                conversation_id=conversation_id,
-                progress_text=progress_text,
-                progress_handle=self._progress_handle,
-            )
-        if handle is not None:
-            self._progress_handle = handle
 
     async def _finish_stream_with_answer(self, conversation: Conversation) -> bool:
         """Close a live stream with the final answer, so they are one message.
@@ -447,7 +430,16 @@ class SurfaceAgentRunProgressObserver(ProgressWaitingMixin, TokenStreamMixin):
         try:
             while time.monotonic() - started_at < _MAX_TYPING_REFRESH_SECONDS:
                 await asyncio.sleep(interval)
-                sent = await self._send_indicator(conversation_id=conversation_id)
+                # Flagged as a refresh so an adapter can tell a keep-alive from
+                # the opening acknowledgement. WhatsApp needs the distinction:
+                # its acknowledgement falls back to posting a reaction when the
+                # read/typing call is refused, and a fallback that fires on every
+                # tick would be an API call every twenty seconds for the whole
+                # run.
+                sent = await self._send_indicator(
+                    conversation_id=conversation_id,
+                    metadata={"is_refresh": True},
+                )
                 if not sent:
                     return
         except asyncio.CancelledError:

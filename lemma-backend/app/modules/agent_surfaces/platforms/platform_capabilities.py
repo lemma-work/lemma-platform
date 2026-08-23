@@ -15,11 +15,36 @@ Byte caps are reused from :mod:`attachment_limits` rather than duplicated.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     attachment_cap,
     inline_cap,
 )
+
+
+class ProgressStyle(StrEnum):
+    """How a platform can show that a long run is still going.
+
+    The three sets the progress observer used to hand-maintain — who streams
+    tokens, who edits a live message, who gets nothing — were three answers to
+    one question, and they drifted: WhatsApp was in none of them and its comment
+    claimed an inbound reaction covered it, which no adapter ever sent. One field
+    on the platform, and the observer reads it.
+    """
+
+    #: A real streaming API: tokens append to a message that is closed *with*
+    #: the final answer, so the steps and the answer are one message (Slack).
+    STREAM = "stream"
+    #: One live message, edited in place as the work proceeds, replaced or
+    #: cleared at the end (Telegram, Teams).
+    EDIT = "edit"
+    #: No edit API at all. Progress can only be a *new* message, so it has to be
+    #: rare and worth the interruption — a plan, or a single "still going"
+    #: (WhatsApp).
+    POST = "post"
+    #: One composed reply and nothing before it (email).
+    NONE = "none"
 
 
 @dataclass(frozen=True)
@@ -53,12 +78,10 @@ class PlatformCapabilities:
     # Email genuinely can — it is the only reason an unreachable colleague still
     # gets told anything.
     can_cold_open: bool = False
-    # Can a live progress stream be closed *with* the final answer, so the
-    # agent's steps and the answer they produced are one message? True only
-    # where the platform has a real streaming API (Slack's chat.startStream /
-    # appendStream / stopStream). Everywhere else progress is a separate
-    # message that gets cleared before the answer is sent.
-    finishes_stream_with_answer: bool = False
+    # How this platform can show that a long run is still going. See
+    # ``ProgressStyle`` — the observer branches on this instead of on three
+    # hand-maintained platform sets.
+    progress_style: ProgressStyle = ProgressStyle.NONE
     # Hours after the person's last inbound message during which free-form
     # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
     # a send is refused unless it is a pre-approved template. None means no
@@ -78,6 +101,21 @@ class PlatformCapabilities:
     # address off one key *is* the design, so applying the identity rule here
     # let the first mailbox in an organization block every one after it.
     system_credential_is_identity: bool = True
+
+    @property
+    def finishes_stream_with_answer(self) -> bool:
+        """Can a live stream be closed *with* the answer, as one message?
+
+        Only a real streaming API can (Slack's chat.startStream / appendStream /
+        stopStream). Everywhere else progress is a separate message that is
+        cleared before the answer is sent.
+        """
+        return self.progress_style is ProgressStyle.STREAM
+
+    @property
+    def shows_live_progress(self) -> bool:
+        """Does anything at all get shown between the question and the answer?"""
+        return self.progress_style is not ProgressStyle.NONE
 
     @property
     def attachment_byte_cap(self) -> int:
@@ -134,7 +172,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="mrkdwn",
         formatting_style=_SLACK_FORMATTING,
         soft_char_limit=3000,
-        finishes_stream_with_answer=True,
+        progress_style=ProgressStyle.STREAM,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
@@ -146,6 +184,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="limited_markdown",
         formatting_style=_TEAMS_FORMATTING,
         soft_char_limit=4000,
+        progress_style=ProgressStyle.EDIT,
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
@@ -159,6 +198,10 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
+        # No message-edit API, so a progress update can only be a new message
+        # in the person's chat. Rationed hard by the observer: a plan when the
+        # agent has one, otherwise a single "still going" on a long run.
+        progress_style=ProgressStyle.POST,
         # Meta closes free-form messaging 24h after the person's last message.
         # A notification past that window needs an approved template, which we
         # do not have, so delivery falls through to the next channel.
@@ -177,6 +220,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="markdownv2_converted",
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,
+        progress_style=ProgressStyle.EDIT,
     ),
     "GMAIL": PlatformCapabilities(
         platform="GMAIL",
@@ -313,6 +357,26 @@ def platform_agent_guidance(platform: str | None) -> str:
             "audio. Do NOT also call display_resource for it."
         )
         lines.append("\n".join(delivery))
+
+        if caps.shows_live_progress:
+            # The plan is the only thing the person can see while a long run is
+            # still going, and on a surface with no edit API it is the only thing
+            # worth interrupting them with. An agent that skips `write_todos`
+            # leaves them watching silence.
+            waiting = (
+                "a live checklist that updates in place"
+                if caps.progress_style is not ProgressStyle.POST
+                else "a short progress message, sent sparingly"
+            )
+            lines.append(
+                "## Work that takes a while\n"
+                "For anything multi-step, call `write_todos` with your plan before "
+                "you start and check items off as you finish them. Lemma shows "
+                f"that checklist to the person as {waiting} — it is the only thing "
+                "they can see while they wait, so a run without one looks to them "
+                "like nothing is happening. Do not narrate progress as chat "
+                "messages; the checklist is how progress is delivered here."
+            )
 
     # Formatting + sizing.
     lines.append(

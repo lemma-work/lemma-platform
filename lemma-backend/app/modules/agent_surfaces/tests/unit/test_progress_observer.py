@@ -11,7 +11,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEventType,
     MessageDraft,
 )
-from app.modules.agent_surfaces.services import progress_observer
+from app.modules.agent_surfaces.services import progress_display, progress_observer
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -416,10 +416,13 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     await asyncio.sleep(0.03)
     await observer.on_run_finished(conversation, SimpleNamespace())
 
-    assert service.calls
+    # The opening acknowledgement, then keep-alive ticks flagged as refreshes so
+    # an adapter can tell them apart from it.
+    assert service.calls[0] == {"conversation_id": conversation.id, "metadata": None}
+    assert len(service.calls) > 1
     assert service.calls[-1] == {
         "conversation_id": conversation.id,
-        "metadata": None,
+        "metadata": {"is_refresh": True},
     }
 
 
@@ -1005,4 +1008,184 @@ async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
 
     await observer.on_run_started(conversation, SimpleNamespace())
 
+    assert service.streamed == []
+
+
+def _plan_return(*lines: str) -> AgentEvent:
+    """A ``write_todos`` tool return carrying the whole checklist."""
+    return AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_return(
+            tool_name="write_todos",
+            tool_call_id="todo-1",
+            tool_result={"success": True, "todos": list(lines)},
+        ),
+    )
+
+
+def _conversation(platform: str) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+
+
+async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
+    """The most informative tool call used to render as the least informative line.
+
+    Every tool call collapses to one status string, so a five-step plan reached
+    the person as ``Using write_todos``.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+
+    await observer.on_event(
+        _plan_return("- [x] Pull the Q3 numbers", "- [ ] Draft the summary"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    body = service.progress[-1]["progress_text"]
+    assert "write_todos" not in body
+    assert "Working on it — 1 of 2 steps done." in body
+    assert "✅ Pull the Q3 numbers" in body
+    assert "⏳ Draft the summary" in body
+
+
+async def test_a_plan_that_has_not_moved_does_not_spend_an_update():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+    plan = _plan_return("- [ ] Only step")
+
+    await observer.on_event(plan, conversation, SimpleNamespace())
+    await observer.on_event(plan, conversation, SimpleNamespace())
+
+    assert len(service.progress) == 1
+
+
+async def test_whatsapp_posts_the_plan_it_previously_showed_nothing_for():
+    """WhatsApp has no edit API, so a long run used to be pure silence."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_event(
+        _plan_return("- [ ] Reconcile the ledger", "- [ ] Write it up"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    assert len(service.progress) == 1
+    assert "0 of 2 steps done" in service.progress[0]["progress_text"]
+
+
+async def test_whatsapp_rations_updates_after_the_first_plan():
+    """Every WhatsApp update is a message in someone's chat, so they are capped.
+
+    The first plan goes straight through — it is what the person most wants at
+    the start of a long run — and the next one waits out the interval.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_event(
+        _plan_return("- [ ] One", "- [ ] Two"), conversation, SimpleNamespace()
+    )
+    await observer.on_event(
+        _plan_return("- [x] One", "- [ ] Two"), conversation, SimpleNamespace()
+    )
+
+    assert len(service.progress) == 1
+
+    observer._last_post_at -= progress_display._POST_PROGRESS_MIN_INTERVAL_SECONDS + 1
+    await observer.on_event(
+        _plan_return("- [x] One", "- [x] Two"), conversation, SimpleNamespace()
+    )
+
+    assert len(service.progress) == 2
+    assert "All 2 steps done" in service.progress[1]["progress_text"]
+
+
+async def test_whatsapp_says_something_on_a_long_run_with_no_plan():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+    activity = AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_call(
+            tool_name="run_query",
+            tool_call_id="tool-9",
+            tool_args={"request": {"comment": "Scanning the ledger"}},
+        ),
+    )
+
+    await observer.on_event(activity, conversation, SimpleNamespace())
+    assert service.progress == []
+
+    observer._run_started_at -= progress_display._POST_HEARTBEAT_DELAY_SECONDS + 1
+    await observer.on_event(activity, conversation, SimpleNamespace())
+
+    assert len(service.progress) == 1
+    assert "Still working on this" in service.progress[0]["progress_text"]
+
+    # One acknowledgement, not a drip feed.
+    observer._run_started_at -= 600
+    await observer.on_event(activity, conversation, SimpleNamespace())
+    assert len(service.progress) == 1
+
+
+async def test_whatsapp_is_acknowledged_when_the_run_starts():
+    """The read-receipt-and-typing call existed but nothing ever invoked it.
+
+    It sat behind the same guard as the typing-refresh loop, and WhatsApp is not
+    in the refresh table.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+    task = observer._typing_task
+    if task is not None:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert service.calls == [{"conversation_id": conversation.id, "metadata": None}]
+
+
+async def test_email_still_shows_nothing_before_the_reply():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("RESEND")
+
+    await observer.on_event(
+        _plan_return("- [ ] Draft it"), conversation, SimpleNamespace()
+    )
+
+    assert service.progress == []
+    assert service.messages == []
+
+
+async def test_slack_is_acknowledged_by_its_open_stream_and_nothing_else():
+    """The open stream is Slack's indicator; a second call would double up."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("SLACK")
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+
+    assert service.streamed == [
+        {"conversation_id": conversation.id, "progress_handle": None, "text": ""}
+    ]
+    assert service.calls == []
+
+
+async def test_email_is_not_acknowledged_at_all():
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer.on_run_started(_conversation("GMAIL"), SimpleNamespace())
+
+    assert service.calls == []
     assert service.streamed == []
