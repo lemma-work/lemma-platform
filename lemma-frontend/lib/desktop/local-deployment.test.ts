@@ -23,7 +23,7 @@ describe("local deployments never serve the landing page", () => {
 
         expect(switchSource.match(/<LandingPage \/>/g) ?? []).toHaveLength(1);
         expect(switchSource).toMatch(
-            /if \(!isLocalDeployment\(\) && \(isLoading \|\| !isAuthenticated\)\) \{\s*return <LandingPage \/>;/,
+            /if \(!isLocalDeployment\(\) && !isAuthenticated\) \{\s*return isLoading && hasSessionCookie \? <PageLoader \/> : <LandingPage \/>;/,
         );
     });
 
