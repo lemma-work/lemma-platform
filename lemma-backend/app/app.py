@@ -860,9 +860,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 "bundle_daily_import_limit": (
                     pod_bundle_settings.pod_bundle_daily_import_limit
                 ),
-                "usage_limit_overrides": bool(
-                    settings.usage_org_limit_overrides_json
-                ),
+                "usage_limit_overrides": bool(settings.usage_org_limit_overrides_json),
             }
         payload["configuration"] = configuration
         if settings.lemma_runtime_instance_id:
