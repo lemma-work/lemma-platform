@@ -116,7 +116,20 @@ async def test_an_unavailable_converter_does_not_burn_attempts(a_pod_of_its_own)
         content_type="application/pdf",
         searchable=True,
     )
+    try:
+        await _the_promise_about_an_unreachable_extractor(alice, pod, report)
+    finally:
+        # Delete it the moment the assertions are done. While this document
+        # exists it is re-claimed and released for as long as the run lasts —
+        # which is the subject of DEV-DATA-003, and not free: the retries stall
+        # the worker's event loop, and the visible symptom lands journeys away
+        # as agent runs that stop being answered. The pod is swept at the end,
+        # but "the end" is ten minutes of every other scenario paying for this
+        # one. Nothing above needs the file afterwards.
+        await alice.deletes_file(report["path"], in_pod=pod)
 
+
+async def _the_promise_about_an_unreachable_extractor(alice, pod, report):
     # Never failed, wherever this runs. That half is the promise: an extractor
     # outage releases the claim rather than spending one of three attempts, so
     # three blips cannot add up to a permanently unreadable document.
