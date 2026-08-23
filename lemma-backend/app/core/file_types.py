@@ -104,6 +104,30 @@ EXTENSION_MIME_MAP = {
 }
 
 
+def extension_for_mime(mime_type: str | None) -> str | None:
+    """The file extension a MIME type should be saved under, or None.
+
+    The reverse of :func:`get_content_type`, and it exists because a name is the
+    only thing the datastore has to type a file by: a WhatsApp photo arrives
+    with a mime type and no filename at all, and stored as bare ``image`` it
+    comes back out as ``application/octet-stream`` -- unviewable, unindexable,
+    and indistinguishable from a blob.
+    """
+    normalized = str(mime_type or "").split(";")[0].strip().lower()
+    # "octet-stream" is the absence of a type, not a type. Naming a file
+    # ``photo.bin`` from it would be worse than leaving it bare: it looks
+    # decided.
+    if not normalized or normalized.endswith("/octet-stream"):
+        return None
+    guessed = mimetypes.guess_extension(normalized)
+    if guessed:
+        return guessed
+    for extension, mapped in EXTENSION_MIME_MAP.items():
+        if mapped == normalized:
+            return extension
+    return None
+
+
 def get_content_type(path: str) -> str:
     extension = os.path.splitext(path)[1].lower()
     return (

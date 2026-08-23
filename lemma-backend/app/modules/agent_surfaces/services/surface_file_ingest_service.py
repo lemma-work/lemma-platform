@@ -37,7 +37,11 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
 from app.composition.surface_datastore import build_file_service
-from app.modules.datastore.contracts import normalize_datastore_name
+from app.core.file_types import extension_for_mime
+from app.modules.datastore.contracts import (
+    DatastoreConflictError,
+    normalize_datastore_name,
+)
 
 logger = get_logger(__name__)
 
@@ -81,14 +85,47 @@ def _attachments_from_parsed(parsed: ParsedInboundSurfaceEvent) -> list[dict[str
     return [item for item in raw if isinstance(item, dict)]
 
 
-def _safe_file_name(name: str | None) -> str:
-    """Reduce an attachment name to a single valid datastore segment."""
+def _safe_file_name(name: str | None, mime: str | None = None) -> str:
+    """Reduce an attachment name to a single valid datastore segment.
+
+    The extension is part of the name's job here. A chat surface is free to send
+    a file with no filename -- WhatsApp names a photo nothing at all, Telegram
+    calls every one of them ``photo`` -- and the datastore types a file by its
+    name alone. Saved bare, the photo comes back as ``application/octet-stream``:
+    ``view_image`` refuses it, indexing skips it, and the agent is left holding a
+    path to something it cannot open. So when the name carries no suffix and the
+    download told us what the bytes are, say so in the name.
+    """
     candidate = Path(str(name or "").strip().replace("\\", "/")).name.strip()
     candidate = candidate.replace("/", "_").strip() or "attachment"
+    if not Path(candidate).suffix:
+        candidate += extension_for_mime(mime) or ""
     try:
         return normalize_datastore_name(candidate)
     except Exception:
         return "attachment"
+
+
+# How many names to try before giving up on one attachment. A person sending a
+# handful of photos in a row is ordinary; a hundred identically-named ones is
+# not worth a hundred round trips.
+_NAME_ATTEMPTS = 25
+
+
+def _numbered(name: str, attempt: int) -> str:
+    """``image.jpg`` -> ``image-2.jpg`` for the second one, and so on.
+
+    Chat surfaces name nothing: every WhatsApp photo is ``image``, every
+    Telegram one is ``photo``. The datastore refuses a duplicate path, so
+    without this the *second* photo anyone ever sent was dropped -- logged as a
+    warning nobody was reading, with the agent told only about the first.
+    """
+    if attempt == 0:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    if not dot:
+        return f"{name}-{attempt + 1}"
+    return f"{stem}-{attempt + 1}.{extension}"
 
 
 class SurfaceFileIngestService:
@@ -280,31 +317,50 @@ class SurfaceFileIngestService:
             return None
 
         content_type = attachment.get("content_type")
+        file_name = _safe_file_name(name, mime)
 
-        async def _persist(file_service: Any) -> IngestedAttachment | None:
-            entity = await file_service.create_file(
-                pod_id=pod_id,
-                name=_safe_file_name(name),
-                file_content=content,
-                ctx=ctx,
-                directory_path=directory,
-                search_enabled=True,
-            )
-            result = IngestedAttachment(
-                path=entity.path,
-                name=entity.name,
-                mime=mime,
-                content_type=str(content_type) if content_type else None,
-            )
-            # Carry audio bytes for in-ingress transcription when small enough;
-            # larger audio is still saved (the agent can `listen` to it) but not
-            # transcribed.
-            if result.is_audio and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
-                result.audio_bytes = content
-            return result
+        def _persist_as(candidate: str):
+            async def _persist(file_service: Any) -> IngestedAttachment | None:
+                entity = await file_service.create_file(
+                    pod_id=pod_id,
+                    name=candidate,
+                    file_content=content,
+                    ctx=ctx,
+                    directory_path=directory,
+                    search_enabled=True,
+                )
+                result = IngestedAttachment(
+                    path=entity.path,
+                    name=entity.name,
+                    mime=mime,
+                    content_type=str(content_type) if content_type else None,
+                )
+                # Carry audio bytes for in-ingress transcription when small
+                # enough; larger audio is still saved (the agent can `listen` to
+                # it) but not transcribed.
+                if (
+                    result.is_audio
+                    and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP
+                ):
+                    result.audio_bytes = content
+                return result
+
+            return _persist
 
         try:
-            return await store(_persist)
+            for attempt in range(_NAME_ATTEMPTS):
+                try:
+                    return await store(_persist_as(_numbered(file_name, attempt)))
+                except DatastoreConflictError:
+                    # That name is taken -- by an earlier photo from this same
+                    # person, almost always. Try the next one.
+                    continue
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_name_unavailable.degraded",
+                platform=platform,
+                attempts=_NAME_ATTEMPTS,
+            )
+            return None
         except Exception:
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_store_failed.degraded",

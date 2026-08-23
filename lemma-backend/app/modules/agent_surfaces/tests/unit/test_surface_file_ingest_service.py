@@ -12,8 +12,10 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
+    _numbered,
     _safe_file_name,
 )
+from app.modules.datastore.contracts import DatastoreConflictError
 
 
 def _event(attachments: list[dict]) -> ParsedInboundSurfaceEvent:
@@ -46,8 +48,11 @@ class _FakeAdapter:
 
 
 class _FakeFileService:
+    """Stands in for the datastore, including its refusal of a duplicate path."""
+
     def __init__(self):
         self.created: list[dict] = []
+        self.taken: set[str] = set()
 
     async def create_file(
         self,
@@ -60,6 +65,10 @@ class _FakeFileService:
         search_enabled=True,
         **kwargs,
     ):
+        path = f"{directory_path}/{name}"
+        if path in self.taken:
+            raise DatastoreConflictError(f"A file or folder already exists at '{path}'")
+        self.taken.add(path)
         self.created.append(
             {
                 "pod_id": pod_id,
@@ -68,7 +77,7 @@ class _FakeFileService:
                 "directory_path": directory_path,
             }
         )
-        return SimpleNamespace(path=f"{directory_path}/{name}", name=name)
+        return SimpleNamespace(path=path, name=name)
 
 
 def _direct_store(file_service):
@@ -224,6 +233,83 @@ def test_safe_file_name_strips_paths_and_falls_back():
     assert _safe_file_name("a/b/c.txt") == "c.txt"
     assert _safe_file_name("") == "attachment"
     assert _safe_file_name(None) == "attachment"
+
+
+def test_safe_file_name_completes_a_nameless_photo_from_its_mime_type():
+    """A chat photo arrives with no filename; the datastore types by name only.
+
+    Saved as bare ``image``/``photo`` the file comes back as
+    ``application/octet-stream``: ``view_image`` refuses it and indexing skips
+    it, so the agent holds a path to something it cannot open.
+    """
+    assert _safe_file_name("image", "image/jpeg") == "image.jpg"
+    assert _safe_file_name("photo", "image/png") == "photo.png"
+    assert _safe_file_name("voice", "audio/ogg; codecs=opus") == "voice.ogg"
+    # An extension the sender supplied is left exactly as it is.
+    assert _safe_file_name("report.pdf", "application/pdf") == "report.pdf"
+    # "octet-stream" is the absence of a type; inventing ".bin" would look decided.
+    assert _safe_file_name("image", "application/octet-stream") == "image"
+    assert _safe_file_name("image", None) == "image"
+
+
+def test_numbered_puts_the_counter_before_the_extension():
+    assert _numbered("image.jpg", 0) == "image.jpg"
+    assert _numbered("image.jpg", 1) == "image-2.jpg"
+    assert _numbered("report.tar.gz", 2) == "report.tar-3.gz"
+    assert _numbered("attachment", 1) == "attachment-2"
+
+
+async def test_a_second_photo_with_the_same_name_is_still_saved():
+    """Every WhatsApp photo is called "image"; every Telegram one, "photo".
+
+    The datastore refuses a duplicate path, so the second one anyone ever sent
+    used to be dropped — logged as a warning, and the agent told only about the
+    first.
+    """
+    service = _service()
+    adapter = _FakeAdapter(
+        results={
+            "p1": (b"one", "photo", "image/png"),
+            "p2": (b"two", "photo", "image/png"),
+        }
+    )
+    file_service = _FakeFileService()
+    attachments = [{"file_id": "p1"}, {"file_id": "p2"}]
+
+    saved = await service._ingest_all(
+        adapter=adapter,
+        pod_id=uuid4(),
+        platform="TELEGRAM",
+        parsed=_event(attachments),
+        credentials={},
+        store=_direct_store(file_service),
+        ctx=SimpleNamespace(),
+        attachments=attachments,
+    )
+
+    assert [item.path for item in saved] == [
+        "/me/telegram/photo.png",
+        "/me/telegram/photo-2.png",
+    ]
+
+
+async def test_a_nameless_photo_is_stored_under_a_typed_name():
+    service = _service()
+    adapter = _FakeAdapter(results={"p1": (b"\x89PNG", "photo", "image/png")})
+    file_service = _FakeFileService()
+
+    saved = await service._ingest_all(
+        adapter=adapter,
+        pod_id=uuid4(),
+        platform="TELEGRAM",
+        parsed=_event([{"file_id": "p1"}]),
+        credentials={},
+        store=_direct_store(file_service),
+        ctx=SimpleNamespace(),
+        attachments=[{"file_id": "p1"}],
+    )
+
+    assert [item.path for item in saved] == ["/me/telegram/photo.png"]
 
 
 async def test_no_transaction_is_open_while_an_attachment_downloads():

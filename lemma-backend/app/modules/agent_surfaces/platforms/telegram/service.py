@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.platforms.telegram.client import (
 from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     acknowledge_interaction as acknowledge_telegram_interaction,
     end_progress as end_telegram_progress,
+    reply_parameters as telegram_reply_parameters,
     send_chunk,
     stream_progress as stream_telegram_progress,
 )
@@ -153,7 +154,7 @@ class TelegramPlatformService:
         """
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
         thread_id = self._message_thread_id(event)
-        reply_to = event.reply_target.get("message_id")
+        reply_parameters = telegram_reply_parameters(event)
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
@@ -176,11 +177,8 @@ class TelegramPlatformService:
             if thread_id is not None:
                 payload["message_thread_id"] = thread_id
             # Thread the reply / attach a keyboard only on the first chunk.
-            if index == 0 and reply_to:
-                payload["reply_parameters"] = {
-                    "message_id": reply_to,
-                    "allow_sending_without_reply": True,
-                }
+            if index == 0 and reply_parameters is not None:
+                payload["reply_parameters"] = reply_parameters
             if index == 0 and isinstance(reply_markup, dict):
                 payload["reply_markup"] = reply_markup
             await self._send_chunk(payload, raw_chunk)
@@ -321,15 +319,15 @@ class TelegramPlatformService:
     ) -> None:
         del metadata
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        reply_to = event.reply_target.get("message_id")
+        reply_parameters = telegram_reply_parameters(event)
 
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": _telegram_display_resource_text(render_plan),
             "parse_mode": "HTML",
         }
-        if reply_to:
-            payload["reply_to_message_id"] = reply_to
+        if reply_parameters is not None:
+            payload["reply_parameters"] = reply_parameters
         thread_id = self._message_thread_id(event)
         if thread_id is not None:
             payload["message_thread_id"] = thread_id

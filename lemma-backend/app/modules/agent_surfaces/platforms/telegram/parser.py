@@ -66,16 +66,67 @@ def _batch(payload: dict[str, Any], message: dict[str, Any]) -> list[Any]:
     return [message]
 
 
-def _batch_message_id(message: dict[str, Any], batch: list[Any]) -> str:
-    """One id for the whole batch, or the single message's own id."""
-    ids = [
+def _batch_message_ids(batch: list[Any]) -> list[str]:
+    """Every real Telegram message id in the batch, in arrival order."""
+    return [
         str(item.get("message_id"))
         for item in batch
         if isinstance(item, dict) and item.get("message_id") is not None
     ]
+
+
+def _batch_message_id(message: dict[str, Any], batch: list[Any]) -> str:
+    """One id for the whole batch, or the single message's own id.
+
+    Synthetic for a batch (``batch:41-43``) because its job is identity --
+    dedup and the conversation link -- and no single Telegram id names the
+    burst. It is not a message id and must never be sent back to Telegram as
+    one; :func:`_reply_to_message_id` is what a reply points at.
+    """
+    ids = _batch_message_ids(batch)
     if len(ids) > 1:
         return f"batch:{ids[0]}-{ids[-1]}"
     return str(message.get("message_id", ""))
+
+
+def _reply_to_message_id(message: dict[str, Any], batch: list[Any]) -> str:
+    """The message a reply should quote: the last one of the burst.
+
+    Telegram's ``reply_parameters.message_id`` takes an integer id of a real
+    message. Handing it the synthetic batch id sent a 400 for every debounced
+    burst, so the reply to two photos sent a second apart failed outright.
+    """
+    ids = _batch_message_ids(batch)
+    if ids:
+        return ids[-1]
+    return str(message.get("message_id", ""))
+
+
+# A quoted message is context, not a document: enough to know what is being
+# pointed at, and not so much that a long quote crowds out the actual request.
+_QUOTED_TEXT_LIMIT = 1000
+
+
+def _quoted_message(message: dict[str, Any]) -> dict[str, Any] | None:
+    """The message this one is a reply to, or None when it replies to nothing.
+
+    Telegram delivers the quoted message inline in the update, so this costs
+    nothing -- and without it a reply reads as a bare "what about this one?"
+    with the "this" missing. The group path had it via ``fetch_thread_context``;
+    a DM never called that, which is where replying to an earlier message
+    silently lost its subject.
+    """
+    reply = payload_section(message, "reply_to_message")
+    text = str(reply.get("text") or reply.get("caption") or "").strip()
+    if not text:
+        return None
+    from_user = payload_section(reply, "from")
+    author = str(from_user.get("username") or from_user.get("first_name") or "").strip()
+    return {
+        "author": author or None,
+        "text": text[:_QUOTED_TEXT_LIMIT],
+        "is_bot": bool(from_user.get("is_bot")),
+    }
 
 
 def _media_group_ids(batch: list[Any]) -> list[str]:
@@ -148,7 +199,7 @@ class TelegramMessageParser:
             should_start_conversation=True,
             reply_target={
                 "chat_id": chat_id,
-                "message_id": message_id,
+                "message_id": _reply_to_message_id(message, batch),
                 # Forum-topic id so replies land in the same topic; empty for
                 # ordinary chats.
                 "message_thread_id": payload_text(message, "message_thread_id"),
@@ -159,6 +210,7 @@ class TelegramMessageParser:
                 "is_topic_message": bool(message.get("is_topic_message")),
                 "message_thread_id": payload_text(message, "message_thread_id"),
                 "is_thread_reply": is_reply_to_bot,
+                "quoted_message": _quoted_message(message),
                 "sender_username": sender.username,
                 "contact_shared": contact["contact_shared"],
                 "contact_shared_by_sender": contact["contact_shared_by_sender"],

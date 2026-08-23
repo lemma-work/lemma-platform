@@ -94,10 +94,19 @@ def _service(recorder: _RecordingClient) -> TelegramPlatformService:
     return service
 
 
-def _event(text: str = "hi", *, message_id: int = 5, thread_id: int | None = None):
+def _event(
+    text: str = "hi",
+    *,
+    message_id: int = 5,
+    thread_id: int | None = None,
+    chat_type: str | None = None,
+):
     message: dict = {
         "message_id": message_id,
-        "chat": {"id": 123, "type": "supergroup" if thread_id else "private"},
+        "chat": {
+            "id": 123,
+            "type": chat_type or ("supergroup" if thread_id else "private"),
+        },
         "from": {"id": 1, "first_name": "U"},
         "text": text,
     }
@@ -113,7 +122,7 @@ async def test_send_message_uses_rich_markdown_and_reply_parameters():
     recorder = _RecordingClient()
     service = _service(recorder)
 
-    await service.send_message(_event(), "Use **bold** here.")
+    await service.send_message(_event(chat_type="supergroup"), "Use **bold** here.")
 
     assert len(recorder.calls) == 1
     method, payload = recorder.calls[0]
@@ -121,10 +130,57 @@ async def test_send_message_uses_rich_markdown_and_reply_parameters():
     assert payload["rich_message"]["markdown"] == "Use **bold** here."
     assert payload["chat_id"] == "123"
     assert payload["reply_parameters"] == {
-        "message_id": "5",
+        "message_id": 5,
         "allow_sending_without_reply": True,
     }
     assert "message_thread_id" not in payload
+
+
+async def test_send_message_does_not_quote_in_a_dm():
+    """A DM reply quotes nothing.
+
+    The event an outbound is built from is the link's *last* inbound, not the
+    message being answered — so a quote here points at whatever arrived most
+    recently. There is one thread and two people; nothing to disambiguate.
+    """
+    recorder = _RecordingClient()
+    service = _service(recorder)
+
+    await service.send_message(_event(), "answering you")
+
+    _, payload = recorder.calls[0]
+    assert "reply_parameters" not in payload
+
+
+async def test_send_message_never_quotes_a_synthetic_batch_id():
+    """A debounced burst has no single Telegram message id.
+
+    ``external_message_id`` is ``batch:5-6`` for identity; sending that back as
+    ``reply_parameters.message_id`` is a 400 that fails the whole reply, so the
+    reply points at the last real message of the burst instead.
+    """
+    first = {
+        "message_id": 5,
+        "chat": {"id": 123, "type": "supergroup"},
+        "from": {"id": 1, "first_name": "U"},
+        "text": "first",
+    }
+    second = {**first, "message_id": 6, "text": "second"}
+    parsed = TelegramMessageParser().parse(
+        {"message": first, "_lemma_batch_messages": [first, second]}
+    )
+    assert parsed is not None
+    assert parsed.external_message_id == "batch:5-6"
+
+    recorder = _RecordingClient()
+    service = _service(recorder)
+    await service.send_message(parsed, "on it")
+
+    _, payload = recorder.calls[0]
+    assert payload["reply_parameters"] == {
+        "message_id": 6,
+        "allow_sending_without_reply": True,
+    }
 
 
 async def test_send_message_falls_back_to_plain_text_on_parse_error():
@@ -153,7 +209,7 @@ async def test_send_message_chunks_long_text_under_limit():
     recorder = _RecordingClient()
     service = _service(recorder)
 
-    await service.send_message(_event(), "x" * 9000)
+    await service.send_message(_event(chat_type="supergroup"), "x" * 9000)
 
     assert len(recorder.calls) >= 3
     assert all(
@@ -196,6 +252,53 @@ async def test_send_message_retry_button_stores_only_the_action():
             [{"text": "Try again", "callback_data": "retry-token"}],
         ]
     }
+
+
+def test_parser_carries_the_message_a_reply_quotes():
+    """Telegram ships the quoted message inline; the parser must keep it.
+
+    Without it a DM reply reaches the agent as "what about this one?" with the
+    "this" missing — the group path had it via ``fetch_thread_context``, and a
+    DM never called that.
+    """
+    parsed = TelegramMessageParser().parse(
+        {
+            "message": {
+                "message_id": 9,
+                "chat": {"id": 123, "type": "private"},
+                "from": {"id": 1, "first_name": "Deepak"},
+                "text": "this one is wrong",
+                "reply_to_message": {
+                    "message_id": 7,
+                    "from": {"id": 2, "is_bot": True, "username": "lemmabot"},
+                    "text": "The runtime for agent-built software",
+                },
+            }
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.metadata["quoted_message"] == {
+        "author": "lemmabot",
+        "text": "The runtime for agent-built software",
+        "is_bot": True,
+    }
+
+
+def test_parser_leaves_quoted_message_unset_when_nothing_was_quoted():
+    parsed = TelegramMessageParser().parse(
+        {
+            "message": {
+                "message_id": 9,
+                "chat": {"id": 123, "type": "private"},
+                "from": {"id": 1, "first_name": "Deepak"},
+                "text": "hello",
+            }
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.metadata["quoted_message"] is None
 
 
 def test_parser_combines_burst_text_and_album_attachments():
