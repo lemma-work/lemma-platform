@@ -158,6 +158,60 @@ STANDING_PODS = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class StandingConnector:
+    """A connector the tenant keeps one auth config for, forever.
+
+    The durable thing is the auth config, because an account is bound to the
+    one it was consented against. Install a fresh auth config each run and
+    every OAuth connector needs a person in a browser again each run — which
+    makes the consent design unusable for exactly the connectors that need it.
+
+    So this is named without a run mark, deliberately. `must_be_traceable`
+    covers pods and organizations and not this, so nothing has to be relaxed:
+    a name with no mark is invisible to cleanup, which is the point.
+    """
+
+    connector: str
+    #: Which of the connector's kinds to install. `None` when it offers one.
+    #: `gmail` needs "composio": its own package kind is OAuth2 against a
+    #: Google client we do not have, while Composio brings its own OAuth app —
+    #: and that is the route this product's users take today.
+    kind: str | None = None
+    #: Whether a person has to open a browser. A bot token does not need one.
+    consented: bool = True
+
+
+#: One per provider the suite drives for real. `whatsapp` and the rest of the
+#: catalogue are deliberately absent: this list is what provisioning installs
+#: and asks somebody to connect, and asking for accounts no scenario uses is
+#: how a consent report becomes noise somebody learns to ignore.
+STANDING_CONNECTORS = (
+    StandingConnector("telegram", consented=False),
+    StandingConnector("github"),
+    StandingConnector("slack"),
+    StandingConnector("gmail", kind="composio"),
+)
+
+
+#: Whose accounts they are. An account is scoped to the person who connected
+#: it — the list endpoint filters on `user_id` — so "is GitHub connected?" has
+#: no answer for the organization, only for a person in it. One nominated
+#: holder is what keeps that from being accidental: without it, provisioning
+#: asks the owner, a scenario asks whoever it happens to be acting as, and the
+#: same tenant answers yes and no to the same question.
+#:
+#: Daniel rather than the owner: he administers every standing pod, so the
+#: surfaces that bind these accounts are already his to manage, and an editor
+#: installing a connector is the ordinary case rather than the privileged one.
+CONNECTOR_HOLDER = "daniel"
+
+
+def standing_auth_config_name(connector: str) -> str:
+    """What the tenant's own auth config for a connector is called."""
+    return f"{connector}_standing"
+
+
 def colleague(label: str) -> Colleague:
     """The cast member by that name, or a failure naming who there is."""
     try:

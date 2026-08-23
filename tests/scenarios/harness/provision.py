@@ -145,6 +145,11 @@ async def provision(
         boss = people[owner_of(tenant.VANTAGE).label]
         boss.organization = companies[tenant.VANTAGE.key]
         administrator = people["daniel"]
+        # Connectors belong to one nominated person, not to whoever provisions:
+        # an account is scoped to the user who connected it. See CONNECTOR_HOLDER.
+        holder = people[tenant.CONNECTOR_HOLDER]
+        holder.organization = companies[tenant.VANTAGE.key]
+        await _standing_connectors(holder, ledger)
         for standing_pod in tenant.STANDING_PODS:
             pod = await _pod(boss, standing_pod, ledger)
             await _administers(boss, administrator, pod, ledger)
@@ -159,10 +164,9 @@ async def provision(
                 await _only_the_cast(owner, ledger)
 
         written = ledger.report(
-            f"{'Reset' if reset else 'Provisioned'} {base_url} "
-            f"({target.environment})"
+            f"{'Reset' if reset else 'Provisioned'} {base_url} ({target.environment})"
         )
-        return written + await _still_needs_a_person(boss)
+        return written + await _still_needs_a_person(holder)
     finally:
         await world.aclose()
 
@@ -194,16 +198,13 @@ async def _standing(
         invitation = await owner.invites(person, to=company, as_role=colleague.role)
         await person.accepts(invitation)
         ledger.did(
-            f"{colleague.full_name} joined {colleague.company.name} "
-            f"as {colleague.role}"
+            f"{colleague.full_name} joined {colleague.company.name} as {colleague.role}"
         )
         return
     if str(mine.get("role")) != colleague.role:
         was = mine.get("role")
         await owner.changes_role(person, to=colleague.role, in_organization=company)
-        ledger.did(
-            f"{colleague.full_name} put back to {colleague.role} (was {was})"
-        )
+        ledger.did(f"{colleague.full_name} put back to {colleague.role} (was {was})")
         return
     ledger.already(f"{colleague.full_name} is {colleague.role}")
 
@@ -264,7 +265,9 @@ async def _clear_run_debris(
     entries = _tree_entries(await owner.file_tree_of(pod))
     # Deepest first: removing a folder takes what is inside it, so a child that
     # has already gone would otherwise 404 and stop the sweep on its way past.
-    for entry in sorted(entries, key=lambda e: str(e.get("path", "")).count("/"), reverse=True):
+    for entry in sorted(
+        entries, key=lambda e: str(e.get("path", "")).count("/"), reverse=True
+    ):
         path = str(entry.get("path") or "")
         if not mine(str(entry.get("name") or "")):
             continue
@@ -336,9 +339,7 @@ async def sweep(base_url: str) -> str:
             standing = {pod.name for pod in tenant.STANDING_PODS}
             for pod in await owner.pods_in(owner.organization):
                 if pod.get("name") in standing:
-                    await _clear_run_debris(
-                        owner, pod, ledger, mine=current().made_this
-                    )
+                    await _clear_run_debris(owner, pod, ledger, mine=current().made_this)
         if not swept:
             return "nothing to sweep: the tenant is not provisioned here"
         return ledger.report(f"Swept {current()} from {base_url}")
@@ -432,6 +433,67 @@ async def _clear_run_pods(
             ledger.did(f"removed leftover pod {name!r}")
 
 
+async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
+    """Install the tenant's own auth config for each provider the suite drives.
+
+    Once, under a name with no run mark, so it is here next time. This is what
+    makes consent worth giving: an account belongs to the auth config it was
+    consented against, so a run that installs its own throws away every OAuth
+    account the moment it finishes cleaning up after itself.
+    """
+    for declared in tenant.STANDING_CONNECTORS:
+        name = tenant.standing_auth_config_name(declared.connector)
+        existing = {
+            config.get("name") for config in await owner.connectors_in(owner.organization)
+        }
+        if name in existing:
+            ledger.already(f"{declared.connector} installed as {name!r}")
+            continue
+        try:
+            await owner.installs_connector(
+                declared.connector,
+                in_organization=owner.organization,
+                named=name,
+                kind=declared.kind,
+            )
+            ledger.did(f"installed {declared.connector} as {name!r}")
+        except Exception as exc:
+            # Not fatal. A deployment with no Slack credentials configured
+            # cannot install Slack, and every scenario that does not need
+            # Slack is unaffected — `_still_needs_a_person` says so at the end.
+            ledger.did(f"could not install {declared.connector}: {_one_line(exc)}")
+
+
+def _one_line(exc: Exception) -> str:
+    return " ".join(str(exc).split())[:160]
+
+
+async def _where_to_consent(owner: Person, connector: str) -> str:
+    """The URL a person opens to connect one provider, or why there is none."""
+    name = tenant.standing_auth_config_name(connector)
+    config = next(
+        (
+            c
+            for c in await owner.connectors_in(owner.organization)
+            if c.get("name") == name
+        ),
+        None,
+    )
+    if config is None:
+        return "not installed — this deployment has no credentials for it"
+    try:
+        asked = await owner.api.post(
+            f"/organizations/{owner.organization['id']}/connectors/connect-requests",
+            json={"auth_config_id": config["id"]},
+        )
+    except Exception as exc:
+        return f"could not be asked for: {_one_line(exc)}"
+    for key in ("redirect_url", "url", "authorization_url"):
+        if asked.get(key):
+            return str(asked[key])
+    return f"answered without a url ({sorted(asked)})"
+
+
 async def _still_needs_a_person(owner: Person) -> str:
     """What provisioning cannot do, spelled out for whoever can.
 
@@ -460,10 +522,13 @@ async def _still_needs_a_person(owner: Person) -> str:
     for number, action in enumerate(waiting, start=1):
         lines.append(f"  {number}. {action.name}")
         lines.append(f"     {action.how}")
+        # The link, not just the instruction. Everything above this describes
+        # what to do; without the URL somebody still has to go and find the
+        # organization, the connector, and the button — which is where a
+        # to-do list stops being followed.
+        lines.append(f"     open: {await _where_to_consent(owner, action.connector)}")
         lines.append("")
-    lines.append(
-        "Scenarios needing these skip until they are done — they do not fail, "
-    )
+    lines.append("Scenarios needing these skip until they are done — they do not fail, ")
     lines.append("which is why this is printed rather than left to be noticed.")
     return "\n".join(lines)
 
@@ -531,7 +596,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(
             asyncio.run(
-                provision(arguments.base_url, reset=arguments.reset, authenticate=authenticate)
+                provision(
+                    arguments.base_url, reset=arguments.reset, authenticate=authenticate
+                )
             )
         )
     except (environment.Unreachable, AssertionError) as stopped:

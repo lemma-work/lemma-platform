@@ -89,6 +89,7 @@ PORT_SETTING = "SCENARIOS_PORT"
 def public_api_url(port: int) -> str:
     return os.getenv(PUBLIC_URL_SETTING, "").strip() or PUBLIC_API_URL
 
+
 #: Organizations whose slug starts with this are capped at zero monthly spend by
 #: the stack's configuration below. PS-OPS-012 promises work over a limit is
 #: refused, and until a deployment could state a limit at all there was nowhere
@@ -108,9 +109,9 @@ RESEND_INBOUND_DOMAIN = "scenarios.lemma.example"
 #: to flag it. `.gitleaks.toml` allows exactly one such value and says why any
 #: other high-entropy string stays a finding; the way to honour that is to not
 #: produce one, rather than to widen the allowlist.
-RESEND_WEBHOOK_SECRET = "whsec_" + base64.b64encode(
-    b"lemma-scenarios-resend-signing"
-).decode()
+RESEND_WEBHOOK_SECRET = (
+    "whsec_" + base64.b64encode(b"lemma-scenarios-resend-signing").decode()
+)
 
 
 def sandbox_images_present() -> bool:
@@ -180,6 +181,26 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _refuse_a_port_in_use(port: int) -> None:
+    """Fail rather than let a pinned port attach the suite to somebody else.
+
+    `_free_port` cannot collide, but `SCENARIOS_PORT` names one, and a stack
+    that failed to bind still goes on to wait for health — which whatever
+    already holds the port happily answers. The run then tests that process:
+    a stale build, with none of this run's settings. It cost an afternoon
+    once, and every symptom pointed at the settings rather than the port.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        if sock.connect_ex(("127.0.0.1", port)) != 0:
+            return
+    raise RuntimeError(
+        f"{PORT_SETTING} is {port}, but something already listens there. "
+        "Stop it first: a stack that cannot bind would still find that "
+        "process healthy and quietly run every scenario against it."
+    )
+
+
 def require_docker() -> None:
     """Fail early and legibly when Docker is not usable.
 
@@ -212,9 +233,13 @@ def require_docker() -> None:
 
 def _docker_run(image: str, internal_port: int, env: dict[str, str] | None = None) -> str:
     command = [
-        "docker", "run", "-d",
-        "--label", CONTAINER_LABEL,
-        "-p", f"127.0.0.1::{internal_port}",
+        "docker",
+        "run",
+        "-d",
+        "--label",
+        CONTAINER_LABEL,
+        "-p",
+        f"127.0.0.1::{internal_port}",
     ]
     for key, value in (env or {}).items():
         command += ["-e", f"{key}={value}"]
@@ -230,7 +255,9 @@ def _docker_run(image: str, internal_port: int, env: dict[str, str] | None = Non
 def _mapped_port(container_id: str, internal_port: int) -> int:
     result = subprocess.run(
         ["docker", "port", container_id, f"{internal_port}/tcp"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return int(result.stdout.strip().splitlines()[0].rsplit(":", 1)[1])
 
@@ -422,17 +449,32 @@ def _environment(
         # Off, so surface scenarios can deliver webhooks and see them arrive.
         # The live lane sets it: a real bot on a runner with no public address
         # has no other way to receive, and there is no webhook to deliver.
-        "ENABLE_TELEGRAM_POLLING_MODE": os.getenv(
-            "SCENARIOS_TELEGRAM_POLLING", "false"
-        ),
-        "ENABLE_SLACK_SOCKET_MODE": "false",
+        "ENABLE_TELEGRAM_POLLING_MODE": os.getenv("SCENARIOS_TELEGRAM_POLLING", "false"),
+        # Slack's counterpart. Socket mode is a WebSocket out to Slack, so a
+        # workspace can reach a stack with no public address — the only way a
+        # Slack surface receives anything on a laptop or a runner.
+        "ENABLE_SLACK_SOCKET_MODE": os.getenv("SCENARIOS_SLACK_SOCKET", "false"),
+        # And email's. Resend's inbound webhook is push-only; polling lists the
+        # account's received mail instead, which is what lets a real round trip
+        # — send from a mailbox, agent answers — run with nothing published.
+        "ENABLE_RESEND_POLLING_MODE": os.getenv("SCENARIOS_RESEND_POLLING", "false"),
         # Email surfaces. A Resend inbound webhook is Svix-signed, so without a
         # secret the endpoint answers 503 and no email scenario can run at all;
         # this is a well-formed throwaway, and scenarios sign with it exactly as
-        # Resend would. The domain is what gives each surface its own address.
+        # Resend would. It stays a throwaway even on the real-email lane: no
+        # webhook from Resend ever arrives here, and the suite has to be able to
+        # sign the ones it delivers itself.
         "RESEND_WEBHOOK_SECRET": RESEND_WEBHOOK_SECRET,
-        "RESEND_INBOUND_DOMAIN": RESEND_INBOUND_DOMAIN,
-        "RESEND_API_KEY": "re_scenarios_not_a_real_key",
+        # The domain is what gives each surface its own address, and the key is
+        # what makes a send real. Both come from the deployment on the
+        # real-email lane, and both have to move together: a real key against
+        # the placeholder domain sends from a domain Resend has not verified.
+        #
+        # Opt-in rather than "use whatever is configured", because the default
+        # lane replies to senders that scenarios invented. Against a real key
+        # every one of those is a hard bounce at a reserved domain, charged to
+        # the sending reputation of an account the product itself uses.
+        **_real_email_settings(),
         # The self-hosted posture. Off in production so an org admin cannot
         # point a connector at the cloud metadata service; on here so a
         # connector can target the fake provider this suite runs on loopback.
@@ -554,6 +596,41 @@ def _deployment_settings() -> dict[str, str]:
     return _inheritable(load_deployment_env())
 
 
+REAL_EMAIL_SETTING = "SCENARIOS_REAL_EMAIL"
+
+
+def _real_email_settings() -> dict[str, str]:
+    """Placeholder Resend credentials, or the deployment's real ones.
+
+    Real ones only when asked for by name. See the call site for why this is
+    opt-in and why the key and the domain are read as a pair.
+    """
+    if os.getenv(REAL_EMAIL_SETTING, "").lower() not in ("1", "true", "yes"):
+        return {
+            "RESEND_INBOUND_DOMAIN": RESEND_INBOUND_DOMAIN,
+            "RESEND_API_KEY": "re_scenarios_not_a_real_key",
+        }
+    real = {
+        name: _configured_or(name, "")
+        for name in ("RESEND_API_KEY", "RESEND_INBOUND_DOMAIN")
+    }
+    missing = sorted(name for name, value in real.items() if not value)
+    if missing:
+        raise RuntimeError(
+            f"{REAL_EMAIL_SETTING} is set, but {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not configured. "
+            "Real email needs a Resend key and a domain verified in that "
+            "same Resend account; without both, every send fails at Resend."
+            + (
+                " Both are read from the deployment's own configuration, which "
+                "SCENARIOS_USE_DEPLOYMENT_ENV=1 is what opens."
+                if not os.getenv("SCENARIOS_USE_DEPLOYMENT_ENV")
+                else ""
+            )
+        )
+    return real
+
+
 def _configured_or(name: str, fallback: str) -> str:
     """What the deployment set, or a placeholder that keeps the stack bootable."""
     settings = {**_deployment_settings(), **os.environ}
@@ -580,7 +657,11 @@ def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
     result = subprocess.run(
         [python_bin, "scripts/import_connector_catalog.py"]
         + ([] if catalogue == "all" else ["--provider", "native"]),
-        cwd=str(BACKEND_ROOT), env=env, capture_output=True, text=True, timeout=300,
+        cwd=str(BACKEND_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if result.returncode != 0:
         print(
@@ -592,7 +673,10 @@ def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
 def _migrate(python_bin: str, env: dict[str, str]) -> None:
     result = subprocess.run(
         [python_bin, "-m", "alembic", "upgrade", "head"],
-        cwd=str(BACKEND_ROOT), env=env, capture_output=True, text=True,
+        cwd=str(BACKEND_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise StackError(
@@ -622,18 +706,34 @@ def start_stack():
     )
 
     try:
-        postgres = _docker_run(POSTGRES_IMAGE, 5432, {
-            "POSTGRES_USER": POSTGRES_USER,
-            "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
-            "POSTGRES_DB": POSTGRES_DB,
-        })
+        postgres = _docker_run(
+            POSTGRES_IMAGE,
+            5432,
+            {
+                "POSTGRES_USER": POSTGRES_USER,
+                "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
+                "POSTGRES_DB": POSTGRES_DB,
+            },
+        )
         containers.append(postgres)
         postgres_port = _mapped_port(postgres, 5432)
         _wait_postgres("127.0.0.1", postgres_port)
         subprocess.run(
-            ["docker", "exec", postgres, "psql", "-U", POSTGRES_USER, "-d",
-             POSTGRES_DB, "-c", "CREATE EXTENSION IF NOT EXISTS vector"],
-            check=True, capture_output=True, text=True,
+            [
+                "docker",
+                "exec",
+                postgres,
+                "psql",
+                "-U",
+                POSTGRES_USER,
+                "-d",
+                POSTGRES_DB,
+                "-c",
+                "CREATE EXTENSION IF NOT EXISTS vector",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
         redis = _docker_run(REDIS_IMAGE, 6379)
@@ -646,7 +746,10 @@ def start_stack():
         supertokens_port = _mapped_port(supertokens, 3567)
         _wait_http(f"http://127.0.0.1:{supertokens_port}/hello")
 
-        port = int(os.getenv(PORT_SETTING, "") or _free_port())
+        pinned = os.getenv(PORT_SETTING, "")
+        port = int(pinned) if pinned else _free_port()
+        if pinned:
+            _refuse_a_port_in_use(port)
         database_url = (
             f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
             f"@127.0.0.1:{postgres_port}/{POSTGRES_DB}"
@@ -668,11 +771,26 @@ def start_stack():
         # in #362; time schedules are driven from the worker now. Booting one
         # here is what `lemma-cli/tests/e2e/conftest.py` still does, which is
         # why that suite fails before its first assertion — see DEV-OPS-001.
-        processes.append(subprocess.Popen(
-            [python_bin, "-m", "uvicorn", "app.app:app",
-             "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
-            cwd=str(BACKEND_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
-        ))
+        processes.append(
+            subprocess.Popen(
+                [
+                    python_bin,
+                    "-m",
+                    "uvicorn",
+                    "app.app:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--log-level",
+                    "warning",
+                ],
+                cwd=str(BACKEND_ROOT),
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        )
         base_url = f"http://127.0.0.1:{port}"
         _wait_http(f"{base_url}/health", timeout=120)
 
@@ -680,10 +798,15 @@ def start_stack():
         # processing are all queued rather than done in the request, so without
         # this the API accepts the work and nothing ever picks it up — which
         # looks exactly like a product bug from a scenario's point of view.
-        processes.append(subprocess.Popen(
-            [python_bin, "-m", "app.worker"],
-            cwd=str(BACKEND_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
-        ))
+        processes.append(
+            subprocess.Popen(
+                [python_bin, "-m", "app.worker"],
+                cwd=str(BACKEND_ROOT),
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        )
 
         yield Stack(
             base_url=base_url,

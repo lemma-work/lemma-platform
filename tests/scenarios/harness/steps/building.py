@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from harness.run import a_name_for
 from harness.drivers.api import items_of
+from harness.tenant import STANDING_CONNECTORS, standing_auth_config_name
 from harness.waiting import eventually
 
 JSON = dict[str, Any]
@@ -350,7 +351,11 @@ class BuildingSteps:
         # `start` describes how the workflow is triggered — `{"type": "MANUAL"}`
         # for one a person runs — not which node comes first. Entry is decided
         # by the graph.
-        body: JSON = {"nodes": nodes, "edges": edges, "start": start or {"type": "MANUAL"}}
+        body: JSON = {
+            "nodes": nodes,
+            "edges": edges,
+            "start": start or {"type": "MANUAL"},
+        }
         return await self.api.put(
             f"/pods/{in_pod['id']}/workflows/{name}/graph",
             what=f"{self.label} giving {name!r} a graph",
@@ -382,9 +387,7 @@ class BuildingSteps:
             json={},
         )
         return await eventually(
-            lambda: self.api.get(
-                f"/pods/{in_pod['id']}/workflow-runs/{started['id']}"
-            ),
+            lambda: self.api.get(f"/pods/{in_pod['id']}/workflow-runs/{started['id']}"),
             lambda run: str(run.get("status")) in TERMINAL_WORKFLOW,
             describe=f"workflow run {started['id']} to settle",
             timeout=timeout,
@@ -452,8 +455,9 @@ class BuildingSteps:
             lambda: self.api.get(
                 f"/pods/{into_pod['id']}/bundle/imports/{started['import_id']}"
             ),
-            lambda job: str(job.get("status"))
-            in {"AWAITING_CONFIRMATION", "FAILED", "COMPLETED"},
+            lambda job: (
+                str(job.get("status")) in {"AWAITING_CONFIRMATION", "FAILED", "COMPLETED"}
+            ),
             describe="the import plan",
             timeout=timeout,
         )
@@ -475,9 +479,7 @@ class BuildingSteps:
             json={"variables": variables or {}},
         )
         return await eventually(
-            lambda: self.api.get(
-                f"/pods/{into_pod['id']}/bundle/imports/{import_id}"
-            ),
+            lambda: self.api.get(f"/pods/{into_pod['id']}/bundle/imports/{import_id}"),
             lambda job: str(job.get("status")) in {"COMPLETED", "FAILED", "CANCELLED"},
             describe="the import to finish applying",
             timeout=timeout,
@@ -486,16 +488,71 @@ class BuildingSteps:
     # --- connector installs and accounts -----------------------------------
 
     async def installs_connector(
-        self, connector_id: str, *, in_organization: JSON, named: str | None = None
+        self,
+        connector_id: str,
+        *,
+        in_organization: JSON,
+        named: str | None = None,
+        kind: str | None = None,
     ) -> JSON:
+        body: JSON = {
+            "connector_id": connector_id,
+            "name": named or a_name_for(connector_id),
+        }
+        if kind is not None:
+            # Which of the connector's kinds. Optional when it offers one, and
+            # decisive when it offers more: `gmail` is OAuth2 against a Google
+            # client this deployment does not have under its own kind, and
+            # Composio's managed OAuth app under "composio".
+            body["kind"] = kind
         return await self.api.post(
             f"/organizations/{in_organization['id']}/connectors/auth-configs",
             what=f"{self.label} installing {connector_id!r}",
-            json={
-                "connector_id": connector_id,
-                "name": named or a_name_for(connector_id),
-            },
+            json=body,
         )
+
+    async def uses_connector(self, connector_id: str, *, in_organization: JSON) -> JSON:
+        """The organization's standing auth config, found before it is made.
+
+        The difference from `installs_connector` is what happens on the second
+        run. An account belongs to the auth config it was consented against, so
+        a fresh auth config every run discards every OAuth account every run —
+        and re-consenting is the one step the suite cannot take for itself.
+        Scenarios that want a *connected* provider go through here; scenarios
+        about installing a connector still install their own, marked and
+        disposable like everything else they make.
+        """
+        wanted = standing_auth_config_name(connector_id)
+        for config in await self.connectors_in(in_organization):
+            if config.get("name") == wanted:
+                return config
+        declared = next(
+            (c for c in STANDING_CONNECTORS if c.connector == connector_id), None
+        )
+        return await self.installs_connector(
+            connector_id,
+            in_organization=in_organization,
+            named=wanted,
+            kind=declared.kind if declared else None,
+        )
+
+    async def connectors_in(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/organizations/{organization['id']}/connectors/auth-configs"
+            )
+        )
+
+    async def account_for(
+        self, connector_id: str, *, in_organization: JSON
+    ) -> JSON | None:
+        """The connected account for a connector, if a person has made one."""
+        for account in await self.accounts_in(in_organization):
+            if account.get("connector_id") == connector_id and (
+                account.get("status") == "CONNECTED"
+            ):
+                return account
+        return None
 
     async def connects_account(
         self,
@@ -528,7 +585,12 @@ class BuildingSteps:
         )
 
     async def installs_http_connector(
-        self, *, in_organization: JSON, server_url: str, spec_url: str, named: str | None = None
+        self,
+        *,
+        in_organization: JSON,
+        server_url: str,
+        spec_url: str,
+        named: str | None = None,
     ) -> JSON:
         """Install a connector for an API described by its own OpenAPI spec.
 
@@ -554,7 +616,9 @@ class BuildingSteps:
             )
         )
 
-    async def opens_auth_config(self, auth_config: JSON, *, in_organization: JSON) -> JSON:
+    async def opens_auth_config(
+        self, auth_config: JSON, *, in_organization: JSON
+    ) -> JSON:
         return await self.api.get(
             f"/organizations/{in_organization['id']}/connectors/auth-configs/"
             f"{auth_config['name']}"
@@ -570,14 +634,18 @@ class BuildingSteps:
             json={"name": to},
         )
 
-    async def uninstalls_connector(self, auth_config: JSON, *, in_organization: JSON) -> None:
+    async def uninstalls_connector(
+        self, auth_config: JSON, *, in_organization: JSON
+    ) -> None:
         await self.api.delete(
             f"/organizations/{in_organization['id']}/connectors/auth-configs/"
             f"{auth_config['name']}",
             what=f"{self.label} uninstalling a connector",
         )
 
-    async def operations_of(self, auth_config: JSON, *, in_organization: JSON) -> list[JSON]:
+    async def operations_of(
+        self, auth_config: JSON, *, in_organization: JSON
+    ) -> list[JSON]:
         return items_of(
             await self.api.get(
                 f"/organizations/{in_organization['id']}/connectors/"
@@ -637,7 +705,9 @@ class BuildingSteps:
             )
         return response.status_code
 
-    async def triggers_of(self, auth_config: JSON, *, in_organization: JSON) -> list[JSON]:
+    async def triggers_of(
+        self, auth_config: JSON, *, in_organization: JSON
+    ) -> list[JSON]:
         return items_of(
             await self.api.get(
                 f"/organizations/{in_organization['id']}/connectors/"
@@ -653,9 +723,7 @@ class BuildingSteps:
         )
 
     async def runs_of_workflow(self, name: str, *, in_pod: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/pods/{in_pod['id']}/workflows/{name}/runs")
-        )
+        return items_of(await self.api.get(f"/pods/{in_pod['id']}/workflows/{name}/runs"))
 
     async def cancels_run(self, run: JSON, *, in_pod: JSON) -> Any:
         return await self.api.call(
@@ -664,9 +732,7 @@ class BuildingSteps:
 
     async def waits_assigned_to_me_in(self, pod: JSON) -> list[JSON]:
         return items_of(
-            await self.api.get(
-                f"/pods/{pod['id']}/workflow-runs/waiting/assigned-to-me"
-            )
+            await self.api.get(f"/pods/{pod['id']}/workflow-runs/waiting/assigned-to-me")
         )
 
     async def answers_form(
@@ -738,7 +804,9 @@ class BuildingSteps:
     async def skill_for(self, connector_id: str) -> Any:
         return await self.api.call("GET", f"/connectors/{connector_id}/skill")
 
-    async def refreshes_operations(self, auth_config: JSON, *, in_organization: JSON) -> Any:
+    async def refreshes_operations(
+        self, auth_config: JSON, *, in_organization: JSON
+    ) -> Any:
         return await self.api.call(
             "POST",
             f"/organizations/{in_organization['id']}/connectors/auth-configs/"
@@ -770,7 +838,9 @@ class BuildingSteps:
             f"/pods/{in_pod['id']}/bundle/imports/{import_id}/events"
         )
 
-    async def replans_import(self, import_id: str, *, in_pod: JSON, variables: JSON | None = None) -> Any:
+    async def replans_import(
+        self, import_id: str, *, in_pod: JSON, variables: JSON | None = None
+    ) -> Any:
         return await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/bundle/imports/{import_id}/replan",
