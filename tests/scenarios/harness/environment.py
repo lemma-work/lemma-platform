@@ -73,7 +73,9 @@ class Demand:
         return target.says(self.fact) == self.wanted
 
     def as_instruction(self) -> str:
-        wanted = str(self.wanted).lower() if isinstance(self.wanted, bool) else self.wanted
+        wanted = (
+            str(self.wanted).lower() if isinstance(self.wanted, bool) else self.wanted
+        )
         return f"{self.setting}={wanted}"
 
 
@@ -126,9 +128,7 @@ OPEN_SIGNUP = EnvironmentCapability(
     name="signing a new person up",
     demands=(
         Demand("abuse_protection", False, "AUTH_ABUSE_PROTECTION_ENABLED"),
-        Demand(
-            "email_verification_required", False, "AUTH_EMAIL_VERIFICATION_REQUIRED"
-        ),
+        Demand("email_verification_required", False, "AUTH_EMAIL_VERIFICATION_REQUIRED"),
         Demand(
             "email_deliverability_checks",
             False,
