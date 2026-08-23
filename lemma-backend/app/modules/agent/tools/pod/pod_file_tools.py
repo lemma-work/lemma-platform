@@ -16,8 +16,11 @@ from pydantic_ai import BinaryContent, ToolReturn
 from pydantic_ai.tools import RunContext
 
 from app.composition.agent_datastore import build_file_app_url, build_object_url
+from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.agent_memory_paths import agent_memory_paths_for_name
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
+from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.agent.tools.pod.models import (
@@ -43,6 +46,52 @@ from app.modules.datastore.contracts import (
 )
 
 
+async def _after_memory_write(
+    services: PodServices,
+    *,
+    agent_name: str | None,
+    stored_path: str,
+    content_length: int,
+) -> JsonObject:
+    """Bookkeeping for a write that may have landed in the agent's memory.
+
+    Two things the file service cannot do for us. First, drop the cached memory
+    section so a fact written this turn is in the brief on the next one rather
+    than up to a TTL later -- this is the reliable half of that invalidation,
+    inline and in-process; the stream subscriber covers writers that never
+    reach here. Second, tell the agent when it has written an auto-loaded index
+    past the point where the prompt will carry all of it, which is the one
+    thing the read-side truncation cannot say back to whoever caused it.
+
+    Returns extra keys to merge into the tool result -- empty for the ordinary
+    write, which is almost all of them.
+    """
+    user_id = services.ctx.user_id
+    await invalidate_memory_brief(
+        pod_id=services.ctx.pod_id, path=stored_path, user_id=user_id
+    )
+    # From the run context, not `services.ctx`: that one is the authorization
+    # context, which knows the principal but not the agent's name.
+    paths = agent_memory_paths_for_name(agent_name)
+    indexes = {
+        paths.pod_index,
+        paths.pod_agent_index,
+        paths.personal_index,
+        paths.personal_agent_index,
+    }
+    limit = agent_settings.agent_memory_index_max_chars
+    if to_me_path(stored_path, user_id) not in indexes or content_length <= limit:
+        return {}
+    return {
+        "warning": (
+            f"This index is {content_length} characters; only the first {limit} "
+            "reach your Runtime Context, and the rest is truncated on every "
+            "run. Move the detail into a topic file and leave a one-line "
+            "pointer here."
+        )
+    }
+
+
 async def pod_write_file(
     ctx: RunContext[BaseAgentContext],
     request: PodWriteFileRequest,
@@ -53,17 +102,6 @@ async def pod_write_file(
     directory (`/me/c/{date}/{slug}`) — a stable, private location scoped to
     this conversation. Writes under your own `/me/...` (including that default
     location) never need approval; writes to a shared pod path may.
-
-    Durable facts belong here, not chat: `/memory/*.md` (+
-    `/memory/agents/<agent-name>/`) for pod-shared knowledge, `/me/*.md` (+
-    `/me/agents/<agent-name>/`) for private facts about the current user. The
-    moment you learn a durable fact, preference, or correction, write it here
-    immediately rather than waiting to be asked — one topic per file, update an
-    existing one rather than create a near-duplicate.
-
-    `AGENTS.md` in any of these four locations is read automatically into
-    every conversation's Runtime Context — keep it a short index (topic + a
-    pointer to the real file), never the facts themselves.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -84,6 +122,12 @@ async def pod_write_file(
                 "path": to_me_path(entity.path, services.ctx.user_id),
                 "size_bytes": entity.size_bytes,
                 "created": True,
+                **await _after_memory_write(
+                    services,
+                    agent_name=ctx.deps.agent_name,
+                    stored_path=entity.path,
+                    content_length=len(request.content),
+                ),
             }
         except DatastoreConflictError:
             if not request.overwrite:
@@ -111,6 +155,12 @@ async def pod_write_file(
                 "path": to_me_path(updated.path, services.ctx.user_id),
                 "size_bytes": updated.size_bytes,
                 "created": False,
+                **await _after_memory_write(
+                    services,
+                    agent_name=ctx.deps.agent_name,
+                    stored_path=updated.path,
+                    content_length=len(request.content),
+                ),
             }
 
     return await run_pod_tool(
@@ -175,11 +225,6 @@ async def pod_read_file(
     converted into at upload.
 
     Use ``pod_view_document_pages`` to *see* pages rather than read them.
-
-    Check `/memory/*.md` (pod-shared facts) and `/me/*.md` (private facts about
-    the current user) before answering when past context could change the answer.
-    Their `AGENTS.md` index is already in your Runtime Context, so start with
-    whatever topic file it points at rather than re-reading the index itself.
     """
 
     async def op(services: PodServices) -> JsonObject:

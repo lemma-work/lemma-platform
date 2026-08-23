@@ -2425,6 +2425,7 @@
           "CONNECTORS",
           "SNOOZE",
           "MESSAGING",
+          "MEMORY",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",

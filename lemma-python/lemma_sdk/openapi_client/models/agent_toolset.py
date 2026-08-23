@@ -3,6 +3,7 @@ from enum import Enum
 
 class AgentToolset(str, Enum):
     CONNECTORS = "CONNECTORS"
+    MEMORY = "MEMORY"
     MESSAGING = "MESSAGING"
     POD = "POD"
     SKILLS = "SKILLS"

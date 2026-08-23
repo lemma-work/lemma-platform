@@ -12,6 +12,7 @@ import {
     Image as ImageIcon,
     ListTodo,
     MessageCircle,
+    NotebookPen,
     Plug,
     Search,
     Send,
@@ -112,6 +113,11 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Spawn other agents and collect what they find.',
         icon: Bot,
     },
+    MEMORY: {
+        label: 'Memory',
+        description: 'Remember durable facts between conversations — shared pod knowledge and private notes on each person.',
+        icon: NotebookPen,
+    },
     TODO: {
         label: 'Task list',
         description: 'Keep a checklist across long pieces of work.',
@@ -155,6 +161,7 @@ const TOOL_ORDER: string[] = [
     'SKILLS',
     'USER_INTERACTION',
     'SUBAGENTS',
+    'MEMORY',
     'TODO',
     'SPEECH',
     'SNOOZE',
@@ -164,6 +171,18 @@ const TOOL_ORDER: string[] = [
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';
+
+/**
+ * Memory keeps its facts in pod files, and carries no tools of its own to read
+ * or write them with — so on an agent that has neither the workspace shell nor
+ * pod data it is a switch that does nothing. Say so on the row rather than
+ * letting someone turn it on and wonder why the agent never remembers.
+ */
+const MEMORY_FILE_TOOLS: string[] = ['WORKSPACE_CLI', 'POD'];
+
+function memoryNeedsAFileTool(tool: string, selected: readonly string[]) {
+    return tool === 'MEMORY' && !MEMORY_FILE_TOOLS.some((entry) => selected.includes(entry));
+}
 
 function toolCopy(tool: string) {
     return TOOL_COPY[tool] ?? {
@@ -526,6 +545,7 @@ export function AgentAccessDialog({
                                         .map((tool) => {
                                             const copy = toolCopy(tool);
                                             const Icon = copy.icon;
+                                            const unmet = memoryNeedsAFileTool(tool, selectedTools);
 
                                             return (
                                                 <AccessRow
@@ -533,7 +553,11 @@ export function AgentAccessDialog({
                                                     selected={selectedTools.includes(tool as ToolSet)}
                                                     icon={<Icon className="h-4 w-4" />}
                                                     title={copy.label}
-                                                    description={copy.description}
+                                                    description={
+                                                        unmet
+                                                            ? `${copy.description} Add Workspace or Pod data — without one of them it has no way to read or write its files.`
+                                                            : copy.description
+                                                    }
                                                     onToggle={() => toggleTool(tool as ToolSet)}
                                                 />
                                             );

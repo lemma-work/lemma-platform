@@ -1,22 +1,29 @@
 """Builds the runtime-context brief appended to an agent's system prompt.
 
 The brief grounds the agent in its environment without it having to run any
-discovery commands: the current pod, the current user, the AGENTS.md content
-from its four memory scopes (see ``agent_memory_paths``), and the resources it
-can work with — for the pod default assistant the full pod inventory (a
-server-side ``pod describe``), for a user-created agent only the resources
-granted to it, each with name, description, and (for tables) schema.
+discovery commands: the current pod, the current user, the resources it can work
+with — for the pod default assistant the full pod inventory (a server-side ``pod
+describe``), for a user-created agent only the resources granted to it, each
+with name, description, and (for tables) schema — and, for an agent with the
+MEMORY capability, what it already knows.
+
+That last part is built and cached by ``agent_memory_brief`` and appended here
+rather than assembled inline, because it is the only half that goes stale from
+the agent's own writes: it is invalidated on write, while everything below only
+changes when somebody edits the pod.
 
 Connection discipline: each DB read runs in its own short UoW that is released
 immediately, and storage I/O (the file walk) is isolated in its own UoW so it
 never extends a span. The whole rendered brief is cached per
 (agent, pod, user, is_default) for ``agent_context_brief_cache_ttl_seconds``, so
 a user's repeated runs against the same agent skip the build (and the DB)
-entirely -- across conversations, not just within one.
+entirely -- across conversations, not just within one. The memory section has
+its own entry and its own TTL, for the reason above.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from uuid import UUID
 
 from app.core.authorization.context import ResourceType
@@ -25,21 +32,19 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.agent_memory_paths import agent_memory_paths
+from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
+from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.composition.agent_datastore import (
     build_file_service,
     build_table_service,
-)
-from app.modules.datastore.contracts import (
-    DatastoreAccessDeniedError,
-    DatastoreFileNotFoundError,
 )
 from app.composition.agent_functions import create_function_repository
 from app.composition.authorization import create_authorization_service
@@ -119,6 +124,7 @@ class AgentContextBriefBuilder:
         conversation: Conversation,
         user_id: UUID,
         pod_id: UUID,
+        toolsets: Collection[AgentToolset] = (),
     ) -> str:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
@@ -128,11 +134,44 @@ class AgentContextBriefBuilder:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
             cached = await _get_cached_brief(key)
             span.set_attribute("lemma.cache_hit", cached is not None)
-            if cached is not None:
-                return cached
-            return await self._build_uncached(
-                key, agent=agent, is_default=is_default, user_id=user_id, pod_id=pod_id
+            if cached is None:
+                cached = await self._build_uncached(
+                    key,
+                    agent=agent,
+                    is_default=is_default,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
+            return await self._with_memory(
+                cached, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
+
+    async def _with_memory(
+        self,
+        inventory: str,
+        *,
+        agent: Agent,
+        pod_id: UUID,
+        user_id: UUID,
+        toolsets: Collection[AgentToolset],
+    ) -> str:
+        """Append the memory section, which is cached and invalidated apart.
+
+        Outside the inventory cache above, not inside it: memory changes when
+        this agent writes a fact mid-conversation, and baking it into a 60s
+        entry is exactly how an agent ends up unable to recall what it just
+        learned. Appended last for the same reason -- the volatile part belongs
+        after the stable one, so everything before it stays cacheable.
+
+        Gated on the same predicate the prompt fragment uses: an agent with no
+        way to reach a pod file is never shown folders it cannot write to.
+        """
+        if not memory_is_active(toolsets):
+            return inventory
+        section = await AgentMemoryBriefBuilder(self.uow_factory).build(
+            agent=agent, pod_id=pod_id, user_id=user_id
+        )
+        return f"{inventory}\n{section}" if section else inventory
 
     async def _build_uncached(
         self,
@@ -155,10 +194,6 @@ class AgentContextBriefBuilder:
             f"- User: {user_line}",
         ]
 
-        lines.extend(
-            await self._memory_section(agent=agent, pod_id=pod_id, user_id=user_id)
-        )
-
         if is_default:
             lines.extend(await self._pod_inventory(pod_id=pod_id, user_id=user_id))
         else:
@@ -171,83 +206,6 @@ class AgentContextBriefBuilder:
         brief = "\n".join(lines)
         await _set_cached_brief(key, brief)
         return brief
-
-    async def _memory_section(
-        self, *, agent: Agent, pod_id: UUID, user_id: UUID
-    ) -> list[str]:
-        """AGENTS.md content for this agent's four memory scopes, best-effort.
-
-        Runs for every agent, default or named — pod-shared memory is useful
-        pod-wide, not just to Lem. States the agent's own scoped folders
-        explicitly rather than leaving it to compute the slug itself: a
-        self-computed path that drifts from this one would make its own
-        writes invisible to its next briefing.
-        """
-        paths = agent_memory_paths(agent)
-        entries = (
-            ("Pod (shared)", paths.pod_index),
-            (f"{paths.slug} (shared)", paths.pod_agent_index),
-            ("This user (private)", paths.personal_index),
-            (f"{paths.slug} + this user (private)", paths.personal_agent_index),
-        )
-        contents = await self._read_agents_mds(
-            [path for _, path in entries], pod_id=pod_id, user_id=user_id
-        )
-
-        lines = [
-            "\n## Your Memory",
-            f"Your agent-scoped memory: `{paths.pod_agent_folder}/` (shared "
-            f"pod-wide) and `{paths.personal_agent_folder}/` (private to this "
-            "user). Pod-shared facts live under `/memory`, private facts about "
-            "the current user under `/me`.",
-        ]
-        for label, path in entries:
-            content = contents.get(path)
-            if content:
-                lines.append(f"\n### {label} — `{path}`\n{content}")
-        return lines
-
-    async def _read_agents_mds(
-        self, paths: list[str], *, pod_id: UUID, user_id: UUID
-    ) -> dict[str, str]:
-        """Text for each path that exists and is readable; the rest are omitted.
-
-        One uow for the whole batch — these four reads are one operation
-        against one store, like the Tables section below does in a single
-        uow. Each read is guarded against the two expected outcomes of an
-        agent that hasn't written there yet (``DatastoreFileNotFoundError``)
-        or lacks a grant on it (``DatastoreAccessDeniedError``), and against a
-        stray non-UTF-8 file, so one bad path doesn't take the others down.
-        ``build_user_context`` itself is deliberately left unguarded, same as
-        the Tables/Agents/Functions sections below — a real
-        authorization-service failure should fail the brief, not hide as an
-        empty memory section.
-        """
-        results: dict[str, str] = {}
-        async with self.uow_factory() as uow:
-            ctx = await create_authorization_service(uow).build_user_context(
-                user_id=user_id, pod_id=pod_id
-            )
-            token = set_current_context(ctx)
-            try:
-                file_service = build_file_service(uow)
-                for path in paths:
-                    try:
-                        _, content = await file_service.download_file_content_by_path(
-                            pod_id, path, ctx
-                        )
-                        text = content.decode("utf-8").strip()
-                    except (
-                        DatastoreFileNotFoundError,
-                        DatastoreAccessDeniedError,
-                        UnicodeDecodeError,
-                    ):
-                        continue
-                    if text:
-                        results[path] = text
-            finally:
-                reset_current_context(token)
-        return results
 
     async def _pod_inventory(self, *, pod_id: UUID, user_id: UUID) -> list[str]:
         lines: list[str] = []

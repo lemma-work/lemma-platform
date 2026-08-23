@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.value_objects import AgentToolset
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
+_MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
@@ -44,6 +46,7 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.WEB_SEARCH: _WEB_SEARCH_PROMPT_PATH,
     AgentToolset.SPEECH: _SPEECH_PROMPT_PATH,
     AgentToolset.TODO: _TODO_PROMPT_PATH,
+    AgentToolset.MEMORY: _MEMORY_PROMPT_PATH,
     AgentToolset.MESSAGING: _MESSAGING_PROMPT_PATH,
     # `display_resource` had no fragment on either path for a long time, on the
     # theory that the tool's own description was enough. It is enough for an
@@ -97,6 +100,18 @@ def load_speech_prompt() -> str:
 
 def load_user_interaction_prompt() -> str:
     return _read_required_prompt(_USER_INTERACTION_PROMPT_PATH)
+
+
+def load_memory_prompt() -> str:
+    """The memory contract: where durable facts live and how AGENTS.md is used.
+
+    One file, read by both harnesses -- the remote one through
+    ``FRAGMENT_BY_TOOLSET``, the in-process one through ``MemoryCapability``.
+    It used to be three hand-synced copies (this fragment inside
+    ``workspace_cli.md``, plus paragraphs in the ``pod_write_file`` and
+    ``pod_read_file`` docstrings), which is two more than can stay true.
+    """
+    return _read_required_prompt(_MEMORY_PROMPT_PATH)
 
 
 def load_agent_host_runtime_prompt() -> str:
@@ -398,4 +413,10 @@ def _fragment_toolsets(
             enabled.add(AgentToolset(name))
         except ValueError:  # pragma: no cover - defensive
             continue
+    # Memory is the one fragment that can be configured and still be useless:
+    # it carries no tools, so without WORKSPACE_CLI or POD it would teach an
+    # agent to write files it has no way to write. Same predicate the brief's
+    # memory section and the in-process capability gate on.
+    if AgentToolset.MEMORY in enabled and not memory_is_active(enabled):
+        enabled.discard(AgentToolset.MEMORY)
     return enabled

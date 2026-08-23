@@ -11,9 +11,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
+from app.modules.agent.services import agent_memory_brief as memory_mod
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
 )
@@ -150,6 +151,16 @@ def stubbed(monkeypatch):
         return fake
 
     monkeypatch.setattr(brief_mod, "_get_brief_cache", _fake_get_cache)
+    # The memory half lives in its own module with its own cache, so it needs
+    # its own stubs -- patching the brief module alone would leave the real
+    # authorization service and datastore wired in behind the memory section.
+    monkeypatch.setattr(
+        memory_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+    )
+    monkeypatch.setattr(
+        memory_mod, "build_file_service", lambda uow: _FakeFileService(agents_md)
+    )
+    monkeypatch.setattr(memory_mod, "_get_cache", lambda: None)
     yield agents_md
 
 
@@ -282,104 +293,87 @@ async def test_brief_cache_disabled_with_zero_ttl(stubbed, monkeypatch):
     assert factory.opened > opened_after_first  # no caching: rebuilt
 
 
-async def test_memory_section_states_scoped_folders_even_with_nothing_written(
+async def test_the_memory_section_is_absent_without_the_memory_toolset(stubbed):
+    """Memory is a capability now, not something every agent is handed.
+
+    An agent that was never granted it should not be told it has folders to
+    keep facts in.
+    """
+    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+        agent=_named_agent(),
+        conversation=_conversation(False),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        toolsets=[AgentToolset.POD],
+    )
+
+    assert "## Your Memory" not in brief
+
+
+async def test_the_memory_section_is_absent_without_a_way_to_reach_pod_files(
     stubbed,
 ):
-    """The 'where to write' grounding must show up before any AGENTS.md exists.
-
-    It's the thing that tells a brand-new agent where its own writes should
-    land — waiting for content to exist first would make it useless on
-    exactly the run that needs it most.
-    """
-    builder = AgentContextBriefBuilder(RecordingUoWFactory())
-    agent = _named_agent()
-
-    brief = await builder.build(
-        agent=agent,
-        conversation=_conversation(False),
-        user_id=uuid4(),
-        pod_id=uuid4(),
-    )
-
-    assert "## Your Memory" in brief
-    assert f"/memory/agents/{agent.name}" in brief
-    assert f"/me/agents/{agent.name}" in brief
-    # Nothing written yet -> no per-scope content blocks.
-    assert "Pod (shared) —" not in brief
-
-
-async def test_memory_section_surfaces_agents_md_content(stubbed):
-    """Each scope's AGENTS.md, when present, is rendered under its own label."""
-    agents_md = stubbed
-    agents_md["/memory/AGENTS.md"] = "- pricing: see memory/pricing.md"
-    agents_md["/me/AGENTS.md"] = "- prefers async updates over calls"
-
-    builder = AgentContextBriefBuilder(RecordingUoWFactory())
-    brief = await builder.build(
+    """MEMORY carries no tools, so on its own it is a promise the agent cannot
+    keep — told to write durable facts, given nothing to write with."""
+    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
         agent=_named_agent(),
         conversation=_conversation(False),
         user_id=uuid4(),
         pod_id=uuid4(),
+        toolsets=[AgentToolset.MEMORY, AgentToolset.WEB_SEARCH],
     )
 
-    assert "### Pod (shared) — `/memory/AGENTS.md`" in brief
-    assert "- pricing: see memory/pricing.md" in brief
-    assert "### This user (private) — `/me/AGENTS.md`" in brief
-    assert "- prefers async updates over calls" in brief
+    assert "## Your Memory" not in brief
 
 
-async def test_memory_section_never_fails_the_brief_when_reads_error(monkeypatch):
-    """A missing/ungranted AGENTS.md degrades to nothing, not a broken brief.
-
-    Every one of these four paths raises the same way an agent's very first
-    run does, before it has written anything: DatastoreFileNotFoundError.
-    """
-
-    class _ExplodingFileService:
-        async def get_directory_tree(self, *args, **kwargs):
-            return {}
-
-        async def download_file_content_by_path(self, *args, **kwargs):
-            raise DatastoreFileNotFoundError()
-
-    monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
-    monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
-    monkeypatch.setattr(brief_mod, "create_function_repository", _FakeListRepo)
-    monkeypatch.setattr(
-        brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
-    )
-    monkeypatch.setattr(
-        brief_mod, "build_table_service", lambda uow: _FakeTableService()
-    )
-    monkeypatch.setattr(
-        brief_mod, "build_file_service", lambda uow: _ExplodingFileService()
-    )
-    monkeypatch.setattr(brief_mod, "_get_brief_cache", lambda: None)
-
-    builder = AgentContextBriefBuilder(RecordingUoWFactory())
-    brief = await builder.build(
+@pytest.mark.parametrize("file_toolset", [AgentToolset.WORKSPACE_CLI, AgentToolset.POD])
+async def test_memory_appears_once_the_agent_can_write_a_file(stubbed, file_toolset):
+    """Either file surface is enough — the shell or the pod tools."""
+    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
         agent=_named_agent(),
         conversation=_conversation(False),
         user_id=uuid4(),
         pod_id=uuid4(),
+        toolsets=[AgentToolset.MEMORY, file_toolset],
     )
 
-    assert "# Runtime Context" in brief  # the rest of the brief still built
     assert "## Your Memory" in brief
-    assert "###" not in brief  # no scope's content survived the failure
 
 
-async def test_lem_gets_the_same_slug_as_any_other_agent(stubbed):
-    """Lem needs no special-casing: its agent.name is already 'pod_default'."""
-    lem = SimpleNamespace(id=uuid4(), name=DEFAULT_POD_AGENT_NAME, description=None)
+async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatch):
+    """The two halves are cached apart, and this is why it matters.
+
+    A fact written mid-conversation has to reach the next turn. If the memory
+    section rode inside the inventory entry, a cache hit would keep serving the
+    agent a brief that predates what it just learned.
+    """
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
+    rendered = ["\n## Your Memory\nfirst"]
+
+    class _StubMemoryBuilder:
+        def __init__(self, uow_factory):
+            self._uow_factory = uow_factory
+
+        async def build(self, **kwargs):
+            return rendered[0]
+
+    monkeypatch.setattr(brief_mod, "AgentMemoryBriefBuilder", _StubMemoryBuilder)
     builder = AgentContextBriefBuilder(RecordingUoWFactory())
-
-    brief = await builder.build(
-        agent=lem,
-        conversation=_conversation(True),  # pod assistant
+    kwargs = dict(
+        agent=_named_agent(),
+        conversation=_conversation(False),
         user_id=uuid4(),
         pod_id=uuid4(),
+        toolsets=[AgentToolset.MEMORY, AgentToolset.POD],
     )
+    first = await builder.build(**kwargs)
+    assert "first" in first
 
-    assert "/memory/agents/pod-default/" in brief
-    assert "/me/agents/pod-default/" in brief
+    # Second run: the inventory is served from cache, the memory is rebuilt.
+    rendered[0] = "\n## Your Memory\nsecond"
+    second = await builder.build(**kwargs)
+
+    assert "second" in second
+    assert "first" not in second

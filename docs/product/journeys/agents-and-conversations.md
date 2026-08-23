@@ -58,6 +58,22 @@ it happens.
 
 **Contracts:** `agent.conversation.create`, `agent.list`
 
+### PS-AGENT-005 — A person gives an agent a memory
+**Status:** covered
+
+- When a person gives an agent memory, the system shall let it keep durable
+  facts between conversations — shared with the pod, or private to the person it
+  learned them from.
+- When a person gives an agent memory, the system shall also give it the access
+  it needs to write there, so the capability works without a second step.
+- When a person takes memory away, the system shall take that access back.
+- The system shall not give an agent memory it was never granted, and shall not
+  carry one person's private facts into another person's conversation.
+- The system shall bound how much remembered text is loaded into a run, so one
+  overlong note cannot crowd out the rest.
+
+**Contracts:** `agent.create`, `agent.update`, `agent.permissions.get`
+
 ### PS-AGENT-004 — A person chooses which model an agent uses
 **Status:** covered
 

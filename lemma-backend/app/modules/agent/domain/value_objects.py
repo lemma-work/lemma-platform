@@ -75,6 +75,9 @@ class AgentToolset(str, Enum):
     CONNECTORS = "CONNECTORS"
     SNOOZE = "SNOOZE"
     MESSAGING = "MESSAGING"
+    # Carries no tools: memory is pod files, read and written with the file
+    # tools the agent already has. See `memory_is_active`.
+    MEMORY = "MEMORY"
     # Reserved: never persisted on Agent.toolsets. Auto-appended at run time for
     # any agent whose resolved model declares VISION capability, regardless of
     # its configured toolsets — see `agent_runner_service.py`.

@@ -25,6 +25,12 @@ class AgentContext(BaseModel):
     # overloading its prompt prefix, while user-created agents that deliberately
     # configured those toolsets get them injected directly.
     is_pod_default_agent: bool = False
+    # Whether this run gets the memory contract and its AGENTS.md scopes. Not
+    # simply "MEMORY is on the agent": memory carries no tools, so it is inert
+    # without WORKSPACE_CLI or POD to read and write with -- see
+    # `memory_is_active`, which the run-context builder resolves once here so
+    # the capability assembler and the brief builder cannot disagree about it.
+    memory_enabled: bool = False
     # Rendered runtime brief (pod/user/granted resources) appended to the system
     # prompt. Built once per run by the runner; harness-neutral so it just rides
     # along on the context.
