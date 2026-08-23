@@ -33,6 +33,7 @@ from app.modules.agent.services.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.tools.tool_assembler import load_agent_grant_summary
 from app.modules.agent.tools.toolset_selection import resolve_toolset_names
 from app.modules.agent.services.vision_service import vision_delegate_available
 
@@ -74,9 +75,12 @@ async def build_run_context(
         }
     pod_cwd = pod_cwd_from_workspace_cwd(workspace_location.cwd)
     # Resolved from the run's *effective* toolsets, not the agent's configured
-    # ones, so the sub-agent withholding and the pod-default set are both
-    # accounted for -- the same list `RunToolAssembler` builds tools from.
-    run_toolsets, _ = resolve_toolset_names(agent, conversation)
+    # ones, so the always-on set, the grant-derived ones and the sub-agent
+    # withholding are all accounted for -- the same list `RunToolAssembler`
+    # builds tools from. The summary is carried on the context so the assembler
+    # can reuse it instead of reading the same grants again.
+    grant_summary = await load_agent_grant_summary(uow_factory, agent=agent)
+    run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=grant_summary)
     ctx = ConversationContext(
         user_id=user_id,
         org_id=conversation.organization_id,
@@ -103,6 +107,7 @@ async def build_run_context(
         supports_pause_signal=(resolved_runtime.harness_kind == HarnessKind.LEMMA),
         is_pod_default_agent=(agent.id == POD_ASSISTANT_AGENT_ID),
         memory_enabled=memory_is_active(run_toolsets),
+        grant_summary=grant_summary,
         **surface_context,
     )
     with suppress(Exception):

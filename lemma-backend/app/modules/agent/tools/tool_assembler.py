@@ -12,11 +12,30 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
-from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+from app.modules.agent.tools.toolset_selection import (
+    AgentGrantSummary,
+    resolve_toolset_names,
+)
 from app.modules.agent.tools.registry import (
     resolve_agent_toolsets,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
+
+
+async def load_agent_grant_summary(
+    uow_factory: UnitOfWorkFactory, *, agent: Agent
+) -> AgentGrantSummary:
+    """This agent's grant summary, or an empty one where it cannot have grants.
+
+    The pod default assistant is the empty case and not an error: it has no
+    ``Agent`` row of its own, runs with the user's permissions, and takes its
+    toolsets from the fixed default set rather than from anything granted to it.
+    """
+    if agent.pod_id is None or agent.id is None:
+        return AgentGrantSummary()
+    return await AgentCallableToolFactory(uow_factory).load_grant_summary(
+        pod_id=agent.pod_id, agent_id=agent.id
+    )
 
 
 class RunToolAssembler:
@@ -32,13 +51,23 @@ class RunToolAssembler:
         conversation: Conversation | None,
         include_final_answer: bool = False,
         vision_mode: AgentVisionMode | None = None,
+        grants: AgentGrantSummary | None = None,
     ) -> list[object]:
+        """Every tool this (agent, conversation) can reach.
+
+        ``grants`` lets a caller that already loaded the agent's grant summary
+        (the runner does, to build its context brief) hand it over instead of
+        paying for the same query twice. Callers without one -- the MCP server
+        and the approval executor -- leave it unset and it is loaded here, so
+        every path still resolves the same toolsets.
+        """
         with run_phase("tool_assembly") as span:
             toolsets = await self._assemble(
                 agent=agent,
                 conversation=conversation,
                 include_final_answer=include_final_answer,
                 vision_mode=vision_mode,
+                grants=grants,
             )
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
@@ -81,8 +110,13 @@ class RunToolAssembler:
         conversation: Conversation | None,
         include_final_answer: bool,
         vision_mode: AgentVisionMode | None = None,
+        grants: AgentGrantSummary | None = None,
     ) -> list[object]:
-        toolset_names, allow_subagents = resolve_toolset_names(agent, conversation)
+        if grants is None and agent is not None and callable(self.uow_factory):
+            grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
+        toolset_names, allow_subagents = resolve_toolset_names(
+            agent, conversation, grants=grants
+        )
         toolsets: list[object] = list(resolve_agent_toolsets(toolset_names))
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation
@@ -107,6 +141,7 @@ class RunToolAssembler:
                 await AgentCallableToolFactory(self.uow_factory).build_toolsets(
                     agent=agent,
                     allow_subagents=allow_subagents,
+                    grants=grants,
                 )
             )
         if (

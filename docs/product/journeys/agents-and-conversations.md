@@ -43,6 +43,14 @@ it happens.
   access than that person has, even where the agent's own grants allow more.
 - When a person changes an agent's grants, the system shall apply the change to
   the next run and not to one already in flight.
+- When a person grants an agent pod data or a connected app, the system shall
+  give it the tools to use that grant without asking them to enable anything
+  else — a capability the grant already implies is not a second decision.
+- The system shall not let that inference widen access: tools it turns on are
+  still scoped by the grant that turned them on, and a grant on one kind of
+  resource shall not imply tools for another.
+- The system shall give every agent the ability to ask a person a question and
+  to request approval, whatever else it was or was not granted.
 
 **Contracts:** `agent.permissions.get`, `agent.permissions.replace`
 
