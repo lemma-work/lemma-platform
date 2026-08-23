@@ -9,8 +9,11 @@
 //     thought, each tool row still drilling into its full details
 //   - speech is speech: narration beats and short answers are left bubbles;
 //     a long or structured answer is a doc card with real heading hierarchy
-//   - deliverables arrive as artifact cards (video/images play inline)
+//   - deliverables arrive as artifact cards (video/images/audio play inline)
 //   - ask_user and request_approval are in-chat cards where the run paused
+//
+// Beats, cards and questions all come out of `turn.items` in the order they
+// happened — a card never jumps ahead of the question that follows it.
 //
 // Everything here is fed by the pure turn model in lib/assistant/turns.ts.
 
@@ -40,6 +43,7 @@ import {
   answerIsDocument,
   chatTurnFingerprint,
   completedTurnStatusLabel,
+  interactionAnchorId,
   type ChatArtifact,
   type ChatTurn,
   type TraceEntry,
@@ -424,9 +428,9 @@ function FileArtifactCard({ artifact, onOpen }: { artifact: ChatArtifact; onOpen
     : <div className={className}>{body}</div>;
 }
 
-/** Video and image artifacts fetch a short-lived file URL and play inline,
- * the way a messenger renders media. Anything that fails degrades to the
- * plain file card. */
+/** Video, image and audio artifacts fetch a short-lived file URL and play
+ * inline, the way a messenger renders media. Anything that fails degrades to
+ * the plain file card. */
 function MediaArtifactCard({ artifact, podId, onOpen }: { artifact: ChatArtifact; podId: string | null; onOpen?: () => void }) {
   const urlQuery = useQuery({
     queryKey: ["chat-artifact-url", podId, artifact.path],
@@ -447,6 +451,25 @@ function MediaArtifactCard({ artifact, podId, onOpen }: { artifact: ChatArtifact
   ) : artifact.href ? (
     <Link href={artifact.href} className="lchat-file-go">Open</Link>
   ) : null;
+  // Audio has no frame to fill: it is a player strip, not a stage, so it keeps
+  // the card's own background instead of the video stock.
+  if (artifact.kind === "audio") {
+    return (
+      <div className="lchat-media">
+        <div className="lchat-audio">
+          {!urlQuery.data
+            ? <InlineLoader size="xs" />
+            : <audio className="lchat-audio-player" controls preload="metadata" src={urlQuery.data} />}
+        </div>
+        <div className="lchat-media-meta">
+          <span className="lchat-file-n">{artifact.name}</span>
+          {meta ? <span className="lchat-file-m">{meta}</span> : null}
+          {openControl}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="lchat-media">
       <div className={artifact.kind === "video" ? "lchat-media-stage lchat-media-stage-video" : "lchat-media-stage"}>
@@ -579,10 +602,43 @@ export const AssistantTurnView = memo(function AssistantTurnView({
           return <div key={item.id} className="lchat-notice">{item.text}</div>;
         }
 
+        if (item.kind === "artifact") {
+          const artifact = item.artifact;
+          // Open beside the conversation in the presentation stage — the
+          // same handler the display_resource cards have always used.
+          const openInStage = onNavigateResource ? () => onNavigateResource("display_resource", artifact.toolCallId ?? artifact.key, {
+            request: { type: "FILE", path: artifact.path, loadingMessages: [] },
+            conversationId: activeConversationId,
+          }) : undefined;
+          return (
+            <div key={item.id} className="lchat-atts">
+              {artifact.kind === "file"
+                ? <FileArtifactCard artifact={artifact} onOpen={openInStage} />
+                : <MediaArtifactCard artifact={artifact} podId={podId} onOpen={openInStage} />}
+            </div>
+          );
+        }
+
+        if (item.kind === "resource") {
+          return (
+            <div key={item.id} className="lchat-resources">
+              <DisplayResourceCards
+                cards={[item.card]}
+                activeConversationId={activeConversationId}
+                onNavigateResource={onNavigateResource}
+              />
+            </div>
+          );
+        }
+
         if (item.kind === "interaction") {
           const isAsk = isAskUserToolName(item.invocation.toolName);
           return (
-            <div key={item.id} className="lchat-interaction">
+            <div
+              key={item.id}
+              className="lchat-interaction"
+              id={interactionAnchorId(item.invocation.toolCallId)}
+            >
               {isAsk ? (
                 <AskUserCard
                   invocation={item.invocation}
@@ -619,32 +675,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
           </div>
         );
       })}
-
-      {turn.artifacts.length > 0 ? (
-        <div className="lchat-atts">
-          {turn.artifacts.map((artifact) => {
-            // Open beside the conversation in the presentation stage — the
-            // same handler the display_resource cards have always used.
-            const openInStage = onNavigateResource ? () => onNavigateResource("display_resource", artifact.toolCallId ?? artifact.key, {
-              request: { type: "FILE", path: artifact.path, loadingMessages: [] },
-              conversationId: activeConversationId,
-            }) : undefined;
-            return artifact.kind === "file"
-              ? <FileArtifactCard key={artifact.key} artifact={artifact} onOpen={openInStage} />
-              : <MediaArtifactCard key={artifact.key} artifact={artifact} podId={podId} onOpen={openInStage} />;
-          })}
-        </div>
-      ) : null}
-
-      {turn.resources.length > 0 ? (
-        <div className="lchat-resources">
-          <DisplayResourceCards
-            cards={turn.resources}
-            activeConversationId={activeConversationId}
-            onNavigateResource={onNavigateResource}
-          />
-        </div>
-      ) : null}
 
       {turn.isLive ? statusPill : null}
 

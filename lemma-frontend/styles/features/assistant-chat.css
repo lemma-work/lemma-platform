@@ -527,6 +527,19 @@ a.lchat-file:hover .lchat-file-go {
     max-height: 60vh;
 }
 
+/* Audio is a strip, not a stage: no frame to fill, so no video stock behind
+   it. The player sizes itself; the card only gives it room. */
+.lchat-audio {
+    display: grid;
+    min-height: 3.25rem;
+    padding: var(--space-2-5) var(--space-3) 0;
+    place-items: center;
+}
+
+.lchat-audio-player {
+    width: 100%;
+}
+
 .lchat-media-loading {
     display: grid;
     aspect-ratio: 16 / 9;
@@ -615,6 +628,14 @@ a.lchat-file:hover .lchat-file-go {
     align-self: flex-start;
     width: min(32rem, 100%);
     margin-top: var(--space-1-5);
+}
+
+/* Each card is its own block now (they render where they happened, not in one
+   bucket at the end), so consecutive cards would pay the full leading twice.
+   The turn's own gap plus this is the gap they had inside the old bucket. */
+.lchat-atts + .lchat-atts,
+.lchat-resources + .lchat-resources {
+    margin-top: var(--space-1);
 }
 
 /* --- arrival motion -------------------------------------------------------------
