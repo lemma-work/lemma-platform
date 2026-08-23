@@ -131,10 +131,16 @@ class TestExecution:
         with pytest.raises(OperationExecutionNotFoundError):
             await dispatcher.execute(request)
 
-    async def test_a_bogus_connection_is_reported_as_unauthorized(self, dispatcher):
+    async def test_a_bogus_connection_is_reported_as_unauthorized(
+        self, dispatcher, composio_client
+    ):
         # Drives the path that flips an account to REAUTH_REQUIRED. Getting this
         # classification wrong means a revoked account fails as a 500 forever
         # instead of prompting the user to reconnect.
+        #
+        # Takes `composio_client` purely for its skip: a bogus connection id
+        # needs no real account, so this was the one test here that reached a
+        # live call without the key and failed rather than skipping.
         request = _request(
             dispatcher, "GOOGLEDRIVE_LIST_FILES", {}, "ca_definitely_not_a_real_id"
         )

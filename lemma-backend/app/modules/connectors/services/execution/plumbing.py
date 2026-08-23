@@ -50,8 +50,6 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
         payload=resolved.payload or {},
         credentials=resolved.third_party_credentials,
         config=resolved.connection_config or {},
-        auth_token=resolved.auth_token,
-        api_url=resolved.api_url,
     )
 
 

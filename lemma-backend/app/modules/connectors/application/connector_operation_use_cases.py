@@ -67,8 +67,6 @@ class ConnectorOperationUseCases:
         payload: dict[str, Any],
         user_id: UUID,
         request: Request,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> OperationExecutionResponse:
         # Phase 1 (short scope): build + bind the request Context (org/delegation
@@ -85,8 +83,6 @@ class ConnectorOperationUseCases:
                 operation_name=operation_name,
                 payload=payload,
                 actor=scope.ctx,
-                auth_token=auth_token,
-                api_url=api_url,
                 account_id=account_id,
             )
 

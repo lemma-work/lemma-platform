@@ -50,10 +50,6 @@ class ExecutionRequest:
     credentials: dict[str, Any]
     config: dict[str, Any]
     deadline_seconds: float
-    # Only the package kind still needs these; they ride along until it is
-    # migrated off the vendored client factory.
-    auth_token: str | None = None
-    api_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

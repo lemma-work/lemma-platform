@@ -465,8 +465,6 @@ class ConnectorOperationService:
         operation_name: str,
         payload: dict[str, Any],
         actor: Context | None = None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> ResolvedConnectorExecution:
         auth_config, connector_id, _kind = await self._resolve_auth_config_context(
@@ -480,8 +478,6 @@ class ConnectorOperationService:
             payload=payload,
             user_id=user_id,
             actor=actor,
-            auth_token=auth_token,
-            api_url=api_url,
             account_id=account_id,
             auth_config_id=auth_config.id,
             # Already loaded by name above; re-reading it by id was a wasted
@@ -497,8 +493,6 @@ class ConnectorOperationService:
         payload: dict[str, Any],
         user_id: UUID,
         actor: Context | None = None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
         auth_config: Any | None = None,
@@ -584,8 +578,6 @@ class ConnectorOperationService:
             input_schema=getattr(operation, "input_schema", None),
             third_party_credentials=third_party_credentials,
             payload=payload or {},
-            auth_token=auth_token,
-            api_url=api_url,
             account_id=getattr(account, "id", None),
             account_user_id=getattr(account, "user_id", None),
             acting_user_id=user_id,
@@ -621,8 +613,6 @@ class ConnectorOperationService:
         operation_name: str,
         payload: dict[str, Any],
         actor: Context | None = None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> OperationExecutionResponse:
         resolved = await self.resolve_execution_for_auth_config(
@@ -632,8 +622,6 @@ class ConnectorOperationService:
             operation_name=operation_name,
             payload=payload,
             actor=actor,
-            auth_token=auth_token,
-            api_url=api_url,
             account_id=account_id,
         )
         return await self.execute_resolved(resolved)
@@ -646,8 +634,6 @@ class ConnectorOperationService:
         payload: dict[str, Any],
         user_id: UUID,
         actor: Context | None = None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
     ) -> OperationExecutionResponse:
@@ -657,8 +643,6 @@ class ConnectorOperationService:
             payload=payload,
             user_id=user_id,
             actor=actor,
-            auth_token=auth_token,
-            api_url=api_url,
             account_id=account_id,
             auth_config_id=auth_config_id,
         )

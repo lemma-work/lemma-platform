@@ -270,8 +270,6 @@ class AppOperationGatewayPort(Protocol):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any: ...
 

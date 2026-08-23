@@ -68,8 +68,6 @@ class KindDispatcher:
         payload: dict[str, Any],
         credentials: dict[str, Any],
         config: dict[str, Any],
-        auth_token: str | None = None,
-        api_url: str | None = None,
     ) -> ExecutionRequest:
         return ExecutionRequest(
             connector_id=connector_id,
@@ -79,8 +77,6 @@ class KindDispatcher:
             credentials=credentials or {},
             config=config or {},
             deadline_seconds=self.timeout_for(kind),
-            auth_token=auth_token,
-            api_url=api_url,
         )
 
     async def execute(self, request: ExecutionRequest) -> Any:
