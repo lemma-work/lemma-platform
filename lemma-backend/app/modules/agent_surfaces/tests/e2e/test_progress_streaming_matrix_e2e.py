@@ -1,7 +1,6 @@
 """Progress-streaming tool-coverage matrix: tool-call activity renders as a
 live, edited message on Slack (chat.update), Telegram (editMessageText), and
-Teams (PUT activity) — the three platforms in
-``progress_observer._STREAM_PROGRESS_PLATFORMS``.
+Teams (PUT activity).
 
 Each scripted tool call carries a ``comment`` (nested under ``request``, since
 every platform tool takes a single ``request: Model`` parameter and no such
@@ -10,13 +9,16 @@ progress observer reads that comment straight off the persisted (pre-tool-
 execution) event to drive the live status text, independent of whatever the
 wrapped tool itself returns.
 
-N/A cells (see ``_STREAM_PROGRESS_PLATFORMS``/``_TEXT_PROGRESS_PLATFORMS`` in
-``progress_observer.py``):
-- **WhatsApp has no message-edit API** — it gets no per-step progress at all
-  (only the inbound reaction/typing indicator signals work is happening).
-- **Email gets one composed reply, never a stream** — Gmail/Outlook/Resend
-  recipients would find a live-editing inbox message bizarre; the observer
-  intentionally skips streaming there regardless of platform capability.
+Which platforms belong here is decided by ``ProgressStyle`` on the platform
+capability (see ``progress_display.py``), and the cells this file does not cover
+are the styles that are not an edited message:
+
+- **WhatsApp** (``POST``) has no message-edit API, so it cannot appear in a
+  matrix about edits. It is not silent — it posts the agent's plan as its own
+  message, rationed — but that path is driven by plan changes rather than by
+  per-tool comments, and is covered in ``tests/unit/test_progress_observer.py``.
+- **Email** (``NONE``) gets one composed reply, never a stream — Gmail/Outlook/
+  Resend recipients would find a live-editing inbox message bizarre.
 """
 
 from __future__ import annotations
@@ -65,12 +67,12 @@ async def test_progress_streams_via_chat_update_on_slack(
 ):
     """Slack opens one native stream, appends the answer, and closes it."""
     from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
     # Disable the inter-update throttle so both progress comments stream.
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -126,9 +128,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
 ):
     """Tool activity streams as an edited Telegram message (editMessageText);
     the placeholder is cleared before the final answer is sent as a new one."""
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
     monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
@@ -182,9 +184,9 @@ async def test_progress_streams_via_put_activity_on_teams(
     is a new activity POST."""
     from app.core.config import settings as app_settings
     from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
 
     async def _fake_bot_token(self, tenant_id: str) -> str | None:
         del self, tenant_id

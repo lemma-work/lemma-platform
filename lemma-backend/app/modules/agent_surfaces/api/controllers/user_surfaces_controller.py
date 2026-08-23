@@ -12,7 +12,7 @@ from fastapi import APIRouter
 
 from app.core.api.dependencies import CurrentUser
 from app.modules.agent_surfaces.api.dependencies import UserSurfacesServiceDep
-from app.modules.agent_surfaces.api.schemas import (
+from app.modules.agent_surfaces.api.user_surface_schemas import (
     SetDefaultSurfaceRequest,
     UserSurfaceItem,
     UserSurfacePlatformGroup,
@@ -38,6 +38,7 @@ def _to_response(groups: list[UserSurfaceGroup]) -> UserSurfacesResponse:
                         platform=surface.surface_type,
                         agent_id=surface.agent_id,
                         is_default=surface.id == group.default_surface_id,
+                        shares_address=surface.id in group.contended,
                     )
                     for surface in group.surfaces
                 ],
@@ -57,7 +58,8 @@ async def list_my_surfaces(
     service: UserSurfacesServiceDep,
 ) -> UserSurfacesResponse:
     """Every surface across the current user's pods, grouped by platform, with
-    the chosen default and a ``conflict`` flag when more than one could answer."""
+    the chosen default and a ``conflict`` flag when two of them answer at the
+    same address."""
     groups = await service.list_user_surfaces(user.id)
     return _to_response(groups)
 

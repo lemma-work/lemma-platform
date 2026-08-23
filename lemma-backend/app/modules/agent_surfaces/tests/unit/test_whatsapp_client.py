@@ -170,3 +170,114 @@ async def test_add_processing_indicator_noop_without_message_id(monkeypatch):
     # No inbound message id → nothing to mark read / react to; must not raise.
     await service.add_processing_indicator(_inbound_event(message_id=None))
     assert calls == []
+
+
+# --- outbound message bodies ----------------------------------------------
+
+
+def _service() -> WhatsAppPlatformService:
+    return WhatsAppPlatformService(
+        {
+            "access_token": "t",
+            "phone_number_id": "phone-1",
+            "api_base_url": "http://x/v21.0",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_long_answer_is_split_rather_than_dropped(monkeypatch):
+    """4096 is Meta's hard ceiling, and an oversized body is rejected outright.
+
+    The person got nothing at all, which is worse than the truncation the other
+    send path did.
+    """
+    service = _service()
+    bodies: list[str] = []
+
+    async def _capture(*, phone_number_id, payload):
+        bodies.append(payload["text"]["body"])
+        return "wamid.out"
+
+    monkeypatch.setattr(service._client, "send_message_payload", _capture)
+
+    paragraph = "word " * 400  # ~2000 characters
+    await service.send_message(
+        _inbound_event(message_id="wamid.in-1"), "\n\n".join([paragraph] * 4)
+    )
+
+    assert len(bodies) > 1
+    assert all(len(body) <= 4096 for body in bodies)
+    assert "".join(bodies).count("word") == 1600
+
+
+@pytest.mark.asyncio
+async def test_a_split_never_leaves_half_a_bold_pair(monkeypatch):
+    service = _service()
+    bodies: list[str] = []
+
+    async def _capture(*, phone_number_id, payload):
+        bodies.append(payload["text"]["body"])
+        return "wamid.out"
+
+    monkeypatch.setattr(service._client, "send_message_payload", _capture)
+
+    filler = "word " * 900  # pushes the bold run over the boundary
+    await service.send_message(
+        _inbound_event(message_id="wamid.in-1"), f"{filler}\n\n**Conclusion** here"
+    )
+
+    for body in bodies:
+        assert body.count("*") % 2 == 0
+
+
+@pytest.mark.asyncio
+async def test_progress_is_posted_as_its_own_message(monkeypatch):
+    """WhatsApp cannot edit a message, so an update can only be a new one."""
+    service = _service()
+    payloads: list[dict] = []
+
+    async def _capture(*, phone_number_id, payload):
+        payloads.append(payload)
+        return "wamid.progress"
+
+    monkeypatch.setattr(service._client, "send_message_payload", _capture)
+
+    await service.stream_progress(
+        _inbound_event(message_id="wamid.in-1"),
+        "Working on it — 1 of 2 steps done.\n✅ Pull the numbers",
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["type"] == "text"
+    assert payloads[0]["text"]["preview_url"] is False
+    assert "✅ Pull the numbers" in payloads[0]["text"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_a_typing_refresh_does_not_re_post_the_reaction(monkeypatch):
+    """The bubble is refreshed on a timer; the acknowledgement is sent once.
+
+    Without the distinction, a rejected read/typing call would drop into the
+    reaction fallback on every tick — an API call every twenty seconds saying
+    something already said.
+    """
+    service = _service()
+    calls: list[dict] = []
+
+    async def _refuse(*, phone_number_id, message_id):
+        raise RuntimeError("read receipts unavailable")
+
+    async def _capture_reaction(**kwargs):
+        calls.append(kwargs)
+        return "wamid.reaction"
+
+    monkeypatch.setattr(service._client, "mark_read_and_typing", _refuse)
+    monkeypatch.setattr(service._client, "react", _capture_reaction)
+
+    event = _inbound_event(message_id="wamid.in-1")
+    await service.add_processing_indicator(event)
+    assert len(calls) == 1
+
+    await service.add_processing_indicator(event, {"is_refresh": True})
+    assert len(calls) == 1

@@ -11,7 +11,8 @@ export class AgentSurfacesMeService {
     /**
      * List My Surfaces
      * Every surface across the current user's pods, grouped by platform, with
-     * the chosen default and a ``conflict`` flag when more than one could answer.
+     * the chosen default and a ``conflict`` flag when two of them answer at the
+     * same address.
      * @returns UserSurfacesResponse Successful Response
      * @throws ApiError
      */

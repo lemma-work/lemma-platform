@@ -5,12 +5,12 @@ from typing import Any
 
 from pydantic_ai.tools import RunContext
 
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
-    SurfaceQuestion,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
@@ -27,99 +27,22 @@ from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppCurrentContactResult,
     WhatsAppFileAttachment,
 )
-from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+    build_whatsapp_approval_interactive,
+    build_whatsapp_interactive,
+    filename_from_url,
+    resolve_whatsapp_send_type,
+    whatsapp_cta_url_payload,
+    whatsapp_display_resource_text,
+    whatsapp_message_bodies,
+    whatsapp_text_payload,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
+    to_plain_text,
+    to_whatsapp_text,
+)
 
 logger = get_logger(__name__)
-
-# Separator for encoding ask_user routing into a WhatsApp button/list ``id``
-# (``callback_id~header~value``). The callback id itself uses ``|``, so ``~``
-# unambiguously splits the three parts. WhatsApp allows ids up to 256 chars.
-WHATSAPP_INTERACTION_SEP = "~"
-
-# Sentinel used in place of a question ``header`` to mark an approval button
-# reply (``callback_id~__approval__~<decision>``). The parser routes this to an
-# approval decision instead of an ask_user answer.
-WHATSAPP_APPROVAL_HEADER = "__approval__"
-
-
-def _build_whatsapp_interactive(
-    callback_id: str, question: SurfaceQuestion
-) -> dict[str, Any] | None:
-    """Build a WhatsApp interactive payload for one question, or ``None`` if it
-    can't be expressed natively (id over 256 chars, more than 10 options, or a
-    header containing the reserved separator)."""
-    # The reply id packs ``callback_id~header~value`` and is decoded with a
-    # 2-split, so the value may contain ``~`` but the header must not — otherwise
-    # the split misassigns and the answer is mis-keyed. Fall back to text when a
-    # header contains the separator (rare; header is model-authored).
-    if WHATSAPP_INTERACTION_SEP in (question.header or ""):
-        return None
-    rows: list[tuple[str, str]] = []
-    for option in question.options:
-        button_id = (
-            f"{callback_id}{WHATSAPP_INTERACTION_SEP}{question.header}"
-            f"{WHATSAPP_INTERACTION_SEP}{option.label}"
-        )
-        if len(button_id.encode("utf-8")) > 256:
-            return None
-        rows.append((button_id, option.label))
-    body = {"text": (question.question or "").strip()[:1024] or "Please choose"}
-    if 1 <= len(rows) <= 3:
-        return {
-            "type": "button",
-            "body": body,
-            "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": rid, "title": title[:20]}}
-                    for rid, title in rows
-                ]
-            },
-        }
-    if 4 <= len(rows) <= 10:
-        return {
-            "type": "list",
-            "body": body,
-            "action": {
-                "button": "Choose",
-                "sections": [
-                    {"rows": [{"id": rid, "title": title[:24]} for rid, title in rows]}
-                ],
-            },
-        }
-    return None
-
-
-def _build_whatsapp_approval_interactive(
-    plan: SurfaceApprovalRenderPlan,
-) -> dict[str, Any] | None:
-    """Build a WhatsApp reply-button payload for an approval prompt, or ``None``
-    if it can't be expressed natively (more than 3 buttons, or an id over 256
-    chars). Each button id packs ``callback_id~__approval__~<decision>``."""
-    buttons: list[dict[str, Any]] = []
-    for button in plan.buttons:
-        button_id = (
-            f"{plan.callback_id}{WHATSAPP_INTERACTION_SEP}{WHATSAPP_APPROVAL_HEADER}"
-            f"{WHATSAPP_INTERACTION_SEP}{button.decision}"
-        )
-        if len(button_id.encode("utf-8")) > 256:
-            return None
-        buttons.append(
-            {"type": "reply", "reply": {"id": button_id, "title": button.label[:20]}}
-        )
-    if not 1 <= len(buttons) <= 3:
-        return None
-    body_parts = [f"*{plan.title}*"]
-    if plan.reason:
-        body_parts.append(plan.reason)
-    if plan.action_summary:
-        body_parts.append(f"Action: {plan.action_summary}")
-    body_text = "\n\n".join(body_parts).strip()[:1024] or "Approval needed"
-    return {
-        "type": "button",
-        "body": {"text": body_text},
-        "action": {"buttons": buttons},
-    }
-
 
 _WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
 
@@ -185,14 +108,47 @@ class WhatsAppPlatformService:
             )
             return
 
+        for body in whatsapp_message_bodies(message):
+            await self._client.send_message_payload(
+                phone_number_id=phone_number_id,
+                payload={
+                    "messaging_product": "whatsapp",
+                    "to": sender_wa_id,
+                    "type": "text",
+                    "text": {"body": body},
+                },
+            )
+
+    async def stream_progress(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        progress_text: str,
+    ) -> None:
+        """Post a progress update as its own message.
+
+        WhatsApp has no message-edit API, so unlike Telegram or Teams there is no
+        live message to rewrite — an update can only be a new message in the
+        person's chat. The observer is what keeps that from becoming spam: it
+        rations these to a moved plan or one "still going" per run. This end just
+        sends what it is given, best-effort, so a failed update cannot touch the
+        run.
+        """
+        phone_number_id = (
+            event.reply_target.get("phone_number_id") or self._phone_number_id
+        )
+        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
+        if not sender_wa_id or not phone_number_id or not self._access_token:
+            return
+        body = to_whatsapp_text(progress_text)
+        if not body:
+            return
         await self._client.send_message_payload(
             phone_number_id=phone_number_id,
-            payload={
-                "messaging_product": "whatsapp",
-                "to": sender_wa_id,
-                "type": "text",
-                "text": {"body": message},
-            },
+            payload=whatsapp_text_payload(
+                recipient_wa_id=sender_wa_id,
+                body=body,
+                preview_url=False,
+            ),
         )
 
     async def send_questions(
@@ -227,7 +183,7 @@ class WhatsAppPlatformService:
             return False
         interactives = []
         for question in question_plan.questions:
-            interactive = _build_whatsapp_interactive(
+            interactive = build_whatsapp_interactive(
                 question_plan.callback_id, question
             )
             if interactive is None:
@@ -260,7 +216,7 @@ class WhatsAppPlatformService:
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
             return False
-        interactive = _build_whatsapp_approval_interactive(approval_plan)
+        interactive = build_whatsapp_approval_interactive(approval_plan)
         if interactive is None:
             return False
         await self._client.send_interactive(
@@ -291,9 +247,9 @@ class WhatsAppPlatformService:
         if action is None:
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
-                payload=_whatsapp_text_payload(
+                payload=whatsapp_text_payload(
                     recipient_wa_id=sender_wa_id,
-                    body=_whatsapp_display_resource_text(render_plan),
+                    body=whatsapp_display_resource_text(render_plan),
                     preview_url=False,
                 ),
             )
@@ -302,7 +258,7 @@ class WhatsAppPlatformService:
         try:
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
-                payload=_whatsapp_cta_url_payload(
+                payload=whatsapp_cta_url_payload(
                     recipient_wa_id=sender_wa_id,
                     render_plan=render_plan,
                 ),
@@ -313,9 +269,9 @@ class WhatsAppPlatformService:
             )
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
-                payload=_whatsapp_text_payload(
+                payload=whatsapp_text_payload(
                     recipient_wa_id=sender_wa_id,
-                    body=_whatsapp_display_resource_text(render_plan),
+                    body=whatsapp_display_resource_text(render_plan),
                     preview_url=True,
                 ),
             )
@@ -332,9 +288,12 @@ class WhatsAppPlatformService:
         shows for ~25s or until the next message is sent, so a single call at run
         start is enough (WhatsApp has no message-edit API for per-step progress).
         Best-effort: an indicator failure never affects the run. When the inbound
-        message id is missing we fall back to the legacy 💬 reaction.
+        message id is missing we fall back to the legacy 💬 reaction — but only
+        on the opening call. The bubble expires after ~25s so the observer
+        refreshes it on a timer, and a reaction re-posted on every tick would be
+        an API call every twenty seconds to say something already said.
         """
-        del metadata
+        is_refresh = bool((metadata or {}).get("is_refresh"))
         phone_number_id = (
             event.reply_target.get("phone_number_id") or self._phone_number_id
         )
@@ -359,7 +318,7 @@ class WhatsAppPlatformService:
 
         # Fallback: no inbound id (or read/typing rejected) — post a reaction so
         # the user still sees the agent acknowledged the message.
-        if not sender_wa_id or not message_id:
+        if is_refresh or not sender_wa_id or not message_id:
             return
         try:
             await self._client.react(
@@ -393,7 +352,7 @@ class WhatsAppPlatformService:
             return None
         file_name = (
             str(attachment.get("name") or "").strip()
-            or _filename_from_url(download_url)
+            or filename_from_url(download_url)
             or "whatsapp_file"
         )
         content = await self._client.download_media(download_url)
@@ -426,7 +385,7 @@ class WhatsAppPlatformService:
         recipient_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not self._access_token or not phone_number_id or not recipient_wa_id:
             return False
-        send_type = _resolve_whatsapp_send_type(
+        send_type = resolve_whatsapp_send_type(
             delivery_mode="auto", mime_type=mime_type
         )
         try:
@@ -453,7 +412,7 @@ class WhatsAppPlatformService:
             media_id=media_id,
             send_type=send_type,
             file_name=file_name,
-            caption=caption,
+            caption=to_plain_text(caption) if caption else None,
         )
         return bool(message_id)
 
@@ -530,94 +489,3 @@ class WhatsAppPlatformService:
             if candidate:
                 return candidate
         return None
-
-
-def _resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
-    requested = str(delivery_mode or "auto").lower()
-    if requested != "auto":
-        return requested
-    if mime_type.startswith("image/"):
-        return "image"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type.startswith("video/"):
-        return "video"
-    return "document"
-
-
-def _whatsapp_cta_url_payload(
-    *,
-    recipient_wa_id: str,
-    render_plan: SurfaceDisplayRenderPlan,
-) -> dict[str, Any]:
-    action = render_plan.primary_action
-    body = _truncate_whatsapp_text(
-        _whatsapp_display_resource_text(render_plan, include_action=False),
-        1024,
-    )
-    return {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": recipient_wa_id,
-        "type": "interactive",
-        "interactive": {
-            "type": "cta_url",
-            "body": {"text": body},
-            "action": {
-                "name": "cta_url",
-                "parameters": {
-                    "display_text": _truncate_whatsapp_button_text(
-                        action.label if action else "Open"
-                    ),
-                    "url": action.url if action else "",
-                },
-            },
-        },
-    }
-
-
-def _whatsapp_text_payload(
-    *,
-    recipient_wa_id: str,
-    body: str,
-    preview_url: bool,
-) -> dict[str, Any]:
-    return {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": recipient_wa_id,
-        "type": "text",
-        "text": {
-            "body": _truncate_whatsapp_text(body, 4096),
-            "preview_url": preview_url,
-        },
-    }
-
-
-def _whatsapp_display_resource_text(
-    render_plan: SurfaceDisplayRenderPlan,
-    *,
-    include_action: bool = True,
-) -> str:
-    parts = [f"*{render_plan.title}*"]
-    if render_plan.summary:
-        parts.append(render_plan.summary)
-    parts.extend(render_plan.detail_lines[:5])
-    action = render_plan.primary_action
-    if include_action and action is not None:
-        parts.append(f"{action.label}: {action.url}")
-    return "\n\n".join(parts)
-
-
-def _truncate_whatsapp_button_text(value: str) -> str:
-    text = " ".join(str(value or "").split()) or "Open"
-    return text if len(text) <= 20 else text[:19].rstrip() + "..."
-
-
-def _truncate_whatsapp_text(value: str, max_length: int) -> str:
-    text = str(value or "").strip()
-    return text if len(text) <= max_length else text[: max_length - 1].rstrip() + "..."
-
-
-def _filename_from_url(url: str) -> str:
-    return str(url or "").rstrip("/").split("/")[-1].strip()

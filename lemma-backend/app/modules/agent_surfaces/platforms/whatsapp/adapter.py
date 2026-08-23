@@ -92,6 +92,26 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     ) -> ParsedSurfaceInteraction | None:
         return self._parser.parse_interaction(payload, headers)
 
+    async def stream_progress(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_text: str,
+        progress_handle: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Post a progress update as a new message.
+
+        Returns ``None`` deliberately: a handle is a reference to a live message
+        that later edits and the end-of-run cleanup act on, and WhatsApp has no
+        such message. Each update stands on its own and there is nothing to
+        clear afterwards.
+        """
+        del progress_handle, metadata
+        await WhatsAppPlatformService(credentials).stream_progress(event, progress_text)
+        return None
+
     async def add_processing_indicator(
         self,
         *,

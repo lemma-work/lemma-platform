@@ -5,8 +5,9 @@
 import type { SurfacePlatform } from './SurfacePlatform.js';
 import type { UserSurfaceItem } from './UserSurfaceItem.js';
 /**
- * All of a user's surfaces for one platform. ``conflict`` is true when more
- * than one surface could answer them (they should pick a ``default``).
+ * All of a user's surfaces for one platform. ``conflict`` is true when two
+ * of them answer at the same address, so the user has to say which pod hears
+ * them (the ``shares_address`` surfaces are the ones to choose between).
  */
 export type UserSurfacePlatformGroup = {
     conflict?: boolean;

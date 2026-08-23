@@ -522,8 +522,8 @@ async def test_whatsapp_parse_inbound_interaction_ignores_non_lemma_id():
 def test_whatsapp_interactive_rejects_header_with_separator():
     """A header containing '~' would corrupt the packed reply id → fall back to
     text (return None) rather than mis-key the answer."""
-    from app.modules.agent_surfaces.platforms.whatsapp.service import (
-        _build_whatsapp_interactive,
+    from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+        build_whatsapp_interactive,
     )
 
     question = SurfaceQuestion(
@@ -531,7 +531,7 @@ def test_whatsapp_interactive_rejects_header_with_separator():
         header="time~zone",  # contains the reserved separator
         options=[SurfaceQuestionOption(label="US"), SurfaceQuestionOption(label="CA")],
     )
-    assert _build_whatsapp_interactive("conv|tool", question) is None
+    assert build_whatsapp_interactive("conv|tool", question) is None
 
 
 def test_whatsapp_parse_interaction_preserves_value_with_separator():

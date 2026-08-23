@@ -120,15 +120,15 @@ def test_teams_approval_card_and_parse_round_trip():
 
 
 def test_whatsapp_approval_buttons_and_parse_round_trip():
-    from app.modules.agent_surfaces.platforms.whatsapp.service import (
-        _build_whatsapp_approval_interactive,
+    from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+        build_whatsapp_approval_interactive,
     )
     from app.modules.agent_surfaces.platforms.whatsapp.parser import (
         WhatsAppMessageParser,
     )
 
     plan = _plan()
-    interactive = _build_whatsapp_approval_interactive(plan)
+    interactive = build_whatsapp_approval_interactive(plan)
     assert interactive["type"] == "button"
     button = interactive["action"]["buttons"][0]
     reply_id = button["reply"]["id"]

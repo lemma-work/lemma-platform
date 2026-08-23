@@ -16,15 +16,38 @@ reports that it had nothing to do.
 the `scn` mark, so it can only ever touch things a run made — and puts the
 cast's roles back to what this module says they should be. For when a run dies
 partway through and leaves somebody promoted.
+
+## Deployments this process cannot register the cast on by itself
+
+Signing up is not always possible from here. A deployment can put a
+proof-of-work challenge in front of it, or require a verification email to be
+read back before anything else works — gates this module has no business
+knowing how to get past, because publishing how would be indistinguishable
+from documenting how to defeat them in bulk.
+
+`--authenticate-with path/to/module.py:function` replaces *only* the "get the
+cast signed in" half with an external one. Everything after that — building
+the organizations, the pods, the memberships — is unchanged and still runs
+here, because none of that is gated by anything the replacement needed to get
+past. The function receives the `World` and must return every `tenant.CAST`
+label mapped to a signed-in `Person` (`Person.api.authenticate(token)` and
+`Person.user_id` set — the same state `signs_up`/`signs_in` leave behind).
+What it does to get there is its own business: `IdentitySteps.signs_up`,
+`.requests_email_verification` and the rest all accept `**kwargs`, reaching
+the raw request, for exactly this — an external caller can attach whatever a
+particular deployment demands without this module ever needing to know what
+that was.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from harness import consent, environment, tenant
@@ -34,6 +57,11 @@ from harness.world import Person, World
 JSON = dict[str, Any]
 
 BASE_URL_SETTING = "SCENARIOS_BASE_URL"
+AUTHENTICATE_WITH_SETTING = "SCENARIOS_AUTHENTICATE_WITH"
+
+#: What an --authenticate-with function must return: every tenant.CAST label
+#: mapped to a Person already in the state signs_up/signs_in leave one in.
+Authenticator = Callable[[World], Awaitable[dict[str, Person]]]
 
 
 class Ledger:
@@ -67,24 +95,36 @@ def owner_of(company: tenant.Company) -> tenant.Colleague:
     raise AssertionError(f"{company.name} has no owner declared in harness/tenant.py")
 
 
-async def provision(base_url: str, *, reset: bool = False) -> str:
+async def provision(
+    base_url: str, *, reset: bool = False, authenticate: Authenticator | None = None
+) -> str:
     target = environment.describe(base_url)
     environment.confirm_writable(target)
     ledger = Ledger()
 
     world = World(base_url=base_url)
     try:
-        people = {
-            colleague.label: world.arriving(colleague.label, colleague.email)
-            for colleague in tenant.CAST
-        }
-
-        for colleague in tenant.CAST:
-            person = people[colleague.label]
-            if await person.arrives():
-                ledger.did(f"registered {colleague.full_name} <{colleague.email}>")
-            else:
-                ledger.already(f"{colleague.full_name} already has an account")
+        if authenticate is not None:
+            people = await authenticate(world)
+            missing = {colleague.label for colleague in tenant.CAST} - set(people)
+            if missing:
+                raise AssertionError(
+                    f"--authenticate-with did not return {sorted(missing)}; it "
+                    f"must authenticate every label in harness/tenant.py's CAST"
+                )
+            for colleague in tenant.CAST:
+                ledger.already(f"{colleague.full_name} authenticated externally")
+        else:
+            people = {
+                colleague.label: world.arriving(colleague.label, colleague.email)
+                for colleague in tenant.CAST
+            }
+            for colleague in tenant.CAST:
+                person = people[colleague.label]
+                if await person.arrives():
+                    ledger.did(f"registered {colleague.full_name} <{colleague.email}>")
+                else:
+                    ledger.already(f"{colleague.full_name} already has an account")
 
         companies: dict[str, JSON] = {}
         for company in tenant.COMPANIES:
@@ -428,6 +468,32 @@ async def _still_needs_a_person(owner: Person) -> str:
     return "\n".join(lines)
 
 
+def _load_authenticator(spec: str) -> Authenticator:
+    """``spec`` is ``path/to/module.py:function_name``.
+
+    A file path rather than an importable module name: the replacement is, by
+    its nature, likely to live somewhere this suite's own package layout does
+    not reach — a private repo entirely, in the case this was written for.
+    """
+    path_str, sep, func_name = spec.partition(":")
+    if not sep or not func_name:
+        raise SystemExit(
+            f"--authenticate-with wants 'path/to/module.py:function_name', got {spec!r}"
+        )
+    path = Path(path_str)
+    if not path.is_file():
+        raise SystemExit(f"--authenticate-with: no such file {path}")
+    spec_obj = importlib.util.spec_from_file_location(f"_authenticator_{path.stem}", path)
+    if spec_obj is None or spec_obj.loader is None:
+        raise SystemExit(f"--authenticate-with: could not load {path}")
+    module = importlib.util.module_from_spec(spec_obj)
+    spec_obj.loader.exec_module(module)
+    try:
+        return getattr(module, func_name)
+    except AttributeError:
+        raise SystemExit(f"--authenticate-with: {path} has no {func_name!r}") from None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -440,6 +506,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also clear what runs left behind and put the cast's roles back",
     )
+    parser.add_argument(
+        "--authenticate-with",
+        default=os.getenv(AUTHENTICATE_WITH_SETTING, ""),
+        help=(
+            "path/to/module.py:function — get the cast signed in some other "
+            f"way, for a deployment this process cannot register on by "
+            f"itself (or {AUTHENTICATE_WITH_SETTING}). See this module's own "
+            f"docstring."
+        ),
+    )
     arguments = parser.parse_args(argv)
     if not arguments.base_url:
         parser.error(
@@ -447,8 +523,17 @@ def main(argv: list[str] | None = None) -> int:
             f"There is no default on purpose: this script registers accounts "
             f"and creates organizations, and an organization cannot be deleted."
         )
+    authenticate = (
+        _load_authenticator(arguments.authenticate_with)
+        if arguments.authenticate_with
+        else None
+    )
     try:
-        print(asyncio.run(provision(arguments.base_url, reset=arguments.reset)))
+        print(
+            asyncio.run(
+                provision(arguments.base_url, reset=arguments.reset, authenticate=authenticate)
+            )
+        )
     except (environment.Unreachable, AssertionError) as stopped:
         print(f"provisioning stopped: {stopped}", file=sys.stderr)
         return 1
