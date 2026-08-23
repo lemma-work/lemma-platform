@@ -215,12 +215,31 @@ class AgentMemoryBriefBuilder:
         contents = await self._read_agents_mds(
             [path for _, path in scopes], pod_id=pod_id, user_id=user_id
         )
+        # Names all four paths, not only the two agent-scoped ones: a live pod
+        # caught an agent hedging between locations ("in case the loader picks
+        # the broader file") on a blank slate, where the pod- and user-level
+        # scopes have no content yet and so never render as a ``###`` block
+        # below. Without their paths stated here, an agent has no way to know
+        # they exist as options until it goes looking for them.
         header = (
             "\n## Your Memory\n"
-            f"Your agent-scoped memory: `{paths.pod_agent_folder}/` (shared "
+            f"Your agent-scoped folders: `{paths.pod_agent_folder}/` (shared "
             f"pod-wide) and `{paths.personal_agent_folder}/` (private to this "
-            "user). Pod-shared facts live under `/memory`, private facts about "
-            "the current user under `/me`."
+            "user) — write new topic files there, never a path you worked out "
+            "yourself.\n\n"
+            "All four AGENTS.md indexes are read into this brief automatically, "
+            "every turn, together — there's nothing to pick between:\n"
+            f"- `{paths.pod_index}` — pod-shared, true no matter which agent\n"
+            f"- `{paths.pod_agent_index}` — this agent's own shared state, "
+            "pod-wide\n"
+            f"- `{paths.personal_index}` — about this user, true no matter "
+            "which agent\n"
+            f"- `{paths.personal_agent_index}` — this agent's own state with "
+            "this user\n\n"
+            "A fact about the pod itself, or about the person (name, role, "
+            "preferences) — belongs in the first or third. Something specific "
+            "to this agent's own ongoing work or relationship — belongs in "
+            "the second or fourth."
         )
         blocks = _budgeted_blocks(scopes, contents)
         return "\n".join(
