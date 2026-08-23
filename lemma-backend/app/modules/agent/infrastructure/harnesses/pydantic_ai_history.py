@@ -381,6 +381,26 @@ def _channel_context_block(metadata: dict) -> str | None:
     )
 
 
+def _transcribed_voice_paths(metadata: dict) -> set[str]:
+    """Paths of inbound voice notes whose words are already in the message.
+
+    Ingress transcribes voice notes before the run starts and folds the
+    transcript in as the user's own words. Listing those files again as
+    something to go and read invites the agent to call `listen` on audio that
+    has already been transcribed — the same transcript, billed and waited for
+    twice. A voice note that failed to transcribe is deliberately absent here,
+    because for that one `listen` is the right call.
+    """
+    provenance = metadata.get("voice_transcripts")
+    if not isinstance(provenance, list):
+        return set()
+    return {
+        str(item.get("path"))
+        for item in provenance
+        if isinstance(item, dict) and item.get("path") and not item.get("failed")
+    }
+
+
 def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
     """What the user attached, either already ingested or still raw.
 
@@ -391,10 +411,25 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
     """
     ingested_files = metadata.get("ingested_files")
     if isinstance(ingested_files, list) and ingested_files:
-        saved = "\n".join(f"- {path}" for path in ingested_files if path)
-        return [
-            f"The user shared files; they are saved in the pod datastore at:\n{saved}"
-        ]
+        transcribed = _transcribed_voice_paths(metadata)
+        saved = "\n".join(
+            f"- {path}" for path in ingested_files if path and path not in transcribed
+        )
+        blocks: list[str] = []
+        if saved:
+            blocks.append(
+                "The user shared files; they are saved in the pod datastore "
+                f"at:\n{saved}"
+            )
+        if transcribed:
+            spoken = "\n".join(f"- {path}" for path in sorted(transcribed))
+            blocks.append(
+                "Their message above includes what they said in a voice note. "
+                "It is already transcribed — treat those words as theirs and do "
+                "NOT call `listen`. The audio itself is saved at:\n" + spoken
+            )
+        if blocks:
+            return blocks
     attachments = metadata.get("attachments")
     if not isinstance(attachments, list) or not attachments:
         return []

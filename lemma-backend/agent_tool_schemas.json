@@ -1119,7 +1119,7 @@
   {
     "tool_name": "listen",
     "toolset": "SPEECH",
-    "description": "Transcribe a voice message or audio file to text.\n\n`file_path` may be a pod path (e.g. `/me/telegram/voice.ogg`) or a workspace\npath; common formats are supported directly.\n\nThe transcript is for YOUR understanding \u2014 act on it as if the user had typed\nit. Never echo it back (\"You said: ...\").",
+    "description": "Transcribe an audio file that has NOT already been transcribed.\n\nA voice note the user sent you on a chat surface is transcribed before the\nmessage reaches you \u2014 their words are already in the message, so calling\nthis on it just pays for the same transcript twice. Use it for audio you\nwent and found: a recording in the datastore, a file someone shared as a\nfile, something you downloaded.\n\n`file_path` may be a pod path (e.g. `/me/telegram/voice.ogg`) or a workspace\npath; common formats are supported directly.\n\nThe transcript is for YOUR understanding \u2014 act on it as if the user had typed\nit. Never echo it back (\"You said: ...\").",
     "input_schema": {
       "description": "Transcribe a pod/workspace audio file to text.",
       "properties": {
@@ -1137,7 +1137,7 @@
             }
           ],
           "default": null,
-          "description": "Optional BCP-47 language hint (e.g. 'en'). None = auto-detect."
+          "description": "Optional BCP-47 language code (e.g. 'en', 'hi'). Leave unset \u2014 the default reads mixed-language speech without being told. Set this only when you already know the language and the transcript came back wrong."
         }
       },
       "required": [
@@ -3018,7 +3018,7 @@
   {
     "tool_name": "say",
     "toolset": "SPEECH",
-    "description": "Speak a reply: synthesize audio and deliver it as a voice note.\n\nText is the default modality, so call this only when voice is genuinely\nwanted. Delivery is automatic \u2014 a native voice note on chat surfaces, an\naudio player on web.\n\nThe audio IS your reply. Do not call `display_resource` afterward, and do not\nrestate the same words as text; add a text line only if it says something\ndifferent.",
+    "description": "Speak a reply: synthesize audio and deliver it as a voice note.\n\nText is the default modality, so call this only when voice is genuinely\nwanted. Delivery is automatic \u2014 a native voice note on chat surfaces, an\naudio player on web.\n\nSpeaking anything other than English: pass `language` (the BCP-47 code the\ntext is in) so the voice speaks that language instead of reading it aloud\nin English.\n\nThe audio IS your reply. Do not call `display_resource` afterward, and do not\nrestate the same words as text; add a text line only if it says something\ndifferent.",
     "input_schema": {
       "description": "Generate spoken audio (MP3) from text.",
       "properties": {
@@ -3037,6 +3037,18 @@
           ],
           "default": null,
           "description": "Optional pod datastore path for the generated .mp3 (e.g. /me/speech/reply.mp3). Defaults to a generated /me/speech/<id>.mp3."
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BCP-47 code for the language `text` is written in (e.g. 'es', 'ja'). Pass it whenever you are not speaking English so the voice speaks that language rather than reading it with an English accent. None = the default voice."
         },
         "voice": {
           "anyOf": [
