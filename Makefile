@@ -30,6 +30,7 @@ SHELL := /bin/bash
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
@@ -1252,6 +1253,30 @@ scenarios-live:
 	@cd $(SCENARIOS_DIR) && SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
 		SCENARIOS_CONNECTOR_CATALOGUE=all SCENARIOS_TELEGRAM_POLLING=true \
 		uv run pytest -q -m live --timeout=900 journeys/live
+
+# ── Real providers, recorded once ─────────────────────────────────────────────
+# Everything Lemma sends outward goes through one proxy. `record` drives the
+# real Telegram, Google, GitHub and Slack with real credentials and writes what
+# happened to tests/scenarios/cassettes/; `replay` serves that back and refuses
+# anything it has not seen, so a run cannot quietly reach the internet.
+#
+# The recordings are committed and reviewed like code: a diff in one is a third
+# party changing its API, which is the signal a hand-written fake could never
+# give. See tests/scenarios/harness/egress.py.
+#
+# `CASSETTE` names the recording — one per journey keeps the diffs small.
+CASSETTE ?= all
+
+scenarios-record:
+	@echo "→ Recording against the real providers…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=record SCENARIOS_CASSETTE="$(CASSETTE)" \
+		SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
+		uv run pytest -q --timeout=900 $(ARGS)
+
+scenarios-replay:
+	@echo "→ Replaying $(CASSETTE)…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=replay SCENARIOS_CASSETTE="$(CASSETTE)" \
+		uv run pytest -q $(ARGS)
 
 # ── The standing tenant ───────────────────────────────────────────────────────
 # The suite runs as a fixed cast of colleagues at Vantage Freight who sign *in*

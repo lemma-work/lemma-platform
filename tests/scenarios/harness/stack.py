@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.credentials import load_deployment_env
+from harness import egress as egress_proxy
+from harness.egress import Egress
 
 ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "lemma-backend"
@@ -124,6 +126,10 @@ class Stack:
     redis_url: str
     database_url: str
     log_path: str = ""
+
+    #: What Lemma said to the outside world, if anything is listening. See
+    #: `harness/egress.py`; `mode == "off"` when nothing is.
+    egress: "Egress | None" = None
 
     #: Did this process start it? A stack the suite booted is empty and
     #: disposable, so the run builds the standing tenant in it as a matter of
@@ -305,7 +311,14 @@ def _coverage_environment() -> dict[str, str]:
     }
 
 
-def _environment(*, port: int, database_url: str, redis_url: str, supertokens_url: str) -> dict[str, str]:
+def _environment(
+    *,
+    port: int,
+    database_url: str,
+    redis_url: str,
+    supertokens_url: str,
+    egress: Egress | None = None,
+) -> dict[str, str]:
     scratch = Path(tempfile.gettempdir()) / f"lemma-scenarios-{port}"
     return {
         **_coverage_environment(),
@@ -445,6 +458,11 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "WORKSPACE_HOST_ALIAS": "host.docker.internal",
         "WORKSPACE_CALLBACK_API_URL": f"http://host.docker.internal:{port}",
         "FUNCTION_RUNTIME_GATEWAY_URL": f"http://host.docker.internal:{port}",
+        # Last, so it wins. A developer with their own HTTPS_PROXY set would
+        # otherwise send the product's traffic somewhere this run cannot read,
+        # and every assertion about what Lemma sent would come back empty with
+        # nothing to say why.
+        **(egress.environment() if egress is not None else {}),
     }
 
 
@@ -574,6 +592,15 @@ def start_stack():
     processes: list[subprocess.Popen] = []
     log_path = Path(tempfile.gettempdir()) / f"lemma-scenarios-{os.getpid()}.log"
     log = open(log_path, "w+", encoding="utf-8")
+    scratch = Path(tempfile.gettempdir()) / f"lemma-scenarios-egress-{os.getpid()}"
+    scratch.mkdir(parents=True, exist_ok=True)
+    # Before the product, because the product is booted with its address; after
+    # everything on the way down, because it is recording their traffic.
+    egress = egress_proxy.start(
+        egress_proxy.wanted_mode(),
+        cassette=os.getenv("SCENARIOS_CASSETTE", "all"),
+        scratch=scratch,
+    )
 
     try:
         postgres = _docker_run(POSTGRES_IMAGE, 5432, {
@@ -611,6 +638,7 @@ def start_stack():
             database_url=database_url,
             redis_url=redis_url,
             supertokens_url=f"http://127.0.0.1:{supertokens_port}",
+            egress=egress,
         )
 
         python_bin = _backend_python()
@@ -643,6 +671,7 @@ def start_stack():
             redis_url=redis_url,
             database_url=database_url,
             log_path=str(log_path),
+            egress=egress,
         )
 
     except StackError as error:
@@ -660,4 +689,8 @@ def start_stack():
                 process.wait()
         for container_id in containers:
             _remove(container_id)
+        # Last: mitmproxy only flushes its recording when it exits, so a run
+        # that tore this down first would lose the final calls it made — and a
+        # recording missing its own tail replays as a mystery.
+        egress_proxy.stop(egress)
         log.close()

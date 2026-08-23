@@ -140,31 +140,47 @@ scenario in the live lane had been doing exactly that, and passing, for months.
 The agent is *told how to behave* with an `instruction`, which is what a person
 does when they set one up, and what it then does is the thing under test.
 
-**The platform is still stood in for on localhost, and should not be.**
-`harness/fake_platform.py` runs small HTTP servers that answer as Telegram, as a
-generic OpenAPI provider, and as Resend, and a scenario points a surface at one
-using `api_base_url` — a supported product setting. It works, and it is the
-wrong shape for this suite:
+**The platform is real, and recorded.** Everything Lemma sends outward goes
+through one proxy ([`harness/egress.py`](harness/egress.py)):
 
-- A deployment cannot reach a server on the machine running the tests, so ~40
-  scenarios skip remotely behind `needs(LOOPBACK_REACHABLE)` — the largest hole
-  in what a deployment run proves.
-- It needs `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS=true`, which production does
-  not have and should not, so those scenarios exercise a configuration nobody
-  runs.
-- It is not what a person does. Nobody points their Telegram surface at a bot
-  API on their laptop.
+```bash
+make scenarios-record CASSETTE=connectors   # real providers, real credentials
+make scenarios-replay CASSETTE=connectors   # what they said, and nothing else
+```
 
-**Where this is going: real providers, no callback.** The live lane already
-shows the shape. `journeys/live/test_telegram.py` uses a real bot in *polling*
-mode — `ENABLE_TELEGRAM_POLLING_MODE`, which is a supported deployment mode and
-the one a self-hosted install behind a firewall uses — so no public URL and no
-loopback is involved at all. GitHub sidesteps it too: a fine-grained PAT is a
-real way to connect, and the deployment calls out rather than being called.
+Recording drives the real Telegram, Google, GitHub and Slack and writes what
+happened to [`cassettes/`](cassettes/). Replay serves that back and **kills any
+request it has not seen**, so a replay run cannot quietly reach the internet and
+pass for the wrong reason. The product is given the proxy's certificate
+authority and no other, so a client that bypasses the proxy fails loudly rather
+than succeeding against a real provider behind the suite's back.
 
-The work is to move the surfaces journey onto that footing and delete
-`fake_platform.py`, gating on `needs(TELEGRAM)` the way the live lane already
-does. Until then those scenarios are honest about where they cannot run.
+No product change was needed for any of it: every outbound client is `httpx`
+with `trust_env` left on, and `slack_sdk` loads the same variables itself.
+
+The proxy is also where a scenario asks **what Lemma sent**:
+
+```python
+async def test_...(egress):
+    ...
+    [call] = egress.calls_to("api.telegram.org", path_contains="sendMessage")
+    assert "approve" in call.json_body()["text"].lower()
+```
+
+That one query replaced three different recorder objects with three different
+shapes, one per platform.
+
+**Why recorded rather than imitated.** A stand-in we write ourselves cannot tell
+us it has drifted: when Telegram changes a response, our imitation keeps
+returning the old one and the suite stays green. A recording can — re-record it
+and the diff is the news. That is why the cassettes are committed and reviewed.
+
+**What is left of the old loopback fakes.** `harness/fake_platform.py` is being
+retired one journey at a time, and a guard stops new callers appearing while it
+goes. One piece will stay: a small server that returns a 500 on demand and hangs
+past the outbound timeout. No real provider does that reliably, and the three
+scenarios that need it are testing *Lemma's* error handling — the thing on the
+other end only has to be some HTTP server behaving badly.
 
 ## Measuring it
 

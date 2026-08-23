@@ -532,6 +532,75 @@ def test_no_scenario_scripts_the_model():
     )
 
 
+def test_a_replay_run_cannot_reach_the_real_internet():
+    """The one setting the whole record/replay design rests on.
+
+    A replay lane exists to be deterministic and credential-free. If an
+    unrecorded request were *forwarded* instead of killed, a run would quietly
+    reach the real provider — passing, slowly, with real side effects, and
+    telling nobody. `server_replay_extra=kill` is what makes a gap in the
+    recording an error rather than a silent live call.
+
+    Asserted on the arguments the proxy is actually started with, because that
+    is the thing that would be edited away.
+    """
+    import inspect
+
+    from harness import egress
+
+    started = inspect.getsource(egress.start)
+    assert "server_replay_extra=kill" in started, (
+        "replay no longer kills unrecorded requests, so a run with a stale "
+        "cassette would reach the real internet instead of failing"
+    )
+    assert "stream_large_bodies" not in started, (
+        "streaming is back. mitmproxy streams a response through without "
+        "keeping it, so the recording replays as '200 OK (content missing)' — "
+        "a response that satisfies a status assertion and contains nothing"
+    )
+
+
+def test_the_stand_ins_are_not_growing():
+    """`fake_platform.py` is being retired, one journey at a time.
+
+    A ratchet rather than a ban, because the file still has legitimate callers
+    until their journeys move. What must not happen is a *new* one appearing
+    while it is being taken away — that is how a retirement becomes permanent.
+    """
+    def imports_a_fake(path: Path) -> bool:
+        # Imports, not mentions: this file and the capability that gates the
+        # fakes both *talk about* them, which is not the same as using one.
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        return any(
+            isinstance(node, ast.ImportFrom) and node.module == "harness.fake_platform"
+            for node in ast.walk(tree)
+        )
+
+    callers = sorted(
+        str(path.relative_to(SUITE))
+        for path in _python_files()
+        if path.name != "fake_platform.py" and imports_a_fake(path)
+    )
+    # Shrinks as journeys move to real providers; when it empties, the file goes.
+    still_using = {
+        "conftest.py",
+        "journeys/operating_a_deployment/test_deleting_cleanly.py",
+        "journeys/surfaces_and_notifications/conftest.py",
+        "journeys/surfaces_and_notifications/test_email_surfaces.py",
+        "journeys/surfaces_and_notifications/test_ingestion.py",
+        "journeys/surfaces_and_notifications/test_native_controls.py",
+        "journeys/surfaces_and_notifications/test_surface_management.py",
+        "journeys/surfaces_and_notifications/test_threads_and_files.py",
+    }
+    appeared = set(callers) - still_using
+    assert not appeared, (
+        f"these newly reach for a loopback stand-in: {sorted(appeared)}. It is "
+        f"being retired — a deployment cannot reach a server on this machine. "
+        f"Drive the real provider through the egress proxy instead; see "
+        f"harness/egress.py"
+    )
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 
