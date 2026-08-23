@@ -26,13 +26,13 @@ from app.modules.datastore.contracts import (
 
 
 class _FakeUoW:
-    session = object()
+    """The unit of work the builder is handed.
 
-    async def commit(self):  # pragma: no cover - not exercised
-        ...
-
-    async def rollback(self):  # pragma: no cover - not exercised
-        ...
+    Deliberately bare: the memory brief only reads, so it never commits, and the
+    two services it passes this to are both stubbed below. Carrying `commit` and
+    `rollback` stubs would be claiming this test exercises a write path it does
+    not.
+    """
 
 
 def _uow_factory():
