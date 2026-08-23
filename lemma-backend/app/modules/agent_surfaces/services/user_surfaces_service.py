@@ -15,19 +15,32 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
     SurfacePodMembershipPort,
 )
+from app.modules.agent_surfaces.services.surface_address import (
+    contended_surface_ids,
+)
 from app.modules.identity.contracts import UserPreferences, UserRepositoryPort
 
 
 @dataclass(frozen=True)
 class UserSurfaceGroup:
     """All of a user's surfaces for one platform, across every pod they belong
-    to, with the platform's default (if set) and whether the choice is
-    ambiguous (more than one surface → a conflict the user should resolve)."""
+    to, with the platform's default (if set) and which of them the user actually
+    has to choose between.
+
+    ``contended`` holds the surfaces sharing one address — the deployment's
+    shared bot/number fronting several pods. More than one surface on a platform
+    is not by itself ambiguous: a pod's own bot has its own handle, and a message
+    to it can only ever arrive there."""
 
     platform: SurfacePlatform
     surfaces: list[AgentSurfaceEntity]
     default_surface_id: UUID | None
-    conflict: bool
+    contended: set[UUID]
+
+    @property
+    def conflict(self) -> bool:
+        """Whether the user has a routing choice to make on this platform."""
+        return bool(self.contended)
 
 
 class UserSurfacesService:
@@ -35,7 +48,8 @@ class UserSurfacesService:
 
     Powers ``GET /surfaces/me`` and ``PUT /surfaces/me/default`` so a user
     reachable via a shared system bot/number in several orgs can see every
-    surface that would answer them and pick a default when they conflict.
+    surface that would answer them and pick a default when they share one
+    address (see ``surface_address``).
     """
 
     def __init__(
@@ -79,7 +93,7 @@ class UserSurfacesService:
                     platform=platform,
                     surfaces=surfaces,
                     default_surface_id=preferences.default_surface_for(platform.value),
-                    conflict=len(surfaces) > 1,
+                    contended=contended_surface_ids(surfaces),
                 )
             )
         groups.sort(key=lambda g: g.platform.value)

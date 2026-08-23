@@ -49,6 +49,8 @@ async def test_surfaces_me_lists_and_sets_default(
     assert any(
         s["id"] == surface["id"] and s["is_default"] is False for s in tg["surfaces"]
     )
+    # Nothing else answers at this address, so there is nothing to choose.
+    assert all(s["shares_address"] is False for s in tg["surfaces"])
 
     # 2. Set the default.
     put = await authenticated_client.put(

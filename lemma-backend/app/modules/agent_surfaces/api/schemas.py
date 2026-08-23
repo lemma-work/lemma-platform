@@ -351,38 +351,6 @@ class AgentSurfaceListResponse(BaseModel):
     next_page_token: str | None = None
 
 
-class UserSurfaceItem(BaseModel):
-    """One of the current user's surfaces (across any pod they belong to)."""
-
-    id: UUID
-    name: str
-    pod_id: UUID
-    platform: SurfacePlatform
-    agent_id: UUID | None = None
-    is_default: bool = False
-
-
-class UserSurfacePlatformGroup(BaseModel):
-    """All of a user's surfaces for one platform. ``conflict`` is true when more
-    than one surface could answer them (they should pick a ``default``)."""
-
-    platform: SurfacePlatform
-    conflict: bool = False
-    default_surface_id: UUID | None = None
-    surfaces: list[UserSurfaceItem]
-
-
-class UserSurfacesResponse(BaseModel):
-    groups: list[UserSurfacePlatformGroup]
-
-
-class SetDefaultSurfaceRequest(BaseModel):
-    """Pick which surface answers this user for ``platform`` when several could."""
-
-    platform: SurfacePlatform
-    surface_id: UUID
-
-
 class SurfaceSendRequest(BaseModel):
     """Send a proactive message to a pod member on this surface."""
 

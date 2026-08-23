@@ -15748,6 +15748,11 @@
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "shares_address": {
+            "default": false,
+            "title": "Shares Address",
+            "type": "boolean"
           }
         },
         "required": [
@@ -15760,7 +15765,7 @@
         "type": "object"
       },
       "UserSurfacePlatformGroup": {
-        "description": "All of a user's surfaces for one platform. ``conflict`` is true when more\nthan one surface could answer them (they should pick a ``default``).",
+        "description": "All of a user's surfaces for one platform. ``conflict`` is true when two\nof them answer at the same address, so the user has to say which pod hears\nthem (the ``shares_address`` surfaces are the ones to choose between).",
         "properties": {
           "conflict": {
             "default": false,
@@ -32113,7 +32118,7 @@
     },
     "/surfaces/me": {
       "get": {
-        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when more than one could answer.",
+        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when two of them answer at the\nsame address.",
         "operationId": "agent.surface.list_mine",
         "responses": {
           "200": {
