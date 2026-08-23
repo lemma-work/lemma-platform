@@ -24,6 +24,7 @@ class UserSurfaceItem:
         pod_id (UUID):
         agent_id (None | Unset | UUID):
         is_default (bool | Unset):  Default: False.
+        shares_address (bool | Unset):  Default: False.
     """
 
     id: UUID
@@ -32,6 +33,7 @@ class UserSurfaceItem:
     pod_id: UUID
     agent_id: None | Unset | UUID = UNSET
     is_default: bool | Unset = False
+    shares_address: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +55,8 @@ class UserSurfaceItem:
 
         is_default = self.is_default
 
+        shares_address = self.shares_address
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -67,6 +71,8 @@ class UserSurfaceItem:
             field_dict["agent_id"] = agent_id
         if is_default is not UNSET:
             field_dict["is_default"] = is_default
+        if shares_address is not UNSET:
+            field_dict["shares_address"] = shares_address
 
         return field_dict
 
@@ -100,6 +106,8 @@ class UserSurfaceItem:
 
         is_default = d.pop("is_default", UNSET)
 
+        shares_address = d.pop("shares_address", UNSET)
+
         user_surface_item = cls(
             id=id,
             name=name,
@@ -107,6 +115,7 @@ class UserSurfaceItem:
             pod_id=pod_id,
             agent_id=agent_id,
             is_default=is_default,
+            shares_address=shares_address,
         )
 
         user_surface_item.additional_properties = d
