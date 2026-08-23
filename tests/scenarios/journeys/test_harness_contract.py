@@ -556,6 +556,41 @@ def test_a_replay_run_cannot_reach_the_real_internet():
     )
 
 
+def test_no_real_address_is_hardcoded():
+    """A real mailbox is configured, never written down.
+
+    The cast needs deliverable addresses the moment an email surface answers
+    one of them — `example.com` is reserved and a reply there is a hard bounce.
+    The answer is `SCENARIOS_MAILBOX`, sub-addressed per colleague.
+
+    What must not happen is somebody committing the mailbox instead of setting
+    it. This is a public repository: a real address in it is somebody's inbox,
+    for as long as the history exists, and no later commit takes it back.
+    """
+    import re
+
+    from harness import tenant
+
+    reserved = re.compile(
+        r"@([A-Za-z0-9.-]*\.)?(example\.(com|net|org)|example|invalid|test|localhost)$"
+    )
+    address = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+    found: list[str] = []
+    for path in _python_files():
+        for literal in address.findall(path.read_text(encoding="utf-8")):
+            _, _, host = literal.partition("@")
+            if not reserved.search("@" + host):
+                found.append(f"{path.relative_to(SUITE)}: {literal}")
+
+    assert not found, (
+        f"these look like real email addresses, written into the suite: "
+        f"{sorted(found)}. Set {tenant.MAILBOX_SETTING} instead — every "
+        f"colleague is sub-addressed from it, so one mailbox covers the cast "
+        f"and nothing anybody owns ends up in a public repository."
+    )
+
+
 def test_the_stand_ins_are_not_growing():
     """`fake_platform.py` is being retired, one journey at a time.
 

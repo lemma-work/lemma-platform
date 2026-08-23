@@ -254,6 +254,31 @@ is why a run leaves no new organizations behind, which matters because the
 product has no way to delete one. A stack the suite boots itself is the
 exception: it starts empty, so the tenant is built in it on first use.
 
+### One mailbox, a whole cast
+
+The cast's addresses default to `example.com`, which is reserved and delivers
+nowhere. That is right until an email surface answers one of them: the agent
+replies to whoever wrote in, and against a real provider that reply is a hard
+bounce at a domain that can never accept it — charged to the sending reputation
+of an account the product itself uses.
+
+```bash
+SCENARIOS_MAILBOX=you@gmail.example      # in the environment, or the backend .env
+```
+
+Every colleague is then sub-addressed out of it — `you+priya.raman@…`,
+`you+daniel.okonkwo@…` — so one inbox covers the cast, every address is
+distinct, and a reply is something you can go and read.
+
+Two rules the suite enforces rather than trusts:
+
+- **The mailbox is never written down.** This is a public repository, and a real
+  address committed to it is somebody's inbox for as long as the history exists.
+  `test_no_real_address_is_hardcoded` fails on any address whose domain is not a
+  reserved one.
+- **It may not be the Resend inbound domain.** Every address there routes into a
+  pod surface, so the cast would be writing to itself.
+
 ### Keeping it between runs
 
 A stack the suite boots throws its database away at the end, which is right for

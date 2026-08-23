@@ -35,9 +35,71 @@ from dataclasses import dataclass
 DOMAIN_SETTING = "SCENARIOS_TENANT_DOMAIN"
 DEFAULT_DOMAIN = "example.com"
 
+#: One real mailbox the whole cast lives in, through sub-addressing.
+#:
+#: `example.com` is reserved by RFC 2606 and nothing delivers there, which is
+#: exactly right until an email surface answers somebody: the agent replies to
+#: the address that wrote to it, and against a real provider that reply is a
+#: hard bounce at a domain that can never accept it — charged to the sending
+#: reputation of an account the product itself uses.
+#:
+#: So point this at a mailbox that does accept mail and every colleague becomes
+#: `you+priya.raman@…`. One inbox, as many distinct, deliverable addresses as
+#: the cast needs, and a reply somebody can actually go and read.
+#:
+#: Never a literal in the source: a real address in a public repository is
+#: somebody's inbox, forever. `test_no_real_address_is_hardcoded` enforces it.
+MAILBOX_SETTING = "SCENARIOS_MAILBOX"
+
 
 def domain() -> str:
     return os.getenv(DOMAIN_SETTING, "").strip() or DEFAULT_DOMAIN
+
+
+def mailbox() -> str:
+    """The real mailbox the cast sub-addresses into, if there is one.
+
+    Read from the deployment's own `.env` as well as the environment, because
+    that is where somebody putting a mailbox down will naturally put it — and a
+    setting that is quietly ignored where you wrote it is worse than one that
+    does not exist.
+    """
+    from harness.stack import load_deployment_env
+
+    direct = os.getenv(MAILBOX_SETTING, "").strip()
+    if direct:
+        return direct
+    try:
+        return (load_deployment_env().get(MAILBOX_SETTING, "") or "").strip()
+    except Exception:  # noqa: BLE001 — no .env is the ordinary case, not a failure
+        return ""
+
+
+def an_address_for(tag: str) -> str:
+    """A distinct address for `tag`, deliverable when a mailbox is configured.
+
+    Refuses the Resend inbound domain outright. Addresses there belong to
+    surfaces, not people: mail sent to one is either delivered back into a pod
+    — an agent answering a colleague who is itself — or rejected, and either
+    way the run stops meaning what it says.
+    """
+    configured = mailbox()
+    if not configured:
+        return f"{tag}@{domain()}"
+    local, _, host = configured.partition("@")
+    if not host:
+        raise AssertionError(
+            f"{MAILBOX_SETTING} must be a whole address like you@example.com, "
+            f"not {configured!r}"
+        )
+    inbound = (os.getenv("RESEND_INBOUND_DOMAIN", "") or "").strip().lower()
+    if inbound and host.lower() == inbound:
+        raise AssertionError(
+            f"{MAILBOX_SETTING} is on {host}, which is this deployment's Resend "
+            f"inbound domain. Every address there routes into a pod surface, so "
+            f"the cast would be writing to itself. Use an ordinary mailbox."
+        )
+    return f"{local}+{tag}@{host}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +141,7 @@ class Colleague:
 
     @property
     def email(self) -> str:
-        return f"{self.mailbox}@{domain()}"
+        return an_address_for(self.mailbox)
 
 
 CAST = (
