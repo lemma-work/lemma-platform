@@ -47,7 +47,13 @@ class SpeechProvider(ABC):
         *,
         voice: str | None = None,
         output_format: str = "mp3",
-    ) -> bytes: ...
+        language: str | None = None,
+    ) -> bytes:
+        """Speak ``text``.
+
+        ``language`` is the language the text is in, so a provider can pick a
+        voice that speaks it; an explicit ``voice`` overrides that.
+        """
 
 
 def _build(name: SpeechProviderName) -> SpeechProvider:

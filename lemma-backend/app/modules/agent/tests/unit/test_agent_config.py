@@ -45,6 +45,9 @@ EXPECTED = [
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),
     ("speech_provider", "SPEECH_PROVIDER", "auto"),
     ("deepgram_api_key", "DEEPGRAM_API_KEY", None),
+    ("speech_stt_language", "SPEECH_STT_LANGUAGE", "multi"),
+    ("speech_tts_voice", "SPEECH_TTS_VOICE", "aura-2-thalia-en"),
+    ("speech_tts_bitrate", "SPEECH_TTS_BITRATE", 48000),
     ("web_fetch_impersonate_browser", "WEB_FETCH_IMPERSONATE_BROWSER", True),
 ]
 FACTORY_FIELDS = {"local_agent_runtime_config_path"}

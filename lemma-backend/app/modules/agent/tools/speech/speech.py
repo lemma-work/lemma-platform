@@ -129,7 +129,10 @@ async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayRespon
     try:
         provider = get_speech_provider()
         audio_bytes = await provider.synthesize(
-            text, voice=request.voice, output_format=output_format
+            text,
+            voice=request.voice,
+            output_format=output_format,
+            language=request.language,
         )
     except Exception as exc:
         return SayResponse(success=False, error=f"Speech synthesis failed: {exc}")

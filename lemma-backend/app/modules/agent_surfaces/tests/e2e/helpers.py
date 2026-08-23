@@ -533,9 +533,14 @@ async def fake_speech_provider(monkeypatch):
 
     class _FakeSpeechProvider:
         async def synthesize(
-            self, text: str, *, voice: str | None = None, output_format: str = "mp3"
+            self,
+            text: str,
+            *,
+            voice: str | None = None,
+            output_format: str = "mp3",
+            language: str | None = None,
         ) -> bytes:
-            del voice, output_format
+            del voice, output_format, language
             return b"FAKE-AUDIO-" + text.encode("utf-8")[:64]
 
     fake = _FakeSpeechProvider()
