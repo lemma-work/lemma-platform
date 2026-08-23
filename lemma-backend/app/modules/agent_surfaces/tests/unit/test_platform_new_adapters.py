@@ -91,6 +91,57 @@ def test_whatsapp_parse_text_message():
     assert event.external_message_id == "wamid-test-001"
 
 
+def _whatsapp_image_payload(image: dict) -> dict:
+    payload = _whatsapp_text_payload()
+    message = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+    message.pop("text")
+    message["type"] = "image"
+    message["image"] = image
+    return payload
+
+
+def test_whatsapp_image_caption_is_the_message_text():
+    """A photo sent with a question must arrive as the question.
+
+    WhatsApp puts a media caption on the media object, never on ``text.body``
+    (a media message has no ``text`` at all) — reading the wrong one delivered
+    the bare word "image" and dropped what the person actually asked.
+    """
+    parser = WhatsAppMessageParser()
+    event = parser.parse(
+        _whatsapp_image_payload(
+            {
+                "id": "media-001",
+                "mime_type": "image/jpeg",
+                "caption": "Bro the bold text feels weird here",
+            }
+        )
+    )
+
+    assert event is not None
+    assert event.message_text == "Bro the bold text feels weird here"
+    assert event.metadata["attachments"] == [
+        {
+            "id": "media-001",
+            "name": "image",
+            "content_type": "image",
+            "mime_type": "image/jpeg",
+            "size": None,
+            "download_url": None,
+        }
+    ]
+
+
+def test_whatsapp_image_without_a_caption_still_says_something_arrived():
+    parser = WhatsAppMessageParser()
+    event = parser.parse(
+        _whatsapp_image_payload({"id": "media-002", "mime_type": "image/png"})
+    )
+
+    assert event is not None
+    assert event.message_text == "image"
+
+
 def test_whatsapp_parse_empty_entry():
     parser = WhatsAppMessageParser()
     assert parser.parse({}) is None

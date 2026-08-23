@@ -152,9 +152,13 @@ class WhatsAppMessageParser:
     def _message_body(self, msg: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         """The readable text of a message, and any attachment, by type.
 
-        WhatsApp puts the readable part somewhere different for each type, and a
-        media message's caption is optional -- hence the fall back to the type
-        name, so the agent at least knows something arrived.
+        WhatsApp puts the readable part somewhere different for each type. A
+        media message's caption lives on the *media* object -- ``image.caption``,
+        never ``text.body``, which a media message does not have at all -- and
+        reading the wrong one is why a photo sent with a question arrived at the
+        agent as the bare word "image" with the question dropped. The type name
+        stays as the fallback for media genuinely sent without a caption, so the
+        agent at least knows something arrived.
         """
         msg_type = msg.get("type", "text")
         if msg_type == "text":
@@ -162,7 +166,9 @@ class WhatsAppMessageParser:
         if msg_type == "interactive":
             return self._interactive_title(payload_section(msg, "interactive")), []
         attachment = self._parse_attachment(msg, msg_type)
-        caption = payload_section(msg, "text").get("body", "") or msg_type
+        caption = (
+            str(payload_section(msg, msg_type).get("caption") or "").strip() or msg_type
+        )
         return caption, ([attachment] if attachment else [])
 
     def _interactive_title(self, interactive: dict[str, Any]) -> str:
@@ -173,6 +179,13 @@ class WhatsAppMessageParser:
         return str(interactive)
 
     def _parse_attachment(self, msg: dict, msg_type: str) -> dict[str, Any] | None:
+        """One inbound media object, as an attachment the ingest step can save.
+
+        ``filename`` is sent for documents and for nothing else, so an image or
+        a voice note has only its mime type to be named by. Ingest completes the
+        name from the mime type of the bytes it actually downloads; the type name
+        alone is what the prompt block falls back to when the file is not saved.
+        """
         media_data = msg.get(msg_type)
         if not isinstance(media_data, dict):
             return None
