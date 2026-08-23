@@ -10,12 +10,11 @@ pytestmark = [journey("Building a pod"), capability("Put people in a pod")]
 
 
 @pytest.fixture
-async def team(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+async def team(world, run):
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_USER")
     return alice, bob, organization, pod
 
@@ -40,8 +39,7 @@ async def test_a_member_can_be_found(team):
 @covers("pod.join_request.me", "pod.join_request.create")
 async def test_a_person_sees_their_own_request(world, team):
     alice, _bob, organization, pod = team
-    carol = await world.new_person("carol")
-    await carol.accepts(await alice.invites(carol, to=organization))
+    carol = await world.person("wei")
 
     assert await carol.my_join_request_for(pod) in (None, {}, []), (
         "someone who has asked for nothing should have nothing waiting"

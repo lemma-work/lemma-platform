@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.steps.agent import answers, attempts
+from harness.credentials import needs
+from harness.environment import MODEL_IS_REAL, OPEN_SIGNUP
 from harness.steps.datastore import column
 
 pytestmark = [journey("Agents and conversations"), capability("Define an agent")]
@@ -13,9 +14,8 @@ pytestmark = [journey("Agents and conversations"), capability("Define an agent")
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("customer-support")
 
 
 @scenario("A person changes what an agent does")
@@ -177,6 +177,10 @@ class TestModelProfiles:
     @covers("agent.runtime.profiles.list")
     async def test_an_outsider_cannot_see_profiles(self, world, pod):
         alice, _the_pod = pod
+        # Somebody in no organization at all, which is what this promise is
+        # about. None of the standing cast is that, so this one stays a
+        # fresh person and says so.
+        needs(OPEN_SIGNUP)
         outsider = await world.new_person("outsider")
 
         response = await outsider.api.call(
@@ -197,6 +201,7 @@ async def test_a_data_grant_brings_its_own_tools(pod):
     see the table it had just been given. A tool no toolset exposes fails the
     run, so this passing is the derivation working.
     """
+    needs(MODEL_IS_REAL)
     alice, the_pod = pod
     agent = await alice.creates_an_agent(in_pod=the_pod, toolsets=[])
     table = await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
@@ -215,11 +220,9 @@ async def test_a_data_grant_brings_its_own_tools(pod):
     conversation = await alice.starts_a_conversation(
         in_pod=the_pod,
         with_agent=agent["name"],
-        saying="What is in the table?",
-        where_the_agent=[
-            attempts("pod_get_records", table_name=table["name"]),
-            answers("Nothing yet."),
-        ],
+        saying=(
+            f"Read the {table['name']} table and tell me what rows are in it."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
 
@@ -251,17 +254,17 @@ async def test_the_universal_abilities_need_no_declaring(pod):
     person a question and requesting approval — the seam where a human gets to
     say no, which was never made safer by being optional.
     """
+    needs(MODEL_IS_REAL)
     alice, the_pod = pod
     agent = await alice.creates_an_agent(in_pod=the_pod, toolsets=[])
 
     conversation = await alice.starts_a_conversation(
         in_pod=the_pod,
         with_agent=agent["name"],
-        saying="Plan something.",
-        where_the_agent=[
-            attempts("write_todos", todos=["- [ ] Work out what to do"]),
-            answers("Planned."),
-        ],
+        saying=(
+            "Before you do anything else, write yourself a task list for "
+            "working out what to do here. Just the list."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
 

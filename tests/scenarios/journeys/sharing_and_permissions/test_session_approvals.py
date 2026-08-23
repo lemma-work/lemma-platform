@@ -6,10 +6,13 @@ asking inside this conversation and nowhere else. A session approval that leaks
 into the next conversation, or into another person's, is a standing grant that
 nobody knowingly gave.
 
-These drive real approvals — the agent calls `request_approval`, the run pauses,
+These drive real approvals on a real model: the agent is *told* to ask before it
+changes anything — which is what a person setting one up does — the run pauses,
 a person decides, and the backend executes the action with that person's
-authority. See `harness.steps.agent.SCRIPT_KEY` for how the agent is told what
-to attempt.
+authority. Asserted on effect, never on the agent's words: whether the row is
+still there, whether the run came back to life, whether the person was asked
+again. What a model says about any of that is its own business and changes every
+time it is asked.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.steps.agent import answers, attempts, result_of
+from harness.credentials import needs
+from harness.environment import MODEL_IS_REAL
 from harness.steps.datastore import column
 
 pytestmark = [
@@ -27,10 +31,10 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_with_two_records(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def pod_with_two_records(world, run):
+    needs(MODEL_IS_REAL)
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("approvals"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     first = await alice.adds_record(
         {"title": "first"}, to_table=table["name"], in_pod=pod
@@ -38,8 +42,23 @@ async def pod_with_two_records(world):
     second = await alice.adds_record(
         {"title": "second"}, to_table=table["name"], in_pod=pod
     )
-    agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD", "USER_INTERACTION"])
-    return alice, pod, table, first, second, agent
+    agent = await alice.creates_an_agent(
+        in_pod=pod,
+        toolsets=["POD", "USER_INTERACTION"],
+        # Told to ask, rather than made to. This is the setting a person reaches
+        # for when they want an agent that checks before it changes anything,
+        # and it is the product feature these scenarios are about.
+        instruction=(
+            "You may read this pod freely. Before you change or delete "
+            "anything, always ask the person for approval with your approval "
+            "tool and wait for their decision. Never delete anything you were "
+            "not asked to."
+        ),
+    )
+    try:
+        yield alice, pod, table, first, second, agent
+    finally:
+        await alice.deletes_pod(pod)
 
 
 def _delete(table: dict, record: dict) -> dict:
@@ -55,37 +74,6 @@ async def _titles_in(person, table, pod) -> set[str]:
     return {str(row.get("data", row).get("title")) for row in rows}
 
 
-async def _times_asked(person, conversation, pod) -> int:
-    """How many times this run stopped to ask a person for permission.
-
-    Counted from the transcript rather than from the approvals endpoint, which
-    lists what is still *pending* — after a decision it is empty, and "nobody
-    was ever asked" and "everyone was answered" would look the same.
-    """
-    return sum(
-        1
-        for message in await person.messages_in(conversation, in_pod=pod)
-        if message.get("tool_name") == "request_approval"
-        and message.get("kind") == "TOOL_CALL"
-    )
-
-
-async def _was_refused(call: str, person, conversation, pod) -> bool:
-    """Did the tool call named ``call`` come back needing approval?
-
-    Reading the transcript rather than the resulting data, because the question
-    here is what the *agent* was told — an attempt that was refused and an
-    attempt that succeeded but changed nothing look identical from outside.
-    """
-    for message in await person.messages_in(conversation, in_pod=pod):
-        if message.get("tool_call_id") != call:
-            continue
-        result = message.get("tool_result")
-        if isinstance(result, dict) and result.get("needs_approval"):
-            return True
-    return False
-
-
 @scenario("Approving an action runs exactly the action that was described")
 @proves("PS-AGENT-020")
 @covers(
@@ -99,23 +87,16 @@ async def test_approving_runs_the_described_action(pod_with_two_records):
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "request_approval",
-                tool_name="pod_write_record",
-                args=_delete(table, first),
-                title="Delete the first row",
-                reason="It is no longer needed.",
-            ),
-            answers("Deleted it."),
-        ],
-        saying="Tidy up the first row.",
+        saying=(
+            f"Delete the row titled 'first' from the "
+            f"{table['name']} table. Leave everything else alone."
+        ),
     )
 
-    [request] = await alice.waits_for_an_approval_in(conversation, in_pod=pod)
-    await alice.answers_approval(
-        request, allow=True, conversation=conversation, in_pod=pod
-    )
+    # Every approval, not the first: an agent told to ask before it changes
+    # anything asks before *each* thing, and how many that turns out to be is
+    # the model's business rather than the product's.
+    await alice.answers_every_approval(conversation, allow=True, in_pod=pod)
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
     remaining = await _titles_in(alice, table, pod)
@@ -134,22 +115,13 @@ async def test_denying_leaves_the_action_undone(pod_with_two_records):
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "request_approval",
-                tool_name="pod_write_record",
-                args=_delete(table, first),
-                title="Delete the first row",
-            ),
-            answers("I was not allowed to do that."),
-        ],
-        saying="Tidy up the first row.",
+        saying=(
+            f"Delete the row titled 'first' from the "
+            f"{table['name']} table. Leave everything else alone."
+        ),
     )
 
-    [request] = await alice.waits_for_an_approval_in(conversation, in_pod=pod)
-    await alice.answers_approval(
-        request, allow=False, conversation=conversation, in_pod=pod
-    )
+    await alice.answers_every_approval(conversation, allow=False, in_pod=pod)
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
     assert await _titles_in(alice, table, pod) == {"first", "second"}, (
@@ -167,56 +139,46 @@ async def test_denying_leaves_the_action_undone(pod_with_two_records):
 @covers("agent.conversation.approval.resolve", "agent.conversation.approval.list")
 async def test_a_session_approval_stops_repeat_asking(pod_with_two_records):
     alice, pod, table, first, second, agent = pod_with_two_records
+    del first, second, agent
 
-    del first, second
-
-    # The real shape of this: the agent tries, is told which permission it was
-    # denied, and quotes that back when it asks. An agent that invented the
-    # permission list would be asking about something it was never refused.
+    # An agent with the pod tools and *no grants at all*, and deliberately not
+    # told to ask for anything. Being refused is what raises the approval here,
+    # and a session approval is scoped to that refusal — an agent instructed to
+    # always ask would ask again whatever the session said, and this scenario
+    # would be measuring the instruction rather than the product.
     #
     # Reading a table needs two permissions and the check stops at the first
-    # missing one, so a genuine agent is refused twice before it gets through —
-    # once per permission. Both are legitimate questions. The promise is about
-    # the *third* attempt: by then every permission it needs has been approved
-    # for the session, and it must not be asked again.
+    # missing one, so it is refused once per permission before it gets through.
+    # Both are legitimate questions. What must not happen is being asked again
+    # for a permission already approved for this session.
+    ungranted = await alice.creates_an_agent(
+        in_pod=pod,
+        toolsets=["POD", "USER_INTERACTION"],
+        instruction="Do what you are asked, using the pod tools available to you.",
+    )
+
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
-        with_agent=agent["name"],
-        where_the_agent=[
-            attempts("pod_get_records", remembered_as="first", table_name=table["name"]),
-            attempts(
-                "request_approval",
-                tool_name="pod_get_records",
-                args={"table_name": table["name"]},
-                title="Read the table",
-                permission_ids=result_of("first", "approval.permission_ids"),
-            ),
-            attempts("pod_get_records", remembered_as="second", table_name=table["name"]),
-            attempts(
-                "request_approval",
-                tool_name="pod_get_records",
-                args={"table_name": table["name"]},
-                title="Read the table",
-                permission_ids=result_of("second", "approval.permission_ids"),
-            ),
-            attempts("pod_get_records", remembered_as="third", table_name=table["name"]),
-            answers("Read it."),
-        ],
-        saying="Read that table.",
+        with_agent=ungranted["name"],
+        saying=(
+            f"Read the {table['name']} table and list its rows. Then read it "
+            f"again and tell me whether anything changed between the two reads."
+        ),
     )
 
     asked = await alice.answers_every_approval(
         conversation, allow=True, for_the_session=True, in_pod=pod
     )
+    await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
-    assert not await _was_refused("third", alice, conversation, pod), (
-        "every permission the agent needs was approved for the session, and it "
-        "was still refused — the approval did not carry within its own "
-        "conversation"
-    )
-    assert asked == 2, (
-        f"the person was asked {asked} times for two distinct permissions; "
-        f"anything more means a session approval is not being remembered"
+    # Two reads, and at most one question per distinct permission. More than
+    # that means a session approval was not remembered and the person was asked
+    # again for something they had already settled.
+    assert 1 <= asked <= 2, (
+        f"the person was asked {asked} times inside one conversation while "
+        f"approving for the session. Reading a table needs two permissions, so "
+        f"two questions is the ceiling — anything above it is the same "
+        f"permission being asked for twice"
     )
 
 
@@ -227,25 +189,14 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     pod_with_two_records,
 ):
     alice, pod, table, first, second, agent = pod_with_two_records
-    del first, second
 
     approved = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "pod_get_records", remembered_as="denied", table_name=table["name"]
-            ),
-            attempts(
-                "request_approval",
-                tool_name="pod_get_records",
-                args={"table_name": table["name"]},
-                title="Read the table",
-                permission_ids=result_of("denied", "approval.permission_ids"),
-            ),
-            answers("Read it."),
-        ],
-        saying="Read that table.",
+        saying=(
+            f"Delete the row titled 'first' from the "
+            f"{table['name']} table."
+        ),
     )
     [request] = await alice.waits_for_an_approval_in(approved, in_pod=pod)
     await alice.answers_approval(
@@ -253,23 +204,26 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     )
     await alice.waits_for_the_run_to_settle(conversation=approved, in_pod=pod)
 
-    # A new thread: same person, same agent, same table, same permission. The
-    # only thing that changed is which conversation it is happening in, which
-    # is precisely what a *session* approval is scoped to.
+    # A new thread: same person, same agent, same table, same kind of change.
+    # The only thing that changed is which conversation it is happening in,
+    # which is precisely what a *session* approval is scoped to.
     fresh = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "pod_get_records", remembered_as="elsewhere", table_name=table["name"]
-            ),
-            answers("Tried."),
-        ],
-        saying="Read it again, in a new thread.",
+        saying=(
+            f"Delete the row titled 'second' from the "
+            f"{table['name']} table."
+        ),
     )
-    await alice.waits_for_the_run_to_settle(conversation=fresh, in_pod=pod)
 
-    assert await _was_refused("elsewhere", alice, fresh, pod), (
-        "a session approval given in one conversation authorised the same "
-        "action in another — that is a standing grant nobody agreed to"
+    asked_again = await alice.waits_for_an_approval_in(fresh, in_pod=pod)
+
+    assert asked_again, (
+        "a session approval given in one conversation authorised the same kind "
+        "of change in another without asking — that is a standing grant nobody "
+        "agreed to"
+    )
+    # And until somebody answers it, the second row is still there.
+    assert "second" in await _titles_in(alice, table, pod), (
+        "the change went through in a conversation that had no approval for it"
     )

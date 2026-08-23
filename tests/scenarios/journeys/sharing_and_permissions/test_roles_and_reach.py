@@ -22,12 +22,14 @@ pytestmark = [
 
 
 @pytest.fixture
-async def a_pod_and_a_table(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def a_pod_and_a_table(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("reach"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
-    return alice, organization, pod, table
+    try:
+        yield alice, alice.organization, pod, table
+    finally:
+        await alice.deletes_pod(pod)
 
 
 async def _can_read(person, table, pod) -> bool:
@@ -43,9 +45,15 @@ async def _can_read(person, table, pod) -> bool:
     return response.status_code < 400
 
 
-async def _joins(world, alice, organization, pod, label, *, as_role):
-    person = await world.new_person(label)
-    await person.accepts(await alice.invites(person, to=organization))
+async def _joins(world, alice, pod, who, *, as_role):
+    """One of the cast joins this pod in a role.
+
+    No invitation: they already work at Vantage Freight, which is the point of a
+    standing cast. What a scenario is arranging here is who reaches this *pod*,
+    and starting that from "sign a stranger up" was always scaffolding rather
+    than something a person does.
+    """
+    person = await world.person(who)
     await alice.adds(person, to_pod=pod, as_role=as_role)
     return person
 
@@ -77,8 +85,8 @@ async def test_a_role_grant_follows_the_role(world, a_pod_and_a_table):
     # Bob holds the role from the start; carol is given it afterwards. Both must
     # end up with the same reach, or a grant to a role is really a grant to
     # whoever happened to be standing there when it was made.
-    bob = await _joins(world, alice, organization, pod, "bob", as_role="auditor")
-    carol = await _joins(world, alice, organization, pod, "carol", as_role="POD_VIEWER")
+    bob = await _joins(world, alice, pod, "sofia", as_role="auditor")
+    carol = await _joins(world, alice, pod, "wei", as_role="POD_VIEWER")
     await alice.gives(carol, roles=["auditor"], in_pod=pod)
 
     for person in (bob, carol):
@@ -111,7 +119,7 @@ async def test_losing_a_role_takes_back_its_grant(world, a_pod_and_a_table):
         ],
         in_pod=pod,
     )
-    bob = await _joins(world, alice, organization, pod, "bob", as_role="auditor")
+    bob = await _joins(world, alice, pod, "sofia", as_role="auditor")
     await eventually(
         lambda: _can_read(bob, table, pod),
         lambda allowed: allowed,
@@ -142,7 +150,7 @@ async def test_losing_a_role_takes_back_its_grant(world, a_pod_and_a_table):
 )
 async def test_narrowing_reach_keeps_workload_grants(world, a_pod_and_a_table):
     alice, organization, pod, table = a_pod_and_a_table
-    bob = await _joins(world, alice, organization, pod, "bob", as_role="POD_EDITOR")
+    bob = await _joins(world, alice, pod, "sofia", as_role="POD_EDITOR")
 
     agent = await alice.creates_an_agent(in_pod=pod)
     grants = [

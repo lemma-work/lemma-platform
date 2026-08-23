@@ -284,6 +284,254 @@ def test_stack_decides_how_the_product_behaves():
     )
 
 
+def test_a_target_is_vetted_before_any_scenario_can_write():
+    """Nothing reaches a deployment until the suite has agreed it may.
+
+    This suite creates real things and deletes most of them. Pointed at the
+    wrong host it does that inside somebody's real workspace, and the
+    organizations it leaves there are permanent — the product has no way to
+    delete one. So the check goes in front of the first write, not after the
+    first surprise.
+
+    Asserted structurally because the failure it prevents is somebody quietly
+    unhooking it: a `world` that no longer waits on `target`, or a `target` that
+    no longer asks.
+    """
+    conftest = SUITE / "conftest.py"
+    tree = ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+
+    assert "target" in functions, (
+        "conftest has no `target` fixture, so nothing asks the deployment what "
+        "it is or whether this run may write to it"
+    )
+    vets = any(
+        isinstance(node, ast.Call)
+        and getattr(node.func, "attr", getattr(node.func, "id", None))
+        == "confirm_writable"
+        for node in ast.walk(functions["target"])
+    )
+    assert vets, (
+        "the `target` fixture no longer calls confirm_writable, so the suite "
+        "would write to whatever host it was handed"
+    )
+
+    world_args = {argument.arg for argument in functions["world"].args.args}
+    assert "target" in world_args, (
+        "the `world` fixture no longer depends on `target`, so a scenario can "
+        "reach a deployment that was never vetted"
+    )
+
+
+def test_production_is_refused_unless_somebody_said_so():
+    """A production target is a decision, never a default."""
+    import os
+
+    from harness.environment import ALLOW_PRODUCTION, Deployment, Unreachable
+    from harness.environment import confirm_writable
+
+    production = Deployment(
+        base_url="https://lemma.example",
+        environment="production",
+        llm_mode="real",
+        instance_id="prod-1",
+        configuration={"environment": "production", "llm_mode": "real"},
+    )
+
+    os.environ.pop(ALLOW_PRODUCTION, None)
+    try:
+        confirm_writable(production)
+    except Unreachable as refusal:
+        assert ALLOW_PRODUCTION in str(refusal), refusal
+    else:
+        raise AssertionError(
+            "the suite would have written to a production deployment without "
+            "anybody saying it could"
+        )
+
+
+def test_a_target_pointed_somewhere_else_is_refused():
+    """Naming the instance is what turns a mistyped host into a stopped run."""
+    import os
+
+    from harness.environment import EXPECTED_INSTANCE, Deployment, Unreachable
+    from harness.environment import confirm_writable
+
+    somewhere_else = Deployment(
+        base_url="https://staging.example",
+        environment="development",
+        llm_mode="real",
+        instance_id="staging-9",
+        configuration={"llm_mode": "real"},
+    )
+
+    os.environ[EXPECTED_INSTANCE] = "dev-scenarios-1"
+    try:
+        confirm_writable(somewhere_else)
+    except Unreachable as refusal:
+        assert "staging-9" in str(refusal), refusal
+    else:
+        raise AssertionError("the suite wrote to an instance it was not pointed at")
+    finally:
+        os.environ.pop(EXPECTED_INSTANCE, None)
+
+
+def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
+    """Silence is not consent, and this is where that would go wrong quietly.
+
+    Production does not report its security posture — so every gate reads as
+    absent. The scenarios that need those gates relaxed must skip there. Read
+    the other way round, a missing fact would look like a satisfied one and the
+    suite would try to sign people up against a deployment that never agreed.
+    """
+    from harness.environment import LOOPBACK_REACHABLE, OPEN_SIGNUP, Deployment
+
+    silent = Deployment(
+        base_url="https://lemma.example",
+        environment="production",
+        llm_mode="real",
+        instance_id=None,
+        configuration={"environment": "production", "llm_mode": "real"},
+    )
+
+    assert OPEN_SIGNUP.missing_on(silent), (
+        "a deployment that said nothing about its signup gates was read as "
+        "having them open"
+    )
+    assert LOOPBACK_REACHABLE.missing_on(silent), (
+        "a deployment that said nothing was read as able to call back to this "
+        "machine"
+    )
+
+
+def test_a_target_too_old_to_describe_itself_stops_the_run():
+    """An older Lemma answers the probe without saying how it is configured.
+
+    Treated as a stop rather than a shrug: every scenario decides from that
+    answer whether it can prove anything, so a run against a target that cannot
+    give one is a run whose greenness means nothing.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from harness.environment import Unreachable, describe, forget
+
+    class OldLemma(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — http.server's spelling
+            body = json.dumps({"status": "ok", "capabilities": {}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), OldLemma)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address[:2]
+    try:
+        describe(f"http://{host}:{port}")
+    except Unreachable as refusal:
+        assert "how it is configured" in str(refusal), refusal
+    else:
+        raise AssertionError("the suite ran against a target it could not read")
+    finally:
+        server.shutdown()
+        server.server_close()
+        forget()
+
+
+def test_a_pod_or_an_organization_cannot_be_named_untraceably():
+    """The two things whose names live somewhere that stands between runs.
+
+    A pod's name lives in its organization and an organization's in the
+    deployment, so a literal there is a 409 for whoever runs second — and
+    cleanup cannot tell it from somebody's own work. Everything else a scenario
+    makes is named *inside* a pod the scenario also made and deletes, and keeps
+    the readable name it is actually about. That distinction came out of doing
+    the migration; guessing it beforehand would have produced a rule that cried
+    wolf on two thirds of the suite.
+
+    Checked on the value that reaches the product rather than by reading the
+    source, because a constant, an f-string and a name built in a helper all
+    arrive the same way.
+    """
+    import inspect
+
+    from harness.run import must_be_traceable
+    from harness.steps.identity import IdentitySteps
+    from harness.steps.pod import PodSteps
+
+    for owner, verb, what in (
+        (PodSteps, "creates_a_pod", "pod"),
+        (IdentitySteps, "creates_an_organization", "organization"),
+    ):
+        body = inspect.getsource(getattr(owner, verb))
+        assert "must_be_traceable" in body, (
+            f"{verb} no longer checks that the name it is given can be traced "
+            f"to a run, so a scenario can leave a {what} the next run collides "
+            f"with and cleanup cannot recognise"
+        )
+        assert "standing" in body, (
+            f"{verb} lost its `standing` escape hatch; provisioning has to be "
+            f"able to make the tenant's own {what}s under their real names"
+        )
+
+    try:
+        must_be_traceable("Support", what="pod")
+    except AssertionError as refusal:
+        assert "run.name" in str(refusal), refusal
+    else:
+        raise AssertionError("a literal name was accepted for a durable resource")
+
+
+def test_no_scenario_scripts_the_model():
+    """The agent is asked in words, never handed the tool call to make.
+
+    The seam that allowed it is gone from the harness, and this is what stops it
+    coming back — because it is genuinely tempting. Scripting a turn is the only
+    way to *guarantee* an agent tries the dangerous thing, and a real model asked
+    politely might not.
+
+    What it costs is the thing this suite exists for. A scripted turn proves
+    Lemma refused *that call*; it cannot prove that a person typing a sentence
+    ends up refused. And against a deployment it is worse than nothing:
+    `e2e_llm_mode` is `real` there, so the script is ignored in silence and the
+    scenario asserts a scripted model's behaviour against a thinking one. A
+    scenario in the live lane had been doing exactly that, and passing, for
+    months.
+
+    What replaced it is the product's own lever: tell the agent how to behave
+    with an `instruction`, then assert on what happened.
+    """
+    import harness.steps.agent as agent_steps
+
+    for gone in ("attempts", "answers", "result_of", "SCRIPT_KEY"):
+        assert not hasattr(agent_steps, gone), (
+            f"harness.steps.agent.{gone} is back. Scripting the model makes a "
+            f"scenario a statement about the script; give the agent an "
+            f"`instruction` and assert on what happens instead"
+        )
+
+    offenders = [
+        f"{path.relative_to(SUITE)}:{node.lineno}"
+        for path in _scenario_files()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.keyword) and node.arg == "where_the_agent"
+    ]
+    assert not offenders, (
+        "these scenarios hand the agent its turns instead of asking it:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 

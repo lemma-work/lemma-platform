@@ -64,13 +64,13 @@ def _svix_headers(body: bytes) -> dict[str, str]:
 
 
 @pytest.fixture
-async def mailbox(world):
+async def mailbox(world, run):
     """A pod reachable by email, with the mail Lemma sends captured."""
     fake = start_fake_resend()
     try:
-        alice = await world.new_person("alice")
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        alice = await world.person("daniel")
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
         del organization
         # No connected account: an email surface authenticates with the

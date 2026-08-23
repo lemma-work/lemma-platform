@@ -11,7 +11,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.steps.agent import answers, attempts
+from harness.credentials import needs
+from harness.environment import MODEL_IS_REAL
 from harness.steps.datastore import column
 from harness.waiting import eventually
 
@@ -22,11 +23,11 @@ pytestmark = [
 
 
 @pytest.fixture
-async def after_a_run(world):
+async def after_a_run(world, run):
     """An organization whose agent has done something worth recording."""
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     conversation = await alice.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"], saying="Say something short."
@@ -127,28 +128,27 @@ async def test_an_unknown_price_never_blocks_a_run(after_a_run):
 @scenario("A run that fails still costs, and is still recorded")
 @proves("PS-OPS-003")
 @covers("usage.organization.events.list", "agent.conversation.get")
-async def test_a_failed_run_is_recorded_too(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_a_failed_run_is_recorded_too(world, run):
+    needs(MODEL_IS_REAL)
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD"])
 
-    # A run that does real model work and then hits a refusal. The tokens were
-    # spent whatever the outcome, so the ledger must show them.
+    # A run that does real model work and then does not get what it wanted. The
+    # row named here has never existed, so whatever the agent tries, it will not
+    # find it — and the tokens were spent looking either way, which is the whole
+    # of this promise. Asked in words rather than by injecting the failing call:
+    # what matters is that a run which ends unhappily still reaches the ledger,
+    # and that is true however the agent arrives at being unable to help.
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        where_the_agent=[
-            attempts(
-                "pod_write_record",
-                action="delete",
-                table_name=table["name"],
-                record_id="00000000-0000-0000-0000-000000000001",
-            ),
-            answers("I could not do that."),
-        ],
-        saying="Delete that row.",
+        saying=(
+            f"Delete the row with id 00000000-0000-0000-0000-000000000001 from "
+            f"the {table['name']} table."
+        ),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 

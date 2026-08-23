@@ -17,6 +17,7 @@ import time
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.run import a_name_for
 from harness.waiting import eventually
 
 pytestmark = [
@@ -37,13 +38,23 @@ STILL_PROMPT = 90.0
 
 
 @pytest.fixture
-async def two_pods(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    busy = await alice.creates_a_pod()
-    quiet = await alice.creates_a_pod()
+async def two_pods(world, run):
+    """Two pods of this run's own, because this journey fills one on purpose.
+
+    The one place in this suite where a pod per scenario is still right: the
+    burst is the point, and a standing pod left holding it would make every
+    later document scenario there wait behind work that is never going to
+    finish.
+    """
+    alice = await world.person("daniel")
+    busy = await alice.creates_a_pod(named=run.name("busy"))
+    quiet = await alice.creates_a_pod(named=run.name("quiet"))
     agent = await alice.creates_an_agent(in_pod=quiet)
-    return alice, busy, quiet, agent
+    try:
+        yield alice, busy, quiet, agent
+    finally:
+        for pod in (busy, quiet):
+            await alice.deletes_pod(pod)
 
 
 async def _upload(alice, pod, name: str):
@@ -57,8 +68,13 @@ async def _upload(alice, pod, name: str):
 
 
 async def _burst(alice, pod, prefix: str):
+    # Named for this run and this burst. The pod is a standing one with other
+    # runs' files already in it, and a fixed name would come back 409 CONFLICT —
+    # which this scenario would then have to tell apart from the 503 it is
+    # actually about. Better to make the collision impossible than to read it.
+    stamp = a_name_for(prefix)
     return await asyncio.gather(
-        *(_upload(alice, pod, f"{prefix}-{index}.txt") for index in range(BURST))
+        *(_upload(alice, pod, f"{stamp}-{index}.txt") for index in range(BURST))
     )
 
 
@@ -98,15 +114,18 @@ async def test_a_declined_upload_can_be_retried(two_pods):
     # Once the burst has drained, the same upload has to go through. Declining
     # for capacity and declining forever are the same thing to a person who
     # never retries, and only one of them is backpressure.
+    # Named once, outside the retry, because the scenario is about *the same*
+    # upload going through on a later attempt rather than a different one.
+    retried = a_name_for("after-the-rush") + ".txt"
     landed = await eventually(
-        lambda: _upload(alice, busy, "after-the-rush.txt"),
+        lambda: _upload(alice, busy, retried),
         lambda response: response.status_code < 400,
         describe="the staging pool to take an upload again",
         timeout=90.0,
     )
 
     stored = await alice.opens_file(landed.json()["path"], in_pod=busy)
-    assert str(stored.get("path")).endswith("after-the-rush.txt"), stored
+    assert str(stored.get("path")).endswith(retried), stored
 
 
 @scenario("A pod taking a burst of uploads does not stall another pod")

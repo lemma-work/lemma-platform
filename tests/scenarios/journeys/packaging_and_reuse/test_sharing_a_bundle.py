@@ -14,6 +14,8 @@ import zipfile
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import BUNDLE_QUOTA
 from harness.steps.datastore import column
 
 pytestmark = [
@@ -23,11 +25,11 @@ pytestmark = [
 
 
 @pytest.fixture
-async def a_shared_bundle(world):
+async def a_shared_bundle(world, run):
     """A pod exported, and the link its owner would send somebody."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    needs(BUNDLE_QUOTA)
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     await alice.adds_record(
         {"title": "worth sharing"}, to_table=table["name"], in_pod=pod
@@ -46,7 +48,7 @@ async def test_a_stranger_can_read_a_shared_bundle(world, a_shared_bundle):
     del alice, pod
 
     # Nobody: a signed-in person with no connection to the pod at all.
-    stranger = await world.new_person("stranger")
+    stranger = await world.person("hannah")
     fetched = await stranger.api.call("GET", link)
 
     assert fetched.status_code == 200, (
@@ -73,7 +75,7 @@ async def test_reading_a_bundle_grants_nothing_else(world, a_shared_bundle):
     alice, pod, table, link = a_shared_bundle
     del alice, table
 
-    stranger = await world.new_person("stranger")
+    stranger = await world.person("hannah")
     await stranger.api.call("GET", link)
 
     # Seeing a bundle is seeing a snapshot somebody chose to send. It must not
@@ -89,7 +91,7 @@ async def test_a_forged_link_is_refused(world, a_shared_bundle):
     del alice, pod, table
 
     tampered = link[:-4] + ("aaaa" if not link.endswith("aaaa") else "bbbb")
-    refused = await (await world.new_person("stranger")).api.call("GET", tampered)
+    refused = await (await world.person("hannah")).api.call("GET", tampered)
 
     assert refused.status_code >= 400, (
         f"a tampered download token was honoured ({refused.status_code}), which "

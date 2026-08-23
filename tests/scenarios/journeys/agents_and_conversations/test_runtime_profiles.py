@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import OPEN_SIGNUP
 
 #: A real, resolvable public host. The platform refuses a base URL it cannot
 #: resolve — the same guard that stops a connector pointing at internal
@@ -21,22 +23,28 @@ pytestmark = [
 
 @pytest.fixture
 async def org(world):
-    alice = await world.new_person("alice")
-    return alice, await alice.creates_an_organization()
+    """Priya, who owns Vantage Freight.
 
+    An organization's model providers are organization administration, so this
+    one needs the owner rather than the editor who runs the pods. Daniel would
+    be refused for want of `org.update`, and the scenario would be reporting a
+    missing permission as though it were the behaviour under test.
+    """
+    priya = await world.person("priya")
+    return priya, priya.organization
 
 @scenario("An organization configures its own model provider")
 @proves("PS-AGENT-004")
 @covers("agent.runtime.profiles.create", "agent.runtime.profiles.get",
         "agent.runtime.profiles.list")
-async def test_an_organization_can_add_a_provider(org):
+async def test_an_organization_can_add_a_provider(org, run):
     alice, organization = org
 
     created = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",
         json={
             "source": "OPENAI_COMPATIBLE",
-            "name": "Our own gateway",
+            "name": run.name("our-own-gateway"),
             "base_url": PROVIDER_BASE_URL,
             "api_key": "org-provider-key",
             "model_names": ["house-model"],
@@ -47,7 +55,7 @@ async def test_an_organization_can_add_a_provider(org):
     reopened = await alice.opens_runtime_profile(
         created["id"], in_organization=organization
     )
-    assert reopened["name"] == "Our own gateway", reopened
+    assert reopened["name"] == created["name"], reopened
     listed = {p["id"] for p in await alice.runtime_profiles_in(organization)}
     assert created["id"] in listed, listed
 
@@ -55,13 +63,13 @@ async def test_an_organization_can_add_a_provider(org):
 @scenario("A provider's credential is never handed back")
 @proves("PS-AGENT-004", "PS-CONN-011")
 @covers("agent.runtime.profiles.get", "agent.runtime.profiles.list")
-async def test_a_provider_key_is_never_returned(org):
+async def test_a_provider_key_is_never_returned(org, run):
     alice, organization = org
     created = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",
         json={
             "source": "OPENAI_COMPATIBLE",
-            "name": "Secret gateway",
+            "name": run.name("secret-gateway"),
             "base_url": PROVIDER_BASE_URL,
             "api_key": "super-secret-provider-key",
             "model_names": ["house-model"],
@@ -86,13 +94,13 @@ async def test_a_provider_key_is_never_returned(org):
 @proves("PS-AGENT-004")
 @covers("agent.runtime.profiles.update", "agent.runtime.profiles.archive",
         "agent.runtime.profiles.restore")
-async def test_a_provider_can_be_archived_and_restored(org):
+async def test_a_provider_can_be_archived_and_restored(org, run):
     alice, organization = org
     created = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",
         json={
             "source": "OPENAI_COMPATIBLE",
-            "name": "Temporary gateway",
+            "name": run.name("temporary-gateway"),
             "base_url": PROVIDER_BASE_URL,
             "api_key": "k",
             "model_names": ["house-model"],
@@ -102,9 +110,9 @@ async def test_a_provider_can_be_archived_and_restored(org):
     base = f"/organizations/{organization['id']}/agent-runtime/profiles/{profile_id}"
 
     renamed = await alice.api.patch(
-        base, json={"source": "OPENAI_COMPATIBLE", "name": "Renamed gateway"}
+        base, json={"source": "OPENAI_COMPATIBLE", "name": run.name("renamed-gateway")}
     )
-    assert renamed["name"] == "Renamed gateway", renamed
+    assert renamed["name"].startswith("renamed-gateway"), renamed
 
     await alice.api.delete(base)
     archived = await alice.opens_runtime_profile(profile_id, in_organization=organization)
@@ -118,14 +126,17 @@ async def test_a_provider_can_be_archived_and_restored(org):
 @scenario("Someone outside the organization cannot add a provider")
 @proves("PS-AGENT-004")
 @covers("agent.runtime.profiles.create")
-async def test_an_outsider_cannot_add_a_provider(world, org):
+async def test_an_outsider_cannot_add_a_provider(world, org, run):
     _alice, organization = org
+    # Somebody in no organization at all, which is what this promise is about.
+    # None of the standing cast is that, so this one stays a fresh person.
+    needs(OPEN_SIGNUP)
     outsider = await world.new_person("outsider")
 
     response = await outsider.api.call(
         "POST", f"/organizations/{organization['id']}/agent-runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE", "name": "Trespass",
+            "source": "OPENAI_COMPATIBLE", "name": run.name("trespass"),
             "base_url": PROVIDER_BASE_URL, "api_key": "k",
             "model_names": ["m"],
         },

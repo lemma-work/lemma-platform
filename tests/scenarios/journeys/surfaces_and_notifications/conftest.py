@@ -90,7 +90,7 @@ class Reachable:
 
 
 @pytest.fixture
-async def reachable(world):
+async def reachable(world, run):
     fake = start_fake_telegram()
     # A Telegram account belongs to one person deployment-wide, and an update id
     # already handled is discarded as a duplicate. Both are per-scenario, or one
@@ -98,10 +98,10 @@ async def reachable(world):
     handle = f"alice_{uuid4().hex[:10]}"
     chat_id = 66600 + (uuid4().int % 9000)
     try:
-        alice = await world.new_person("alice")
+        alice = await world.person("daniel")
         await alice.is_known_on_telegram_as(handle)
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("surface"))
         agent = await alice.creates_an_agent(
             in_pod=pod, toolsets=["POD", "USER_INTERACTION"]
         )

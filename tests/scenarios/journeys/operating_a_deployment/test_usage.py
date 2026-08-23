@@ -11,8 +11,8 @@ pytestmark = [journey("Operating a deployment"), capability("Know what is being 
 @proves("PS-OPS-001")
 @covers("usage.organization.summary.get", "usage.organization.events.list")
 async def test_usage_is_readable_by_a_member(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     summary = await alice.usage_summary_of(organization)
 
@@ -23,8 +23,8 @@ async def test_usage_is_readable_by_a_member(world):
 @proves("PS-OPS-002")
 @covers("usage.organization.me.summary.get")
 async def test_own_usage_is_readable(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     mine = await alice.own_usage_in(organization)
 
@@ -35,9 +35,9 @@ async def test_own_usage_is_readable(world):
 @proves("PS-OPS-001")
 @covers("usage.organization.summary.get")
 async def test_an_outsider_cannot_read_usage(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    outsider = await world.new_person("outsider")
+    alice = await world.person("priya")
+    organization = alice.organization
+    outsider = await world.person("hannah")
 
     await outsider.is_refused_usage_of(organization)
 
@@ -46,8 +46,8 @@ async def test_an_outsider_cannot_read_usage(world):
 @proves("PS-OPS-010")
 @covers("usage.organization.limits.get")
 async def test_limits_are_visible(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     limits = await alice.api.get(f"/usage/organizations/{organization['id']}/limits")
 

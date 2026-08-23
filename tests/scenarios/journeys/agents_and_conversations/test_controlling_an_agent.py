@@ -11,9 +11,8 @@ pytestmark = [journey("Agents and conversations"), capability("Stay in control")
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("customer-support")
 
 
 @scenario("A pod has an agent before anyone creates one")

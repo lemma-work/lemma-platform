@@ -109,9 +109,9 @@ async def _pair_and_publish(alice) -> str:
     "agent.host.poll",
 )
 async def test_dispatched_work_is_claimed_exactly_once(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    organization = alice.organization
+    pod = await alice.works_in("company-wide")
 
     host_secret = await _pair_and_publish(alice)
 
@@ -146,6 +146,20 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     )
     assert pinned.status_code < 400, pinned.text[:300]
 
+    # What this host is already holding. The scenario deliberately never
+    # finishes the run it dispatches — nothing here does the work — so the claim
+    # it makes stands for good, and a tenant that has seen an earlier run has an
+    # earlier claim on it. Subtracting them keeps the question the same one it
+    # always was: did *this* message become exactly one claim.
+    standing = await _poll(alice, host_secret)
+    outstanding = {
+        command["command_id"]
+        for command in (
+            standing.json().get("commands", []) if standing.status_code == 200 else []
+        )
+        if command.get("kind") == "START_RUN"
+    }
+
     conversation = await alice.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"]
     )
@@ -168,6 +182,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
             commands = [
                 c for c in answer.json().get("commands", [])
                 if c.get("kind") == "START_RUN"
+                and c.get("command_id") not in outstanding
             ]
             return commands or None
 
@@ -196,6 +211,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
             offers = [
                 c for c in answer.json().get("commands", [])
                 if c.get("kind") == "START_RUN"
+                and c.get("command_id") not in outstanding
             ]
             assert len(offers) <= 1, (
                 f"a single handout carried {len(offers)} START_RUN commands "

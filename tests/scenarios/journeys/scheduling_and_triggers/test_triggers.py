@@ -20,11 +20,10 @@ pytestmark = [
 
 
 @pytest.fixture
-async def watched_table(world):
+async def watched_table(world, run):
     """A pod with an agent and a table a schedule can watch."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     table = await alice.creates_a_table(
         in_pod=pod, columns=[column("title"), column("rank", "INTEGER")], shared=True
@@ -185,7 +184,7 @@ async def test_an_outsider_cannot_read_history(world, watched_table):
         config={"table_name": table, "operations": ["INSERT"]},
         agent=agent["name"],
     )
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     response = await outsider.api.call(
         "GET", f"/pods/{pod['id']}/schedules/{schedule['id']}/runs"

@@ -65,9 +65,8 @@ async def _a_waiting_run(alice, pod):
 @proves("PS-FLOW-011", "PS-FLOW-012")
 @covers("workflow.run.get", "workflow.run.waiting_assigned_to_me")
 async def test_a_waiting_run_is_held(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("operations")
 
     _workflow, run = await _a_waiting_run(alice, pod)
 
@@ -89,9 +88,8 @@ async def test_a_waiting_run_is_held(world):
 @proves("PS-FLOW-011")
 @covers("workflow.run.form.submit", "workflow.run.get")
 async def test_answering_resumes_the_run(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("operations")
     _workflow, run = await _a_waiting_run(alice, pod)
 
     submitted = await alice.answers_form(run, node="ask", inputs={"approved": True}, in_pod=pod)
@@ -116,9 +114,8 @@ async def test_answering_resumes_the_run(world):
 @proves("PS-FLOW-011")
 @covers("workflow.run.form.submit", "workflow.run.get")
 async def test_a_repeated_answer_resumes_once(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("operations")
     _workflow, run = await _a_waiting_run(alice, pod)
 
     first = await alice.answers_form(run, node="ask", inputs={"approved": True}, in_pod=pod)
@@ -158,9 +155,8 @@ async def test_cancelling_a_live_run_stops_it(world):
     for runs that are already over. A run paused on a person is mid-flight —
     it has done work, it is holding a wait, and the person who started it is
     entitled to call the whole thing off rather than answer it."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("operations")
 
     _workflow, run = await _a_waiting_run(alice, pod)
 

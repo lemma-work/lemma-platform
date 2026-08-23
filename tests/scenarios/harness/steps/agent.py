@@ -6,8 +6,8 @@ import asyncio
 import json
 import time
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 from harness.waiting import eventually
 
@@ -15,65 +15,41 @@ JSON = dict[str, Any]
 
 #: A run has finished when it reaches one of these. Anything else means it is
 #: still going, and a scenario asserting on the answer has to keep waiting.
-SETTLED = {"COMPLETED", "FAILED", "STOPPED", "CANCELLED", "WAITING_FOR_INPUT"}
+#: A run that has stopped of its own accord and will do nothing more.
+FINISHED = {"COMPLETED", "FAILED", "STOPPED", "CANCELLED"}
 
-#: Where the deterministic model reads its turns from. The stack boots with
-#: `E2E_LLM_MODE=mock` (chosen at boot, like the sandbox provider), and that
-#: model takes its script from the conversation's own `metadata` — a documented
-#: field on `agent.conversation.create`.
+#: A run that has stopped and is waiting for a person to decide something. The
+#: turn finished — `last_run_status` is COMPLETED — but the conversation will
+#: not move again until somebody answers.
+PAUSED_FOR_A_PERSON = {"WAITING", "WAITING_FOR_INPUT"}
+
+#: What "settled" means to a scenario waiting for a run: either of the above.
+#: `WAITING` was missing until a real model started asking for approvals of its
+#: own accord — the scripted one only ever produced `WAITING_FOR_INPUT`, so the
+#: gap sat behind the seam for as long as the seam existed.
 #:
-#: So a scenario decides what an agent *attempts* by passing product data
-#: through the public API, not by patching a model. This is the same posture as
-#: pointing a surface at a self-hosted Bot API server with `api_base_url`: the
-#: seam is a supported product capability, and Lemma's own authorization, tool
-#: dispatch, approval and persistence all run for real. Without it, an agent
-#: scenario can only prove that *something* was answered — never that a
-#: destructive action was refused, because an unscripted model never tries one.
-SCRIPT_KEY = "mock_llm_script"
+#: The distinction matters, and getting it wrong is silent: a helper that answers
+#: approvals must treat `WAITING` as work still to do, or it returns the moment
+#: the first question is asked and reports that nobody was asked anything.
+SETTLED = FINISHED | PAUSED_FOR_A_PERSON
 
 
-def attempts(
-    tool: str, /, *, remembered_as: str | None = None, **arguments: Any
-) -> JSON:
-    """One turn in which the agent tries to call ``tool``.
-
-    Tool names are the agent's real ones — `pod_write_record`, `pod_query`,
-    `run_connector_operation`. A name no toolset exposes fails the run, which is
-    the honest outcome rather than a silent no-op.
-
-    ``remembered_as`` names this call so a later turn can quote part of its
-    result with :func:`result_of`.
-    """
-    return {
-        "tool_calls": [
-            {
-                "tool_name": tool,
-                "args": arguments,
-                "tool_call_id": remembered_as or f"call_{uuid4().hex[:8]}",
-            }
-        ]
-    }
-
-
-def result_of(call: str, path: str) -> str:
-    """Quote part of an earlier tool's result inside a later turn's arguments.
-
-    A script is static JSON, so it cannot contain a value the run only produces
-    at runtime — and the interesting arguments are exactly those. The
-    deterministic model resolves ``${call.dotted.path}`` against the result of
-    the named earlier call.
-
-    This is what makes an approval scenario honest. A real agent learns which
-    permissions it was denied from the failed call's own `approval` envelope and
-    quotes them back; a scenario that hard-codes them instead would prove the
-    plumbing works on values no agent could have known.
-    """
-    return f"${{{call}.{path}}}"
-
-
-def answers(text: str) -> JSON:
-    """One turn in which the agent simply says something and stops."""
-    return {"text": text}
+#: The scripted-model seam used to live here: a scenario passed the tool calls
+#: it wanted through `conversation.metadata`, and a deterministic model made
+#: them. It is gone, and deliberately.
+#:
+#: It proved that Lemma dispatched, authorized and approved *that call*. It
+#: could not prove that a sentence a person actually typed ended up refused,
+#: which is the promise. And against a deployment it was worse than useless:
+#: `e2e_llm_mode` is `real` there, so the metadata was ignored in silence and
+#: the scenario asserted a scripted model's behaviour against a thinking one.
+#: One scenario in the live lane had been doing exactly that for months.
+#:
+#: What replaced it is the product's own lever: an agent's `instruction`. Tell
+#: an agent to ask before it changes anything — which is what a person does when
+#: they set one up — then say what a person would say, and assert on what must
+#: be true afterwards. Scenarios that need this take `needs(MODEL_IS_REAL)` and
+#: skip with a reason where there is no model to think with.
 
 
 def _approval_id(approval: JSON) -> str:
@@ -104,7 +80,7 @@ class AgentSteps:
         toolsets: list[str] | None = None,
         visibility: str | None = None,
     ) -> JSON:
-        name = named or f"agent_{uuid4().hex[:10]}"
+        name = named or a_name_for("agent")
         body: JSON = {"name": name, "instruction": instruction}
         if toolsets is not None:
             body["toolsets"] = toolsets
@@ -166,7 +142,6 @@ class AgentSteps:
         in_pod: JSON,
         with_agent: str | None = None,
         saying: str | None = None,
-        where_the_agent: list[JSON] | None = None,
         under: JSON | None = None,
     ) -> JSON:
         """Open a thread, and optionally say the first thing.
@@ -176,16 +151,13 @@ class AgentSteps:
         agent is never asked anything. Bundling them here means a scenario says
         "starts a conversation saying X" and gets what it asked for.
 
-        ``where_the_agent`` is what the agent will try, turn by turn — see
-        :func:`attempts` and :data:`SCRIPT_KEY`. ``under`` makes this thread a
+        ``under`` makes this thread a
         child of another, which is how a subagent's work stays attached to the
         conversation that delegated it.
         """
         body: JSON = {}
         if with_agent:
             body["agent_name"] = with_agent
-        if where_the_agent is not None:
-            body["metadata"] = {SCRIPT_KEY: where_the_agent}
         if under is not None:
             body["parent_id"] = str(under["id"])
         conversation = await self.api.post(
@@ -197,22 +169,6 @@ class AgentSteps:
         if saying:
             await self.says(saying, in_conversation=conversation, in_pod=in_pod)
         return conversation
-
-    async def tells_the_agent_to(
-        self, conversation: JSON, turns: list[JSON], *, in_pod: JSON
-    ) -> JSON:
-        """Script a conversation this scenario did not create.
-
-        A thread opened by a surface belongs to the surface, so there is no
-        create call to pass `metadata` to. `agent.conversation.update` takes
-        metadata, which is how a scenario reaches a conversation that arrived
-        from outside.
-        """
-        return await self.api.patch(
-            f"/pods/{in_pod['id']}/conversations/{conversation['id']}",
-            what=f"{self.label} deciding what the agent will attempt",
-            json={"metadata": {SCRIPT_KEY: turns}},
-        )
 
     async def conversations_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/conversations"))
@@ -407,7 +363,10 @@ class AgentSteps:
         answered: set[str] = set()
         while time.monotonic() < deadline:
             state = await self.opens_conversation(conversation, in_pod=in_pod)
-            if str(state.get("status") or "").upper() in SETTLED:
+            # FINISHED, not SETTLED: a run paused on an approval is exactly what
+            # this loop is for, and treating it as done returns before answering
+            # a single question.
+            if str(state.get("status") or "").upper() in FINISHED:
                 return len(answered)
             for request in await self.approvals_in(conversation, in_pod=in_pod):
                 identifier = _approval_id(request)

@@ -438,6 +438,14 @@ class PodMemberRepository(PodMemberRepositoryPort):
         check-then-act: two administrators leaving at the same moment would each
         see the other and both be allowed through, which is precisely the state
         the guard exists to prevent. Locking the members serialises them.
+
+        The de-duplication happens here rather than in SQL, and that is not a
+        stylistic choice: Postgres rejects ``SELECT DISTINCT ... FOR UPDATE``
+        outright, so asking for both in one statement raised
+        ``FeatureNotSupportedError`` and the guard answered 500 every time it
+        actually fired. It never showed up because the only scenario covering
+        the rule demoted an *organization owner*, who is exempt and returns
+        before reaching this query. See DEV-POD-002.
         """
         stmt = (
             select(PodMember.id)
@@ -457,11 +465,10 @@ class PodMemberRepository(PodMemberRepositoryPort):
                 PodMember.pod_id == pod_id,
                 RolePermissionModel.permission_id == permission_id,
             )
-            .distinct()
             .with_for_update(of=PodMember)
         )
         result = await self.session.execute(stmt)
-        return len(result.scalars().all())
+        return len(set(result.scalars().all()))
 
 
 class PodJoinRequestRepository(PodJoinRequestRepositoryPort):

@@ -112,6 +112,61 @@ def test_capability_health_exposes_safe_local_ai_readiness(client, monkeypatch):
     }
 
 
+def test_capability_health_reports_how_the_deployment_is_configured(
+    client, monkeypatch
+):
+    """A remote client cannot read this deployment's `.env`, so it asks.
+
+    The product scenario suite decides from this whether a promise is even
+    provable here — whether a real model answers, whether it may sign anyone up.
+    Reading a local file instead would describe a different machine, and a suite
+    that trusts one skips and runs for the wrong reasons.
+    """
+    monkeypatch.setattr(appmod.settings, "environment", "development")
+    monkeypatch.setattr(appmod.settings, "e2e_llm_mode", "real")
+    monkeypatch.setattr(appmod.settings, "auth_abuse_protection_enabled", False)
+    monkeypatch.setattr(appmod.settings, "auth_email_verification_required", False)
+
+    configuration = client.get("/health/capabilities").json()["configuration"]
+
+    assert configuration["environment"] == "development"
+    assert configuration["llm_mode"] == "real"
+    assert configuration["abuse_protection"] is False
+    assert configuration["email_verification_required"] is False
+    assert "role_cache_ttl_seconds" in configuration
+
+
+def test_capability_health_withholds_security_posture_in_production(
+    client, monkeypatch
+):
+    """This endpoint is unauthenticated, and production owes a stranger nothing.
+
+    Whether signup is rate limited and whether a connector may reach a private
+    address are the two facts an attacker would most like handed to them. They
+    are reported where a test suite needs them and withheld where they would be
+    reconnaissance. `llm_mode` survives both ways: production serving the
+    scripted test model is a misconfiguration worth seeing.
+    """
+    monkeypatch.setattr(appmod.settings, "environment", "production")
+
+    configuration = client.get("/health/capabilities").json()["configuration"]
+
+    assert configuration["environment"] == "production"
+    assert configuration["llm_mode"]
+    withheld = {
+        "abuse_protection",
+        "altcha",
+        "email_verification_required",
+        "email_deliverability_checks",
+        "disposable_email_domains",
+        "private_network_targets",
+    }
+    assert not withheld & set(configuration), (
+        f"production disclosed its security posture: "
+        f"{sorted(withheld & set(configuration))}"
+    )
+
+
 def test_ready_returns_503_when_db_down(client, monkeypatch):
     monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))

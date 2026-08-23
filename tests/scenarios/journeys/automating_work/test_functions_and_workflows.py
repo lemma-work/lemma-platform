@@ -21,9 +21,8 @@ needs_sandbox = pytest.mark.sandbox
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("operations")
 
 
 @needs_sandbox
@@ -82,7 +81,7 @@ async def test_deleting_a_function_removes_it(pod):
 @covers("function.create")
 async def test_an_outsider_cannot_create_a_function(world, pod):
     alice, the_pod = pod
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     await outsider.is_refused_creating_a_function(in_pod=the_pod, named="trespass")
 
@@ -144,6 +143,6 @@ class TestWorkflows:
     @covers("workflow.create")
     async def test_an_outsider_cannot_create_a_workflow(self, world, pod):
         alice, the_pod = pod
-        outsider = await world.new_person("outsider")
+        outsider = await world.person("hannah")
 
         await outsider.is_refused_creating_a_workflow(in_pod=the_pod, named="trespass")

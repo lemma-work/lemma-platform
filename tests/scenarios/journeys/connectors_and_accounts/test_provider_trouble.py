@@ -28,8 +28,8 @@ SLOW = "slow_operation"
 
 @pytest.fixture
 async def connected(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url,
@@ -66,9 +66,9 @@ async def test_a_failing_provider_is_reported_not_swallowed(connected):
 @scenario("A pod stays usable while a provider is failing")
 @proves("PS-CONN-032")
 @covers("connector.operation.execute", "table.create")
-async def test_a_failing_provider_does_not_take_the_pod_with_it(connected):
+async def test_a_failing_provider_does_not_take_the_pod_with_it(connected, run):
     alice, organization, auth_config = connected
-    pod = await alice.creates_a_pod()
+    pod = await alice.creates_a_pod(named=run.name("pod"))
 
     for _ in range(3):
         await alice.is_refused_running_operation(

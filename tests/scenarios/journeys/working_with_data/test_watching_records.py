@@ -74,11 +74,10 @@ async def _next_change(
 
 @pytest.fixture
 async def a_watched_table(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("sales")
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
-    return alice, organization, pod, table
+    return alice, alice.organization, pod, table
 
 
 @scenario("A person watching a table sees a new record arrive")
@@ -132,7 +131,7 @@ async def test_updates_and_deletions_arrive(a_watched_table):
 @covers("record.create")
 async def test_a_stranger_is_sent_nothing(world, a_watched_table):
     alice, _organization, pod, table = a_watched_table
-    stranger = await world.new_person("stranger")
+    stranger = await world.person("hannah")
 
     # Either refusing the handshake or accepting it and forwarding nothing is a
     # correct answer. Leaking one row is not, and a scenario that only checked

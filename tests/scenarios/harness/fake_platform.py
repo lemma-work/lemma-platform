@@ -147,7 +147,24 @@ class FakeTelegram:
         self._thread.join(timeout=5)
 
 
+
+def _only_where_the_deployment_can_call_back() -> None:
+    """Every server below binds loopback, so only a local deployment reaches it.
+
+    Checked here rather than at each of the dozen fixtures that start one,
+    because the failure it prevents is somebody adding a thirteenth and not
+    knowing. Against a deployment these scenarios skip with a reason; the
+    stand-ins stay exactly as useful as they always were on a stack the suite
+    boots itself.
+    """
+    from harness.credentials import needs
+    from harness.environment import LOOPBACK_REACHABLE
+
+    needs(LOOPBACK_REACHABLE)
+
+
 def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTelegram:
+    _only_where_the_deployment_can_call_back()
     recorded: list[SentMessage] = []
     #: Telegram remembers the webhook it was given, and Lemma reads it back to
     #: confirm registration took. A fake that forgets fails that confirmation.
@@ -423,6 +440,7 @@ def _spec_for(base_url: str) -> JSON:
 
 
 def start_fake_provider() -> FakeProvider:
+    _only_where_the_deployment_can_call_back()
     received: list[ReceivedCall] = []
     widgets: list[JSON] = []
 
@@ -563,6 +581,7 @@ class FakeResend:
 
 
 def start_fake_resend() -> FakeResend:
+    _only_where_the_deployment_can_call_back()
     recorded: list[SentEmail] = []
 
     class Handler(BaseHTTPRequestHandler):

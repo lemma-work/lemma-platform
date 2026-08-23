@@ -10,9 +10,10 @@ limited.
 
 from __future__ import annotations
 
-from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import SERVER_SPEND_CAPS
 from harness.stack import SPEND_CAP_PROBE_SLUG_PREFIX
 
 pytestmark = [
@@ -36,13 +37,16 @@ PROBE_ORGANIZATION_PREFIX = SPEND_CAP_PROBE_SLUG_PREFIX
     "agent.create",
     "agent.conversation.message.send",
 )
-async def test_work_over_the_limit_is_refused_clearly(world):
-    alice = await world.new_person("alice")
+async def test_work_over_the_limit_is_refused_clearly(world, run):
+    needs(SERVER_SPEND_CAPS)
+    alice = await world.person("priya")
     # Created for its slug: the deployment caps this organization and no other.
-    await alice.creates_an_organization(
-        named=f"{PROBE_ORGANIZATION_PREFIX}-{uuid4().hex[:6]}"
-    )
-    pod = await alice.creates_a_pod()
+    # The prefix is what the deployment's override matches on, and the run mark
+    # goes on the end where it always does — so the cap still lands on this
+    # organization and nothing else, and the organization is still traceable to
+    # the run that made it. It cannot be deleted afterwards either way.
+    await alice.creates_an_organization(named=run.name(PROBE_ORGANIZATION_PREFIX))
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     conversation = await alice.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"]

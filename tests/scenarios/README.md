@@ -40,6 +40,10 @@ cd tests/scenarios && uv run pytest --base-url http://localhost:8000
 | Piece | What it does |
 |---|---|
 | `harness/stack.py` | Boots the system under test and hands back a URL |
+| `harness/environment.py` | Asks the target what it is configured to do, and whether this run may write to it |
+| `harness/tenant.py` | Who the standing cast are, and what they are to each other |
+| `harness/provision.py` | Builds that tenant on a deployment, or puts it back |
+| `harness/run.py` | The mark one run leaves on a tenant shared with every other run |
 | `harness/world.py` | `World` and `Person` — a scenario asks the world for people, and people do things |
 | `harness/steps/` | The product verbs, one module per noun. `alice.creates_a_pod(...)` |
 | `harness/drivers/api.py` | The only place that knows about paths, verbs and status codes |
@@ -96,9 +100,10 @@ Four things to hold to:
 - **Steps are product verbs.** If a scenario contains a path or a status code,
   the step is missing — add it to `harness/steps/` instead. That is what will
   let these same scenarios run through the CLI and the SDKs.
-- **Create everything you assert on.** The stack is shared across the session,
-  so another scenario's pods are in the same database. Never assert on a total.
-  `world.new_person()` makes uniqueness the default.
+- **Create everything you assert on, and name it through `run.name()`.** The
+  stack is shared across the session and the tenant is shared across every run,
+  so another scenario's pods — and last night's — are in the same database.
+  Never assert on a total; filter to what this run made.
 - **Move the promise to `covered` in the same pull request**, once you have seen
   it pass. If it does not pass, the finding is a `gap` in the specification and
   a fix to the code — not an edit to the assertion.
@@ -117,22 +122,49 @@ cannot be imported from Node at all — was found here and by nothing else.
 
 ## Standing in for other people's servers
 
-Two things are not Lemma and cannot be run for real on every change: the model
-behind an agent, and the messaging platform behind a surface. Both are stood in
-for, and in both cases through a **supported product setting** rather than a
-patch:
+Two things are not Lemma: the model behind an agent, and the messaging platform
+behind a surface. They are handled differently now, and one of them is on its
+way out.
 
-- **The model** — `E2E_LLM_MODE=mock` swaps in a deterministic scripted model.
-  The production code path runs to the model boundary.
-- **The platform** — `harness/fake_platform.py` is a small HTTP server that
-  answers as Telegram. A scenario points a surface at it with `api_base_url` on
-  the connected account, which exists so a deployment can use a self-hosted Bot
-  API server. Lemma itself runs entirely for real: it registers the webhook,
-  verifies the secret on delivery, resolves the sender, runs the agent, and
-  sends the reply — and the fake records what it said.
+**The model is real.** Scenarios that drive an agent say what a person would say
+and assert on what must be true afterwards — the row is still there, an approval
+was raised, the work completed. They take `needs(MODEL_IS_REAL)` and skip with a
+reason where no model is configured.
 
-Everything else is real, including the Docker sandboxes that functions execute
-in.
+There used to be a seam for scripting the model's turns through a conversation's
+`metadata`, and it is gone. It proved Lemma refused *that call*; it could not
+prove a person typing a sentence ended up refused. Against a deployment it was
+worse: `e2e_llm_mode` is `real` there, so the script was ignored in silence and
+the scenario asserted a scripted model's behaviour against a thinking one — one
+scenario in the live lane had been doing exactly that, and passing, for months.
+The agent is *told how to behave* with an `instruction`, which is what a person
+does when they set one up, and what it then does is the thing under test.
+
+**The platform is still stood in for on localhost, and should not be.**
+`harness/fake_platform.py` runs small HTTP servers that answer as Telegram, as a
+generic OpenAPI provider, and as Resend, and a scenario points a surface at one
+using `api_base_url` — a supported product setting. It works, and it is the
+wrong shape for this suite:
+
+- A deployment cannot reach a server on the machine running the tests, so ~40
+  scenarios skip remotely behind `needs(LOOPBACK_REACHABLE)` — the largest hole
+  in what a deployment run proves.
+- It needs `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS=true`, which production does
+  not have and should not, so those scenarios exercise a configuration nobody
+  runs.
+- It is not what a person does. Nobody points their Telegram surface at a bot
+  API on their laptop.
+
+**Where this is going: real providers, no callback.** The live lane already
+shows the shape. `journeys/live/test_telegram.py` uses a real bot in *polling*
+mode — `ENABLE_TELEGRAM_POLLING_MODE`, which is a supported deployment mode and
+the one a self-hosted install behind a firewall uses — so no public URL and no
+loopback is involved at all. GitHub sidesteps it too: a fine-grained PAT is a
+real way to connect, and the deployment calls out rather than being called.
+
+The work is to move the surfaces journey onto that footing and delete
+`fake_platform.py`, gating on `needs(TELEGRAM)` the way the live lane already
+does. Until then those scenarios are honest about where they cannot run.
 
 ## Measuring it
 
@@ -166,6 +198,45 @@ is worse than one that says where it stops:
 - **The client conformance is a subset**, not a mirror of every journey. A
   process per call is too slow for that, and the point is that the clients
   agree on the core path.
+
+## The standing tenant
+
+Most scenarios do not want a stranger. They want somebody who already works
+somewhere, in a pod that already has things in it — which is the situation every
+real user is in, and the one a suite that starts the world over for every test
+can never reach.
+
+So there is a **cast**: five colleagues at Vantage Freight, plus Hannah at
+Calder Retail, who is the outsider every refusal scenario needs. They are
+declared in [`harness/tenant.py`](harness/tenant.py) and they sign **in**:
+
+```python
+daniel = await world.person("daniel")          # already here, already ORG_EDITOR
+pod = await daniel.works_in("sales")           # opens it; makes it only if absent
+table = await daniel.creates_a_table(named=run.name("orders"), in_pod=pod)
+```
+
+`world.new_person()` is still there for a scenario that genuinely needs somebody
+brand new — onboarding, invitations, being refused as a stranger.
+
+**Everything durable is named through `run.name()`.** The tenant is shared with
+every run before and after this one, so `orders` alone collides and `orders` in a
+pod holding forty other tables cannot be asserted on. `run.name("orders")` gives
+`orders_scn7f3a1`: an assertion filters to it, cleanup can tell the suite's
+leavings from a person's work, and a failure says which run to go and look at.
+
+Against a deployment, the tenant is built once and deliberately, by a person:
+
+```bash
+make scenarios-provision TARGET=https://your-lemma
+make scenarios-deployment TARGET=https://your-lemma
+```
+
+A run never registers anybody. That is what lets the same suite run against a
+deployment whose signup gates are on — signing in passes none of them — and it
+is why a run leaves no new organizations behind, which matters because the
+product has no way to delete one. A stack the suite boots itself is the
+exception: it starts empty, so the tenant is built in it on first use.
 
 ## The two lanes
 

@@ -15,8 +15,8 @@ pytestmark = [
 @proves("PS-OPS-001")
 @covers("usage.organization.stats.get", "usage.organization.events.list")
 async def test_usage_can_be_broken_down(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     stats = await alice.usage_stats_of(organization)
     events = await alice.api.get(
@@ -30,10 +30,9 @@ async def test_usage_can_be_broken_down(world):
 @scenario("Retrying a firing that does not exist is refused")
 @proves("PS-SCHED-022")
 @covers("schedule.run.retry")
-async def test_retrying_an_unknown_firing_is_refused(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_retrying_an_unknown_firing_is_refused(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     table = await alice.creates_a_table(
         in_pod=pod, columns=[column("title")], shared=True

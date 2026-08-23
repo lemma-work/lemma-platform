@@ -29,6 +29,7 @@ SHELL := /bin/bash
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
+        scenarios-deployment scenarios-provision scenarios-reset \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
@@ -332,6 +333,8 @@ help:
 	@echo "    make scenarios-images   build the sandbox images the lane below needs"
 	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
 	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
+	@echo "    make scenarios-provision  build the standing tenant on a deployment"
+	@echo "    make scenarios-deployment run the suite against a deployment"
 	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
@@ -1249,6 +1252,39 @@ scenarios-live:
 	@cd $(SCENARIOS_DIR) && SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
 		SCENARIOS_CONNECTOR_CATALOGUE=all SCENARIOS_TELEGRAM_POLLING=true \
 		uv run pytest -q -m live --timeout=900 journeys/live
+
+# ── The standing tenant ───────────────────────────────────────────────────────
+# The suite runs as a fixed cast of colleagues at Vantage Freight who sign *in*
+# rather than up — which is what lets it run against a deployment whose
+# registration gates are on, and what keeps a run from leaving another
+# organization behind. See tests/scenarios/harness/tenant.py.
+#
+# `TARGET` names the deployment; `SCENARIOS_BASE_URL` does the same thing if you
+# would rather set it once. There is no default, on purpose: these register
+# accounts and create organizations, and an organization cannot be deleted.
+TARGET ?= $(SCENARIOS_BASE_URL)
+
+# Run once per environment, by a person who can see what it did. Never part of
+# a run: this is the only thing that registers anybody, and a deployment counts
+# every call to its auth routes. Idempotent — run it twice and the second run
+# reports it had nothing to do.
+scenarios-provision:
+	@echo "→ Provisioning the standing tenant…"
+	@cd $(SCENARIOS_DIR) && uv run python -m harness.provision --base-url "$(TARGET)"
+
+# For when a run died partway through and left somebody promoted. Clears what
+# runs left behind — matched on the `scn` mark, so it can only ever touch
+# things a run made — and puts the cast's roles back to what tenant.py declares.
+scenarios-reset:
+	@echo "→ Resetting the standing tenant…"
+	@cd $(SCENARIOS_DIR) && uv run python -m harness.provision --reset --base-url "$(TARGET)"
+
+# The suite against a real Lemma, with whatever model that deployment is
+# configured with. Boots nothing; the tenant must already be there.
+scenarios-deployment:
+	@echo "→ Product scenarios against $(TARGET)…"
+	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
+	@cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" --timeout=900
 
 # The guards on the suite itself: no imports of the app under test, no mocking,
 # no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —

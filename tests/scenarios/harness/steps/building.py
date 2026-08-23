@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 from harness.waiting import eventually
 
@@ -65,7 +66,7 @@ class BuildingSteps:
         code: str | None = None,
         kind: str = "API",
     ) -> JSON:
-        name = named or f"function_{uuid4().hex[:10]}"
+        name = named or a_name_for("function")
         code = code if code is not None else function_source(name)
         return await self.api.post(
             f"/pods/{in_pod['id']}/functions",
@@ -103,7 +104,7 @@ class BuildingSteps:
     async def creates_a_workflow(
         self, *, in_pod: JSON, named: str | None = None, mode: str = "GLOBAL"
     ) -> JSON:
-        name = named or f"workflow_{uuid4().hex[:10]}"
+        name = named or a_name_for("workflow")
         return await self.api.post(
             f"/pods/{in_pod['id']}/workflows",
             what=f"{self.label} creating workflow {name!r}",
@@ -143,7 +144,7 @@ class BuildingSteps:
         workflow: str | None = None,
     ) -> JSON:
         body: JSON = {
-            "name": named or f"schedule_{uuid4().hex[:10]}",
+            "name": named or a_name_for("schedule"),
             "schedule_type": kind,
             "config": config if config is not None else {"cron": "0 9 * * *"},
         }
@@ -193,7 +194,7 @@ class BuildingSteps:
     # --- apps ------------------------------------------------------------
 
     async def creates_an_app(self, *, in_pod: JSON, named: str | None = None) -> JSON:
-        name = named or f"app_{uuid4().hex[:10]}"
+        name = named or a_name_for("app")
         return await self.api.post(
             f"/pods/{in_pod['id']}/apps",
             what=f"{self.label} creating app {name!r}",
@@ -492,7 +493,7 @@ class BuildingSteps:
             what=f"{self.label} installing {connector_id!r}",
             json={
                 "connector_id": connector_id,
-                "name": named or f"{connector_id}_{uuid4().hex[:8]}",
+                "name": named or a_name_for(connector_id),
             },
         )
 
@@ -541,7 +542,7 @@ class BuildingSteps:
             json={
                 "connector_id": "openapi",
                 "kind": "http",
-                "name": named or f"provider_{uuid4().hex[:8]}",
+                "name": named or a_name_for("provider"),
                 "config": {"server_url": server_url, "spec_url": spec_url},
             },
         )

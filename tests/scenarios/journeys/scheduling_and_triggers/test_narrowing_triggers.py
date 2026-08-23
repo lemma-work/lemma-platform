@@ -33,11 +33,10 @@ ACTED_ON = {"RECEIVED", "PROCESSING", "DISPATCHED", "COMPLETED", "TARGET_FAILED"
 
 
 @pytest.fixture
-async def watching_for_done(world):
+async def watching_for_done(world, run):
     """A schedule that fires only when a row's status becomes "done"."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(
         in_pod=pod, columns=[column("title"), column("status")]
     )
@@ -150,10 +149,9 @@ async def test_skipped_and_fired_are_distinguishable(watching_for_done):
 @scenario("A condition no operation could satisfy is refused when it is written")
 @proves("PS-SCHED-012")
 @covers("schedule.create")
-async def test_an_unsatisfiable_condition_is_refused(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_an_unsatisfiable_condition_is_refused(world, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(
         in_pod=pod, columns=[column("title"), column("status")]
     )

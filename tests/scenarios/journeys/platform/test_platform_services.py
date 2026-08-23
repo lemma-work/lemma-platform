@@ -24,8 +24,7 @@ TINY_PNG = bytes.fromhex(
 
 @pytest.fixture
 async def person(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
+    alice = await world.person("daniel")
     return alice
 
 
@@ -149,7 +148,7 @@ async def test_browser_access_needs_a_workspace(person):
 @proves("PS-AGENT-031")
 @covers("widget.embed_token")
 async def test_an_embed_token_needs_a_real_result(person):
-    pod = await person.creates_a_pod()
+    pod = await person.works_in("company-wide")
     agent = await person.creates_an_agent(in_pod=pod)
     conversation = await person.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"]
@@ -170,7 +169,7 @@ async def test_an_embed_token_needs_a_real_result(person):
 @proves("PS-PACK-030")
 @covers("app.create_from_widget")
 async def test_promoting_a_missing_result_is_refused(person):
-    pod = await person.creates_a_pod()
+    pod = await person.works_in("company-wide")
     agent = await person.creates_an_agent(in_pod=pod)
     conversation = await person.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"]

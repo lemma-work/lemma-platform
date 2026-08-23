@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for, must_be_traceable
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -37,6 +37,7 @@ class PodSteps:
         in_organization: JSON | None = None,
         named: str | None = None,
         pod_type: str = "HYBRID",
+        standing: bool = False,
     ) -> JSON:
         organization = in_organization or self.organization
         if organization is None:
@@ -44,7 +45,9 @@ class PodSteps:
                 f"{self.label} has no organization to create a pod in; "
                 f"call creates_an_organization() first"
             )
-        name = named or f"{self.label.title()} Pod {uuid4().hex[:8]}"
+        name = named or a_name_for(f"{self.label}_pod")
+        if not standing:
+            must_be_traceable(name, what="pod")
         pod = await self.api.post(
             "/pods",
             what=f"{self.label} creating pod {name!r}",
@@ -56,6 +59,34 @@ class PodSteps:
         )
         self.pod = pod
         return pod
+
+    async def works_in(self, name: str, *, in_organization: JSON | None = None) -> JSON:
+        """Open the pod they work in, making it only if it is not there yet.
+
+        The verb nearly every scenario should use, and it is not a test
+        optimisation — it is what a person does. Nobody creates a fresh pod for
+        every task; they open the one that is already there, with last quarter's
+        tables and somebody else's records still in it.
+
+        Reuse-if-exists is also what makes the suite runnable against a real
+        deployment. A pod delete is a soft delete that leaves its schema behind
+        for good, so a suite that made one per scenario would grow the target a
+        few hundred dead schemas every night.
+        """
+        organization = in_organization or self.organization
+        if organization is None:
+            raise AssertionError(
+                f"{self.label} has no organization, so there is nowhere for "
+                f"{name!r} to be. world.person() sets one; world.new_person() "
+                f"does not, because a stranger does not have one yet"
+            )
+        for pod in await self.pods_in(organization):
+            if pod.get("name") == name:
+                self.pod = pod
+                return pod
+        return await self.creates_a_pod(
+            in_organization=organization, named=name, standing=True
+        )
 
     async def opens_pod(self, pod: JSON) -> JSON:
         return await self.api.get(
@@ -257,6 +288,23 @@ class PodSteps:
             what=f"{self.label} re-roling {person.label} in {in_pod.get('name')!r}",
             json={"roles": roles},
         )
+
+    async def is_refused_giving(
+        self, person: Any, *, roles: list[str], in_pod: JSON
+    ) -> int:
+        membership = await self.membership_of(person, in_pod=in_pod)
+        response = await self.api.call(
+            "PATCH",
+            f"/pods/{in_pod['id']}/members/{_member_id(membership)}/roles",
+            json={"roles": roles},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused re-roling "
+                f"{person.label} to {roles} in {in_pod.get('name')!r}, but it "
+                f"succeeded ({response.status_code})"
+            )
+        return response.status_code
 
     async def members_of_pod(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/members"))

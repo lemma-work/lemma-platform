@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import OPEN_SIGNUP
 
 pytestmark = [
     journey("Building a pod"),
@@ -19,25 +21,27 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_admin_who_is_only_a_member(world):
+async def pod_admin_who_is_only_a_member(world, run):
     """Bob runs a pod but is an ordinary member of the organization.
 
     That combination is the whole point: everything he can confer has to be
     capped by what he holds himself, and what he holds in the organization is
     the lowest role there is.
     """
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
 
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_ADMIN")
 
+    # Somebody in no organization at all. That is what makes the scenario mean
+    # something: approving their request is what would confer an organization
+    # role, and a colleague who already has one has nothing to be conferred.
+    needs(OPEN_SIGNUP)
     carol = await world.new_person("carol")
     await alice.opens_pod_to(pod, who="ORG_MEMBERS")
     request = await carol.requests_to_join(pod)
-    return alice, bob, carol, organization, pod, request
+    return alice, bob, carol, alice.organization, pod, request
 
 
 @scenario("A pod admin cannot mint an organization owner by approving a request")
@@ -83,10 +87,9 @@ async def test_approving_within_your_own_authority_is_allowed(
 @scenario("An approver cannot confer pod permissions they do not hold")
 @proves("PS-POD-022", "PS-ACCESS-010")
 @covers("pod.join_request.approve", "pod.roles.create")
-async def test_approving_cannot_confer_unheld_pod_permissions(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_approving_cannot_confer_unheld_pod_permissions(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     await alice.opens_pod_to(pod, who="ORG_MEMBERS")
 
     # A role strictly above what an editor holds, so conferring it would be an
@@ -98,11 +101,10 @@ async def test_approving_cannot_confer_unheld_pod_permissions(world):
         permissions=["datastore.table.delete", "pod.member.manage"],
     )
 
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_EDITOR")
 
-    carol = await world.new_person("carol")
+    carol = await world.person("wei")
     request = await carol.requests_to_join(pod)
 
     refused = await bob.api.call(

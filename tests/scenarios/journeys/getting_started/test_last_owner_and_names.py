@@ -16,9 +16,13 @@ pytestmark = [journey("Getting started"), capability("Create an organization")]
 @scenario("Two organizations may be called the same thing")
 @proves("PS-ONB-014")
 @covers("org.create")
-async def test_two_organizations_may_share_a_display_name(world):
+async def test_two_organizations_may_share_a_display_name(world, run):
     alice = await world.new_person("alice")
-    shared = f"Acme {alice.label}"
+    # One name, asked for once and used twice — which is the scenario. Built
+    # through `run.name` because both organizations outlive the run and neither
+    # can ever be deleted, so a name that says nothing about who made it is one
+    # nobody can ever account for.
+    shared = run.name("acme")
     await alice.creates_an_organization(named=shared)
 
     bob = await world.new_person("bob")

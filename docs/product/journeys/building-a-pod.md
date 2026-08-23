@@ -225,11 +225,14 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 ### PS-POD-041 — A pod always has at least one admin
 **Status:** covered
 
-- The system shall ensure every pod has at least one admin at all times.
+- The system shall ensure every pod has at least one member who can administer
+  it at all times.
 - If removing a member or changing their roles would leave the pod with no
   admin, then the system shall refuse and shall say another admin must be
   appointed first.
-
+- The system shall count anyone whose roles grant pod membership management, not
+  only holders of the `POD_ADMIN` role, so that a pod using a custom role is not
+  told it has one administrator when it has four.
 **Contracts:** `pod.member.remove`, `pod.member.update_roles`
 
 ---

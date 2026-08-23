@@ -21,8 +21,8 @@ pytestmark = [
 @pytest.fixture
 async def installed(world, provider):
     """An organization with the provider installed and an account connected."""
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url,
@@ -48,8 +48,8 @@ async def installed(world, provider):
     "connector.operation.discover",
 )
 async def test_installing_discovers_operations(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
@@ -71,11 +71,19 @@ async def test_installing_discovers_operations(world, provider):
 @proves("PS-CONN-010")
 @covers("connector.auth_config.list", "connector.auth_config.get")
 async def test_an_installation_does_not_leak_across_organizations(world, installed):
-    alice, organization, auth_config, _account = installed
-    elsewhere = await alice.creates_an_organization()
+    _alice, _organization, auth_config, _account = installed
+    # Calder Retail, a company that genuinely exists on this tenant, rather than
+    # a second organization made to prove a point and left behind. Hannah looks
+    # for it herself: Priya cannot read another company's connectors at all,
+    # which is the right answer and the wrong question to ask here.
+    hannah = await world.person("hannah")
 
-    assert await alice.auth_configs_in(elsewhere) == [], (
-        "installing in one organization must have no effect in another"
+    theirs = {
+        str(config["id"]) for config in await hannah.auth_configs_in(hannah.organization)
+    }
+
+    assert str(auth_config["id"]) not in theirs, (
+        "installing a connector in one organization put it in another"
     )
 
 
@@ -84,7 +92,7 @@ async def test_an_installation_does_not_leak_across_organizations(world, install
 @covers("connector.auth_config.create", "connector.auth_config.list")
 async def test_an_outsider_cannot_install(world, installed, provider):
     alice, organization, _auth_config, _account = installed
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     listed = await outsider.api.call(
         "GET", f"/organizations/{organization['id']}/connectors/auth-configs"
@@ -140,8 +148,7 @@ class TestConnectingAnAccount:
     @covers("connector.operation.execute", "connector.account.get")
     async def test_an_account_is_not_shared(self, world, installed):
         alice, organization, auth_config, account = installed
-        bob = await world.new_person("bob")
-        await bob.accepts(await alice.invites(bob, to=organization))
+        bob = await world.person("sofia")
 
         await bob.is_refused_running_operation(
             "create_a_widget",

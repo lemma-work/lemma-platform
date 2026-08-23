@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 
 from typing import Any
-from uuid import uuid4
 
+from harness.run import a_name_for
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -54,7 +54,7 @@ class DatastoreSteps:
         ``shared=True`` for a table a whole team reads and writes — a support
         inbox, a shared CRM — where every member sees every row.
         """
-        name = named or f"table_{uuid4().hex[:10]}"
+        name = named or a_name_for("table")
         body: JSON = {
             "name": name,
             "columns": columns or [column("title"), column("note")],
@@ -76,7 +76,7 @@ class DatastoreSteps:
             "POST",
             f"/pods/{in_pod['id']}/datastore/tables",
             json={
-                "name": named or f"table_{uuid4().hex[:10]}",
+                "name": named or a_name_for("table"),
                 "columns": columns or [column("title")],
             },
         )

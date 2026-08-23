@@ -19,6 +19,7 @@ Two conventions worth knowing:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -57,6 +58,8 @@ class ApiDriver:
     def __init__(self, client: httpx.AsyncClient, *, token: str | None = None) -> None:
         self._client = client
         self._token = token
+        self._renew: Callable[[], Awaitable[None]] | None = None
+        self._renewing = False
 
     @property
     def token(self) -> str | None:
@@ -76,14 +79,58 @@ class ApiDriver:
     def authenticate(self, token: str) -> None:
         self._token = token
 
+    def renews_with(self, sign_in: Callable[[], Awaitable[None]]) -> None:
+        """How to get a fresh token when this one runs out.
+
+        A session lasts as long as the deployment says it does, and one
+        deployment says five minutes — short enough that a suite pointed at it
+        would start failing partway through a run, on requests that were
+        perfectly good. The person signs in again and the request is retried
+        once, so a scenario never has to know that a session has a lifetime.
+        """
+        self._renew = sign_in
+
     @property
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
 
     async def call(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        headers = {**self._headers, **kwargs.pop("headers", {})}
+        response = await self._send(method, path, **kwargs)
+        if not self._session_ran_out(response):
+            return response
+        # Renew once and try again. Once, because a second 401 after a fresh
+        # sign-in is the product refusing this person rather than a session
+        # ageing out, and retrying that forever would turn a clear failure into
+        # a hang. Every request body this suite sends is bytes or JSON, so
+        # sending it a second time sends the same thing.
+        self._renewing = True
+        try:
+            await self._renew()  # type: ignore[misc]
+        finally:
+            self._renewing = False
+        return await self._send(method, path, **kwargs)
+
+    def _session_ran_out(self, response: httpx.Response) -> bool:
+        """A 401 on a request that carried a token, and that we can do something about.
+
+        Deliberately narrow. A scenario proving that a stranger is turned away
+        sends no token and must keep its 401; a scenario proving somebody lacks
+        a permission gets a 403, which is a different question entirely.
+        """
+        return (
+            response.status_code == 401
+            and self._token is not None
+            and self._renew is not None
+            and not self._renewing
+        )
+
+    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        # `kwargs` is left untouched so the retry above sends the same request
+        # rather than one missing whatever the first attempt consumed.
+        headers = {**self._headers, **kwargs.get("headers", {})}
+        rest = {name: value for name, value in kwargs.items() if name != "headers"}
         return await self._client.request(
-            method, _reachable(path), headers=headers, **kwargs
+            method, _reachable(path), headers=headers, **rest
         )
 
     async def expect(

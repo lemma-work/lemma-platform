@@ -17,8 +17,10 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.steps.datastore import column
+from harness.environment import MODEL_IS_REAL
 from harness.fake_platform import start_fake_telegram
-from harness.steps.agent import answers, attempts
 from harness.waiting import eventually
 
 pytestmark = [
@@ -46,7 +48,7 @@ def _update(*, text: str, update_id: int, handle: str, chat_id: int) -> dict:
 
 
 @pytest.fixture
-async def reachable_pod(world):
+async def reachable_pod(world, run):
     """A pod on Telegram, with a person the platform recognises."""
     fake = start_fake_telegram()
     # A Telegram account belongs to one person deployment-wide, and a chat id
@@ -55,12 +57,24 @@ async def reachable_pod(world):
     handle = f"alice_{uuid4().hex[:10]}"
     chat_id = 66600 + (uuid4().int % 9000)
     try:
-        alice = await world.new_person("alice")
+        alice = await world.person("daniel")
         await alice.is_known_on_telegram_as(handle)
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
+        table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
         agent = await alice.creates_an_agent(
-            in_pod=pod, toolsets=["POD", "USER_INTERACTION"]
+            in_pod=pod,
+            toolsets=["POD", "USER_INTERACTION"],
+            # The agent is *told* how to behave, which is what a person does
+            # when they set one up — rather than the scenario injecting the tool
+            # call it wants to see. The instruction is product surface; the turn
+            # the model then takes is the thing under test.
+            instruction=(
+                "When somebody asks for a report, do not choose for them. Use "
+                "your question tool to ask which report they want, offering "
+                "exactly two choices: 'Weekly summary' and 'Full ledger'. "
+                "Before reading anything from the pod, ask for approval first."
+            ),
         )
         auth_config = await alice.installs_connector(
             "telegram", in_organization=organization
@@ -81,7 +95,7 @@ async def reachable_pod(world):
             account=account,
         )
         fake.clear()
-        yield alice, pod, fake, handle, chat_id
+        yield alice, pod, fake, handle, chat_id, table
     finally:
         fake.stop()
 
@@ -133,31 +147,11 @@ async def _replies(fake, chat_id):
 @proves("PS-SURF-021")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
 async def test_a_question_is_asked_with_native_controls(reachable_pod):
-    alice, pod, fake, handle, chat_id = reachable_pod
+    needs(MODEL_IS_REAL)
+    alice, pod, fake, handle, chat_id, table = reachable_pod
     conversation = await _their_conversation(alice, pod, fake, handle, chat_id)
 
-    await alice.tells_the_agent_to(
-        conversation,
-        [
-            attempts(
-                "ask_user",
-                request={
-                    "questions": [
-                        {
-                            "question": "Which report should I send?",
-                            "header": "Report",
-                            "options": [
-                                {"label": "Weekly summary", "recommended": True},
-                                {"label": "Full ledger"},
-                            ],
-                        }
-                    ]
-                },
-            ),
-            answers("Right you are."),
-        ],
-        in_pod=pod,
-    )
+    del conversation  # the surface owns the thread; this scenario just talks
     await _says_on_telegram(
         alice, fake, "send me a report", update_id=chat_id * 10 + 1, handle=handle, chat_id=chat_id
     )
@@ -188,25 +182,18 @@ async def test_a_question_is_asked_with_native_controls(reachable_pod):
 @proves("PS-SURF-021", "PS-AGENT-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
 async def test_an_approval_is_offered_with_native_controls(reachable_pod):
-    alice, pod, fake, handle, chat_id = reachable_pod
+    needs(MODEL_IS_REAL)
+    alice, pod, fake, handle, chat_id, table = reachable_pod
     conversation = await _their_conversation(alice, pod, fake, handle, chat_id)
 
-    await alice.tells_the_agent_to(
-        conversation,
-        [
-            attempts(
-                "request_approval",
-                tool_name="pod_tables",
-                args={},
-                title="Look at the tables",
-                reason="I need to know what is here.",
-            ),
-            answers("Thanks."),
-        ],
-        in_pod=pod,
-    )
+    del conversation  # the surface owns the thread; this scenario just talks
+    # A change, not a read. This agent holds no grant that lets it write, so the
+    # product refuses and raises the approval itself — which is more reliable
+    # than asking the agent nicely to request one, and is the path a person
+    # actually walks into.
     await _says_on_telegram(
-        alice, fake, "have a look around", update_id=chat_id * 10 + 2, handle=handle, chat_id=chat_id
+        alice, fake, f"add a row titled 'hello' to the {table['name']} table",
+        update_id=chat_id * 10 + 2, handle=handle, chat_id=chat_id
     )
 
     offered = await eventually(

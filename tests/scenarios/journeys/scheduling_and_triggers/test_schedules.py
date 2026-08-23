@@ -10,10 +10,9 @@ pytestmark = [journey("Scheduling and triggers"), capability("Make work happen o
 
 
 @pytest.fixture
-async def pod_with_agent(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def pod_with_agent(world, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     return alice, pod, agent
 
@@ -95,7 +94,7 @@ async def test_a_schedules_history_is_readable(pod_with_agent):
 async def test_an_outsider_cannot_touch_schedules(world, pod_with_agent):
     alice, pod, agent = pod_with_agent
     await alice.creates_a_schedule(in_pod=pod, agent=agent["name"])
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     created = await outsider.api.call(
         "POST",

@@ -13,10 +13,9 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+async def pod(world, run):
+    alice = await world.person("daniel")
+    return alice, await alice.creates_a_pod(named=run.name("pod"))
 
 
 @scenario("A person sees which platforms they can connect")
@@ -75,7 +74,7 @@ async def test_my_surfaces_are_listable(pod):
 @covers("agent.surface.list", "agent.surface.create")
 async def test_an_outsider_cannot_touch_surfaces(world, pod):
     alice, the_pod = pod
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     listed = await outsider.api.call("GET", f"/pods/{the_pod['id']}/surfaces")
     created = await outsider.api.call(

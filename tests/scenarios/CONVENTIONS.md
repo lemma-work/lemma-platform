@@ -73,8 +73,10 @@ async def test_creator_of_an_organization_owns_it(world):
 - **Steps are product verbs.** A path or a status code in a scenario body means
   a step is missing — add it to `harness/steps/`. That is also what will let
   these scenarios run through the CLI and the SDKs.
-- **Create everything you assert on.** The stack is shared across the session.
-  Never assert on a total. `world.new_person()` makes uniqueness the default.
+- **Create everything you assert on, and name it through `run.name()`.** The
+  stack is shared across the session and the tenant is shared across every run
+  that has ever touched it. Never assert on a total; filter to what this run
+  made. See [the standing tenant](README.md#the-standing-tenant).
 - **Move the promise to `covered` in the same pull request**, once you have
   watched it pass. If it does not pass, the finding is a `gap` and a fix to the
   code — never an edit to the assertion.

@@ -93,9 +93,8 @@ async def _run_until_settled(alice, pod, name: str, code: str):
 
 @pytest.fixture
 async def a_pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("operations")
 
 
 @scenario("A function that sleeps past its limit is stopped and marked failed")
