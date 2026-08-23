@@ -25,9 +25,28 @@ from harness.world import Sessions, World
 pytest_plugins = ["harness.reporting"]
 
 
+#: A cleanup that never finishes is worse than one that gives up: it hangs the
+#: session *after* every test has already passed, so the run reports nothing at
+#: all and looks like an infrastructure fault. Bounded, and it says when it ran
+#: out — whatever it did not reach, `make scenarios-reset` will.
+SWEEP_BUDGET = 120.0
+
+
 def await_sweep(base_url: str) -> str:
-    """Run the sweep from a synchronous fixture teardown."""
-    return asyncio.run(sweep(base_url))
+    """Run the sweep from a synchronous fixture teardown, under a time budget."""
+
+    async def bounded() -> str:
+        try:
+            return await asyncio.wait_for(sweep(base_url), timeout=SWEEP_BUDGET)
+        except TimeoutError:
+            return (
+                f"sweep gave up after {SWEEP_BUDGET:.0f}s and left some of this "
+                f"run's resources behind. The run itself is unaffected — every "
+                f"test had already finished. Run `make scenarios-reset` against "
+                f"this target to clear them."
+            )
+
+    return asyncio.run(bounded())
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

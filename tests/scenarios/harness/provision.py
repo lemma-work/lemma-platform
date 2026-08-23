@@ -249,13 +249,15 @@ async def sweep(base_url: str) -> str:
         owner.organization = await _company_named(owner, tenant.VANTAGE.name)
         if owner.organization is None:
             return "nothing to sweep: the tenant is not provisioned here"
-        for standing_pod in tenant.STANDING_PODS:
-            for pod in await owner.pods_in(owner.organization):
-                if pod.get("name") == standing_pod.name:
-                    await _clear_run_debris(
-                        owner, pod, ledger, mine=current().made_this
-                    )
+        # Pods first, deliberately. A pod this run made carries everything the
+        # run put inside it, so removing one is worth more than any number of
+        # individual deletes — and the sweep runs under a time budget, so the
+        # order decides what gets done when there is not enough of it.
         await _clear_run_pods(owner, ledger, mine=current().made_this)
+        standing = {pod.name for pod in tenant.STANDING_PODS}
+        for pod in await owner.pods_in(owner.organization):
+            if pod.get("name") in standing:
+                await _clear_run_debris(owner, pod, ledger, mine=current().made_this)
         return ledger.report(f"Swept {current()} from {base_url}")
     finally:
         await world.aclose()
