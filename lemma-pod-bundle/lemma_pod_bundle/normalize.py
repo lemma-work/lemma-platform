@@ -180,7 +180,7 @@ def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
+    stripped = _strip_keys(
         schedule,
         {
             "id",
@@ -195,6 +195,17 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
             "allowed_actions",
         },
     )
+    # `provider_trigger_id` names a subscription the *source* org owns, and
+    # webhook matching applies no tenant filter -- so an imported schedule that
+    # kept it would answer to another organization's events. It is re-minted at
+    # import anyway, whenever the new pod's account provisions one.
+    config = stripped.get("config")
+    if isinstance(config, dict) and "provider_trigger_id" in config:
+        stripped = {
+            **stripped,
+            "config": _strip_keys(config, {"provider_trigger_id"}),
+        }
+    return stripped
 
 
 def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:

@@ -239,7 +239,7 @@
       },
       {
         "name": "slack_thread_reply",
-        "event_type": "message",
+        "event_type": "message.thread",
         "description": "Triggered when a reply is posted in a thread",
         "config_schema": {
           "type": "object",

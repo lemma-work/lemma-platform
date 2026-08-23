@@ -1370,12 +1370,44 @@ async def test_sync_composio_catalog_batched_commits_per_toolkit_batch():
     assert run_batch.await_count == 3
 
 
-def test_trigger_id_includes_provider():
+def test_trigger_id_is_keyed_on_kind_like_the_uniqueness_index():
+    """The index is unique on (connector, kind, event_type). Minting the id from
+    the two-valued provider instead meant two rows the index considers distinct
+    could collide on the primary key."""
     assert (
-        importer._trigger_id("gmail", AuthProvider.COMPOSIO, "New_Message")
+        importer._trigger_id("gmail", ConnectorKind.COMPOSIO.value, "New_Message")
         == "gmail:composio:new_message"
     )
-    assert importer._trigger_id("slack", AuthProvider.LEMMA, "msg") == "slack:lemma:msg"
+    assert (
+        importer._trigger_id("slack", ConnectorKind.PACKAGE.value, "msg")
+        == "slack:package:msg"
+    )
+    # A native http connector no longer shares an id space with a package one.
+    assert (
+        importer._trigger_id("github", ConnectorKind.HTTP.value, "Push")
+        == "github:http:push"
+    )
+
+
+def test_two_triggers_sharing_an_event_type_fail_the_import():
+    with pytest.raises(ValueError, match="two triggers with event_type 'message'"):
+        importer._reject_duplicate_trigger_events(
+            "slack",
+            [
+                {"name": "slack_channel_message", "event_type": "message"},
+                {"name": "slack_thread_reply", "event_type": "message"},
+            ],
+        )
+
+
+def test_distinct_event_types_pass():
+    importer._reject_duplicate_trigger_events(
+        "slack",
+        [
+            {"name": "slack_channel_message", "event_type": "message"},
+            {"name": "slack_thread_reply", "event_type": "message.thread"},
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -1660,3 +1692,176 @@ async def test_apply_connector_renames_skips_when_target_not_synced():
         renamed = await importer._apply_connector_renames(repo, session)
     assert renamed == 0
     assert session.executed == []
+
+
+def test_a_second_native_kind_survives_the_merge():
+    """Keying the merge on the two-valued auth provider collapsed every native
+    kind onto one slot, so a connector gaining an `http` spec silently lost its
+    `package` one -- which is exactly what a package-to-http migration does."""
+    slack = ConnectorEntity(
+        id="slack",
+        title="Slack",
+        provider_capabilities=[
+            LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
+            ComposioProviderCapability(toolkit_slug="slack"),
+        ],
+    )
+
+    merged = importer._merge_provider_capabilities(
+        slack, HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)
+    )
+
+    assert [capability.kind for capability in merged] == [
+        ConnectorKind.HTTP,
+        ConnectorKind.PACKAGE,
+        ConnectorKind.COMPOSIO,
+    ]
+
+
+def test_merging_the_same_kind_twice_replaces_rather_than_duplicates():
+    github = ConnectorEntity(
+        id="github",
+        title="GitHub",
+        provider_capabilities=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
+    )
+
+    merged = importer._merge_provider_capabilities(
+        github, HttpKindSpec(auth_scheme=AuthMethod.API_KEY)
+    )
+
+    assert [capability.kind for capability in merged] == [ConnectorKind.HTTP]
+    assert merged[0].auth_scheme is AuthMethod.API_KEY
+
+
+@pytest.mark.asyncio
+async def test_a_native_http_connector_seeds_triggers_under_its_own_kind():
+    """Triggers were written under `package` regardless of the entry's kind,
+    while `list_triggers_for_auth_config` reads them back by the *install's*
+    kind. For an http connector like GitHub the rows existed and the API could
+    never return them."""
+    connector_repository = _ConnectorRepository()
+    operation_repository = AsyncMock()
+    trigger_repository = AsyncMock()
+    trigger_repository.get_by_connector_kind_and_name = AsyncMock(return_value=None)
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "github",
+                    "title": "GitHub",
+                    "description": "GitHub connector",
+                    "auth_method": "OAUTH2",
+                    "kind": "http",
+                    "triggers": [
+                        {
+                            "name": "github_pull_request_opened",
+                            "event_type": "pull_request.opened",
+                            "description": "A pull request was opened",
+                        }
+                    ],
+                }
+            ],
+        ),
+        patch.object(importer, "_list_native_apps", return_value=[]),
+    ):
+        totals = await importer._sync_native_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"github"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    assert totals[2] == 1
+    created = trigger_repository.create.await_args.args[0]
+    assert created.kind is ConnectorKind.HTTP
+    assert created.id == "github:http:pull_request.opened"
+    # The lookup has to use the same kind, or every import creates a duplicate.
+    lookup = trigger_repository.get_by_connector_kind_and_name.await_args.args
+    assert lookup[1] == ConnectorKind.HTTP.value
+
+
+@pytest.mark.asyncio
+async def test_slacks_seeded_install_schema_asks_for_the_signing_secret():
+    """An organization running its own Slack app has to supply a signing secret
+    or its webhooks cannot be verified at all. The seeder had its own copy of
+    the default-schema rule that took no connector id, so it could never
+    produce that field -- and because it wrote *a* schema into the catalog, the
+    read-time default that does know about Slack never got a chance to."""
+    connector_repository = _ConnectorRepository()
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "slack",
+                    "title": "Slack",
+                    "description": "Slack connector",
+                    "auth_method": "OAUTH2",
+                    "oauth2_config": {
+                        "authorization_url": "https://slack.com/oauth/v2/authorize",
+                        "token_url": "https://slack.com/api/oauth.v2.access",
+                    },
+                    "triggers": [],
+                }
+            ],
+        ),
+        patch.object(importer, "_list_native_apps", return_value=[]),
+    ):
+        await importer._sync_native_catalog(
+            connector_repository,
+            AsyncMock(),
+            AsyncMock(),
+            app_filters={"slack"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    schema = _capability(
+        connector_repository.entity, AuthProvider.LEMMA
+    ).auth_config_schema
+    assert "signing_secret" in schema["properties"]
+    assert "signing_secret" in schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_a_connector_without_its_own_quirks_gets_the_plain_oauth_schema():
+    connector_repository = _ConnectorRepository()
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "github",
+                    "title": "GitHub",
+                    "description": "GitHub connector",
+                    "auth_method": "OAUTH2",
+                    "kind": "http",
+                    "oauth2_config": {
+                        "authorization_url": "https://github.com/login/oauth/authorize",
+                        "token_url": "https://github.com/login/oauth/access_token",
+                    },
+                    "triggers": [],
+                }
+            ],
+        ),
+        patch.object(importer, "_list_native_apps", return_value=[]),
+    ):
+        await importer._sync_native_catalog(
+            connector_repository,
+            AsyncMock(),
+            AsyncMock(),
+            app_filters={"github"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    schema = _capability(
+        connector_repository.entity, AuthProvider.LEMMA
+    ).auth_config_schema
+    assert sorted(schema["required"]) == ["client_id", "client_secret"]

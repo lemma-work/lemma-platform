@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 
 from app.modules.connectors.domain.connector import ConnectorEntity, OAuth2Config
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
+from app.modules.connectors.services.credential_freshness import (
+    credential_refresh_due,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -110,3 +114,66 @@ async def test_exchange_code_normalizes_slack_token_type_to_bearer():
 
     assert credentials.access_token == "xoxp-user-token"
     assert credentials.token_type == "Bearer"
+
+
+class FakeExpiringOAuth2Session(FakeOAuth2Session):
+    """A provider that reports an absolute expiry, the way a GitHub App does."""
+
+    async def fetch_token(self, **kwargs):
+        FakeOAuth2Session.last_fetch_token = kwargs
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "token_type": "Bearer",
+            "expires_at": 1_800_000_000,
+        }
+
+
+class FakeShortLivedOAuth2Session(FakeOAuth2Session):
+    """A provider that reports a relative lifetime, the way Slack's user tokens do."""
+
+    async def fetch_token(self, **kwargs):
+        FakeOAuth2Session.last_fetch_token = kwargs
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 28_800,
+        }
+
+
+async def test_an_absolute_expiry_is_the_instant_the_provider_meant():
+    """`fromtimestamp` without a tz returns the wall clock of whatever host ran
+    it, and `credential_freshness` reads a naive value as UTC -- so west of UTC
+    the token looked fresher than it was. The assertion that matters is
+    `tzinfo`: an aware value cannot be misread, on any host."""
+    provider = LemmaAuthProvider(oauth_session_factory=FakeExpiringOAuth2Session)
+
+    credentials = await provider.exchange_code_for_credentials(
+        connector=_connector(),
+        redirect_uri="https://example.ngrok.app/callback?code=abc",
+        user_id=uuid4(),
+    )
+
+    assert credentials.expires_at is not None
+    assert credentials.expires_at.tzinfo is not None
+    assert credentials.expires_at == datetime(2027, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+
+
+async def test_a_relative_lifetime_is_measured_from_utc_now():
+    provider = LemmaAuthProvider(oauth_session_factory=FakeShortLivedOAuth2Session)
+    before = datetime.now(timezone.utc)
+
+    credentials = await provider.exchange_code_for_credentials(
+        connector=_connector(),
+        redirect_uri="https://example.ngrok.app/callback?code=abc",
+        user_id=uuid4(),
+    )
+
+    assert credentials.expires_at is not None
+    assert credentials.expires_at.tzinfo is not None
+    # An 8-hour token must read as ~8 hours away, not 8 hours plus the host's
+    # UTC offset.
+    remaining = credentials.expires_at - before
+    assert timedelta(hours=7, minutes=59) <= remaining <= timedelta(hours=8, minutes=1)
+    assert not credential_refresh_due({"expires_at": credentials.expires_at})

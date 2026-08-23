@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
@@ -167,11 +167,20 @@ class LemmaAuthProvider(AuthProviderInterface):
                 "connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic"
             )
 
+        # Both arms are UTC-aware on purpose. `credential_freshness._as_aware`
+        # reads a naive value as UTC, so a naive *local* expiry was being
+        # shifted by the host's offset -- west of UTC the token looked fresher
+        # than it was and proactive refresh fired late. Nothing caught it
+        # because the providers shipped here either report no expiry at all or,
+        # like GitHub's OAuth App tokens, never expire; a GitHub App's 8-hour
+        # user token is the first credential on this path with a real one.
         expires_at = None
         if "expires_at" in token_data:
-            expires_at = datetime.fromtimestamp(token_data["expires_at"])
+            expires_at = datetime.fromtimestamp(
+                token_data["expires_at"], tz=timezone.utc
+            )
         elif "expires_in" in token_data:
-            expires_at = datetime.now().replace(microsecond=0) + timedelta(
+            expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
                 seconds=token_data["expires_in"]
             )
         if connector.id == "microsoft_teams":

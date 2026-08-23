@@ -97,6 +97,7 @@ from app.modules.connectors.domain.connector import (
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
+    ConnectorKind,
     DiscoveryMode,
     HttpKindSpec,
     LemmaProviderCapability,
@@ -108,6 +109,9 @@ from app.modules.connectors.domain.connector import (
     provider_to_kind,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigStatus
+from app.modules.connectors.services.auth_config_schemas import (
+    default_auth_config_schema,
+)
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
@@ -548,29 +552,41 @@ def _system_oauth_available(system_oauth: dict[str, object] | None) -> bool:
 
 def _existing_capabilities(
     existing: ConnectorEntity | None,
-) -> dict[AuthProvider, object]:
+) -> dict[ConnectorKind, object]:
     if not existing:
         return {}
     return {
-        AuthProvider(capability.provider.value): capability
-        for capability in existing.provider_capabilities
+        capability.kind: capability for capability in existing.provider_capabilities
     }
+
+
+def _capability_order(kind: ConnectorKind) -> tuple[int, str]:
+    """Native kinds first, composio last, alphabetical within each group.
+
+    Only the *stability* matters -- ``default_kind_for_provider`` resolves the
+    legacy ``LEMMA`` vocabulary to the first non-composio spec in this list, so
+    an order that varies between imports would make that answer vary too.
+    """
+    return (1 if kind is ConnectorKind.COMPOSIO else 0, kind.value)
 
 
 def _merge_provider_capabilities(
     existing: ConnectorEntity | None,
     *capabilities: object | None,
 ) -> list[object]:
+    """Merge kind specs by *kind*, not by the two-valued auth provider.
+
+    Keying by provider collapsed every native kind onto one slot, because
+    ``kind_to_provider`` maps http/sql/mcp/package alike to ``LEMMA``. A
+    connector that gained a second native spec silently lost the first --
+    exactly what a package-to-http migration does.
+    """
     merged = _existing_capabilities(existing)
     for capability in capabilities:
         if capability is None:
             continue
-        merged[AuthProvider(capability.provider.value)] = capability
-    return [
-        merged[provider]
-        for provider in (AuthProvider.LEMMA, AuthProvider.COMPOSIO)
-        if provider in merged
-    ]
+        merged[capability.kind] = capability
+    return [merged[kind] for kind in sorted(merged, key=_capability_order)]
 
 
 def _native_package_provider_capability(
@@ -589,41 +605,23 @@ def _native_package_provider_capability(
                     "profile_operation_names": profile_operation_names,
                 }
                 if capability.auth_config_schema is None:
-                    updates["auth_config_schema"] = _default_auth_config_schema(
-                        auth_method
+                    updates["auth_config_schema"] = default_auth_config_schema(
+                        auth_method, connector_id
                     )
                 return capability.model_copy(update=updates)
         except ValueError:
             pass
 
     return _native_kind_spec(
-        auth_method=auth_method, profile_operation_names=profile_operation_names
+        connector_id=connector_id,
+        auth_method=auth_method,
+        profile_operation_names=profile_operation_names,
     )
-
-
-def _default_auth_config_schema(auth_method: AuthMethod) -> dict:
-    if auth_method != AuthMethod.OAUTH2:
-        return {"type": "object", "properties": {}, "additionalProperties": False}
-    return {
-        "type": "object",
-        "required": ["client_id", "client_secret"],
-        "properties": {
-            "client_id": {
-                "type": "string",
-                "title": "Client ID",
-            },
-            "client_secret": {
-                "type": "string",
-                "title": "Client secret",
-                "format": "password",
-            },
-        },
-        "additionalProperties": False,
-    }
 
 
 def _native_kind_spec(
     *,
+    connector_id: str | None = None,
     auth_method: AuthMethod,
     oauth2_defaults: dict | None = None,
     auth_config_schema: dict | None = None,
@@ -659,9 +657,14 @@ def _native_kind_spec(
         oauth2_defaults=OAuth2Defaults.model_validate(oauth2_defaults)
         if oauth2_defaults
         else None,
+        # `connector_id` matters: the shared default adds the signing secret an
+        # org's own Slack app needs for its webhooks to verify at all. Seeding
+        # without it wrote a schema that never asked for one, and because the
+        # catalog then *has* a schema, the read-time default never filled the
+        # gap either.
         auth_config_schema=auth_config_schema
         if auth_config_schema is not None
-        else _default_auth_config_schema(auth_method),
+        else default_auth_config_schema(auth_method, connector_id),
         credential_schema=credential_schema,
         system_oauth=SystemOAuthCredentialRef.model_validate(system_oauth)
         if system_oauth
@@ -698,8 +701,37 @@ def _operation_id(
     return f"{connector_id}:{resolved}:{operation_name}"
 
 
-def _trigger_id(connector_id: str, provider: AuthProvider, trigger_slug: str) -> str:
-    return f"{connector_id}:{provider.value.lower()}:{trigger_slug.lower()}"
+def _trigger_id(connector_id: str, kind: str, trigger_slug: str) -> str:
+    """Mint a trigger id from the *kind*, matching the uniqueness index.
+
+    This used to key on the two-valued auth provider while
+    ``ix_connector_triggers_app_kind_event`` keys on the five-valued kind, so
+    two triggers the index considers distinct could mint the same primary key.
+    Composio ids are unchanged -- its provider and kind are both ``composio``.
+    """
+    return f"{connector_id}:{kind.lower()}:{trigger_slug.lower()}"
+
+
+def _reject_duplicate_trigger_events(
+    connector_id: str, triggers: list[dict[str, object]]
+) -> None:
+    """Refuse a catalog entry whose triggers collide on ``event_type``.
+
+    Identity is ``(connector, kind, event_type)`` in the index and in the id, so
+    two triggers sharing an ``event_type`` are one row: the second silently
+    overwrote the first on every import, and the ``name`` that told them apart
+    is never read. Failing the import is the only way that stays visible.
+    """
+    seen: set[str] = set()
+    for trigger in triggers:
+        event_type = str(trigger.get("event_type") or "")
+        if event_type in seen:
+            raise ValueError(
+                f"Connector '{connector_id}' declares two triggers with "
+                f"event_type '{event_type}'. Give them distinct event types -- "
+                "a dotted sub-type such as 'message.thread' is the convention."
+            )
+        seen.add(event_type)
 
 
 def _normalize_connector_id(app_slug: str) -> str:
@@ -1025,7 +1057,7 @@ async def _upsert_trigger(
     entity = ConnectorTriggerEntity(
         id=existing.id
         if existing
-        else _trigger_id(connector_id, provider, trigger.slug),
+        else _trigger_id(connector_id, provider_to_kind(provider).value, trigger.slug),
         connector_id=connector_id,
         provider=provider,
         event_type=trigger.slug,
@@ -1196,6 +1228,7 @@ async def _sync_native_catalog(
             provider_capabilities=_merge_provider_capabilities(
                 existing,
                 _native_kind_spec(
+                    connector_id=connector_id,
                     auth_method=auth_method,
                     oauth2_defaults=app_config.get("oauth2_config"),
                     auth_config_schema=app_config.get("auth_config_schema"),
@@ -1234,7 +1267,12 @@ async def _sync_native_catalog(
                 count=op_count,
             )
 
-        # Sync triggers for this app
+        # Triggers, tagged with the same kind as the spec and the static
+        # operations above -- `list_triggers_for_auth_config` reads them back by
+        # the *install's* kind, so a trigger written under the wrong one exists
+        # in the table and is invisible through the API.
+        _reject_duplicate_trigger_events(connector_id, app_config.get("triggers", []))
+        trigger_kind = native_kind or ConnectorKind.PACKAGE.value
         for trigger_data in app_config.get("triggers", []):
             from app.modules.connectors.domain.connector_trigger import (
                 ConnectorTriggerEntity,
@@ -1242,7 +1280,7 @@ async def _sync_native_catalog(
 
             existing_trigger = await trigger_repository.get_by_connector_kind_and_name(
                 connector_id,
-                provider_to_kind(AuthProvider.LEMMA).value,
+                trigger_kind,
                 trigger_data["event_type"],
             )
             trigger_entity = ConnectorTriggerEntity(
@@ -1250,11 +1288,11 @@ async def _sync_native_catalog(
                     existing_trigger.id
                     if existing_trigger
                     else _trigger_id(
-                        connector_id, AuthProvider.LEMMA, trigger_data["event_type"]
+                        connector_id, trigger_kind, trigger_data["event_type"]
                     )
                 ),
                 connector_id=connector_id,
-                provider=AuthProvider.LEMMA,
+                kind=trigger_kind,
                 event_type=trigger_data["event_type"],
                 description=trigger_data.get("description"),
                 config_schema=trigger_data.get("config_schema"),
@@ -1473,6 +1511,7 @@ async def _sync_single_composio_toolkit(
             )
         else:
             lemma_capability = _native_kind_spec(
+                connector_id=connector_id,
                 auth_method=_infer_native_auth_method(connector_id, existing),
                 profile_operation_names=lemma_profile_operation_names,
             )
