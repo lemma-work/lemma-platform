@@ -111,7 +111,11 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
             if reset:
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
         if reset:
-            await _clear_run_pods(boss, ledger)
+            for company in tenant.COMPANIES:
+                owner = people[owner_of(company).label]
+                owner.organization = companies[company.key]
+                await _clear_run_pods(owner, ledger)
+                await _only_the_cast(owner, ledger)
 
         return ledger.report(
             f"{'Reset' if reset else 'Provisioned'} {base_url} "
@@ -215,24 +219,46 @@ async def _clear_run_debris(
     # long as it exists, and a standing pod that accumulates a few runs' worth of
     # them starves document work for everything else in that pod. That is not
     # hygiene, it is the reason a later run sees a converter that never answers.
-    for entry in _tree_entries(await owner.file_tree_of(pod)):
+    entries = _tree_entries(await owner.file_tree_of(pod))
+    # Deepest first: removing a folder takes what is inside it, so a child that
+    # has already gone would otherwise 404 and stop the sweep on its way past.
+    for entry in sorted(entries, key=lambda e: str(e.get("path", "")).count("/"), reverse=True):
         path = str(entry.get("path") or "")
-        name = str(entry.get("name") or "")
-        if path and mine(name):
+        if not mine(str(entry.get("name") or "")):
+            continue
+        try:
             await owner.deletes_file(path, in_pod=pod)
-            ledger.did(f"removed {path!r} from {pod.get('name')!r}")
+        except AssertionError:
+            continue  # already gone with its folder
+        ledger.did(f"removed {path!r} from {pod.get('name')!r}")
 
 
 def _tree_entries(tree: Any) -> list[JSON]:
-    """The top level of a pod's file tree, whatever envelope it arrives in."""
-    if isinstance(tree, dict):
-        for key in ("items", "children", "entries", "nodes"):
-            found = tree.get(key)
-            if isinstance(found, list):
-                return [entry for entry in found if isinstance(entry, dict)]
-    if isinstance(tree, list):
-        return [entry for entry in tree if isinstance(entry, dict)]
-    return []
+    """Every entry in a pod's file tree, at any depth.
+
+    All the way down, and that is not thoroughness for its own sake. A document
+    no converter can read is retried for as long as it exists, and a worker
+    doing that for a handful of them starves the agent runs everything else is
+    waiting on — which shows up as unrelated scenarios timing out, several
+    journeys away from the file that caused it. Walking only the top level left
+    exactly those files behind whenever a run had put them in a folder.
+    """
+    found: list[JSON] = []
+    _walk(tree, found)
+    return found
+
+
+def _walk(node: Any, found: list[JSON]) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _walk(item, found)
+        return
+    if not isinstance(node, dict):
+        return
+    if node.get("path") and node.get("name"):
+        found.append(node)
+    for key in ("items", "children", "entries", "nodes"):
+        _walk(node.get(key), found)
 
 
 async def sweep(base_url: str) -> str:
@@ -244,28 +270,41 @@ async def sweep(base_url: str) -> str:
     ledger = Ledger()
     world = World(base_url=base_url)
     try:
-        owner = world.arriving(*_owner_credentials())
-        await owner.signs_in()
-        owner.organization = await _company_named(owner, tenant.VANTAGE.name)
-        if owner.organization is None:
+        # Both companies. Calder Retail is small — it exists so that "somebody
+        # outside is refused" has a genuine outsider — but scenarios do make
+        # pods in it, and a sweep that only looked at Vantage left them there.
+        # A pod nobody clears keeps whatever is in it, and a document no
+        # converter can read is retried for as long as it exists.
+        swept = False
+        for company in tenant.COMPANIES:
+            owner = world.arriving(*_credentials_of(owner_of(company)))
+            await owner.signs_in()
+            owner.organization = await _company_named(owner, company.name)
+            if owner.organization is None:
+                continue
+            swept = True
+            # Pods first, deliberately. A pod this run made carries everything
+            # the run put inside it, so removing one is worth more than any
+            # number of individual deletes — and the sweep runs under a time
+            # budget, so the order decides what gets done when there is not
+            # enough of it.
+            await _clear_run_pods(owner, ledger, mine=current().made_this)
+            await _only_the_cast(owner, ledger)
+            standing = {pod.name for pod in tenant.STANDING_PODS}
+            for pod in await owner.pods_in(owner.organization):
+                if pod.get("name") in standing:
+                    await _clear_run_debris(
+                        owner, pod, ledger, mine=current().made_this
+                    )
+        if not swept:
             return "nothing to sweep: the tenant is not provisioned here"
-        # Pods first, deliberately. A pod this run made carries everything the
-        # run put inside it, so removing one is worth more than any number of
-        # individual deletes — and the sweep runs under a time budget, so the
-        # order decides what gets done when there is not enough of it.
-        await _clear_run_pods(owner, ledger, mine=current().made_this)
-        standing = {pod.name for pod in tenant.STANDING_PODS}
-        for pod in await owner.pods_in(owner.organization):
-            if pod.get("name") in standing:
-                await _clear_run_debris(owner, pod, ledger, mine=current().made_this)
         return ledger.report(f"Swept {current()} from {base_url}")
     finally:
         await world.aclose()
 
 
-def _owner_credentials() -> tuple[str, str]:
-    owner = owner_of(tenant.VANTAGE)
-    return owner.label, owner.email
+def _credentials_of(colleague: tenant.Colleague) -> tuple[str, str]:
+    return colleague.label, colleague.email
 
 
 async def _company_named(owner: Person, name: str) -> JSON | None:
@@ -273,6 +312,31 @@ async def _company_named(owner: Person, name: str) -> JSON | None:
         if organization.get("name") == name:
             return organization
     return None
+
+
+async def _only_the_cast(owner: Person, ledger: Ledger) -> None:
+    """Put the organization's membership back to the people it declares.
+
+    Not tidiness. `test_approving_within_your_own_authority_is_allowed` proves
+    that approving a join request may confer an organization role — so it does,
+    every run, to somebody the run invented. Members can be removed, unlike
+    organizations, so a tenant that reconciles its own membership stays the
+    tenant `harness/tenant.py` describes instead of growing a stranger a night.
+
+    Matched against the declared cast rather than against a name pattern: anyone
+    who is not one of them was put there by a run, and the owner is never
+    removed by construction — they are in the cast.
+    """
+    belongs = {colleague.email.lower() for colleague in tenant.CAST}
+    for member in await owner.members_of(owner.organization):
+        email = str(member.get("user_email") or member.get("email") or "").lower()
+        if not email or email in belongs:
+            continue
+        try:
+            await owner.removes_membership(member, from_organization=owner.organization)
+        except AssertionError:
+            continue
+        ledger.did(f"removed {email} from {owner.organization.get('name')!r}")
 
 
 async def _clear_run_pods(

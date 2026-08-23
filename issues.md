@@ -83,6 +83,62 @@ import — is exactly the overlap.
 better: it keeps one creator, and the search service currently also misses the
 schema-level `try_grant` that `create_datastore_schema` does afterwards.
 
+### DEV-DATA-003 — Documents no converter can read retry forever, and enough of them stall the worker for every pod
+
+**Violates:** *(no promise. The promise about unavailable converters not burning
+a document's attempts is honoured — the cost of honouring it is what this is
+about, and it lands on other pods.)*
+**Severity:** medium
+**Where:** [`file_processing_service.py`](lemma-backend/app/modules/datastore/services/file_processing_service.py),
+`extraction_unavailable_claim_released` — the path that releases a claim without
+counting an attempt
+
+**Required:** A document the converter cannot reach stays queued for a later
+attempt rather than being marked failed, and the unavailable dependency is not
+counted against its retry budget. That is `PS-DATA-041`, it is deliberate, and
+it works.
+
+**Actual:** Because no attempt is ever counted, nothing bounds the retrying. A
+document uploaded with indexing on, to a deployment whose converter is absent or
+down, is re-claimed and released for as long as the file exists — and the work
+is not free. Measured on one stack carrying four such files:
+
+```
+  90  datastore.file_processing_service.extraction_unavailable_claim_released.degraded
+  28  Task datastore_file:01a02ccd-c125-…  failed!
+  28  Task datastore_file:01a02ccd-90a5-…  failed!
+  18  Task datastore_file:01a02cdd-2d96-…  failed!
+  15  Task datastore_file:01a02cdd-5e59-…  failed!
+   7  runtime.loop_stall.degraded
+```
+
+Four unreadable files were enough to stall the worker's event loop seven times.
+The visible symptom was in a different module and four journeys away: agent runs
+dispatched from Telegram surfaces stopped being answered inside ninety seconds,
+in pods that had nothing to do with any of those files. Deleting the files made
+the retries stop immediately and the surfaces work again — so this is the
+*existence* of the documents, not a leaked task surviving them.
+
+**Why it matters:** the condition is not exotic. It is every document uploaded
+while the extraction service is down, and every document uploaded to a
+deployment that never had one. The backlog is silent — the files sit at
+`PENDING` with `processing_attempts: 0`, which is exactly what
+`PS-DATA-041` promises and gives an operator nothing to look at — while agents
+elsewhere in the deployment slow down. One tenant's unreadable PDFs become
+everybody's latency, which is the same shape as the problem
+`PS-DATA-042`'s backpressure exists to prevent for uploads.
+
+**Fix:** bound the *rate*, not the attempts. A document whose converter is
+unavailable should back off — exponentially, or by parking until the dependency
+reports healthy again — rather than being re-claimed as fast as the queue will
+allow. The attempt counter stays untouched, so `PS-DATA-041` is unaffected: what
+changes is how often a hopeless claim is retried, not how many failures it is
+charged with.
+
+**Found by:** the scenario suite running against a standing tenant. The old
+design gave every scenario a new pod and never accumulated enough stuck
+documents to notice; four were enough.
+
 ## SDK — the clients we ship
 
 ### DEV-SDK-001 — The TypeScript SDK cannot be imported from Node at all

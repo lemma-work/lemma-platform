@@ -316,6 +316,19 @@ class IdentitySteps:
             what=f"{self.label} removing {person.label} from the organization",
         )
 
+    async def removes_membership(self, member: JSON, *, from_organization: JSON) -> None:
+        """Remove a membership row, without needing the person behind it.
+
+        The counterpart of `removes_from_organization`, which resolves a `Person`
+        first. Cleanup has the row and not the person: whoever a run left in the
+        organization is somebody it invented and has no handle on any more.
+        """
+        await self.api.delete(
+            f"/organizations/{from_organization['id']}/members/{member['id']}",
+            what=f"{self.label} removing a membership from "
+            f"{from_organization.get('name')!r}",
+        )
+
     async def whoami(self) -> JSON:
         """Resolve the current credential to who it says the caller is."""
         return await self.api.get("/auth/verify-token")
