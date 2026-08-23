@@ -760,6 +760,58 @@ def _configured_or(name: str, fallback: str) -> str:
     return settings.get(name) or fallback
 
 
+WORKERS_SETTING = "SCENARIOS_WORKERS"
+
+#: Receivers that must not be run twice. A polling receiver is a single
+#: consumer by construction — Telegram answers a second `getUpdates` for the
+#: same bot with 409 Conflict, and the two pollers then take turns losing.
+_SINGLE_CONSUMER_RECEIVERS = (
+    "ENABLE_TELEGRAM_POLLING_MODE",
+    "ENABLE_TELEGRAM_MANAGER_POLLING_MODE",
+    "ENABLE_SLACK_SOCKET_MODE",
+    "ENABLE_RESEND_POLLING_MODE",
+)
+
+
+def _how_many_workers(env: dict[str, str]) -> int:
+    """How many worker processes to run. One unless asked for more.
+
+    The product expects replicas — `schedule_poller` says so in as many words:
+    "Every replica runs this. Nothing elects a leader; the claim decides who
+    fires." The suite ran exactly one, which is fine per journey and is what CI
+    does, and is the wrong shape for a local run of every journey at once: 380
+    scenarios queue their agent runs through a single event loop, and the first
+    thing to give is a scenario waiting on a reply that is merely behind a
+    queue. More workers is the honest fix, because it is the deployment shape.
+
+    Refused where a polling receiver is on, because those are single-consumer.
+    """
+    asked = os.getenv(WORKERS_SETTING, "").strip()
+    if not asked:
+        return 1
+    try:
+        many = int(asked)
+    except ValueError:
+        raise StackError(f"{WORKERS_SETTING} must be a number, got {asked!r}") from None
+    if many < 1:
+        raise StackError(f"{WORKERS_SETTING} must be at least 1, got {many}")
+    if many == 1:
+        return 1
+    polling = [
+        name
+        for name in _SINGLE_CONSUMER_RECEIVERS
+        if str(env.get(name, "")).lower() in {"1", "true", "yes"}
+    ]
+    if polling:
+        raise StackError(
+            f"{WORKERS_SETTING}={many} with {', '.join(polling)} on. Those "
+            f"receivers are single-consumer: a second poller asking Telegram "
+            f"for the same bot's updates is answered 409 Conflict, and the two "
+            f"take turns losing messages. Run one worker, or turn them off."
+        )
+    return many
+
+
 def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
     """Import the native connector catalogue.
 
@@ -958,15 +1010,16 @@ def start_stack():
         # processing are all queued rather than done in the request, so without
         # this the API accepts the work and nothing ever picks it up — which
         # looks exactly like a product bug from a scenario's point of view.
-        processes.append(
-            subprocess.Popen(
-                [python_bin, "-m", "app.worker"],
-                cwd=str(BACKEND_ROOT),
-                env=env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
+        for _ in range(_how_many_workers(env)):
+            processes.append(
+                subprocess.Popen(
+                    [python_bin, "-m", "app.worker"],
+                    cwd=str(BACKEND_ROOT),
+                    env=env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
             )
-        )
 
         yield Stack(
             base_url=base_url,

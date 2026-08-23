@@ -93,6 +93,68 @@ charged with.
 design gave every scenario a new pod and never accumulated enough stuck
 documents to notice; four were enough.
 
+## SURF — surfaces and notifications
+
+### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
+**Violates:** *(no promise, on the evidence — see below.)*
+**Severity:** medium
+**Where:** not localised. Observed through
+[`test_ingestion.py`](tests/scenarios/journeys/surfaces_and_notifications/test_ingestion.py),
+`test_an_unknown_sender_is_told_how_to_get_access`
+
+The promise this scenario carries — that an answer comes back where the question
+was asked — holds everywhere it has been checked: the scenario passes in
+isolation and in CI, and the live lane delivers a real message to a real
+Telegram account. What is recorded here is that a full local run does not get an
+answer within four minutes and that the cause is not known. Calling the promise
+broken would be claiming more than has been shown.
+
+**Required:** A message delivered to a surface is answered on that surface. The
+scenario signs a Telegram update, delivers it to the webhook path Lemma itself
+registered, and waits for the agent's reply.
+
+**Actual:** In a local run of the whole suite the reply never arrives. The wait
+gives up after **240 seconds and 2,377 polls** having seen nothing — not a slow
+answer, no answer. The same scenario passes:
+
+- on its own (0.7s),
+- with its own journey, all 38 of them,
+- paired with the file journey that was starving the worker,
+- and in CI, which shards by journey so no stack ever carries more than one.
+
+**What it is not.** Each of these was tested, not reasoned about:
+
+- *Not the worker queue.* `SCENARIOS_WORKERS=3` was added to run the replica
+  shape the product is built for — `schedule_poller` says "Every replica runs
+  this. Nothing elects a leader; the claim decides who fires" — and the failure
+  is identical with three workers as with one.
+- *Not the retrying-document storm.* That was real and is fixed separately: the
+  scenario that uploads an unreadable document now deletes it, which took its
+  own journey from 98s to 41s and one neighbouring scenario from 59.0s to 0.6s.
+  This failure survives that fix.
+- *Not the `channel_send_failed` warnings in the same log.* Those are Resend
+  401s from the fast lane's placeholder key, on a different platform.
+- *Not the mailbox change.* The journey passes 48/48 in isolation with real
+  sub-addressed addresses configured.
+
+**Why it matters:** it is the only red in an otherwise green suite, and the
+first thing a person or an agent runs locally is the whole suite. A failure
+that appears only at full size, with no error and no log line naming a cause,
+is the kind that gets re-diagnosed from scratch every time somebody meets it —
+which is what this file exists to stop. It may also be real: nothing here
+proves the product would answer given longer, only that it did not answer in
+four minutes.
+
+**Fix:** unknown, and finding it is the work. The next step is a bisect — halve
+the journey list until the smallest set that reproduces it is known — then look
+at whether the agent run was dispatched at all, dispatched and never completed,
+or completed with its reply never leaving. Those are three different bugs and
+the evidence so far does not distinguish them.
+
+**Found by:** running the full suite locally, repeatedly, while getting the rest
+of it green. It has failed the same way on every full local run in this
+sequence, before and after every change made to the suite.
+
 ## SDK — the clients we ship
 
 ### DEV-SDK-001 — The TypeScript SDK cannot be imported from Node at all
