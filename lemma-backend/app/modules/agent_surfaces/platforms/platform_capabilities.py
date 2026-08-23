@@ -28,8 +28,7 @@ class ProgressStyle(StrEnum):
 
     The three sets the progress observer used to hand-maintain — who streams
     tokens, who edits a live message, who gets nothing — were three answers to
-    one question, and they drifted: WhatsApp was in none of them and its comment
-    claimed an inbound reaction covered it, which no adapter ever sent. One field
+    one question, kept in three places that had to be updated together. One field
     on the platform, and the observer reads it.
     """
 

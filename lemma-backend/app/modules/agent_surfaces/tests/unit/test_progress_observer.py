@@ -1134,11 +1134,11 @@ async def test_whatsapp_says_something_on_a_long_run_with_no_plan():
     assert len(service.progress) == 1
 
 
-async def test_whatsapp_is_acknowledged_when_the_run_starts():
-    """The read-receipt-and-typing call existed but nothing ever invoked it.
+async def test_whatsapp_keeps_its_typing_bubble_alive():
+    """The bubble the inbound path lights up expires after ~25s.
 
-    It sat behind the same guard as the typing-refresh loop, and WhatsApp is not
-    in the refresh table.
+    Nothing refreshed it, so on a long run it went dark early — dead in exactly
+    the runs where it was the only sign of life.
     """
     service = _SurfaceService()
     observer = _observer(service)
@@ -1168,7 +1168,7 @@ async def test_email_still_shows_nothing_before_the_reply():
 
 
 async def test_slack_is_acknowledged_by_its_open_stream_and_nothing_else():
-    """The open stream is Slack's indicator; a second call would double up."""
+    """The open stream is Slack's indicator — the observer adds nothing to it."""
     service = _SurfaceService()
     observer = _observer(service)
     conversation = _conversation("SLACK")
@@ -1181,7 +1181,7 @@ async def test_slack_is_acknowledged_by_its_open_stream_and_nothing_else():
     assert service.calls == []
 
 
-async def test_email_is_not_acknowledged_at_all():
+async def test_email_gets_no_indicator_from_the_observer():
     service = _SurfaceService()
     observer = _observer(service)
 

@@ -55,10 +55,12 @@ logger = get_logger(__name__)
 _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.TELEGRAM.value: 4.0,
     SurfacePlatform.TEAMS.value: 10.0,
-    # WhatsApp couples mark-as-read and the typing bubble into one call, and the
-    # bubble expires after ~25s. Refreshed inside that window it is the cheapest
-    # honest "still working" the platform has — it costs no conversation message
-    # and no attention, unlike the posted updates that back it up.
+    # WhatsApp couples mark-as-read and the typing bubble into one call, which
+    # the ingress path already makes once when it picks the message up. The
+    # bubble expires after ~25s, so on anything longer than a quick answer it
+    # went dark and stayed dark — dead in exactly the runs where it was the only
+    # sign of life. Refreshed inside that window it costs no conversation
+    # message and no attention, unlike the posted updates that back it up.
     SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
@@ -166,25 +168,18 @@ class SurfaceAgentRunProgressObserver(
         if platform is None:
             return
         capabilities = PLATFORM_CAPABILITIES.get(platform or "")
-        if capabilities is None or not capabilities.shows_live_progress:
-            # Email: one composed reply and nothing before it.
-            return
-        if capabilities.finishes_stream_with_answer:
+        if capabilities is not None and capabilities.finishes_stream_with_answer:
             # Open the stream up front. Slack shows a live indicator on an open
             # stream, which is the only "working on it" signal a *channel* gets
             # — setStatus is assistant-DM only, and waiting for the first token
             # leaves a tool-heavy run looking dead. An empty stream is disposed
-            # of by end_progress if no answer ever arrives. That open stream *is*
-            # the acknowledgement, so nothing else is sent here.
+            # of by end_progress if no answer ever arrives.
             await self._open_stream(conversation)
-            return
-        # Acknowledge first, refresh second. These were behind one guard keyed on
-        # the refresh interval, so a platform absent from the refresh table never
-        # got the opening acknowledgement either — which is how WhatsApp came to
-        # have a read-receipt-and-typing call that nothing ever invoked.
-        sent = await self._send_indicator(conversation_id=conversation.id)
         interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
-        if not sent or interval is None:
+        if interval is None:
+            return
+        sent = await self._send_indicator(conversation_id=conversation.id)
+        if not sent:
             return
         self._typing_task = create_inherited_task(
             self._refresh_typing_loop(

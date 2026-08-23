@@ -124,10 +124,11 @@ class ProgressDisplayMixin:
     async def _maybe_post_progress(self, conversation_id, activity: str | None) -> None:
         """Send a standing-alone progress message, sparingly.
 
-        Before this, a long run on WhatsApp was silence: no typing indicator
-        exists there, no adapter ever sent the reaction the registry claimed
-        covered it, and the next thing the person saw was the answer — minutes
-        later, with no way to tell a slow run from a dropped one.
+        Before this, a long run on WhatsApp was silence. The inbound path marks
+        the message read and shows a typing bubble when it picks the message up,
+        but that bubble expires after ~25s; past it the next thing the person saw
+        was the answer, minutes later, with no way to tell a slow run from a
+        dropped one.
 
         What gets through is the plan, and only when it has actually moved. A run
         with no plan gets a single "still going" once it is long enough to look
