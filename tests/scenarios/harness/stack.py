@@ -485,6 +485,11 @@ DECIDED_BY_THE_STACK = (
     "ENABLE_TELEGRAM_POLLING_MODE",
     "ENABLE_TELEGRAM_MANAGER_POLLING_MODE",
     "ENABLE_SLACK_SOCKET_MODE",
+    # The fourth receiver toggle, missing from this list until now: a
+    # developer whose .env turned Resend polling on would have had the suite
+    # receiving mail differently from everybody else's, and passing or failing
+    # on that difference.
+    "ENABLE_RESEND_POLLING_MODE",
     # Where sandboxes run. `WORKSPACE_PROVIDER` is pinned to docker below, and a
     # stray hosted-provider key would send function runs somewhere else.
     "AGENTBOX_API_KEY",

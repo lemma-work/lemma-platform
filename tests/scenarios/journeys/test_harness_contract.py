@@ -586,7 +586,6 @@ def test_the_stand_ins_are_not_growing():
         "conftest.py",
         "journeys/operating_a_deployment/test_deleting_cleanly.py",
         "journeys/surfaces_and_notifications/conftest.py",
-        "journeys/surfaces_and_notifications/test_email_surfaces.py",
         "journeys/surfaces_and_notifications/test_ingestion.py",
         "journeys/surfaces_and_notifications/test_native_controls.py",
         "journeys/surfaces_and_notifications/test_surface_management.py",
