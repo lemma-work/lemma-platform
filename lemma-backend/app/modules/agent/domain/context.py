@@ -31,6 +31,11 @@ class AgentContext(BaseModel):
     # `memory_is_active`, which the run-context builder resolves once here so
     # the capability assembler and the brief builder cannot disagree about it.
     memory_enabled: bool = False
+    # This agent's grant summary, loaded once for the run. Toolset selection
+    # derives POD and CONNECTORS from it, and the tool assembler reuses it
+    # rather than reading the same rows a second time. Typed loosely here to
+    # keep this domain model free of a tools-layer import.
+    grant_summary: object | None = None
     # Rendered runtime brief (pod/user/granted resources) appended to the system
     # prompt. Built once per run by the runner; harness-neutral so it just rides
     # along on the context.

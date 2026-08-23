@@ -81,6 +81,11 @@ const CATEGORIES: AccessCategory[] = [
 /**
  * Toolsets, said in terms of what the agent gains. The enum name is an
  * implementation detail — `WORKSPACE_CLI` told nobody anything.
+ *
+ * Deliberately wider than `TOOL_ORDER`: only the declarable ones render as
+ * rows, but an agent created before pod access became derived still *holds*
+ * `POD`, and `toolSetLabel` is what names it wherever it is shown. Drop an entry
+ * and that becomes a title-cased enum name in front of a user.
  */
 const TOOL_COPY: Record<string, { label: string; description: string; icon: LemmaIcon }> = {
     WORKSPACE_CLI: {
@@ -153,35 +158,41 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
     },
 };
 
-/** Ordered so the abilities most agents want are decided first. */
+/**
+ * The only toolsets a person decides. Everything else an agent can do is either
+ * universal or already answered by a grant, and the server resolves it:
+ *
+ *   always on  — ask a person, skills, sleep/resume, message people, task list
+ *   derived    — pod data (any folder or table grant), connected apps (any
+ *                connector grant)
+ *   runtime    — vision, from the model's own capability
+ *
+ * Kept in step with `DECLARABLE_TOOLSETS` in
+ * `lemma-backend/app/modules/agent/tools/toolset_selection.py`. Nothing checks
+ * that for you: showing a switch the server ignores, or hiding one it honours,
+ * both fail silently.
+ *
+ * Ordered so the abilities most agents want are decided first.
+ */
 const TOOL_ORDER: string[] = [
     'WORKSPACE_CLI',
-    'POD',
     'WEB_SEARCH',
-    'SKILLS',
-    'USER_INTERACTION',
     'SUBAGENTS',
     'MEMORY',
-    'TODO',
     'SPEECH',
-    'SNOOZE',
-    'MESSAGING',
-    'VIEW_IMAGE',
-    'CONNECTORS',
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';
 
 /**
- * Memory keeps its facts in pod files, and carries no tools of its own to read
- * or write them with — so on an agent that has neither the workspace shell nor
- * pod data it is a switch that does nothing. Say so on the row rather than
- * letting someone turn it on and wonder why the agent never remembers.
+ * Memory keeps its facts in pod files and carries no tools of its own to read or
+ * write them with. Pod access is no longer a switch — it comes from granting a
+ * folder or a table — so the two ways to make memory work are the workspace
+ * shell or any data grant. Say so on the row rather than letting someone turn it
+ * on and wonder why the agent never remembers.
  */
-const MEMORY_FILE_TOOLS: string[] = ['WORKSPACE_CLI', 'POD'];
-
-function memoryNeedsAFileTool(tool: string, selected: readonly string[]) {
-    return tool === 'MEMORY' && !MEMORY_FILE_TOOLS.some((entry) => selected.includes(entry));
+function memoryNeedsAFileTool(tool: string, selected: readonly string[], grantedData: boolean) {
+    return tool === 'MEMORY' && !selected.includes('WORKSPACE_CLI') && !grantedData;
 }
 
 function toolCopy(tool: string) {
@@ -518,6 +529,13 @@ export function AgentAccessDialog({
                     <section className="agent-access-pane" aria-label={activeCategory.label}>
                         <header className="agent-access-pane-header">
                             <p className="agent-access-pane-blurb">{activeCategory.blurb}</p>
+                            {category === 'tools' ? (
+                                <p className="agent-access-pane-blurb">
+                                    Every agent can already ask you a question, request approval, keep a task
+                                    list, message people in this pod, and pause and resume. Reaching pod data
+                                    and connected apps comes from granting them, not from a switch here.
+                                </p>
+                            ) : null}
                             {isSearchable ? (
                                 <div className="agent-access-search">
                                     <Search className="agent-access-search-icon h-4 w-4" />
@@ -538,14 +556,15 @@ export function AgentAccessDialog({
                                 <div className="agent-access-list">
                                     {TOOL_ORDER
                                         .filter((tool) => Object.values(ToolSet).includes(tool as ToolSet))
-                                        .concat(
-                                            Object.values(ToolSet).filter((tool) => !TOOL_ORDER.includes(tool)),
-                                        )
                                         .filter((tool) => matches(query, toolCopy(tool).label, toolCopy(tool).description))
                                         .map((tool) => {
                                             const copy = toolCopy(tool);
                                             const Icon = copy.icon;
-                                            const unmet = memoryNeedsAFileTool(tool, selectedTools);
+                                            const unmet = memoryNeedsAFileTool(
+                                                tool,
+                                                selectedTools,
+                                                selectedFolders.length > 0 || selectedTables.length > 0,
+                                            );
 
                                             return (
                                                 <AccessRow
@@ -555,7 +574,7 @@ export function AgentAccessDialog({
                                                     title={copy.label}
                                                     description={
                                                         unmet
-                                                            ? `${copy.description} Add Workspace or Pod data — without one of them it has no way to read or write its files.`
+                                                            ? `${copy.description} Add Workspace, or grant it a folder or table — without one of those it has no way to read or write its files.`
                                                             : copy.description
                                                     }
                                                     onToggle={() => toggleTool(tool as ToolSet)}

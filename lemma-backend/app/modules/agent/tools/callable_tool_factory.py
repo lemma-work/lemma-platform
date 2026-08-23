@@ -28,6 +28,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,
@@ -132,7 +133,13 @@ class AgentCallableToolFactory:
         *,
         agent: Agent,
         allow_subagents: bool = True,
+        grants: AgentGrantSummary | None = None,
     ) -> list[FunctionToolset[BaseAgentContext]]:
+        """``function_<name>`` / ``agent_<name>`` tools for this agent's grants.
+
+        ``grants`` is the summary the caller already loaded for toolset
+        selection; passing it through spares a second read of the same rows.
+        """
         if agent.pod_id is None or agent.id is None:
             return []
 
@@ -140,11 +147,11 @@ class AgentCallableToolFactory:
         async with self.uow_factory() as uow:
             function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
-            function_ids, agent_ids = await self._load_callable_resource_ids(
-                uow,
-                pod_id=agent.pod_id,
-                agent_id=agent.id,
-            )
+            if grants is None:
+                grants = await self._load_grant_summary(
+                    uow, pod_id=agent.pod_id, agent_id=agent.id
+                )
+            function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
             for function_id in function_ids:
                 function = await function_repo.get(function_id)
@@ -175,38 +182,65 @@ class AgentCallableToolFactory:
         # conversations.
         return [FunctionToolset[BaseAgentContext](tools=tools)]
 
-    async def _load_callable_resource_ids(
+    async def load_grant_summary(
+        self, *, pod_id: UUID, agent_id: UUID
+    ) -> AgentGrantSummary:
+        """Everything one agent's grants decide, in one query.
+
+        Two consumers need this and they used to be able to disagree: the
+        callable tools below, and the toolset selection that now derives POD and
+        CONNECTORS from a grant rather than a second switch. Reading the table
+        once and handing the same answer to both is what keeps a tool from being
+        listed by one path and refused by the other.
+
+        Not filtered by permission id, unlike the callable-tool query it
+        replaces: "does this agent hold *any* grant on a folder" is a different
+        question from "may it execute this function", and a read-only grant
+        still means the agent should be able to reach pod data.
+        """
+        async with self.uow_factory() as uow:
+            return await self._load_grant_summary(uow, pod_id=pod_id, agent_id=agent_id)
+
+    async def _load_grant_summary(
         self,
         uow,
         *,
         pod_id: UUID,
         agent_id: UUID,
-    ) -> tuple[list[UUID], list[UUID]]:
+    ) -> AgentGrantSummary:
         from sqlalchemy import select
 
         stmt = select(
             ResourcePermissionGrantModel.resource_type,
             ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
         ).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
             ResourcePermissionGrantModel.grantee_type == "AGENT",
             ResourcePermissionGrantModel.grantee_id == agent_id,
-            ResourcePermissionGrantModel.permission_id.in_(
-                [Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE]
-            ),
         )
         rows = list((await uow.session.execute(stmt)).all())
-        function_ids = [
+        callable_rows = [
+            (resource_type, resource_id)
+            for resource_type, resource_id, permission_id in rows
+            if permission_id
+            in (Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE)
+        ]
+        function_ids = tuple(
             resource_id
-            for resource_type, resource_id in rows
+            for resource_type, resource_id in callable_rows
             if resource_type == "function"
-        ]
-        agent_ids = [
+        )
+        agent_ids = tuple(
             resource_id
-            for resource_type, resource_id in rows
+            for resource_type, resource_id in callable_rows
             if resource_type == "agent" and resource_id != agent_id
-        ]
-        return function_ids, agent_ids
+        )
+        return AgentGrantSummary.from_grants(
+            [(resource_type, resource_id) for resource_type, resource_id, _ in rows],
+            function_ids=function_ids,
+            agent_ids=agent_ids,
+        )
 
     def _build_function_tool(
         self, function: FunctionEntity, *, parent_agent: Agent
