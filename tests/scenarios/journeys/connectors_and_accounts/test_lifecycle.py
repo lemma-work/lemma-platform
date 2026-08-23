@@ -60,9 +60,10 @@ async def test_installing_discovers_operations(world, provider):
     installed = {c["name"] for c in await alice.auth_configs_in(organization)}
     assert auth_config["name"] in installed, installed
 
-    operations = {o["name"] for o in await alice.operations_of(
-        auth_config, in_organization=organization
-    )}
+    operations = {
+        o["name"]
+        for o in await alice.operations_of(auth_config, in_organization=organization)
+    }
     assert operations, "installing must discover what the provider offers"
     assert "create_a_widget" in operations, operations
 
@@ -98,9 +99,14 @@ async def test_an_outsider_cannot_install(world, installed, provider):
         "GET", f"/organizations/{organization['id']}/connectors/auth-configs"
     )
     created = await outsider.api.call(
-        "POST", f"/organizations/{organization['id']}/connectors/auth-configs",
-        json={"connector_id": "openapi", "kind": "http", "name": "trespass",
-              "config": {"server_url": provider.base_url, "spec_url": provider.spec_url}},
+        "POST",
+        f"/organizations/{organization['id']}/connectors/auth-configs",
+        json={
+            "connector_id": "openapi",
+            "kind": "http",
+            "name": "trespass",
+            "config": {"server_url": provider.base_url, "spec_url": provider.spec_url},
+        },
     )
 
     assert listed.status_code >= 400, listed.status_code
@@ -131,8 +137,12 @@ class TestConnectingAnAccount:
 
     @scenario("A person connects an account and it belongs to them")
     @proves("PS-CONN-020")
-    @covers("connector.account.create", "connector.account.list",
-            "connector.account.get", "connector.connected")
+    @covers(
+        "connector.account.create",
+        "connector.account.list",
+        "connector.account.get",
+        "connector.connected",
+    )
     async def test_an_account_belongs_to_who_connected_it(self, installed):
         alice, organization, _auth_config, account = installed
 
@@ -160,7 +170,11 @@ class TestConnectingAnAccount:
 
     @scenario("A person disconnects their account and it stops being usable")
     @proves("PS-CONN-020")
-    @covers("connector.account.delete", "connector.account.list", "connector.operation.execute")
+    @covers(
+        "connector.account.delete",
+        "connector.account.list",
+        "connector.operation.execute",
+    )
     async def test_disconnecting_stops_the_account_working(self, installed):
         alice, organization, auth_config, account = installed
 

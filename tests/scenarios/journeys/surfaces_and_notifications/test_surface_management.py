@@ -21,14 +21,20 @@ async def connected(world, run):
         organization = alice.organization
         pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
-        auth_config = await alice.installs_connector("telegram", in_organization=organization)
+        auth_config = await alice.installs_connector(
+            "telegram", in_organization=organization
+        )
         account = await alice.connects_account(
-            in_organization=organization, auth_config=auth_config,
+            in_organization=organization,
+            auth_config=auth_config,
             credentials={"bot_token": "424242:managed", "api_base_url": fake.api_base},
         )
         surface = await alice.connects_a_surface(
-            in_pod=pod, platform="TELEGRAM", named="tg",
-            agent=agent["name"], account=account,
+            in_pod=pod,
+            platform="TELEGRAM",
+            named="tg",
+            agent=agent["name"],
+            account=account,
         )
         yield alice, pod, agent, surface, fake
     finally:
@@ -37,8 +43,9 @@ async def connected(world, run):
 
 @scenario("A person reads a connected surface and how far its setup got")
 @proves("PS-SURF-001")
-@covers("agent.surface.get", "agent.surface.setup", "agent.surface.list",
-        "surface.connected")
+@covers(
+    "agent.surface.get", "agent.surface.setup", "agent.surface.list", "surface.connected"
+)
 async def test_a_surface_reads_back(connected):
     alice, pod, _agent, surface, _fake = connected
 
@@ -113,10 +120,18 @@ async def test_deleting_a_surface_stops_it(connected):
 
     assert surface["name"] not in {s["name"] for s in await alice.surfaces_in(pod)}
     delivered = await alice.api.call(
-        "POST", path,
-        json={"update_id": 1, "message": {"message_id": 1, "date": 1700000000,
-              "chat": {"id": 999, "type": "private"},
-              "from": {"id": 999, "is_bot": False, "first_name": "S"}, "text": "hi"}},
+        "POST",
+        path,
+        json={
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "date": 1700000000,
+                "chat": {"id": 999, "type": "private"},
+                "from": {"id": 999, "is_bot": False, "first_name": "S"},
+                "text": "hi",
+            },
+        },
         headers={"X-Telegram-Bot-Api-Secret-Token": secret},
     )
     assert delivered.status_code >= 400, (
@@ -145,7 +160,8 @@ async def test_a_managed_bot_setup_says_what_is_missing(connected):
     alice, pod, agent, _surface, _fake = connected
 
     started = await alice.api.call(
-        "POST", f"/pods/{pod['id']}/telegram-bot-setups",
+        "POST",
+        f"/pods/{pod['id']}/telegram-bot-setups",
         json={"name": "managed", "default_agent_name": agent["name"]},
     )
 
@@ -171,13 +187,13 @@ async def test_the_manager_webhook_rejects_unsigned(world, connected):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
-        "POST", "/surfaces/webhooks/telegram-manager",
+        "POST",
+        "/surfaces/webhooks/telegram-manager",
         json={"update_id": 1, "message": {"text": "/start"}},
     )
 
     assert response.status_code >= 400, (
-        f"an unsigned delivery to the manager bot was accepted "
-        f"({response.status_code})"
+        f"an unsigned delivery to the manager bot was accepted ({response.status_code})"
     )
 
 
@@ -188,7 +204,8 @@ async def test_a_consent_callback_without_a_grant_is_refused(world):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
-        "GET", "/surfaces/teams/admin-consent/callback",
+        "GET",
+        "/surfaces/teams/admin-consent/callback",
         params={"tenant": "not-a-tenant", "state": "not-a-state"},
     )
 

@@ -24,7 +24,9 @@ async def test_a_workflow_can_be_changed(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
 
     await alice.changes_workflow(
@@ -44,7 +46,9 @@ async def test_a_workflows_runs_are_listed(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
 
@@ -61,7 +65,9 @@ async def test_a_run_can_be_watched(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
 
@@ -79,7 +85,9 @@ async def test_cancelling_a_finished_run_is_refused(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
     assert run["status"] == "COMPLETED", run
@@ -110,7 +118,9 @@ async def test_answering_a_run_that_is_not_waiting_is_refused(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
 
@@ -131,7 +141,9 @@ async def test_a_run_can_be_visualised(pod):
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
     await alice.gives_workflow_a_graph(
         workflow["name"],
-        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+        nodes=[{"id": "done", "type": "END"}],
+        edges=[],
+        in_pod=the_pod,
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
 

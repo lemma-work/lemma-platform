@@ -22,7 +22,8 @@ async def stocked(world):
     )
     await alice.adds_records(
         [{"title": f"row {n}", "rank": n} for n in range(5)],
-        to_table=table["name"], in_pod=pod,
+        to_table=table["name"],
+        in_pod=pod,
     )
     return alice, pod, table["name"]
 
@@ -38,7 +39,8 @@ async def test_many_records_change_at_once(stocked):
         # A bulk update row is the record itself, keyed by id — not an
         # envelope with the changes nested under `data`.
         [{"id": str(r["id"]), "title": f"renamed {r['rank']}"} for r in rows],
-        in_table=table, in_pod=pod,
+        in_table=table,
+        in_pod=pod,
     )
 
     after = await alice.records_in(table, in_pod=pod, limit=50)
@@ -82,7 +84,9 @@ class TestAsking:
     async def test_a_query_returns_rows(self, stocked):
         alice, pod, table = stocked
 
-        answer = await alice.asks(f"SELECT title, rank FROM {table} ORDER BY rank", in_pod=pod)
+        answer = await alice.asks(
+            f"SELECT title, rank FROM {table} ORDER BY rank", in_pod=pod
+        )
 
         assert answer is not None, answer
         assert "row 0" in str(answer), answer

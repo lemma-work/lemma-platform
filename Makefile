@@ -1450,6 +1450,11 @@ format:
 	@cd $(STACK_DIR) && $(RUFF) format .
 	@echo "→ Pod bundle…"
 	@cd $(BUNDLE_DIR) && $(RUFF) format .
+	@# Scenarios was in `lint` but in neither of these, so `ruff check` held
+	@# while formatting drifted across 51 files. A directory that is checked
+	@# but never formatted is the one that drifts, because nothing says so.
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format .
 
 format-check:
 	@echo "→ Backend…"
@@ -1462,6 +1467,8 @@ format-check:
 	@cd $(STACK_DIR) && $(RUFF) format --check .
 	@echo "→ Pod bundle…"
 	@cd $(BUNDLE_DIR) && $(RUFF) format --check .
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format --check .
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #

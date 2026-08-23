@@ -45,11 +45,13 @@ async def test_an_agents_reach_can_be_set(pod):
 
     await alice.replaces_agent_grants(
         agent["name"],
-        grants=[{
-            "resource_type": "datastore_table",
-            "resource_name": table["name"],
-            "permission_ids": ["datastore.table.read", "datastore.record.read"],
-        }],
+        grants=[
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table["name"],
+                "permission_ids": ["datastore.table.read", "datastore.record.read"],
+            }
+        ],
         in_pod=the_pod,
     )
 
@@ -68,11 +70,13 @@ async def test_a_functions_reach_can_be_set(pod):
 
     await alice.replaces_function_grants(
         function["name"],
-        grants=[{
-            "resource_type": "datastore_table",
-            "resource_name": table["name"],
-            "permission_ids": ["datastore.table.read"],
-        }],
+        grants=[
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table["name"],
+                "permission_ids": ["datastore.table.read"],
+            }
+        ],
         in_pod=the_pod,
     )
 
@@ -150,7 +154,9 @@ class TestSteeringAConversation:
         )
         response = await alice.decides(
             {"id": "00000000-0000-0000-0000-000000000001"},
-            allow=True, conversation=conversation, in_pod=the_pod,
+            allow=True,
+            conversation=conversation,
+            in_pod=the_pod,
         )
 
         assert response.status_code >= 400, (
@@ -220,9 +226,7 @@ async def test_a_data_grant_brings_its_own_tools(pod):
     conversation = await alice.starts_a_conversation(
         in_pod=the_pod,
         with_agent=agent["name"],
-        saying=(
-            f"Read the {table['name']} table and tell me what rows are in it."
-        ),
+        saying=(f"Read the {table['name']} table and tell me what rows are in it."),
     )
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
 

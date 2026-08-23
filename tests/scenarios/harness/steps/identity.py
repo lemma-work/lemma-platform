@@ -116,9 +116,7 @@ class IdentitySteps:
     async def _enters(self, path: str, *, doing: str, **kwargs: Any) -> JSON:
         # Deliberately `call` rather than `expect`: the access token comes back
         # as a response *header*, so the decoded body alone is not enough.
-        response = await self.api.call(
-            "POST", path, json=self._credentials(), **kwargs
-        )
+        response = await self.api.call("POST", path, json=self._credentials(), **kwargs)
         if response.status_code != 200:
             raise AssertionError(
                 f"{self.label} could not {doing}: {response.status_code}\n"
@@ -342,7 +340,6 @@ class IdentitySteps:
         raise AssertionError(
             f"{person.label} is not a member of {in_organization.get('name')!r}"
         )
-
 
     async def removes_from_organization(self, person: Any, *, organization: JSON) -> None:
         member = await self.org_membership_of(person, in_organization=organization)

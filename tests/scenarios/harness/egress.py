@@ -216,8 +216,10 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
     port, control = _free_port(), _free_port()
 
     settings = [
-        "--set", f"confdir={confdir}",
-        "--set", f"control_port={control}",
+        "--set",
+        f"confdir={confdir}",
+        "--set",
+        f"control_port={control}",
         # Bodies are deliberately *not* streamed. mitmproxy streams a response
         # straight through without keeping it, so a recording made with
         # streaming on replays as "200 OK (content missing)" — which is a
@@ -228,21 +230,34 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
         settings += ["-w", str(recording)]
     else:
         settings += [
-            "--set", f"server_replay={recording}",
+            "--set",
+            f"server_replay={recording}",
             # The whole safety story in one setting: a request nobody recorded
             # is killed rather than forwarded, so a replay run cannot quietly
             # reach the real internet and pass for the wrong reason.
-            "--set", "server_replay_extra=kill",
+            "--set",
+            "server_replay_extra=kill",
             # A scenario may poll — asking twice must not exhaust the recording.
-            "--set", "server_replay_reuse=true",
-            "--set", "server_replay_refresh=true",
+            "--set",
+            "server_replay_reuse=true",
+            "--set",
+            "server_replay_refresh=true",
         ]
 
     log = scratch / "egress.log"
     process = subprocess.Popen(  # noqa: S603 — arguments are ours, not a scenario's
-        [*_mitmdump(), "--listen-host", "127.0.0.1", "-p", str(port),
-         "-s", str(Path(__file__).resolve().parent / "egress_addon.py"), *settings],
-        stdout=log.open("w"), stderr=subprocess.STDOUT,
+        [
+            *_mitmdump(),
+            "--listen-host",
+            "127.0.0.1",
+            "-p",
+            str(port),
+            "-s",
+            str(Path(__file__).resolve().parent / "egress_addon.py"),
+            *settings,
+        ],
+        stdout=log.open("w"),
+        stderr=subprocess.STDOUT,
     )
 
     egress = Egress(

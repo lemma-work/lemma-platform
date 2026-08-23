@@ -69,8 +69,7 @@ def test_suite_is_black_box():
                         f"{path.relative_to(SUITE)}:{node.lineno} imports {root!r}"
                     )
     assert not offenders, (
-        "the scenario suite must reach Lemma only over HTTP:\n  "
-        + "\n  ".join(offenders)
+        "the scenario suite must reach Lemma only over HTTP:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -87,7 +86,9 @@ def test_scenarios_do_not_mock():
                             f"{path.relative_to(SUITE)}:{node.lineno} "
                             f"imports {alias.name!r}"
                         )
-            elif isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES:
+            elif (
+                isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES
+            ):
                 offenders.append(
                     f"{path.relative_to(SUITE)}:{node.lineno} imports from "
                     f"{node.module!r}"
@@ -100,9 +101,7 @@ def test_scenarios_do_not_mock():
                 # The `monkeypatch` fixture, taken as a test argument.
                 name = node.arg
             if name in FORBIDDEN_NAMES:
-                offenders.append(
-                    f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}"
-                )
+                offenders.append(f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}")
     assert not offenders, (
         "a scenario asserts against the real system, never a substituted one:\n  "
         + "\n  ".join(offenders)
@@ -148,8 +147,7 @@ def test_every_scenario_declares_what_it_proves(path: Path):
         decorators = {
             decorator.func.id
             for decorator in node.decorator_list
-            if isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Name)
+            if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
         }
         absent = {"scenario", "proves"} - decorators
         if absent:
@@ -183,12 +181,11 @@ def test_step_names_do_not_collide():
                     continue
                 if item.name in seen and seen[item.name] != path.name:
                     clashes.append(
-                        f"{item.name!r} defined in both {seen[item.name]} and "
-                        f"{path.name}"
+                        f"{item.name!r} defined in both {seen[item.name]} and {path.name}"
                     )
                 seen[item.name] = path.name
-    assert not clashes, (
-        "step verbs must be unique across mixins:\n  " + "\n  ".join(clashes)
+    assert not clashes, "step verbs must be unique across mixins:\n  " + "\n  ".join(
+        clashes
     )
 
 
@@ -221,7 +218,7 @@ def test_stack_never_inherits_real_infrastructure():
     # With inheritance on, which is when the danger exists at all.
     os.environ["SCENARIOS_USE_DEPLOYMENT_ENV"] = "1"
     try:
-            stack = _environment(
+        stack = _environment(
             port=12345,
             database_url="postgresql://scenarios/disposable",
             redis_url="redis://scenarios/9",
@@ -403,8 +400,7 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
         "having them open"
     )
     assert LOOPBACK_REACHABLE.missing_on(silent), (
-        "a deployment that said nothing was read as able to call back to this "
-        "machine"
+        "a deployment that said nothing was read as able to call back to this machine"
     )
 
 
@@ -567,6 +563,7 @@ def test_the_stand_ins_are_not_growing():
     until their journeys move. What must not happen is a *new* one appearing
     while it is being taken away — that is how a retirement becomes permanent.
     """
+
     def imports_a_fake(path: Path) -> bool:
         # Imports, not mentions: this file and the capability that gates the
         # fakes both *talk about* them, which is not the same as using one.
@@ -612,17 +609,15 @@ def test_every_journey_runs_in_ci():
     import re
 
     workflow = (
-        Path(__file__).resolve().parents[3]
-        / ".github"
-        / "workflows"
-        / "scenarios.yml"
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "scenarios.yml"
     )
     named = set(re.findall(r"journeys/([a-z_]+)", workflow.read_text()))
 
     on_disk = {
         directory.name
         for directory in (Path(__file__).resolve().parent).iterdir()
-        if directory.is_dir() and not directory.name.startswith(("_", "."))
+        if directory.is_dir()
+        and not directory.name.startswith(("_", "."))
         # The live lane is deliberately elsewhere: it needs real providers and
         # runs nightly, never on a pull request.
         and directory.name != "live"

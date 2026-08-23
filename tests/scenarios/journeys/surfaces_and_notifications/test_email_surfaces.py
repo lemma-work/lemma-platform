@@ -126,9 +126,7 @@ async def test_an_email_surface_has_an_address(mailbox):
 
     address = _address_of(surface)
 
-    assert address, (
-        f"an email surface with no address cannot be written to: {surface}"
-    )
+    assert address, f"an email surface with no address cannot be written to: {surface}"
     assert address.endswith(RESEND_INBOUND_DOMAIN), (
         f"the surface's address is not under this deployment's inbound domain, "
         f"so mail to it will never arrive: {address!r}"
@@ -219,7 +217,6 @@ async def test_an_unsigned_email_is_refused(mailbox):
         f"an unsigned email was accepted ({refused.status_code}); anyone who "
         f"knows the address could start an agent"
     )
-
 
 
 def _address_of(surface) -> str:

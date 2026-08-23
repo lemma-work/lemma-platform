@@ -25,7 +25,6 @@ pytestmark = [
 ]
 
 
-
 @pytest.fixture
 async def telegram(world, run):
     """A pod reachable on Telegram, with the platform stood in for."""
@@ -36,7 +35,9 @@ async def telegram(world, run):
         pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
 
-        auth_config = await alice.installs_connector("telegram", in_organization=organization)
+        auth_config = await alice.installs_connector(
+            "telegram", in_organization=organization
+        )
         account = await alice.connects_account(
             in_organization=organization,
             auth_config=auth_config,
@@ -76,14 +77,17 @@ def _update(*, chat_id: int, text: str, from_id: int, update_id: int = 1) -> dic
 @pytest.mark.timeout(360)
 @scenario("A message from an unrecognised sender is answered with how to get access")
 @proves("PS-SURF-010", "PS-SURF-012", "PS-SURF-020")
-@covers("surface.webhook.handle_platform", "agent.surface.send", "surface.message_answered")
+@covers(
+    "surface.webhook.handle_platform", "agent.surface.send", "surface.message_answered"
+)
 async def test_an_unknown_sender_is_told_how_to_get_access(world, telegram):
     alice, pod, fake = telegram
     chat_id = 55501
 
     # Delivered where Lemma told Telegram to deliver, not to a guessed path.
     delivered = await alice.api.call(
-        "POST", fake.webhook_path,
+        "POST",
+        fake.webhook_path,
         json=_update(chat_id=chat_id, text="hello there", from_id=chat_id),
         headers={"X-Telegram-Bot-Api-Secret-Token": fake.webhook_secret},
     )
@@ -125,7 +129,8 @@ async def test_an_unsigned_delivery_is_rejected(world, telegram):
     chat_id = 55502
 
     delivered = await alice.api.call(
-        "POST", fake.webhook_path,
+        "POST",
+        fake.webhook_path,
         json=_update(chat_id=chat_id, text="let me in", from_id=chat_id),
     )
 
@@ -148,7 +153,8 @@ async def test_a_wrongly_signed_delivery_is_rejected(world, telegram):
     chat_id = 55503
 
     delivered = await alice.api.call(
-        "POST", fake.webhook_path,
+        "POST",
+        fake.webhook_path,
         json=_update(chat_id=chat_id, text="let me in", from_id=chat_id),
         headers={"X-Telegram-Bot-Api-Secret-Token": "not-the-secret"},
     )
@@ -164,7 +170,9 @@ async def test_a_wrongly_signed_delivery_is_rejected(world, telegram):
 async def test_a_repeated_delivery_is_answered_once(world, telegram):
     alice, pod, fake = telegram
     chat_id = 55504
-    update = _update(chat_id=chat_id, text="only once please", from_id=chat_id, update_id=9001)
+    update = _update(
+        chat_id=chat_id, text="only once please", from_id=chat_id, update_id=9001
+    )
     headers = {"X-Telegram-Bot-Api-Secret-Token": fake.webhook_secret}
 
     await alice.api.call("POST", fake.webhook_path, json=update, headers=headers)

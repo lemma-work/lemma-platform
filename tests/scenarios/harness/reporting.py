@@ -82,9 +82,7 @@ def _first_mark_arg(item: pytest.Item, name: str) -> str | None:
 def _all_mark_args(item: pytest.Item, name: str) -> tuple[str, ...]:
     # iter_markers walks module -> class -> function, so several @proves stack
     # rather than the innermost silently winning.
-    return tuple(
-        str(arg) for mark in item.iter_markers(name) for arg in mark.args
-    )
+    return tuple(str(arg) for mark in item.iter_markers(name) for arg in mark.args)
 
 
 #: ``pytest_runtest_logreport`` is not handed the config, and the report object

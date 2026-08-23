@@ -87,9 +87,15 @@ class CliDriver:
         # which is the entrypoint a user actually has on their PATH. `python -m
         # lemma_cli` is not it — the package has no `__main__`.
         command = [
-            "uv", "run", "--project", str(CLI_PROJECT), "lemma",
-            "--base-url", self.base_url,
-            "--token", self.token,
+            "uv",
+            "run",
+            "--project",
+            str(CLI_PROJECT),
+            "lemma",
+            "--base-url",
+            self.base_url,
+            "--token",
+            self.token,
         ]
         if org:
             command += ["--org", org]

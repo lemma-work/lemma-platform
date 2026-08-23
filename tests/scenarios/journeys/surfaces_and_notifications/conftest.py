@@ -32,9 +32,16 @@ class Reachable:
     chat_id: int
     agent: Any
 
-    def update(self, text: str, *, update_id: int, chat_id: int | None = None,
-               thread_id: int | None = None, document: dict | None = None,
-               voice: dict | None = None) -> dict:
+    def update(
+        self,
+        text: str,
+        *,
+        update_id: int,
+        chat_id: int | None = None,
+        thread_id: int | None = None,
+        document: dict | None = None,
+        voice: dict | None = None,
+    ) -> dict:
         """One inbound message, shaped the way Telegram shapes them."""
         chat = chat_id if chat_id is not None else self.chat_id
         message: dict = {
@@ -117,13 +124,20 @@ async def reachable(world, run):
             },
         )
         await alice.connects_a_surface(
-            in_pod=pod, platform="TELEGRAM", named="tg",
-            agent=agent["name"], account=account,
+            in_pod=pod,
+            platform="TELEGRAM",
+            named="tg",
+            agent=agent["name"],
+            account=account,
         )
         fake.clear()
         yield Reachable(
-            alice=alice, pod=pod, fake=fake, handle=handle,
-            chat_id=chat_id, agent=agent,
+            alice=alice,
+            pod=pod,
+            fake=fake,
+            handle=handle,
+            chat_id=chat_id,
+            agent=agent,
         )
     finally:
         fake.stop()
