@@ -58,11 +58,18 @@ class IdentitySteps:
 
     # --- account ---------------------------------------------------------
 
-    async def signs_up(self) -> JSON:
-        """Register, which also signs the person in — there is no second step."""
-        return await self._enters(SIGNUP_PATH, doing="sign up")
+    async def signs_up(self, **kwargs: Any) -> JSON:
+        """Register, which also signs the person in — there is no second step.
 
-    async def signs_in(self) -> JSON:
+        ``**kwargs`` reaches the raw request untouched (``headers=``, most
+        often) — this method has no opinion on what a deployment wants in
+        front of signup, only on what signing up means once it is let
+        through. A deployment that wants more than a password is a caller's
+        problem to solve, not this suite's to know how.
+        """
+        return await self._enters(SIGNUP_PATH, doing="sign up", **kwargs)
+
+    async def signs_in(self, **kwargs: Any) -> JSON:
         """Come back to an account that already exists.
 
         This is what a standing cast does at the start of every run, and it is
@@ -70,9 +77,9 @@ class IdentitySteps:
         not: signing in passes none of the gates a real deployment keeps in
         front of registration.
         """
-        return await self._enters(SIGNIN_PATH, doing="sign in")
+        return await self._enters(SIGNIN_PATH, doing="sign in", **kwargs)
 
-    async def arrives(self) -> bool:
+    async def arrives(self, **kwargs: Any) -> bool:
         """Register if this address is new, sign in if it is not. New?
 
         What provisioning uses, and the order it tries them in is the point.
@@ -82,7 +89,9 @@ class IdentitySteps:
         block outright. Registering first costs one request either way and never
         fails on a person who is simply already here.
         """
-        response = await self.api.call("POST", SIGNUP_PATH, json=self._credentials())
+        response = await self.api.call(
+            "POST", SIGNUP_PATH, json=self._credentials(), **kwargs
+        )
         payload = response.json() if response.content else {}
         if response.status_code == 200 and payload.get("status") == "OK":
             self._admitted(response, payload, doing="sign up")
@@ -104,10 +113,12 @@ class IdentitySteps:
             ]
         }
 
-    async def _enters(self, path: str, *, doing: str) -> JSON:
+    async def _enters(self, path: str, *, doing: str, **kwargs: Any) -> JSON:
         # Deliberately `call` rather than `expect`: the access token comes back
         # as a response *header*, so the decoded body alone is not enough.
-        response = await self.api.call("POST", path, json=self._credentials())
+        response = await self.api.call(
+            "POST", path, json=self._credentials(), **kwargs
+        )
         if response.status_code != 200:
             raise AssertionError(
                 f"{self.label} could not {doing}: {response.status_code}\n"
@@ -135,6 +146,30 @@ class IdentitySteps:
         # ageing out mid-run is the driver's problem rather than a scenario's.
         self.api.renews_with(self.signs_in)
         self.user_id = payload["user"]["id"]
+
+    async def is_email_verified(self) -> bool:
+        return bool((await self.api.get("/st/auth/user/email/verify")).get("isVerified"))
+
+    async def requests_email_verification(self, **kwargs: Any) -> None:
+        """Ask the deployment to send this person a verification email.
+
+        ``**kwargs`` reaches the raw request, same as ``signs_up`` — a
+        deployment that gates this the way it gates signup is a caller's
+        problem to solve, not this method's to know how.
+        """
+        await self.api.post("/st/auth/user/email/verify/token", **kwargs)
+
+    async def verifies_email(self, token: str) -> None:
+        """Consume a verification token — the one a person gets by clicking
+        the email's link, obtained however the caller obtained it."""
+        payload = await self.api.post(
+            "/st/auth/user/email/verify", json={"method": "token", "token": token}
+        )
+        if payload.get("status") != "OK":
+            raise AssertionError(
+                f"{self.label} could not verify their email: "
+                f"{payload.get('status')!r} — {payload}"
+            )
 
     async def profile(self) -> JSON:
         return await self.api.get("/users/me")
