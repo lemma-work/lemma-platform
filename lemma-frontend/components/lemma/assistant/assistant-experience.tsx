@@ -21,17 +21,19 @@ import type {
 import {
   buildDisplayMessageRows,
   findPendingUserApprovalInvocation,
+  isAskUserToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
 // Rows → turns: the conversation-shaped model (ask, work pill, speech,
 // artifacts, interaction cards) the transcript renders.
-import { buildChatTurns } from "@/lib/assistant/turns";
+import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
 import { LEM_SEED } from "@/lib/identity/seeded-identity";
 import { ResourceIdentity } from "@/components/shared/resource-identity";
+import { Button } from "@/components/ui/button";
 import type {
   AssistantRenderableMessage,
 } from "lemma-sdk/react";
@@ -344,6 +346,19 @@ export function AssistantExperienceView({
   // the composer stays put — but answering is the card's job, so the composer
   // refuses to send until the interaction resolves.
   const interactionPending = !!activePendingApprovalInvocation;
+  // A blocked composer has to be able to point at what is blocking it. The card
+  // is the only way to answer and the input refuses to send until it resolves,
+  // so if the reader has scrolled away from it — or a tall card below it pushed
+  // it off screen — the conversation has no visible way forward.
+  const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
+  const pendingInteractionIsAsk = !!activePendingApprovalInvocation
+    && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  const scrollToPendingInteraction = useCallback(() => {
+    if (!pendingInteractionCallId) return;
+    document
+      .getElementById(interactionAnchorId(pendingInteractionCallId))
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [pendingInteractionCallId]);
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {
@@ -548,9 +563,22 @@ export function AssistantExperienceView({
     : failedFileCount > 0
       ? `${pluralize(failedFileCount, "file")} failed to upload`
       : null;
-  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel;
+  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel || interactionPending;
   const composerStatus = (
     <>
+      {interactionPending ? (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          onClick={scrollToPendingInteraction}
+          className="h-auto px-0 text-xs font-normal"
+        >
+          {pendingInteractionIsAsk
+            ? "Answer the question to continue"
+            : "Approve or reject to continue"}
+        </Button>
+      ) : null}
       {showComposerStatus && runStatusModel ? (
         <LiveRunStatusLine status={runStatusModel} />
       ) : null}

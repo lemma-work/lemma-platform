@@ -261,6 +261,71 @@ describe("buildChatTurns", () => {
     expect(turns[0].resources[0].request.type).toBe("TABLE");
   });
 
+  it("cards render where they happened, so a question never sits above the card it asks about", () => {
+    const turns = turnsFor([
+      userMessage("show me the orders and pick one"),
+      toolCall("display_resource", "call-1", 10, { type: "TABLE", name: "orders" }, { success: true }),
+      toolCall("ask_user", "call-2", 20, { questions: [{ header: "Row", question: "Which one?" }] }),
+    ]);
+
+    expect(turns[0].items.map((item) => item.kind)).toEqual(["resource", "interaction"]);
+    expect(turns[0].hasPendingInteraction).toBe(true);
+  });
+
+  it("a written file's card moves to the beat that presented it", () => {
+    const turns = turnsFor([
+      userMessage("make it, say something, then show it"),
+      toolCall("pod_write_file", "call-1", 10, { path: "/me/intro.mp4" }, { success: true, path: "/me/intro.mp4", size_bytes: 4_200_000 }),
+      assistantText("Rendered it — have a look.", 20, { is_intermediate_assistant_message: true }),
+      toolCall("display_resource", "call-2", 30, { type: "FILE", path: "/me/intro.mp4" }, { success: true }),
+    ]);
+
+    expect(turns[0].items.map((item) => item.kind)).toEqual(["text", "artifact"]);
+    expect(turns[0].artifacts).toHaveLength(1);
+  });
+
+  it("a card between beats does not break the closing answer's document card", () => {
+    const long = `# Report\n\n${"Body text that runs on. ".repeat(40)}`;
+    const turns = turnsFor([
+      userMessage("write it up"),
+      toolCall("display_resource", "call-1", 10, { type: "TABLE", name: "orders" }, { success: true }),
+      assistantText(long, 20),
+    ]);
+
+    const answer = turns[0].items.find((item) => item.kind === "text");
+    expect(answer).toMatchObject({ kind: "text", documentEligible: true });
+  });
+
+  it("say is the reply: the voice note cards as audio and never lands in the trace", () => {
+    const turns = turnsFor([
+      userMessage("read that back to me"),
+      toolCall("say", "call-1", 10, { text: "Here you go." }, { success: true, audio_file_path: "/me/speech/019f2c.mp3" }),
+    ]);
+
+    expect(turns[0].artifacts).toHaveLength(1);
+    expect(turns[0].artifacts[0]).toMatchObject({
+      path: "/me/speech/019f2c.mp3",
+      kind: "audio",
+      ext: "MP3",
+      name: "Voice note",
+    });
+    expect(turns[0].items.map((item) => item.kind)).toEqual(["artifact"]);
+    expect(turns[0].trace).toHaveLength(0);
+    expect(turns[0].toolCount).toBe(0);
+  });
+
+  it("a failed say has nothing to play, so it stays work in the trace", () => {
+    const turns = turnsFor([
+      userMessage("read that back to me"),
+      toolCall("say", "call-1", 10, { text: "Here you go." }, { success: false, error: "Speech synthesis failed." }),
+      assistantText("Voice is down — here it is as text.", 20),
+    ]);
+
+    expect(turns[0].artifacts).toHaveLength(0);
+    expect(turns[0].toolCount).toBe(1);
+    expect(turns[0].failedCount).toBe(1);
+  });
+
   it("ask_user becomes an in-chat interaction card, pending until answered", () => {
     const pending = turnsFor([
       userMessage("deploy it"),
