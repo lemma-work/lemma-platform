@@ -141,6 +141,67 @@ def test_showing_your_work_is_taught_on_both_paths():
     assert "display_resource" in remote.read_text()
 
 
+def test_the_memory_contract_is_taught_on_both_paths():
+    """Memory is the one capability with no toolset to hang its fragment on.
+
+    Every other fragment reaches the in-process harness by matching a toolset
+    object in ``_instructions_for``. MEMORY carries no tools, so it has to be
+    appended from ``ctx.memory_enabled`` instead — and this is the test that
+    notices if only one of the two paths keeps it.
+    """
+    from app.modules.agent.capabilities.memory import MemoryCapability
+    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
+
+    in_process = MemoryCapability().get_instructions()
+    assert "/memory" in in_process and "AGENTS.md" in in_process
+
+    remote = FRAGMENT_BY_TOOLSET.get(AgentToolset.MEMORY)
+    assert remote is not None, "the remote-harness path lost the fragment"
+    assert remote.read_text().strip() == in_process
+
+
+def test_the_memory_contract_is_written_down_exactly_once():
+    """It used to be three hand-synced copies: this fragment, and paragraphs in
+    the `pod_write_file` and `pod_read_file` docstrings. Two of those could
+    drift from the truth without anything failing."""
+    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    from app.modules.agent.tools.pod.pod_file_tools import pod_read_file, pod_write_file
+
+    for docstring in (pod_write_file.__doc__ or "", pod_read_file.__doc__ or ""):
+        assert "AGENTS.md" not in docstring
+        assert "/memory" not in docstring
+    # The workspace CLI prompt still names `/memory` as a path shape, but no
+    # longer restates the contract.
+    assert "## Memory" not in load_workspace_cli_prompt()
+
+
+@pytest.mark.anyio
+async def test_the_memory_capability_is_appended_only_when_memory_is_enabled():
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.capabilities.memory import MemoryCapability
+
+    def _ctx(memory_enabled: bool):
+        return SimpleNamespace(
+            conversation_id=uuid4(),
+            is_pod_default_agent=False,
+            memory_enabled=memory_enabled,
+        )
+
+    def _has_memory(capabilities):
+        return any(isinstance(cap, MemoryCapability) for cap in capabilities)
+
+    assert not _has_memory(
+        await build_lemma_harness_tooling(
+            ctx=_ctx(False), full_toolsets=[], enable_prompt_caching=False
+        )
+    )
+    assert _has_memory(
+        await build_lemma_harness_tooling(
+            ctx=_ctx(True), full_toolsets=[], enable_prompt_caching=False
+        )
+    )
+
+
 @pytest.mark.anyio
 async def test_assembler_returns_capabilities_for_every_visible_toolset():
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling

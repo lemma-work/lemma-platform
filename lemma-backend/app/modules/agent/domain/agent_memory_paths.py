@@ -1,4 +1,5 @@
-"""Canonical AGENTS.md locations for an agent's four memory scopes.
+"""Canonical AGENTS.md locations for an agent's four memory scopes, and the
+one predicate that says whether memory means anything to a given agent.
 
 Every agent gets the same four fixed locations, computed the same way for the
 pod-default assistant ("Lem", as users see it) as for any named agent: Lem's
@@ -14,10 +15,12 @@ apart, an agent's notes would silently stop showing up in its own briefing.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from app.core.helpers.slug import slugify
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.value_objects import AgentToolset
 
 _POD_INDEX = "/memory/AGENTS.md"
 _PERSONAL_INDEX = "/me/AGENTS.md"
@@ -41,7 +44,18 @@ class AgentMemoryPaths:
 
 
 def agent_memory_paths(agent: Agent) -> AgentMemoryPaths:
-    slug = slugify(agent.name) or _FALLBACK_SLUG
+    return agent_memory_paths_for_name(agent.name)
+
+
+def agent_memory_paths_for_name(name: str | None) -> AgentMemoryPaths:
+    """The same four paths, from a name alone.
+
+    The tools know their agent by name off the run context, not as an ``Agent``
+    entity, and they must land on exactly the paths the brief reads back --
+    that is the whole reason this module exists. Taking a name lets them share
+    the rule instead of re-deriving a slug that could drift from it.
+    """
+    slug = slugify(name or "") or _FALLBACK_SLUG
     pod_agent_folder = f"/memory/agents/{slug}"
     personal_agent_folder = f"/me/agents/{slug}"
     return AgentMemoryPaths(
@@ -53,3 +67,27 @@ def agent_memory_paths(agent: Agent) -> AgentMemoryPaths:
         personal_index=_PERSONAL_INDEX,
         personal_agent_index=f"{personal_agent_folder}/AGENTS.md",
     )
+
+
+# The toolsets that can actually reach a pod file. WORKSPACE_CLI writes through
+# the shell (`lemma files write`), POD through `pod_write_file`.
+_FILE_TOOLSETS = frozenset({AgentToolset.WORKSPACE_CLI, AgentToolset.POD})
+
+
+def memory_is_active(toolsets: Collection[AgentToolset]) -> bool:
+    """Whether this run should be taught, and shown, its memory.
+
+    MEMORY carries no tools, so on its own it is a promise an agent cannot keep:
+    told to write durable facts to `/memory`, given nothing to write with. Both
+    the prompt fragment and the brief's ``## Your Memory`` section gate on this,
+    so an agent that cannot act on memory is never told about it.
+
+    Deliberately a predicate rather than an implication in
+    ``resolve_toolset_names``: the only toolset that could be auto-added is POD,
+    which also carries `pod_query` and `pod_write_record`. Granting table writes
+    to obtain file reads is the wrong trade; the agent editor refuses the
+    combination instead.
+    """
+    if AgentToolset.MEMORY not in toolsets:
+        return False
+    return any(toolset in _FILE_TOOLSETS for toolset in toolsets)

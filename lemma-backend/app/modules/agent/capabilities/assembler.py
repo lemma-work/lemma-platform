@@ -34,6 +34,7 @@ from app.modules.agent.capabilities.deferred_hint import (
 from app.modules.agent.capabilities.instructed_toolset import (
     InstructedToolsetCapability,
 )
+from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
 from app.modules.agent.capabilities.open_notifications import (
     build_open_notifications_capability,
@@ -237,6 +238,12 @@ async def _build_lemma_harness_tooling(
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     capabilities: list[object] = [_visible_capability(obj) for obj in core]
     capabilities.append(CurrentTimeCapability())
+
+    # Memory carries no toolset, so nothing above can have contributed its
+    # contract; append it here from the flag the run-context builder resolved.
+    # Stable per run, so it rides in the cached prefix with the fragments above.
+    if getattr(ctx, "memory_enabled", False):
+        capabilities.append(MemoryCapability())
 
     # When the run is on a third-party surface, append standing per-platform
     # guidance (delivery/forms/formatting/channel-context). Stable per

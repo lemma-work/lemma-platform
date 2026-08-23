@@ -81,25 +81,43 @@ Optional fields: `input_schema` (typed input when other systems invoke the agent
 
 ## Toolsets
 
-Grant only the toolsets the job needs:
+Only five are a decision. Set those on the agent; the rest arrive on their own.
+
+- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`.
+  Put these in `tool_sets`. Grant only what the job needs.
+- **Always on** — `USER_INTERACTION`, `SKILLS`, `SNOOZE`, `MESSAGING`, `TODO`.
+  Every agent has them; listing them changes nothing.
+- **Derived** — `POD` follows any folder or table grant, `CONNECTORS` follows any
+  connector grant. Grant the resource and the tools appear. Do **not** also list
+  the toolset: it was the same permission asked twice, and forgetting the second
+  half failed silently.
+- **Runtime** — `VIEW_IMAGE` comes from the model's own vision capability and is
+  never stored on an agent.
+
+A stale `POD` or `CONNECTORS` in an older agent's `tool_sets` is harmless — the
+effective set is the union — but do not write new ones.
 
 | Toolset | Enables |
 | --- | --- |
-| `POD` | read/query pod tables and records, read/search pod files, and mint file URLs (in-app member link or a public hit-capped share link) — grant-checked against the agent's own grants |
-| `WORKSPACE_CLI` | a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
-| `SKILLS` | loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
-| `WEB_SEARCH` | web search |
-| `USER_INTERACTION` | ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
-| `SPEECH` | speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
-| `SUBAGENTS` | async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
-| `CONNECTORS` | call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
-| `TODO` | a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
-| `SNOOZE` | suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Opt-in: waking replays the whole conversation, so grant it only to agents whose work genuinely has a gap in the middle |
-| `MESSAGING` | look up who is in the pod, and reach a *member who is not in this conversation* on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox (`message_user` / `check_messages` / `list_pod_members`). Opt-in, and a real capability to hand out: it also exposes the member list, and the recipient sees the pod's bot and extends it the trust they extend to Lemma, so every message names both the agent and the human whose authority the run carries. It does **not** pause the run — the reply is handled by the recipient's own agent, under their permissions, guided by the `background_instruction`. Pair it with `SNOOZE` for any agent that needs the answer in the same run, since nothing wakes it otherwise. Holding the toolset **is** the grant — there is no second surface-level switch to find. Reaching the person the run belongs to needs nothing at all: the run already carries their delegated authority |
+| `POD` | **Derived — any folder or table grant.**  read/query pod tables and records, read/search pod files, and mint file URLs (in-app member link or a public hit-capped share link) — grant-checked against the agent's own grants |
+| `WORKSPACE_CLI` | **Declared.**  a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
+| `SKILLS` | **Always on.**  loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
+| `WEB_SEARCH` | **Declared.**  web search |
+| `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
+| `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
+| `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
+| `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
+| `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
+| `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. Carries **no tools of its own**: pair it with `WORKSPACE_CLI` or `POD`, or the agent is told to remember things it has no way to write. Granting it also grants `folder.write` on `/memory`, and removing it takes that back |
+| `SNOOZE` | **Always on.**  suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Opt-in: waking replays the whole conversation, so grant it only to agents whose work genuinely has a gap in the middle |
+| `MESSAGING` | **Always on.**  look up who is in the pod, and reach a *member who is not in this conversation* on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox (`message_user` / `check_messages` / `list_pod_members`). Opt-in, and a real capability to hand out: it also exposes the member list, and the recipient sees the pod's bot and extends it the trust they extend to Lemma, so every message names both the agent and the human whose authority the run carries. It does **not** pause the run — the reply is handled by the recipient's own agent, under their permissions, guided by the `background_instruction`. Pair it with `SNOOZE` for any agent that needs the answer in the same run, since nothing wakes it otherwise. Holding the toolset **is** the grant — there is no second surface-level switch to find. Reaching the person the run belongs to needs nothing at all: the run already carries their delegated authority |
 
-For pod files and data, prefer `POD` (typed, grant-checked table/record/file tools).
-`WORKSPACE_CLI` is the escape hatch when the agent needs a real shell. There is no
-separate file-system toolset — file access is part of `POD`, gated by folder grants.
+For pod files and data you grant the folder or table and `POD` follows — typed,
+grant-checked table/record/file tools. `WORKSPACE_CLI` is the escape hatch when
+the agent needs a real shell, and it is a declared choice because a shell is
+broader than anything a grant describes. There is no separate file-system
+toolset: file access is part of `POD`, scoped by the folder grants that produced
+it.
 
 ## Using files (search-first → read markdown → page → view image)
 

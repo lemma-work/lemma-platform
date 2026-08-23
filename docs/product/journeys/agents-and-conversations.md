@@ -43,6 +43,14 @@ it happens.
   access than that person has, even where the agent's own grants allow more.
 - When a person changes an agent's grants, the system shall apply the change to
   the next run and not to one already in flight.
+- When a person grants an agent pod data or a connected app, the system shall
+  give it the tools to use that grant without asking them to enable anything
+  else — a capability the grant already implies is not a second decision.
+- The system shall not let that inference widen access: tools it turns on are
+  still scoped by the grant that turned them on, and a grant on one kind of
+  resource shall not imply tools for another.
+- The system shall give every agent the ability to ask a person a question and
+  to request approval, whatever else it was or was not granted.
 
 **Contracts:** `agent.permissions.get`, `agent.permissions.replace`
 
@@ -57,6 +65,22 @@ it happens.
   agent available.
 
 **Contracts:** `agent.conversation.create`, `agent.list`
+
+### PS-AGENT-005 — A person gives an agent a memory
+**Status:** covered
+
+- When a person gives an agent memory, the system shall let it keep durable
+  facts between conversations — shared with the pod, or private to the person it
+  learned them from.
+- When a person gives an agent memory, the system shall also give it the access
+  it needs to write there, so the capability works without a second step.
+- When a person takes memory away, the system shall take that access back.
+- The system shall not give an agent memory it was never granted, and shall not
+  carry one person's private facts into another person's conversation.
+- The system shall bound how much remembered text is loaded into a run, so one
+  overlong note cannot crowd out the rest.
+
+**Contracts:** `agent.create`, `agent.update`, `agent.permissions.get`
 
 ### PS-AGENT-004 — A person chooses which model an agent uses
 **Status:** covered

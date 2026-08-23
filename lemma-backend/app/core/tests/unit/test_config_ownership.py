@@ -7,6 +7,9 @@ def test_global_settings_exclude_module_owned_controls() -> None:
     module_owned = {
         "agent_run_stop_poll_interval_seconds",
         "agent_context_brief_cache_ttl_seconds",
+        "agent_memory_index_max_chars",
+        "agent_memory_section_max_chars",
+        "agent_memory_brief_cache_ttl_seconds",
         "function_run_poll_interval_seconds",
         "conversation_title_model",
         "local_agent_runtime_config_path",
