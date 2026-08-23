@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic_ai.tools import RunContext
 
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
@@ -27,7 +28,10 @@ from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppCurrentContactResult,
     WhatsAppFileAttachment,
 )
-from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
+    to_plain_text,
+    to_whatsapp_text,
+)
 
 logger = get_logger(__name__)
 
@@ -191,7 +195,7 @@ class WhatsAppPlatformService:
                 "messaging_product": "whatsapp",
                 "to": sender_wa_id,
                 "type": "text",
-                "text": {"body": message},
+                "text": {"body": to_whatsapp_text(message)},
             },
         )
 
@@ -453,7 +457,7 @@ class WhatsAppPlatformService:
             media_id=media_id,
             send_type=send_type,
             file_name=file_name,
-            caption=caption,
+            caption=to_plain_text(caption) if caption else None,
         )
         return bool(message_id)
 
@@ -588,7 +592,7 @@ def _whatsapp_text_payload(
         "to": recipient_wa_id,
         "type": "text",
         "text": {
-            "body": _truncate_whatsapp_text(body, 4096),
+            "body": _truncate_whatsapp_text(to_whatsapp_text(body), 4096),
             "preview_url": preview_url,
         },
     }
