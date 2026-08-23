@@ -238,6 +238,17 @@ is why a run leaves no new organizations behind, which matters because the
 product has no way to delete one. A stack the suite boots itself is the
 exception: it starts empty, so the tenant is built in it on first use.
 
+If the target enforces `AUTH_EMAIL_VERIFICATION_REQUIRED`, signing up is not
+enough on its own — every authenticated request from an unverified account is
+refused regardless of session. There is no gate to sign around here the way
+the others are avoided, so provisioning gets past it the way a person does:
+set `SCENARIOS_RESEND_API_KEY` to a Resend key that can read mail sent to
+`SCENARIOS_TENANT_DOMAIN`, and `make scenarios-provision` receives each
+colleague's real verification email and uses the real token in it. Unset,
+this step is skipped entirely — harmless anywhere that does not require it,
+loud (`provisioning stopped: ...`) anywhere that does. See
+[`harness/inbox.py`](harness/inbox.py).
+
 ## The two lanes
 
 `make scenarios` is the fast lane: everything runs against containers the stack

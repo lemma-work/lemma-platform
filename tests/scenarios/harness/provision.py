@@ -24,10 +24,11 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 
-from harness import environment, tenant
+from harness import environment, inbox, tenant
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
@@ -86,6 +87,19 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
             else:
                 ledger.already(f"{colleague.full_name} already has an account")
 
+        # Gated on whether *this run* was given a way to read the inbox, not on
+        # what the target says it needs — production deliberately withholds
+        # `email_verification_required` along with the rest of its security
+        # posture (see health_capabilities in lemma-backend/app/app.py), so
+        # asking the target would skip verification there by default, which is
+        # exactly backwards: production is the one place getting this wrong is
+        # expensive. Configuring SCENARIOS_RESEND_API_KEY is the operator
+        # saying "this target needs it and here is how" — the same shape
+        # `credentials.py` already uses for everything else this suite reads.
+        if inbox.configured():
+            for colleague in tenant.CAST:
+                await _verify(people[colleague.label], colleague, ledger)
+
         companies: dict[str, JSON] = {}
         for company in tenant.COMPANIES:
             owner = people[owner_of(company).label]
@@ -124,6 +138,28 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
         )
     finally:
         await world.aclose()
+
+
+async def _verify(person: Person, colleague: tenant.Colleague, ledger: Ledger) -> None:
+    """Get past AUTH_EMAIL_VERIFICATION_REQUIRED the way a person actually does.
+
+    Every other gate the standing cast avoids by signing in instead of up (see
+    tenant.py's module docstring). This one cannot be avoided that way: a
+    deployment enforcing it refuses every authenticated request from an
+    unverified account regardless of session, so a signed-in Priya is still
+    turned away the moment `_company` asks for her organizations. The only
+    honest way through is the one a person uses — receive the real email,
+    read the real token out of it, and consume it — which is what this does,
+    via `harness/inbox.py`.
+    """
+    if await person.is_email_verified():
+        ledger.already(f"{colleague.full_name}'s email is verified")
+        return
+    since = time.time()
+    await person.requests_email_verification()
+    token = inbox.wait_for_verification_link(colleague.email, since=since)
+    await person.verifies_email(token)
+    ledger.did(f"verified {colleague.full_name}'s email")
 
 
 async def _company(owner: Person, company: tenant.Company, ledger: Ledger) -> JSON:

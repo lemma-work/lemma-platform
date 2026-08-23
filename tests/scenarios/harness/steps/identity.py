@@ -136,6 +136,24 @@ class IdentitySteps:
         self.api.renews_with(self.signs_in)
         self.user_id = payload["user"]["id"]
 
+    async def is_email_verified(self) -> bool:
+        return bool((await self.api.get("/st/auth/user/email/verify")).get("isVerified"))
+
+    async def requests_email_verification(self) -> None:
+        await self.api.post("/st/auth/user/email/verify/token")
+
+    async def verifies_email(self, token: str) -> None:
+        """Consume a verification token — the one a person gets by clicking the
+        email's link, extracted instead of clicked. See harness/inbox.py."""
+        payload = await self.api.post(
+            "/st/auth/user/email/verify", json={"method": "token", "token": token}
+        )
+        if payload.get("status") != "OK":
+            raise AssertionError(
+                f"{self.label} could not verify their email: "
+                f"{payload.get('status')!r} — {payload}"
+            )
+
     async def profile(self) -> JSON:
         return await self.api.get("/users/me")
 
