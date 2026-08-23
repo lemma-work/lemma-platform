@@ -12,10 +12,18 @@
 //     answer all render as bubbles/cards — they are never demoted to a trace
 //   - tool work and genuine thinking collect into one collapsible trace, which
 //     the UI renders as a single left-aligned status pill ("Worked for 9m 14s")
-//   - files the run produced (presented via display_resource, or written with a
-//     deliverable extension) become artifact cards; other display_resource calls
-//     become resource cards
+//   - files the run produced (presented via display_resource, written with a
+//     deliverable extension, or spoken with `say`) become artifact cards; other
+//     display_resource calls become resource cards
 //   - ask_user / request_approval calls become in-chat interaction cards
+//
+// Everything a turn shows is ONE list, in the order it happened. Cards used to
+// be collected into buckets rendered after the speech, which put a question the
+// run is blocked on *above* the widget it asked about — and, since the composer
+// disables itself while an interaction is pending, a reader scrolled to the
+// bottom could see a dead input box telling them to answer a card that was off
+// the top of the screen. Chronology fixes that by construction: the run is
+// paused at the ask, so nothing can come after it.
 //
 // Pure and framework-free so the grouping rules are unit-testable without
 // rendering anything.
@@ -27,6 +35,7 @@ import {
   isRenderableUserInteractionInvocation,
   messageTextContent,
   messageTimeMs,
+  normalizeAgentToolName,
   normalizeAssistantDisplayText,
   userApprovalResolvedDecision,
   type AssistantMessagePart,
@@ -68,7 +77,17 @@ export type ChatTurnItem =
     streaming: boolean;
   }
   | { kind: "notice"; id: string; text: string }
-  | { kind: "interaction"; id: string; invocation: AssistantToolInvocation; message: AssistantRenderableMessage };
+  | { kind: "interaction"; id: string; invocation: AssistantToolInvocation; message: AssistantRenderableMessage }
+  /** A deliverable, carded where the run produced or presented it. */
+  | { kind: "artifact"; id: string; artifact: ChatArtifact }
+  /** A non-file display_resource, carded where the run presented it. */
+  | { kind: "resource"; id: string; card: ChatResourceCard };
+
+/** DOM id of an interaction card, so a blocked composer can scroll to the
+ *  question blocking it. A string, not a lookup: this module stays pure. */
+export function interactionAnchorId(toolCallId: string): string {
+  return `lchat-interaction-${toolCallId}`;
+}
 
 export interface ChatArtifact {
   /** Dedupe key — the pod path. */
@@ -79,7 +98,7 @@ export interface ChatArtifact {
   name: string;
   /** Uppercase extension badge label ("PDF"). */
   ext: string;
-  kind: "video" | "image" | "file";
+  kind: "video" | "image" | "audio" | "file";
   sizeBytes?: number;
   /** In-app href to the file in the pod's files view. */
   href: string | null;
@@ -118,16 +137,25 @@ const FILE_WRITE_TOOLS = new Set(["pod_write_file", "create_file"]);
 
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "opus", "m4a", "aac", "flac"]);
 
 // A written file only earns a card when it looks like a deliverable. Build
 // scripts and scratch output stay in the trace — otherwise a run that wrote
 // twelve files to produce two would end with fourteen cards.
 const DELIVERABLE_EXTENSIONS = new Set([
-  "pdf", "pptx", "docx", "xlsx", "csv", "tsv", "md", "html", "epub",
-  "mp3", "wav", "ogg", "flac", "zip",
+  "pdf", "pptx", "docx", "xlsx", "csv", "tsv", "md", "html", "epub", "zip",
   ...VIDEO_EXTENSIONS,
   ...IMAGE_EXTENSIONS,
+  ...AUDIO_EXTENSIONS,
 ]);
+
+/** `say` — the speech toolset's synthesis half. Its own tool description tells
+ *  the agent the audio IS the reply and not to present it with
+ *  display_resource afterwards, so nothing else will ever card it. */
+function isSpeechSayToolName(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false;
+  return normalizeAgentToolName(toolName).toLowerCase().replace(/[.:]/g, "_") === "say";
+}
 
 // A long or structured answer reads as a document; a short one as a chat
 // bubble. The rule is a pure function of the text, so a streaming answer and
@@ -171,6 +199,13 @@ function humanizeFileName(fileName: string): string {
 
 function normalizeName(toolName: string): string {
   return toolName.trim().toLowerCase();
+}
+
+/** Item id of a path's artifact card. Keyed by path, not by tool call, because
+ *  the write and the presentation of one file share a card — and a stable id
+ *  is what lets that card move to the presentation without remounting. */
+function artifactItemId(path: string): string {
+  return `artifact:${path}`;
 }
 
 /**
@@ -318,7 +353,17 @@ export function buildChatTurns({
 
   const addArtifact = (
     turn: MutableTurn,
-    artifact: { path: string; href: string | null; sizeBytes?: number; toolCallId: string },
+    artifact: {
+      path: string;
+      href: string | null;
+      sizeBytes?: number;
+      toolCallId: string;
+      /** A call that SHOWED the file (display_resource, `say`) rather than one
+       *  that wrote it — which is where the merged card belongs. */
+      presented?: boolean;
+      /** Overrides the humanized file name; a voice note is not "019f2c…". */
+      name?: string;
+    },
   ) => {
     const fileName = fileNameFromPath(artifact.path);
     const ext = extensionOf(fileName);
@@ -329,21 +374,35 @@ export function buildChatTurns({
       existing.href = existing.href ?? artifact.href;
       existing.sizeBytes = existing.sizeBytes ?? artifact.sizeBytes;
       existing.toolCallId = artifact.toolCallId;
+      if (artifact.name) existing.name = artifact.name;
+      // One card, anchored at the beat the reader saw it: a write that is later
+      // presented moves down to the presentation, not the other way round.
+      if (artifact.presented) {
+        const at = turn.items.findIndex((item) => item.id === artifactItemId(artifact.path));
+        if (at >= 0 && at !== turn.items.length - 1) turn.items.push(...turn.items.splice(at, 1));
+      }
       return;
     }
     const entry: ChatArtifact = {
       key: artifact.path,
       path: artifact.path,
       fileName,
-      name: humanizeFileName(fileName),
+      name: artifact.name ?? humanizeFileName(fileName),
       ext: ext ? ext.toUpperCase() : "FILE",
-      kind: VIDEO_EXTENSIONS.has(ext) ? "video" : IMAGE_EXTENSIONS.has(ext) ? "image" : "file",
+      kind: VIDEO_EXTENSIONS.has(ext)
+        ? "video"
+        : IMAGE_EXTENSIONS.has(ext)
+          ? "image"
+          : AUDIO_EXTENSIONS.has(ext)
+            ? "audio"
+            : "file",
       sizeBytes: artifact.sizeBytes,
       href: artifact.href,
       toolCallId: artifact.toolCallId,
     };
     turn.artifactByPath.set(artifact.path, entry);
     turn.artifacts.push(entry);
+    turn.items.push({ kind: "artifact", id: artifactItemId(artifact.path), artifact: entry });
   };
 
   const fileHref = (toolCallId: string, path: string): string | null => {
@@ -393,13 +452,44 @@ export function buildChatTurns({
             })
             : null;
           if (displayResource.request.type === "FILE" && displayResource.request.path) {
-            addArtifact(turn, { path: displayResource.request.path, href, toolCallId: displayResource.toolCallId });
+            addArtifact(turn, {
+              path: displayResource.request.path,
+              href,
+              toolCallId: displayResource.toolCallId,
+              presented: true,
+            });
           } else {
-            turn.resources.push({ toolCallId: displayResource.toolCallId, request: displayResource.request, href });
+            const card: ChatResourceCard = {
+              toolCallId: displayResource.toolCallId,
+              request: displayResource.request,
+              href,
+            };
+            turn.resources.push(card);
+            turn.items.push({ kind: "resource", id: `resource:${card.toolCallId}`, card });
           }
         }
       }
       return;
+    }
+
+    // A voice note is speech, not machinery. `say` synthesizes audio, saves it
+    // to the pod and — on a chat surface — delivers it natively; on web nothing
+    // delivers it, so without this the whole reply was a row in a collapsed
+    // trace. A synthesis that failed or is still running has nothing to play
+    // and stays work.
+    if (isSpeechSayToolName(invocation.toolName) && invocation.state === "result") {
+      const result = record(invocation.result);
+      const path = typeof result.audio_file_path === "string" ? result.audio_file_path.trim() : "";
+      if (result.success !== false && path) {
+        addArtifact(turn, {
+          path,
+          href: fileHref(invocation.toolCallId, path),
+          toolCallId: invocation.toolCallId,
+          presented: true,
+          name: "Voice note",
+        });
+        return;
+      }
     }
 
     // Questions and approvals are conversation, not machinery: they render as
@@ -563,6 +653,14 @@ export function buildChatTurns({
     let index = turn.items.length - 1;
     while (index >= 0) {
       const item = turn.items[index];
+      // A card is how the answer is *shown*; it does not interrupt the closing
+      // run of answer text it sits beside. (Before the cards joined the item
+      // stream they could not fall between two beats at all, so skipping them
+      // is what keeps this rule reading the same text it always did.)
+      if (item.kind === "artifact" || item.kind === "resource") {
+        index -= 1;
+        continue;
+      }
       if (item.kind !== "text" || !item.answer) break;
       item.documentEligible = true;
       index -= 1;
@@ -658,6 +756,13 @@ export function chatTurnFingerprint(turn: ChatTurn): string {
     }
     if (item.kind === "interaction") {
       return `${item.id}:i:${item.invocation.state}`;
+    }
+    if (item.kind === "artifact") {
+      // href and size arrive on the merge, not the first sighting.
+      return `${item.id}:a:${item.artifact.href ?? ""}:${item.artifact.sizeBytes ?? ""}`;
+    }
+    if (item.kind === "resource") {
+      return `${item.id}:r:${item.card.href ?? ""}`;
     }
     return `${item.id}:n:${item.text}`;
   }).join(",");

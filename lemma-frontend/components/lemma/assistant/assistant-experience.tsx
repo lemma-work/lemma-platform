@@ -21,12 +21,13 @@ import type {
 import {
   buildDisplayMessageRows,
   findPendingUserApprovalInvocation,
+  isAskUserToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
 // Rows → turns: the conversation-shaped model (ask, work pill, speech,
 // artifacts, interaction cards) the transcript renders.
-import { buildChatTurns } from "@/lib/assistant/turns";
+import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
@@ -344,6 +345,19 @@ export function AssistantExperienceView({
   // the composer stays put — but answering is the card's job, so the composer
   // refuses to send until the interaction resolves.
   const interactionPending = !!activePendingApprovalInvocation;
+  // A blocked composer has to be able to point at what is blocking it. The card
+  // is the only way to answer and the input refuses to send until it resolves,
+  // so if the reader has scrolled away from it — or a tall card below it pushed
+  // it off screen — the conversation has no visible way forward.
+  const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
+  const pendingInteractionIsAsk = !!activePendingApprovalInvocation
+    && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  const scrollToPendingInteraction = useCallback(() => {
+    if (!pendingInteractionCallId) return;
+    document
+      .getElementById(interactionAnchorId(pendingInteractionCallId))
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [pendingInteractionCallId]);
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {
@@ -548,9 +562,20 @@ export function AssistantExperienceView({
     : failedFileCount > 0
       ? `${pluralize(failedFileCount, "file")} failed to upload`
       : null;
-  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel;
+  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel || interactionPending;
   const composerStatus = (
     <>
+      {interactionPending ? (
+        <button
+          type="button"
+          onClick={scrollToPendingInteraction}
+          className="focus-ring -mx-1 rounded-md px-1 py-0.5 text-left text-xs text-[var(--action-primary)] hover:underline"
+        >
+          {pendingInteractionIsAsk
+            ? "Answer the question to continue"
+            : "Approve or reject to continue"}
+        </button>
+      ) : null}
       {showComposerStatus && runStatusModel ? (
         <LiveRunStatusLine status={runStatusModel} />
       ) : null}
