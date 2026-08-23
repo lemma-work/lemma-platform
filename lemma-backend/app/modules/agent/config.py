@@ -40,6 +40,28 @@ class AgentSettings(BaseSettings):
         default=60,
         description="TTL for cached rendered agent runtime-context briefs; zero disables caching.",
     )
+    agent_memory_index_max_chars: int = Field(
+        default=2000,
+        description=(
+            "Per-scope cap on the AGENTS.md text spliced into the runtime "
+            "brief; the rest is truncated at a line boundary with a marker."
+        ),
+    )
+    agent_memory_section_max_chars: int = Field(
+        default=6000,
+        description=(
+            "Cap on the whole rendered memory section of the runtime brief, "
+            "spent narrowest-scope-first."
+        ),
+    )
+    agent_memory_brief_cache_ttl_seconds: int = Field(
+        default=60,
+        description=(
+            "TTL for the cached memory section of the runtime brief; zero "
+            "disables caching. Writes invalidate it, so this is only the "
+            "backstop for an invalidation that never arrived."
+        ),
+    )
     function_run_poll_interval_seconds: float = Field(
         default=0.5,
         description="Interval an agent tool waits between function-run status polls.",

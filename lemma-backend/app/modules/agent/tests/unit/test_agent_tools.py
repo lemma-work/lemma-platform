@@ -8,6 +8,7 @@ import pytest
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
@@ -141,16 +142,20 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
 
 
 @pytest.mark.asyncio
-async def test_user_created_agent_gets_only_its_selected_toolsets():
-    # A user-created agent must get EXACTLY the toolsets it was created with —
-    # the pod defaults (workspace CLI, skills, …) are NOT forced onto it.
+async def test_a_user_created_agent_gets_no_declarable_toolset_it_did_not_choose():
+    """The declared half stays exactly what the author picked.
+
+    Universal abilities are added on top (see the next test), but nothing from
+    the *declarable* set is ever implied — an agent that was not given a sandbox
+    shell or the ability to spawn sub-agents does not quietly acquire one.
+    """
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
         name="reporter",
         instruction="Summarize records.",
-        toolsets=[AgentToolset.POD, AgentToolset.WEB_SEARCH],
+        toolsets=[AgentToolset.WEB_SEARCH],
     )
     conversation = Conversation(
         pod_id=agent.pod_id,
@@ -163,26 +168,61 @@ async def test_user_created_agent_gets_only_its_selected_toolsets():
         conversation=conversation,
     )
 
-    assert pod_toolset in toolsets
     assert web_search_toolset in toolsets
-    # Nothing from the pod defaults is implicitly added — including SUBAGENTS,
-    # which is opt-in for user-created agents.
     assert workspace_cli_toolset not in toolsets
-    assert user_interaction_toolset not in toolsets
     assert subagents_toolset not in toolsets
+    # POD is derived from a grant, and this agent holds none.
+    assert pod_toolset not in toolsets
 
 
 @pytest.mark.asyncio
-async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
+async def test_every_agent_can_reach_a_person_whatever_it_was_given():
+    """`request_approval` is the seam where a human gets to say no.
+
+    It rides in USER_INTERACTION, which is why that toolset is universal rather
+    than a switch: withholding it never made an agent safer, it only removed the
+    place a person could intervene.
+    """
+    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="narrow",
+        instruction="Answer questions.",
+        toolsets=[],
+    )
+    conversation = Conversation(
+        pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
+    )
+
+    toolsets = await runner.tool_assembler.assemble(
+        agent=agent, conversation=conversation
+    )
+
+    assert user_interaction_toolset in toolsets
+
+
+@pytest.mark.asyncio
+async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
     # RunToolAssembler feeds BOTH the in-process harness and the remote MCP path,
-    # so a user-created agent gets the todo tools only when its toolsets include
-    # TODO — never implicitly.
+    # and a task list is conversation-scoped scratch with no access implication —
+    # so it is universal rather than a switch. The prompt still says nothing when
+    # the conversation has never planned anything.
     from app.modules.agent.tools import callable_tool_factory as ctf
 
-    async def _no_dynamic(self, *, agent, allow_subagents):  # noqa: ANN001
+    async def _no_dynamic(self, *, agent, allow_subagents, grants=None):  # noqa: ANN001
         return []
 
     monkeypatch.setattr(ctf.AgentCallableToolFactory, "build_toolsets", _no_dynamic)
+
+    # Toolset selection now reads the agent's grants (POD and CONNECTORS are
+    # derived from them), so the assembler opens a unit of work even when the
+    # dynamic tools above are stubbed out. Return an empty summary rather than a
+    # database.
+    async def _no_grants(self, *, pod_id, agent_id):  # noqa: ANN001
+        return AgentGrantSummary()
+
+    monkeypatch.setattr(ctf.AgentCallableToolFactory, "load_grant_summary", _no_grants)
 
     runner = AgentRunnerService(uow_factory=lambda: None, harness_registry=object())
 
@@ -201,7 +241,7 @@ async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
         user_id=without_todo.user_id,
         agent_id=without_todo.id,
     )
-    assert not _has_todo(
+    assert _has_todo(
         await runner.tool_assembler.assemble(agent=without_todo, conversation=conv)
     )
 

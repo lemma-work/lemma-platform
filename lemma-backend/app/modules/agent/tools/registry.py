@@ -40,6 +40,11 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     # prompt prefix of an ordinary chat.
     AgentToolset.MESSAGING,
     AgentToolset.SNOOZE,
+    # Memory contributes no tools -- see `_CAPABILITY_ONLY_TOOLSETS`. It is in
+    # this list so Lem is taught the memory contract and gets its AGENTS.md
+    # scopes loaded into every brief; the reading and writing happen through
+    # WORKSPACE_CLI and POD, which are already here.
+    AgentToolset.MEMORY,
 )
 
 _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
@@ -56,10 +61,16 @@ _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
     AgentToolset.MESSAGING: messaging_toolset,
 }
 
-# Toolsets that are NOT static singletons — they are realized per-conversation as
-# pydantic-ai capabilities (e.g. TODO needs conversation-scoped storage). They are
-# skipped by ``resolve_agent_toolsets`` and handled by the capability assembler.
-_CAPABILITY_ONLY_TOOLSETS: frozenset[AgentToolset] = frozenset({AgentToolset.TODO})
+# Toolsets with no entry in ``_TOOLSET_BY_NAME``, for either of two reasons:
+# they are not static singletons and must be realized per-conversation (TODO
+# needs conversation-scoped storage), or they carry no tools at all and exist
+# only to contribute prompt guidance (MEMORY). Both are skipped by
+# ``resolve_agent_toolsets`` — which indexes ``_TOOLSET_BY_NAME`` unguarded, so
+# a name missing from BOTH is a KeyError — and handled by the capability
+# assembler instead.
+_CAPABILITY_ONLY_TOOLSETS: frozenset[AgentToolset] = frozenset(
+    {AgentToolset.TODO, AgentToolset.MEMORY}
+)
 
 # "Extra" toolsets are heavy/optional surfaces the in-process LEMMA harness loads
 # lazily (deferred) over the conversation MCP server instead of in the prompt

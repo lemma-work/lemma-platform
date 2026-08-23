@@ -17,5 +17,6 @@ export enum AgentToolset {
     CONNECTORS = 'CONNECTORS',
     SNOOZE = 'SNOOZE',
     MESSAGING = 'MESSAGING',
+    MEMORY = 'MEMORY',
     VIEW_IMAGE = 'VIEW_IMAGE',
 }

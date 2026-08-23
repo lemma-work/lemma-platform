@@ -37,6 +37,13 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
+from app.modules.datastore.contracts import (
+    DATASTORE_EVENTS_STREAM,
+    DatastoreFileCreatedEvent,
+    DatastoreFileDeletedEvent,
+    DatastoreFileUpdatedEvent,
+)
+from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
     AgentRunCompletedEvent,
@@ -73,6 +80,48 @@ CONTROL_EVENT_MODELS = {
     AgentRunStopRequestedEvent.get_event_type(): AgentRunStopRequestedEvent,
     AgentRunCompletedEvent.get_event_type(): AgentRunCompletedEvent,
 }
+
+
+_FILE_WRITE_EVENT_TYPES = frozenset(
+    {
+        DatastoreFileCreatedEvent.get_event_type(),
+        DatastoreFileUpdatedEvent.get_event_type(),
+        DatastoreFileDeletedEvent.get_event_type(),
+    }
+)
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    DATASTORE_EVENTS_STREAM,
+    group="agent-memory-brief-invalidation",
+    consumer="agent-memory-brief-invalidation-consumer",
+)
+async def on_datastore_file_written(event: dict, fs_logger: Logger):
+    """Drop a cached memory section when the file behind it changes.
+
+    The pod tools already invalidate inline, which covers agents writing through
+    `pod_write_file`. This covers the other writer, and it is the common one:
+    an agent with a shell writes memory with `lemma files write`, which reaches
+    the datastore over HTTP in the API process and never enters the worker that
+    ran the agent. Without this, the shell path is stale until the TTL.
+
+    No inbox and no idempotency key -- deleting a cache entry twice costs
+    nothing, and a delivery this misses costs only the TTL, which is the
+    behaviour that existed before any invalidation at all.
+    """
+    if event.get("event_type") not in _FILE_WRITE_EVENT_TYPES:
+        return
+    pod_id = event.get("pod_id")
+    path = event.get("path")
+    if not pod_id or not path:
+        return
+    actor_id = event.get("actor_id")
+    await invalidate_memory_brief(
+        pod_id=UUID(str(pod_id)),
+        path=str(path),
+        user_id=UUID(str(actor_id)) if actor_id else None,
+    )
 
 
 def conversation_title_job_id(conversation_id: UUID) -> str:

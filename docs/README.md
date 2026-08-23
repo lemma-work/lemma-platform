@@ -29,6 +29,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Sandbox fabric](architecture/sandbox/README.md) | The provider-neutral sandbox model, and the doc set below it |
 | [Desktop architecture](architecture/desktop.md) | Process ownership, lifecycle protocol, ports, and local state |
 | [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, and how Desktop supervises them |
+| [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
 
 The sandbox set breaks down further:
 [protocol](architecture/sandbox/sandbox-protocol.md) ·

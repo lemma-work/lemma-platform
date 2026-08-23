@@ -2425,6 +2425,7 @@
           "CONNECTORS",
           "SNOOZE",
           "MESSAGING",
+          "MEMORY",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
@@ -10106,7 +10107,7 @@
         "type": "string"
       },
       "OrganizationSlugAvailabilityResponse": {
-        "description": "Organization slug availability response.\n\n``available`` answers only for the slug. When the caller also passes a\ncandidate name, ``name_available`` answers for the globally-unique name; a\ncreate succeeds only when both are true.",
+        "description": "Organization slug availability response.\n\n``available`` answers for the slug, which is the handle and is unique across\nthe deployment. It is the only field that can refuse a create.\n\n``name_available`` is answered whenever a candidate name is passed, and is\nnow always ``true``: display names are labels and two organizations may\nshare one (PS-ONB-014). Kept so callers that probe both fields keep one\nresponse shape, and deprecated -- do not gate a create on it.",
         "properties": {
           "available": {
             "title": "Available",
@@ -10132,6 +10133,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Always true when a name is supplied: organization display names are not unique. Gate creates on `available` instead.",
             "title": "Name Available"
           },
           "slug": {
@@ -18789,7 +18792,7 @@
     },
     "/organizations/slug-availability": {
       "get": {
-        "description": "Check whether an organization slug is available, and optionally whether a candidate name is still free",
+        "description": "Check whether an organization slug — the handle, and the only unique one of the two — is available. `name_available` is deprecated and always true: display names are labels, and two organizations may share one.",
         "operationId": "org.slug_availability",
         "parameters": [
           {

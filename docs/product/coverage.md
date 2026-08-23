@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 157 |
+| `covered` | 158 |
 | `gap` | 0 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **160** |
+| **total** | **161** |
 
-Scenario tests declaring a promise: 342.
+Scenario tests declaring a promise: 347.
 
 ## Contract coverage
 
@@ -36,8 +36,9 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
-| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable`, `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
+| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_a_data_grant_brings_its_own_tools`, `test_the_universal_abilities_need_no_declaring`, `test_an_agents_grants_are_readable`, `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
+| `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
 | `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_a_conversation_can_be_watched` |
