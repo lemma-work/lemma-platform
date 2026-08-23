@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { RootPageSwitch } from '@/components/root/root-page-switch';
 import { JsonLd } from '@/components/seo/json-ld';
+import { hasSessionCookie } from '@/lib/auth/server-session';
 import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/seo/site-copy';
 import {
     organizationSchema,
@@ -41,7 +42,13 @@ export const metadata: Metadata = {
     },
 };
 
-export default function HomePage() {
+export default async function HomePage() {
+    // Read before anything renders, so a signed-in visitor is never served a
+    // page of marketing to look at while the auth check flies. See
+    // `hasSessionCookie` — a hint about which placeholder to paint, not a
+    // claim about who they are.
+    const arrivedWithSession = await hasSessionCookie();
+
     return (
         <>
             {/*
@@ -52,7 +59,7 @@ export default function HomePage() {
               to read.
             */}
             <JsonLd schema={[organizationSchema(), webSiteSchema(), softwareApplicationSchema()]} />
-            <RootPageSwitch />
+            <RootPageSwitch hasSessionCookie={arrivedWithSession} />
         </>
     );
 }
