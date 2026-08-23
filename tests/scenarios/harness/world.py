@@ -95,6 +95,10 @@ class Sessions:
     _built: bool = False
     _connections_read: bool = False
 
+    @property
+    def connections_read(self) -> bool:
+        return self._connections_read
+
     async def admit(self, person: Person) -> None:
         """Give this person their session, signing in only if there is none."""
         await self._tenant_exists()
@@ -188,6 +192,8 @@ class World:
     sessions: Sessions = field(default_factory=Sessions)
     _clients: list[httpx.AsyncClient] = field(default_factory=list)
     _people: dict[str, Person] = field(default_factory=dict)
+    #: Re-entrancy guard: the lookup asks for a person, and that asks to look up.
+    _reading_connections: bool = False
 
     async def new_person(self, label: str = "someone", *, sign_up: bool = True) -> Person:
         """A brand-new person, signed up and signed in.
@@ -226,9 +232,28 @@ class World:
         person = self.arriving(label, colleague.email)
         await self.sessions.admit(person)
         person.organization = await self.sessions.company_of(person, colleague)
-        await self.sessions.note_who_is_connected(person)
         self._people[label] = person
+        await self._note_who_is_connected()
         return person
+
+    async def _note_who_is_connected(self) -> None:
+        """Ask the one person whose accounts are the tenant's, once.
+
+        An account is scoped to whoever connected it, so asking whichever
+        colleague a scenario happened to want first answers about them — and a
+        GitHub account connected by the holder reads as "nobody has connected
+        GitHub" to every scenario that acts as somebody else. Which is exactly
+        what happened: three GitHub scenarios skipped against a tenant that had
+        GitHub connected all along.
+        """
+        if self.sessions.connections_read or self._reading_connections:
+            return
+        self._reading_connections = True
+        try:
+            holder = await self.person(tenant.CONNECTOR_HOLDER)
+        finally:
+            self._reading_connections = False
+        await self.sessions.note_who_is_connected(holder)
 
     async def returning(self, person: Person, *, using: str | None = None) -> Person:
         """The same person, signing in again — a second device, a new day.

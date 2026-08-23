@@ -192,13 +192,27 @@ TELEGRAM_CHAT = Capability(
     ),
 )
 
+TELEGRAM_HANDLE = Capability(
+    name="the Telegram account the cast is known by",
+    requires=("SCENARIOS_TELEGRAM_HANDLE",),
+    how=(
+        "the @username (without the @) of the Telegram account that messages "
+        "the bot. It is what turns an inbound message into a message from "
+        "somebody rather than from a stranger"
+    ),
+)
+
 GITHUB_REPO = Capability(
     name="a GitHub repository to write to",
-    requires=("SCENARIOS_GITHUB_REPO", "SCENARIOS_GITHUB_TOKEN"),
+    # The repository only. A PAT was required here too, from when this scenario
+    # injected one — which `connector_service` refuses for an OAuth2 connector,
+    # so it never worked. The credentials come from the connected account now,
+    # and asking for a token nothing reads only skipped the scenario.
+    requires=("SCENARIOS_GITHUB_REPO",),
     how=(
-        "'owner/name' of a throwaway repository, and a fine-grained PAT for it. "
-        "A PAT is a real way to connect GitHub and needs no browser consent — "
-        "the OAuth app above is what a person would use instead"
+        "'owner/name' of a throwaway repository. Scenarios open a real issue "
+        "there and close it again, using the GitHub account somebody connected "
+        "— so that account needs write access to it"
     ),
 )
 

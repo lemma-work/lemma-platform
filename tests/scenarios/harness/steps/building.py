@@ -523,7 +523,7 @@ class BuildingSteps:
         disposable like everything else they make.
         """
         wanted = standing_auth_config_name(connector_id)
-        for config in await self.connectors_in(in_organization):
+        for config in await self.auth_configs_in(in_organization):
             if config.get("name") == wanted:
                 return config
         declared = next(
@@ -534,13 +534,6 @@ class BuildingSteps:
             in_organization=in_organization,
             named=wanted,
             kind=declared.kind if declared else None,
-        )
-
-    async def connectors_in(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(
-                f"/organizations/{organization['id']}/connectors/auth-configs"
-            )
         )
 
     async def account_for(

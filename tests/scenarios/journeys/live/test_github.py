@@ -21,6 +21,7 @@ import pytest
 from harness import capability, covers, journey, proves, scenario
 from harness.consent import GITHUB
 from harness.credentials import GITHUB_REPO, needs
+from harness.tenant import CONNECTOR_HOLDER
 
 pytestmark = [
     journey("Connectors and accounts"),
@@ -44,7 +45,9 @@ async def github(world):
     instructions where nobody has, and the run says so under "waiting on a
     person" rather than quietly proving less.
     """
-    alice = await world.person("priya")
+    # The holder, not whoever the scenario would otherwise pick: an account is
+    # scoped to the person who connected it, so asking anybody else finds none.
+    alice = await world.person(CONNECTOR_HOLDER)
     needs(GITHUB)
     organization = alice.organization
     [auth_config] = [
@@ -147,8 +150,10 @@ async def test_an_agent_uses_github_only_when_granted(github, run):
     # holding, rather than a word it must not happen to use.
     whoami = await alice.runs_operation(
         "users_get_authenticated",
-        auth_config=auth_config, account=account,
-        in_organization=organization, payload={},
+        auth_config=auth_config,
+        account=account,
+        in_organization=organization,
+        payload={},
     )
     secret_identity = str((whoami.get("result") or {}).get("login") or "")
     assert secret_identity, whoami

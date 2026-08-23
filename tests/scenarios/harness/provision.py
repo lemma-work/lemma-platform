@@ -150,11 +150,15 @@ async def provision(
         holder = people[tenant.CONNECTOR_HOLDER]
         holder.organization = companies[tenant.VANTAGE.key]
         await _standing_connectors(holder, ledger)
+        standing_pods: dict[str, JSON] = {}
         for standing_pod in tenant.STANDING_PODS:
             pod = await _pod(boss, standing_pod, ledger)
+            standing_pods[standing_pod.name] = pod
             await _administers(boss, administrator, pod, ledger)
             if reset:
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
+        await _known_on_telegram(holder, ledger)
+        await _standing_reach(holder, standing_pods, ledger)
         if reset:
             for company in tenant.COMPANIES:
                 owner = people[owner_of(company).label]
@@ -433,6 +437,75 @@ async def _clear_run_pods(
             ledger.did(f"removed leftover pod {name!r}")
 
 
+async def _known_on_telegram(holder: Person, ledger: Ledger) -> None:
+    """Tell Lemma which Telegram account the holder is.
+
+    Without it every inbound message is from a stranger — correctly, and the
+    stranger is told how to get access rather than answered. So the live lane
+    would prove the refusal path and never the conversation.
+    """
+    handle = os.getenv("SCENARIOS_TELEGRAM_HANDLE", "").strip().lstrip("@")
+    if not handle:
+        return
+    try:
+        await holder.is_known_on_telegram_as(handle)
+        ledger.did(f"{holder.label} is known on Telegram as @{handle}")
+    except Exception as exc:
+        ledger.did(f"could not set the Telegram handle: {_one_line(exc)}")
+
+
+async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger) -> None:
+    """Give the tenant a surface that keeps its reach between runs.
+
+    Needs a connected account, so it is best-effort: a deployment where nobody
+    has connected Telegram yet gets the pod and the agent, and the surface the
+    next time somebody runs this after consenting.
+    """
+    for reach in tenant.STANDING_REACH:
+        pod = pods.get(reach.pod)
+        if pod is None:
+            continue
+        agents = {str(a.get("name")) for a in await holder.agents_in(pod)}
+        if reach.agent not in agents:
+            await holder.creates_an_agent(
+                in_pod=pod,
+                named=reach.agent,
+                toolsets=["POD", "USER_INTERACTION"],
+                instruction=(
+                    "You answer on a messaging surface. Be brief and friendly, "
+                    "and say what you can see in this pod when asked."
+                ),
+            )
+            ledger.did(f"created agent {reach.agent!r} in {reach.pod!r}")
+        else:
+            ledger.already(f"agent {reach.agent!r} is in {reach.pod!r}")
+
+        surfaces = {str(s.get("name")) for s in await holder.surfaces_in(pod)}
+        if reach.name in surfaces:
+            ledger.already(f"surface {reach.name!r} is on {reach.pod!r}")
+            continue
+        account = await holder.account_for(
+            reach.connector, in_organization=holder.organization
+        )
+        if account is None:
+            ledger.did(
+                f"no {reach.connector} account yet, so surface {reach.name!r} "
+                f"is not made — connect it and run this again"
+            )
+            continue
+        try:
+            await holder.connects_a_surface(
+                in_pod=pod,
+                platform=reach.platform,
+                named=reach.name,
+                agent=reach.agent,
+                account=account,
+            )
+            ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
+        except Exception as exc:
+            ledger.did(f"could not create surface {reach.name!r}: {_one_line(exc)}")
+
+
 async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
     """Install the tenant's own auth config for each provider the suite drives.
 
@@ -444,7 +517,8 @@ async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
     for declared in tenant.STANDING_CONNECTORS:
         name = tenant.standing_auth_config_name(declared.connector)
         existing = {
-            config.get("name") for config in await owner.connectors_in(owner.organization)
+            config.get("name")
+            for config in await owner.auth_configs_in(owner.organization)
         }
         if name in existing:
             ledger.already(f"{declared.connector} installed as {name!r}")
@@ -474,7 +548,7 @@ async def _where_to_consent(owner: Person, connector: str) -> str:
     config = next(
         (
             c
-            for c in await owner.connectors_in(owner.organization)
+            for c in await owner.auth_configs_in(owner.organization)
             if c.get("name") == name
         ),
         None,

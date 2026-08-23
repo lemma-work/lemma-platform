@@ -194,6 +194,37 @@ STANDING_CONNECTORS = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class StandingReach:
+    """A surface that stands between runs, because what it can reach does.
+
+    A bot cannot cold-DM. Outbound goes through a conversation the person
+    started, and that link is keyed by *surface* — so a surface created fresh
+    each run can never send to anybody, and the live scenario that tried it
+    waited two minutes for a reply to a message Lemma had refused to send.
+
+    Standing, one message from one person makes the surface reachable for every
+    run afterwards. The same trade as the standing pods, for the same reason.
+    """
+
+    pod: str
+    platform: str
+    connector: str
+    agent: str
+    name: str
+
+
+STANDING_REACH = (
+    StandingReach(
+        pod="customer-support",
+        platform="TELEGRAM",
+        connector="telegram",
+        agent="frontdesk",
+        name="telegram",
+    ),
+)
+
+
 #: Whose accounts they are. An account is scoped to the person who connected
 #: it — the list endpoint filters on `user_id` — so "is GitHub connected?" has
 #: no answer for the organization, only for a person in it. One nominated
