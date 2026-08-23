@@ -152,7 +152,11 @@ async def test_an_unreadable_scope_never_takes_the_others_down(monkeypatch):
 
     assert "## Your Memory" in section
     assert "- knows the private half" in section
-    assert "`/memory/AGENTS.md`" not in section
+    # The header names all four canonical paths unconditionally (that's what
+    # the grounding is for), so `/memory/AGENTS.md` legitimately appears there
+    # even though it's unreadable here -- what must not appear is a content
+    # block claiming it has something to say.
+    assert "### Pod (shared)" not in section
 
 
 async def test_an_oversized_index_is_cut_at_a_line_boundary_and_says_so(
