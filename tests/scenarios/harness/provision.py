@@ -115,6 +115,7 @@ async def provision(base_url: str, *, reset: bool = False) -> str:
                 owner = people[owner_of(company).label]
                 owner.organization = companies[company.key]
                 await _clear_run_pods(owner, ledger)
+                await _uninstall_run_connectors(owner, ledger, mine=made_by_a_run)
                 await _only_the_cast(owner, ledger)
 
         return ledger.report(
@@ -289,6 +290,7 @@ async def sweep(base_url: str) -> str:
             # budget, so the order decides what gets done when there is not
             # enough of it.
             await _clear_run_pods(owner, ledger, mine=current().made_this)
+            await _uninstall_run_connectors(owner, ledger, mine=current().made_this)
             await _only_the_cast(owner, ledger)
             standing = {pod.name for pod in tenant.STANDING_PODS}
             for pod in await owner.pods_in(owner.organization):
@@ -312,6 +314,35 @@ async def _company_named(owner: Person, name: str) -> JSON | None:
         if organization.get("name") == name:
             return organization
     return None
+
+
+async def _uninstall_run_connectors(
+    owner: Person, ledger: Ledger, *, mine: Callable[[str], bool]
+) -> None:
+    """Remove the connector installations a run left in the organization.
+
+    These are the ones that hurt most and show it least. An installation lives
+    on the *organization*, so deleting the pod a scenario made does not take it
+    — and every surfaces run leaves a Telegram installation behind, each with a
+    connected account on the same bot token, each pointing at a stand-in on a
+    port that closed when that run ended.
+
+    One tenant reached a hundred of them, sixty Telegram. Inbound delivery then
+    has sixty candidates to resolve a message against and mostly picks a dead
+    one, so the agent never answers — which surfaces as four scenarios in
+    `test_threads_and_files` timing out, with nothing in any log to say why.
+    """
+    for auth_config in await owner.auth_configs_in(owner.organization):
+        name = str(auth_config.get("name", ""))
+        if not mine(name):
+            continue
+        try:
+            await owner.uninstalls_connector(
+                auth_config, in_organization=owner.organization
+            )
+        except AssertionError:
+            continue
+        ledger.did(f"uninstalled {name!r} from {owner.organization.get('name')!r}")
 
 
 async def _only_the_cast(owner: Person, ledger: Ledger) -> None:
