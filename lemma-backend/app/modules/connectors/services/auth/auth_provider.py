@@ -1,8 +1,18 @@
-from app.modules.connectors.domain.account import CredentialTypes, OAuthCredentials
+"""What an authentication scheme has to provide.
+
+Every method takes the *install* rather than the connector. The connector is
+shared catalog data; which client secret to present, which tenant an
+installation is bound to, and whether the organization brought its own
+credentials are all properties of one organization's install, and none of them
+have anywhere to live on a catalog entry.
+"""
+
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 from uuid import UUID
-from app.modules.connectors.domain.connector import ConnectorEntity
+
+from app.modules.connectors.domain.account import CredentialTypes, OAuthCredentials
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 
 
 class AuthProviderInterface(ABC):
@@ -11,103 +21,53 @@ class AuthProviderInterface(ABC):
     @abstractmethod
     async def connect_with_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
     ) -> CredentialTypes:
-        """
-        Connect an account directly from user-supplied credentials (non-OAuth).
+        """Connect an account directly from user-supplied credentials (non-OAuth).
 
         Used for credential-managed schemes (API key, etc.) where there is no
-        redirect/callback flow.
-
-        Args:
-            connector: The connector (effective connector with provider config)
-            user_id: The user ID
-            credentials: Raw credential fields submitted by the user
-
-        Returns:
-            The credentials to persist on the account.
+        redirect/callback flow. Returns the credentials to persist.
         """
-        pass
 
     @abstractmethod
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
     ) -> Tuple[str, str]:
-        """
-        Get authorization URL for OAuth flow.
-
-        Args:
-            connector: The connector to connect
-            user_id: The user ID
-            state: OAuth state parameter
-            redirect_uri: OAuth redirect URI
-
-        Returns:
-            Tuple of (authorization_url, state)
-        """
-        pass
+        """Return ``(authorization_url, state)`` to send the person to."""
 
     @abstractmethod
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
     ) -> OAuthCredentials:
-        """
-        Exchange authorization code for OAuth credentials.
+        """Turn the provider's callback into credentials worth storing.
 
-        Args:
-            connector: The connector
-            redirect_uri: The redirect URI with authorization code
-            user_id: The user ID
-            state: Optional OAuth state parameter
-
-        Returns:
-            OAuthCredentials object
+        ``redirect_uri`` is the full callback URL, code and all.
         """
-        pass
 
     @abstractmethod
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials:
-        """
-        Refresh OAuth credentials.
-
-        Args:
-            connector: The connector
-            credentials: Current credentials
-            user_id: The user ID
-
-        Returns:
-            Updated OAuthCredentials object
-        """
-        pass
+        """Exchange an expiring credential for a fresh one."""
 
     @abstractmethod
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None:
-        """
-        Revoke/delete the connection.
-
-        Args:
-            connector: The connector
-            credentials: The credentials to revoke
-            user_id: The user ID
-        """
-        pass
+        """Give the credential up at the provider, if it can be given up."""

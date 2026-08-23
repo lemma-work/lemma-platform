@@ -50,7 +50,10 @@ async def _run(apply_changes: bool) -> dict[str, object]:
             rows = (
                 (
                     await session.execute(
-                        select(Account).order_by(Account.id).offset(offset).limit(_BATCH)
+                        select(Account)
+                        .order_by(Account.id)
+                        .offset(offset)
+                        .limit(_BATCH)
                     )
                 )
                 .scalars()

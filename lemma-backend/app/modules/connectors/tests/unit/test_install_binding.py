@@ -11,7 +11,10 @@ def test_jira_speaks_for_its_cloud_site():
     assert (
         resolve_external_ref(
             "jira",
-            {"access_token": "t", "user_data": {"cloud_id": "abc-123", "base_url": "x"}},
+            {
+                "access_token": "t",
+                "user_data": {"cloud_id": "abc-123", "base_url": "x"},
+            },
         )
         == "abc-123"
     )

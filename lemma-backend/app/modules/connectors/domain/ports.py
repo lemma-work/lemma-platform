@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
-from app.modules.connectors.domain.account import AccountEntity, OAuthCredentials
+from app.modules.connectors.domain.account import (
+    AccountEntity,
+    CredentialTypes,
+    OAuthCredentials,
+)
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     OAuth2Defaults,
@@ -171,9 +176,24 @@ class ConnectorOperationRepositoryPort(Protocol):
 
 
 class AuthProviderPort(Protocol):
+    """The scheme-facing half of authentication, over one resolved install.
+
+    ``connect_with_credentials`` belongs here and was missing: it is the only
+    entry point the credential-managed schemes have, and callers were already
+    invoking it through this Protocol on the strength of the concrete classes
+    happening to implement it.
+    """
+
+    async def connect_with_credentials(
+        self,
+        install: ResolvedAuthInstall,
+        user_id: UUID,
+        credentials: dict,
+    ) -> CredentialTypes: ...
+
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
@@ -181,7 +201,7 @@ class AuthProviderPort(Protocol):
 
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
@@ -189,14 +209,14 @@ class AuthProviderPort(Protocol):
 
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials: ...
 
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None: ...

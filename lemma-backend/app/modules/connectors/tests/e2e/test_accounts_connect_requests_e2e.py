@@ -11,6 +11,7 @@ from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
 )
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
@@ -111,14 +112,15 @@ async def test_connect_request_and_accounts_lifecycle(
     auth_config = auth_config_response.json()
     assert auth_config["config"]["oauth2_credentials"]["client_secret"] == "********"
 
-    async def _fake_get_authorization_url(
-        self, connector, user_id, state, redirect_uri
-    ):
-        assert connector.oauth2_config.client_secret == "client-secret"
+    async def _fake_get_authorization_url(self, install, user_id, state, redirect_uri):
+        # The org brought its own client, so the secret it stored is what has
+        # to reach the scheme -- not the deployment's.
+        assert install.oauth2.client_secret == "client-secret"
+        assert install.config_source is AuthConfigSource.ORG_CUSTOM
         return ("https://mock.example.com/authorize", "provider_state")
 
     async def _fake_exchange_code_for_credentials(
-        self, connector, redirect_uri, user_id, state=None
+        self, install, redirect_uri, user_id, state=None
     ):
         return OAuthCredentials(
             access_token="access-token",
@@ -843,9 +845,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
 
-    async def _fake_get_authorization_url(
-        self, connector, user_id, state, redirect_uri
-    ):
+    async def _fake_get_authorization_url(self, install, user_id, state, redirect_uri):
         return ("https://mock.example.com/authorize", "provider_state")
 
     # The callback URL's "code" query param stands in for the provider's actual
@@ -853,7 +853,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     # exchange returns, so the test can drive distinct-identity vs same-identity
     # callbacks without a real OAuth provider.
     async def _fake_exchange_code_for_credentials(
-        self, connector, redirect_uri, user_id, state=None
+        self, install, redirect_uri, user_id, state=None
     ):
         from urllib.parse import parse_qs, urlparse
 

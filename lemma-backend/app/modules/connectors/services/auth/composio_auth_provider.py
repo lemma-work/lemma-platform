@@ -14,7 +14,8 @@ from composio.types import auth_scheme as composio_auth_scheme
 from app.modules.connectors.infrastructure.composio_client import get_composio_client
 
 from app.modules.connectors.domain.account import ComposioCredentials, OAuthCredentials
-from app.modules.connectors.domain.connector import AuthScheme, ConnectorEntity
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.connectors.domain.connector import AuthScheme
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.ports import ConnectorRepositoryPort
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
@@ -73,20 +74,15 @@ class ComposioAuthProvider(AuthProviderInterface):
             )
             return None
 
-    def _is_google_app(self, app: ConnectorEntity) -> bool:
-        return app.id in ["google_calendar", "gmail", "google_workspace"]
+    def _is_google_app(self, install: ResolvedAuthInstall) -> bool:
+        return install.connector_id in ["google_calendar", "gmail", "google_workspace"]
 
-    def _toolkit_slug(self, connector: ConnectorEntity) -> str:
-        if connector.composio_toolkit_slug:
-            return connector.composio_toolkit_slug
-        try:
-            capability = connector.capability_for("COMPOSIO")
-        except ValueError as exc:
-            raise ConnectorValidationError("Composio app name not configured") from exc
-        toolkit_slug = getattr(capability, "toolkit_slug", None)
-        if not toolkit_slug:
+    def _toolkit_slug(self, install: ResolvedAuthInstall) -> str:
+        # Resolved once when the install is built, rather than dug back out of
+        # the catalog entry on every call.
+        if not install.composio_toolkit_slug:
             raise ConnectorValidationError("Composio app name not configured")
-        return toolkit_slug
+        return install.composio_toolkit_slug
 
     def _extract_expiration_from_connection(
         self, connection_account: Any
@@ -116,7 +112,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         return None
 
     async def _resolve_token_expiration(
-        self, connector: ConnectorEntity, connection_account: Any
+        self, install: ResolvedAuthInstall, connection_account: Any
     ) -> datetime:
         token_expires_at = self._extract_expiration_from_connection(connection_account)
         if token_expires_at is not None:
@@ -125,7 +121,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         state = getattr(connection_account, "state", None)
         value = getattr(state, "val", None)
         access_token = getattr(value, "access_token", None)
-        if self._is_google_app(connector) and access_token:
+        if self._is_google_app(install) and access_token:
             google_expiry = await self._get_google_token_expiration(access_token)
             if google_expiry is not None:
                 return google_expiry
@@ -156,13 +152,6 @@ class ComposioAuthProvider(AuthProviderInterface):
             data["word_id"] = word_id
         return data or None
 
-    def _composio_auth_scheme(self, connector: ConnectorEntity) -> AuthScheme:
-        try:
-            capability = connector.capability_for("COMPOSIO")
-        except ValueError:
-            return AuthScheme.OAUTH2
-        return getattr(capability, "auth_scheme", AuthScheme.OAUTH2)
-
     # Maps our auth scheme to the Composio custom-auth scheme string used when a
     # toolkit has no Composio-managed credentials (bring-your-own API key, etc.).
     _CUSTOM_AUTH_SCHEME = {
@@ -172,7 +161,7 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def _resolve_auth_config_id(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         composio: Any,
         *,
         custom_auth_scheme: str | None = None,
@@ -200,7 +189,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             options = {"type": "use_composio_managed_auth"}
         auth_config = await run_blocking(
             lambda: composio.auth_configs.create(
-                toolkit=self._toolkit_slug(connector),
+                toolkit=self._toolkit_slug(install),
                 options=options,
             ),
             limiter="external_http",
@@ -209,7 +198,7 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def connect_with_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
     ) -> ComposioCredentials:
@@ -218,7 +207,7 @@ class ComposioAuthProvider(AuthProviderInterface):
                 "Credentials are required to connect this Composio app."
             )
 
-        scheme = self._composio_auth_scheme(connector)
+        scheme = install.auth_scheme
         if scheme == AuthScheme.OAUTH2:
             raise ConnectorValidationError(
                 "OAuth2 Composio apps must be connected with a connect request, "
@@ -233,7 +222,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             self._composio_client_factory, limiter="external_http"
         )
         auth_config_id = await self._resolve_auth_config_id(
-            connector,
+            install,
             composio,
             custom_auth_scheme=self._CUSTOM_AUTH_SCHEME.get(scheme, "API_KEY"),
         )
@@ -256,7 +245,7 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
@@ -265,7 +254,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             self._composio_client_factory, limiter="external_http"
         )
 
-        auth_config_id = await self._resolve_auth_config_id(connector, composio)
+        auth_config_id = await self._resolve_auth_config_id(install, composio)
 
         redirect_url = f"{redirect_uri}?state={state}"
 
@@ -285,12 +274,12 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
     ) -> OAuthCredentials:
-        self._toolkit_slug(connector)
+        self._toolkit_slug(install)
 
         parsed_url = urlparse(redirect_uri)
         query_params = parse_qs(parsed_url.query)
@@ -321,7 +310,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         access_token = getattr(state_value, "access_token", None)
         refresh_token = getattr(state_value, "refresh_token", None)
         token_expires_at = await self._resolve_token_expiration(
-            connector, connection_account
+            install, connection_account
         )
 
         logger.debug("connectors.composio_auth_provider.set_token_expiration.observed")
@@ -337,7 +326,7 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials:
@@ -358,7 +347,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         access_token = getattr(state_value, "access_token", None)
         refresh_token = getattr(state_value, "refresh_token", None)
         token_expires_at = await self._resolve_token_expiration(
-            connector, connection_account
+            install, connection_account
         )
 
         return OAuthCredentials(
@@ -375,7 +364,7 @@ class ComposioAuthProvider(AuthProviderInterface):
 
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None:

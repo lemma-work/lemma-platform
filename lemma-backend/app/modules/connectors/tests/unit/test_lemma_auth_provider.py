@@ -5,7 +5,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.connectors.domain.connector import ConnectorEntity, OAuth2Config
+from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.connectors.domain.connector import (
+    AuthScheme,
+    ConnectorKind,
+    OAuth2Config,
+)
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
 from app.modules.connectors.services.credential_freshness import (
     credential_refresh_due,
@@ -64,10 +70,16 @@ class FakeSlackOAuth2Session(FakeOAuth2Session):
         }
 
 
-def _connector() -> ConnectorEntity:
-    return ConnectorEntity(
-        id="slack",
-        oauth2_config=OAuth2Config(
+def _install(connector_id: str = "slack") -> ResolvedAuthInstall:
+    return ResolvedAuthInstall(
+        connector_id=connector_id,
+        kind=ConnectorKind.PACKAGE,
+        auth_scheme=AuthScheme.OAUTH2,
+        auth_config_id=uuid4(),
+        organization_id=uuid4(),
+        config_source=AuthConfigSource.SYSTEM_DEFAULT,
+        config={},
+        oauth2=OAuth2Config(
             client_id="client-id",
             client_secret="client-secret",
             default_scopes=["chat:write"],
@@ -85,7 +97,7 @@ async def test_exchange_code_uses_clean_redirect_uri_for_token_exchange():
     )
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector(),
+        install=_install(),
         redirect_uri=callback_url,
         user_id=uuid4(),
     )
@@ -107,7 +119,7 @@ async def test_exchange_code_normalizes_slack_token_type_to_bearer():
     )
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector(),
+        install=_install(),
         redirect_uri=callback_url,
         user_id=uuid4(),
     )
@@ -150,7 +162,7 @@ async def test_an_absolute_expiry_is_the_instant_the_provider_meant():
     provider = LemmaAuthProvider(oauth_session_factory=FakeExpiringOAuth2Session)
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector(),
+        install=_install(),
         redirect_uri="https://example.ngrok.app/callback?code=abc",
         user_id=uuid4(),
     )
@@ -165,7 +177,7 @@ async def test_a_relative_lifetime_is_measured_from_utc_now():
     before = datetime.now(timezone.utc)
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector(),
+        install=_install(),
         redirect_uri="https://example.ngrok.app/callback?code=abc",
         user_id=uuid4(),
     )

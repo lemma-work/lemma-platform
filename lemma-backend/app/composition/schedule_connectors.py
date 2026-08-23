@@ -13,7 +13,8 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.account import AccountEntity
-from app.modules.connectors.domain.connector import AuthProvider, ConnectorEntity
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
 from app.modules.connectors.infrastructure.adapters.auth_provider_registry import (
     AuthProviderRegistry,
@@ -139,10 +140,10 @@ class ManagersFactory:
     def get_manager(
         app_trigger: ConnectorTriggerEntity,
         auth_provider: str,
-        connector: ConnectorEntity | None = None,
+        install: ResolvedAuthInstall | None = None,
     ) -> ComposioScheduleManager | None:
         del app_trigger
-        if connector is not None and connector.composio_toolkit_slug:
+        if install is not None and install.composio_toolkit_slug:
             return ComposioScheduleManager()
         if auth_provider == AuthProvider.COMPOSIO.value:
             return ComposioScheduleManager()
@@ -218,7 +219,7 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         if auth_config is None:
             raise ScheduleValidationError("Account auth configuration not found")
         connector = await self.connector_service.get_connector(account.connector_id)
-        effective_connector = self.connector_service._build_effective_connector(
+        auth_install = self.connector_service._resolve_auth_install(
             connector, auth_config
         )
         provider = getattr(auth_config.provider, "value", str(auth_config.provider))
@@ -226,7 +227,7 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
             ManagersFactory.get_manager(
                 trigger,
                 provider,
-                connector=effective_connector,
+                install=auth_install,
             ),
             account,
             trigger,

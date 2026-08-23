@@ -6,7 +6,7 @@ from uuid import UUID
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from app.modules.connectors.domain.account import OAuthCredentials
-from app.modules.connectors.domain.connector import ConnectorEntity
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
 from app.modules.connectors.services.helpers.helpers import get_atlassian_cloud_id
@@ -30,7 +30,7 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def connect_with_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
     ) -> dict:
@@ -40,17 +40,17 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
     ) -> Tuple[str, str]:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
 
         # create_authorization_url is pure URL/PKCE building (no network), so it
         # stays synchronous even on the async client — no thread hop needed.
@@ -70,17 +70,17 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
     ) -> OAuthCredentials:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
         authorization_response = redirect_uri
         normalized_redirect_uri = self._normalize_redirect_uri(authorization_response)
 
@@ -95,7 +95,7 @@ class LemmaAuthProvider(AuthProviderInterface):
                 authorization_response=authorization_response,
             )
 
-        return await self._create_oauth_credentials(token_data, connector)
+        return await self._create_oauth_credentials(token_data, install)
 
     def _normalize_redirect_uri(self, callback_url: str) -> str:
         parsed = urlsplit(callback_url)
@@ -103,11 +103,11 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
@@ -118,7 +118,7 @@ class LemmaAuthProvider(AuthProviderInterface):
                 "This connector might not support refresh tokens."
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
 
         async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
@@ -130,23 +130,23 @@ class LemmaAuthProvider(AuthProviderInterface):
                 refresh_token=credentials.refresh_token,
             )
 
-        return await self._create_oauth_credentials(token_data, connector)
+        return await self._create_oauth_credentials(token_data, install)
 
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None:
         return None
 
     async def _create_oauth_credentials(
-        self, token_data: dict, connector: ConnectorEntity
+        self, token_data: dict, install: ResolvedAuthInstall
     ) -> OAuthCredentials:
         if not isinstance(token_data, dict):
             token_data = dict(token_data) if token_data else {}
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
         access_token_path = oauth_config.access_token_path if oauth_config else None
         access_token = self._extract_token_field(
             token_data, access_token_path or "access_token", fallback_key="access_token"
@@ -183,7 +183,7 @@ class LemmaAuthProvider(AuthProviderInterface):
             expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
                 seconds=token_data["expires_in"]
             )
-        if connector.id == "microsoft_teams":
+        if install.connector_id == "microsoft_teams":
             import base64
             import json as _json
 
@@ -208,9 +208,9 @@ class LemmaAuthProvider(AuthProviderInterface):
                     break
             user_data = {"tid": tid, "tenant_id": tid, "oid": oid} if tid else None
 
-        elif connector.id in ["jira", "confluence"]:
+        elif install.connector_id in ["jira", "confluence"]:
             cloud_id = await self._cloud_id_resolver(access_token)
-            if "jira" in connector.id:
+            if "jira" in install.connector_id:
                 server_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
             else:
                 server_url = (
@@ -224,7 +224,7 @@ class LemmaAuthProvider(AuthProviderInterface):
             user_data = None
 
         token_type = token_data.get("token_type", "Bearer")
-        if connector.id == "slack" and token_type.lower() in {"bot", "user"}:
+        if install.connector_id == "slack" and token_type.lower() in {"bot", "user"}:
             token_type = "Bearer"
 
         return OAuthCredentials(
