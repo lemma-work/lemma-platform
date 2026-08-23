@@ -147,6 +147,15 @@ class AgentSteps:
             what=f"{self.label} deleting agent {name!r}",
         )
 
+    async def changes_agent_toolsets(
+        self, name: str, *, in_pod: JSON, to: list[str]
+    ) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/agents/{name}",
+            what=f"{self.label} changing what agent {name!r} can do",
+            json={"toolsets": to},
+        )
+
     async def grants_of_agent(self, name: str, *, in_pod: JSON) -> JSON:
         return await self.api.get(f"/pods/{in_pod['id']}/agents/{name}/permissions")
 

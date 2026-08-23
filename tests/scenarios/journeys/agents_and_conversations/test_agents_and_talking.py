@@ -57,6 +57,53 @@ async def test_an_agents_grants_are_readable(pod):
     assert "grants" in grants, grants
 
 
+def _memory_grant(grants: dict) -> list[str]:
+    """The permissions this agent holds on `/memory`, if any."""
+    for grant in grants.get("grants") or []:
+        if grant.get("resource_name") == "/memory":
+            return grant.get("permission_ids") or []
+    return []
+
+
+@scenario("An agent given memory can reach the place its memory lives")
+@proves("PS-AGENT-005")
+@covers("agent.create", "agent.permissions.get")
+async def test_memory_comes_with_the_access_it_needs(pod):
+    """Otherwise the switch is decorative: the agent is told to keep durable
+    facts in pod files and refused every time it tries."""
+    alice, the_pod = pod
+
+    agent = await alice.creates_an_agent(in_pod=the_pod, toolsets=["MEMORY", "POD"])
+
+    grants = await alice.grants_of_agent(agent["name"], in_pod=the_pod)
+    assert "folder.write" in _memory_grant(grants), grants
+
+
+@scenario("An agent without memory holds no claim on it")
+@proves("PS-AGENT-005")
+@covers("agent.create", "agent.permissions.get")
+async def test_memory_access_is_not_handed_out_unasked(pod):
+    alice, the_pod = pod
+
+    agent = await alice.creates_an_agent(in_pod=the_pod, toolsets=["POD"])
+
+    grants = await alice.grants_of_agent(agent["name"], in_pod=the_pod)
+    assert _memory_grant(grants) == [], grants
+
+
+@scenario("Taking memory away takes back the access that came with it")
+@proves("PS-AGENT-005")
+@covers("agent.update", "agent.permissions.get")
+async def test_memory_access_leaves_with_the_capability(pod):
+    alice, the_pod = pod
+    agent = await alice.creates_an_agent(in_pod=the_pod, toolsets=["MEMORY", "POD"])
+
+    await alice.changes_agent_toolsets(agent["name"], in_pod=the_pod, to=["POD"])
+
+    grants = await alice.grants_of_agent(agent["name"], in_pod=the_pod)
+    assert _memory_grant(grants) == [], grants
+
+
 class TestTalkingToAnAgent:
     pytestmark = capability("Talk to an agent")
 

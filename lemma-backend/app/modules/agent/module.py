@@ -70,5 +70,14 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_report_system_model_pricing,),
-    stream_groups=(("agent_events", "agent-events"),),
+    stream_groups=(
+        ("agent_events", "agent-events"),
+        # A second group on the datastore's stream, so a memory file written
+        # anywhere -- including the shell's `lemma files write`, which never
+        # reaches this process -- drops the cached brief section that quotes it.
+        # Declared here because publishers create declared groups before XADD;
+        # an undeclared group silently misses everything published before its
+        # first read.
+        ("datastore.events", "agent-memory-brief-invalidation"),
+    ),
 )

@@ -1855,7 +1855,7 @@
   {
     "tool_name": "pod_read_file",
     "toolset": "POD",
-    "description": "Read a pod file's text.\n\nA file that has text of its own -- markdown, plain text, HTML, CSV, code,\nemail -- is returned exactly as it is. A file that has none, because it is a\nbinary document like a PDF or a DOCX, is returned as the markdown it was\nconverted into at upload.\n\nUse ``pod_view_document_pages`` to *see* pages rather than read them.\n\nCheck `/memory/*.md` (pod-shared facts) and `/me/*.md` (private facts about\nthe current user) before answering when past context could change the answer.\nTheir `AGENTS.md` index is already in your Runtime Context, so start with\nwhatever topic file it points at rather than re-reading the index itself.",
+    "description": "Read a pod file's text.\n\nA file that has text of its own -- markdown, plain text, HTML, CSV, code,\nemail -- is returned exactly as it is. A file that has none, because it is a\nbinary document like a PDF or a DOCX, is returned as the markdown it was\nconverted into at upload.\n\nUse ``pod_view_document_pages`` to *see* pages rather than read them.",
     "input_schema": {
       "properties": {
         "path": {
@@ -2557,7 +2557,7 @@
   {
     "tool_name": "pod_write_file",
     "toolset": "POD",
-    "description": "Write text content to a pod file, creating or overwriting it.\n\nWithout an absolute path, the file lands in your default pod working\ndirectory (`/me/c/{date}/{slug}`) \u2014 a stable, private location scoped to\nthis conversation. Writes under your own `/me/...` (including that default\nlocation) never need approval; writes to a shared pod path may.\n\nDurable facts belong here, not chat: `/memory/*.md` (+\n`/memory/agents/<agent-name>/`) for pod-shared knowledge, `/me/*.md` (+\n`/me/agents/<agent-name>/`) for private facts about the current user. The\nmoment you learn a durable fact, preference, or correction, write it here\nimmediately rather than waiting to be asked \u2014 one topic per file, update an\nexisting one rather than create a near-duplicate.\n\n`AGENTS.md` in any of these four locations is read automatically into\nevery conversation's Runtime Context \u2014 keep it a short index (topic + a\npointer to the real file), never the facts themselves.",
+    "description": "Write text content to a pod file, creating or overwriting it.\n\nWithout an absolute path, the file lands in your default pod working\ndirectory (`/me/c/{date}/{slug}`) \u2014 a stable, private location scoped to\nthis conversation. Writes under your own `/me/...` (including that default\nlocation) never need approval; writes to a shared pod path may.",
     "input_schema": {
       "properties": {
         "path": {
