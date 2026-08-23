@@ -77,17 +77,19 @@ def _teams_event(fake_teams) -> ParsedInboundSurfaceEvent:
     )
 
 
-def _telegram_event() -> ParsedInboundSurfaceEvent:
+def _telegram_event(*, is_dm: bool = True) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
-        conversation_type=ConversationType.EXTERNAL_DM,
+        conversation_type=(
+            ConversationType.EXTERNAL_DM if is_dm else ConversationType.EXTERNAL_GROUP
+        ),
         external_channel_id="424242",
         external_thread_id="424242",
         external_message_id="111",
         sender_external_user_id="424242",
         sender_display_name="Contract User",
         message_text="hello",
-        is_dm=True,
+        is_dm=is_dm,
         mentioned_agent=True,
         reply_target={"chat_id": "424242", "message_id": 111},
     )
@@ -245,12 +247,35 @@ async def test_telegram_final_answer_contract_and_retry(fake_telegram, message_s
     assert payload["_method"] == "POST"
     assert payload["_path"] == "/bottelegram-contract-token/sendMessage"
     assert payload["chat_id"] == "424242"
+    # A DM quotes nothing: the event an outbound is built from is the link's
+    # last inbound, not the message being answered, so a quote here would tag
+    # whatever arrived most recently.
+    assert "reply_parameters" not in payload
+    assert payload["parse_mode"] == "MarkdownV2"
+    assert "Contract" in payload["text"]
+
+
+async def test_telegram_quotes_the_inbound_message_in_a_group(
+    fake_telegram, message_store
+):
+    service = TelegramPlatformService(
+        {
+            "bot_token": "telegram-contract-token",
+            "api_base_url": f"{fake_telegram.api_base}/bot",
+        }
+    )
+
+    await service.send_message(
+        event=_telegram_event(is_dm=False),
+        message="Contract reply",
+    )
+
+    messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    payload = messages[-1]
     assert payload["reply_parameters"] == {
         "message_id": 111,
         "allow_sending_without_reply": True,
     }
-    assert payload["parse_mode"] == "MarkdownV2"
-    assert "Contract" in payload["text"]
 
 
 async def test_whatsapp_final_answer_contract(fake_whatsapp, message_store):

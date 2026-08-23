@@ -2092,6 +2092,40 @@ def test_latest_user_prompt_renders_channel_context_as_background():
     assert message.text == "what happened?"
 
 
+def test_latest_user_prompt_renders_the_message_a_reply_quotes():
+    """A quoted reply must carry what it points at.
+
+    Telegram delivers the quoted message inline in the update, but only the
+    group path ever read it — so in a DM "this one is wrong" arrived as a
+    pronoun with no referent.
+    """
+    message = Message(
+        conversation_id=uuid4(),
+        sequence=0,
+        role=MessageRole.USER.value,
+        kind=MessageKind.TEXT,
+        text="this one is wrong",
+        metadata={
+            "surface_platform": "TELEGRAM",
+            "sender_display_name": "Deepak",
+            "quoted_message": {
+                "author": "lemmabot",
+                "text": "The runtime for agent-built software",
+                "is_bot": True,
+            },
+        },
+    )
+
+    _history, user_prompt = PydanticAIHarness()._history_and_prompt([message])
+
+    assert user_prompt is not None
+    assert "this one is wrong" in user_prompt
+    assert "your own earlier message" in user_prompt
+    assert "The runtime for agent-built software" in user_prompt
+    assert "BACKGROUND CONTEXT" in user_prompt
+    assert message.text == "this one is wrong"
+
+
 def test_latest_user_prompt_includes_metadata_state_without_changing_content():
     conversation_id = uuid4()
     message = Message(
