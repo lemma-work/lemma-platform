@@ -231,6 +231,129 @@ def require_docker() -> None:
         )
 
 
+#: Ask for infrastructure that stands between runs. Off by default, because a
+#: suite that leaves containers and a database behind on every developer's
+#: machine is a rude default — and because a fresh database is the right answer
+#: for CI, where nothing has consented to anything.
+#:
+#: On, it is what makes the standing tenant actually stand. GitHub, Slack and
+#: Gmail accounts exist only after a person consented in a browser, and the
+#: product has no way to store one without that (correctly). Throwing the
+#: database away each run therefore throws away the one thing the suite cannot
+#: recreate for itself — so re-running anything that touches a real connector
+#: meant asking a person to click through OAuth again, every time.
+STANDING_SETTING = "SCENARIOS_STANDING_STACK"
+
+#: Named, so they can be found again. `_docker_run` deliberately names nothing.
+STANDING_NETWORK = "lemma-scenarios"
+STANDING_POSTGRES = "lemma-scenarios-postgres"
+STANDING_REDIS = "lemma-scenarios-redis"
+STANDING_SUPERTOKENS = "lemma-scenarios-supertokens"
+
+#: Supertokens keeps its own tables. A database of its own rather than sharing
+#: `test`, so `alembic downgrade` and the sweep can never reach them: losing
+#: those is losing every password, with the application database left intact
+#: and pointing at users who can no longer sign in.
+STANDING_SUPERTOKENS_DB = "supertokens"
+
+
+def standing_wanted() -> bool:
+    """Whether this run wants infrastructure that outlives it."""
+    return os.getenv(STANDING_SETTING, "").lower() in {"1", "true", "yes"}
+
+
+def _network_exists() -> None:
+    subprocess.run(
+        ["docker", "network", "create", STANDING_NETWORK],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _standing_container(
+    name: str,
+    image: str,
+    internal_port: int,
+    env: dict[str, str] | None = None,
+    volume: str | None = None,
+) -> str:
+    """The named container: reused if it is there, started if it is stopped.
+
+    On a user-defined network so the containers can reach each other by name —
+    which Supertokens needs, since its storage is a Postgres it has to dial
+    itself. Published on 127.0.0.1 as well, for the API process on the host.
+    """
+    existing = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", f"name=^{name}$"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if existing:
+        running = subprocess.run(
+            ["docker", "ps", "-q", "--filter", f"name=^{name}$"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not running:
+            subprocess.run(["docker", "start", name], check=True, capture_output=True)
+        return existing
+
+    command = [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--label",
+        CONTAINER_LABEL,
+        "--network",
+        STANDING_NETWORK,
+        "-p",
+        f"127.0.0.1::{internal_port}",
+    ]
+    if volume:
+        # A *named* volume, so `docker rm` without -v keeps the data and a
+        # container rebuilt on a new image still finds it.
+        command += ["-v", f"{name}-data:{volume}"]
+    for key, value in (env or {}).items():
+        command += ["-e", f"{key}={value}"]
+    command.append(image)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise StackError(
+            f"could not start {name}: {(result.stderr or result.stdout).strip()[:500]}"
+        )
+    return result.stdout.strip()
+
+
+def _database_exists(postgres: str, name: str) -> None:
+    """Create a database if it is not there. Idempotent, by inspection."""
+    listed = subprocess.run(
+        [
+            "docker",
+            "exec",
+            postgres,
+            "psql",
+            "-U",
+            POSTGRES_USER,
+            "-d",
+            POSTGRES_DB,
+            "-tAc",
+            f"SELECT 1 FROM pg_database WHERE datname = '{name}'",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if listed.stdout.strip() == "1":
+        return
+    subprocess.run(
+        ["docker", "exec", postgres, "createdb", "-U", POSTGRES_USER, name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _docker_run(image: str, internal_port: int, env: dict[str, str] | None = None) -> str:
     command = [
         "docker",
@@ -705,17 +828,31 @@ def start_stack():
         scratch=scratch,
     )
 
+    standing = standing_wanted()
+    if standing:
+        _network_exists()
+
     try:
-        postgres = _docker_run(
-            POSTGRES_IMAGE,
-            5432,
-            {
-                "POSTGRES_USER": POSTGRES_USER,
-                "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
-                "POSTGRES_DB": POSTGRES_DB,
-            },
-        )
-        containers.append(postgres)
+        credentials = {
+            "POSTGRES_USER": POSTGRES_USER,
+            "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
+            "POSTGRES_DB": POSTGRES_DB,
+        }
+        if standing:
+            postgres = _standing_container(
+                STANDING_POSTGRES,
+                POSTGRES_IMAGE,
+                5432,
+                credentials,
+                # The volume this image actually declares. PGDATA lives at
+                # /var/lib/postgresql/18/docker *inside* it — mounting the
+                # older /var/lib/postgresql/data persists an empty directory
+                # and loses everything, silently.
+                volume="/var/lib/postgresql",
+            )
+        else:
+            postgres = _docker_run(POSTGRES_IMAGE, 5432, credentials)
+            containers.append(postgres)
         postgres_port = _mapped_port(postgres, 5432)
         _wait_postgres("127.0.0.1", postgres_port)
         subprocess.run(
@@ -736,13 +873,36 @@ def start_stack():
             text=True,
         )
 
-        redis = _docker_run(REDIS_IMAGE, 6379)
-        containers.append(redis)
+        if standing:
+            # Redis holds caches and streams, not the tenant. It stands only so
+            # the three move together; nothing here would be lost by dropping it.
+            redis = _standing_container(STANDING_REDIS, REDIS_IMAGE, 6379)
+        else:
+            redis = _docker_run(REDIS_IMAGE, 6379)
+            containers.append(redis)
         redis_port = _mapped_port(redis, 6379)
         _wait_tcp("127.0.0.1", redis_port)
 
-        supertokens = _docker_run(SUPERTOKENS_IMAGE, 3567)
-        containers.append(supertokens)
+        if standing:
+            # Given storage, at last. Without POSTGRESQL_CONNECTION_URI this
+            # image keeps everything in memory, so a persisted application
+            # database would survive with every password gone — users intact
+            # and nobody able to sign in, which is worse than not persisting.
+            _database_exists(postgres, STANDING_SUPERTOKENS_DB)
+            supertokens = _standing_container(
+                STANDING_SUPERTOKENS,
+                SUPERTOKENS_IMAGE,
+                3567,
+                {
+                    "POSTGRESQL_CONNECTION_URI": (
+                        f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
+                        f"@{STANDING_POSTGRES}:5432/{STANDING_SUPERTOKENS_DB}"
+                    )
+                },
+            )
+        else:
+            supertokens = _docker_run(SUPERTOKENS_IMAGE, 3567)
+            containers.append(supertokens)
         supertokens_port = _mapped_port(supertokens, 3567)
         _wait_http(f"http://127.0.0.1:{supertokens_port}/hello")
 

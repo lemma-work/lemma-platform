@@ -254,6 +254,38 @@ is why a run leaves no new organizations behind, which matters because the
 product has no way to delete one. A stack the suite boots itself is the
 exception: it starts empty, so the tenant is built in it on first use.
 
+### Keeping it between runs
+
+A stack the suite boots throws its database away at the end, which is right for
+CI and wrong the moment a real connector is involved. GitHub, Slack and Gmail
+accounts exist only after a person consented in a browser, and the product has
+no way to store one without that — correctly. So a throwaway database discards
+the one thing the suite cannot recreate for itself, and every re-run means
+asking somebody to click through OAuth again.
+
+```bash
+SCENARIOS_STANDING_STACK=1 make scenarios     # the same containers, next time too
+make scenarios-standing-down                  # and remove them
+```
+
+The containers get fixed names, the database a named volume, and none of them is
+torn down at the end. Two things had to be true for this to work, and both were
+checked rather than assumed:
+
+- **Supertokens needs storage of its own.** With no `POSTGRESQL_CONNECTION_URI`
+  that image keeps everything in memory, so a persisted application database
+  would come back with every password gone — users intact and nobody able to
+  sign in, which is worse than not persisting at all. It gets its own database
+  in the same Postgres now, so `alembic downgrade` and the sweep cannot reach it.
+- **The encryption key has to be the same key.** Credentials are Fernet blobs;
+  a key regenerated per boot turns every stored account into noise. In
+  local/testing it is derived from a fixed seed, so it is stable — verified by
+  storing an API key on one boot and executing an operation with it on the next.
+
+What this buys is the point of the standing tenant: consent once, then run the
+suite as often as you like — and somebody else can run it too, without being
+sent to a browser first.
+
 ## The two lanes
 
 `make scenarios` is the fast lane: everything runs against containers the stack

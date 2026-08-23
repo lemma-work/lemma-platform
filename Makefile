@@ -29,6 +29,7 @@ SHELL := /bin/bash
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
+        scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
         scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
@@ -331,6 +332,8 @@ help:
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
 	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
 	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
+	@echo "    SCENARIOS_STANDING_STACK=1 make scenarios   keep the database between runs"
+	@echo "    make scenarios-standing-down   and remove it again"
 	@echo "    make scenarios-images   build the sandbox images the lane below needs"
 	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
 	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
@@ -1317,6 +1320,23 @@ scenarios-deployment:
 scenarios-guards:
 	@echo "→ Scenario suite guards…"
 	@cd $(SCENARIOS_DIR) && uv run pytest journeys/test_harness_contract.py -q
+
+# Infrastructure that stands between runs, so a connected account survives.
+#
+# GitHub, Slack and Gmail accounts exist only after a person consented in a
+# browser, and the product has no way to store one without that. A throwaway
+# database therefore discards the one thing the suite cannot recreate for
+# itself — so every re-run asked somebody to click through OAuth again.
+#
+# Opt-in: `SCENARIOS_STANDING_STACK=1 make scenarios`. Anything that would be
+# rude to leave behind is removed by the target below.
+scenarios-standing-down:
+	@echo "→ Removing the standing scenario infrastructure…"
+	@docker rm -f lemma-scenarios-postgres lemma-scenarios-redis \
+		lemma-scenarios-supertokens >/dev/null 2>&1 || true
+	@docker volume rm lemma-scenarios-postgres-data >/dev/null 2>&1 || true
+	@docker network rm lemma-scenarios >/dev/null 2>&1 || true
+	@echo "  gone — the tenant and every connected account with it."
 
 # What the scenario suite actually executes in the backend. Instruments the
 # uvicorn and worker subprocesses, so this measures the product being driven
