@@ -58,9 +58,18 @@ class HumanAction:
         _asked_for.add(self)
         if _connected is None:
             raise NotLookedUpYet(
-                f"nothing has asked the tenant which accounts it has, so "
-                f"{self.name!r} cannot be checked. The session fixture does "
-                f"that before any scenario runs."
+                f"{self.name!r} cannot be checked yet: nothing has asked the "
+                f"tenant which accounts it has. That happens the first time a "
+                f"scenario asks for somebody — `await world.person(...)` — "
+                f"because the lookup needs a signed-in person to make it.\n\n"
+                f"So ask for the person first, then declare what they need:\n"
+                f"    priya = await world.person('priya')\n"
+                f"    needs(GITHUB)\n\n"
+                f"Deliberately loud rather than reporting it as missing: "
+                f"'nobody has connected GitHub' and 'nobody has looked' are "
+                f"very different answers, and quietly returning the first for "
+                f"the second would send somebody to reconnect an account that "
+                f"was there all along."
             )
         if self.connector in _connected:
             return ()

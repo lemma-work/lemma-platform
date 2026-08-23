@@ -75,6 +75,20 @@ FUNCTION_IMAGE = "lemma-function:scenarios"
 #: on. `ApiDriver` rewrites those back; see `drivers/api.py`.
 PUBLIC_API_URL = "https://scenarios.lemma.example"
 
+#: Two things a local stack cannot fake its way through, and an override for
+#: each. An OAuth callback has to come back to an address the *browser* can
+#: reach and the provider has registered, and a real Telegram refuses a webhook
+#: whose host does not resolve — both were found the hard way. Set
+#: `SCENARIOS_PUBLIC_API_URL` (with `SCENARIOS_PORT`, so the address is stable
+#: enough to register once) to run a consent flow against a stack on this
+#: machine, or to point a tunnel at one.
+PUBLIC_URL_SETTING = "SCENARIOS_PUBLIC_API_URL"
+PORT_SETTING = "SCENARIOS_PORT"
+
+
+def public_api_url(port: int) -> str:
+    return os.getenv(PUBLIC_URL_SETTING, "").strip() or PUBLIC_API_URL
+
 #: Organizations whose slug starts with this are capped at zero monthly spend by
 #: the stack's configuration below. PS-OPS-012 promises work over a limit is
 #: refused, and until a deployment could state a limit at all there was nowhere
@@ -336,7 +350,7 @@ def _environment(
         # call us: scenarios deliver the webhook themselves. Everything that
         # genuinely has to reach the running server (sandbox callbacks, the
         # function gateway) is pointed at the real host separately, below.
-        "API_URL": PUBLIC_API_URL,
+        "API_URL": public_api_url(port),
         "FRONTEND_URL": f"http://127.0.0.1:{port}",
         "AUTH_FRONTEND_URL": f"http://127.0.0.1:{port}",
         "DATABASE_URL": database_url,
@@ -632,7 +646,7 @@ def start_stack():
         supertokens_port = _mapped_port(supertokens, 3567)
         _wait_http(f"http://127.0.0.1:{supertokens_port}/hello")
 
-        port = _free_port()
+        port = int(os.getenv(PORT_SETTING, "") or _free_port())
         database_url = (
             f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
             f"@127.0.0.1:{postgres_port}/{POSTGRES_DB}"
