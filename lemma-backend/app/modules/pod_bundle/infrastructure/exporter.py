@@ -630,8 +630,8 @@ class BundleExporter:
     ) -> None:
         """Bundle an app's code: its source (extracted to ``source/``), or — for a
         widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
-        an app with neither archive, or one over budget, exports metadata-only.
-        Mirrors the CLI's ``_download_app_assets`` for format parity."""
+        an app with neither archive, or one over budget, exports metadata-only. A
+        one-file app lands as ``source/index.html``; the CLI writes ``html.html``."""
         from app.modules.apps.contracts import AppNotFoundError
 
         # Prefer source (rebuildable in the target pod); the exported vite dist is

@@ -25,7 +25,18 @@ const AccountOnboarding = dynamic(
 
 type RootPageMode = 'redirect' | 'home';
 
-export function RootPageSwitch({ mode = 'redirect' }: { mode?: RootPageMode }) {
+export function RootPageSwitch({
+    mode = 'redirect',
+    hasSessionCookie = false,
+}: {
+    mode?: RootPageMode;
+    /**
+     * Did this request arrive holding a session cookie? Read on the server by
+     * `hasSessionCookie()`, and a hint about which placeholder to paint — never
+     * a claim that the visitor is signed in. See the branch below.
+     */
+    hasSessionCookie?: boolean;
+}) {
     const { isAuthenticated, isLoading } = useLemmaAuth();
 
     // A local installation is not selling anything. The marketing page never
@@ -36,8 +47,19 @@ export function RootPageSwitch({ mode = 'redirect' }: { mode?: RootPageMode }) {
     // is still in flight. The auth check is a network round trip, which makes
     // this both the server render and what a crawler with no JavaScript sees:
     // real marketing copy, never a blank loading shell.
-    if (!isLocalDeployment() && (isLoading || !isAuthenticated)) {
-        return <LandingPage />;
+    //
+    // Unless the request carried a session cookie. Rendering the pitch during
+    // that round trip means someone who is already signed in watches a page of
+    // marketing load and then throw itself away — a second of the wrong app,
+    // on every visit to the root. The cookie is the one thing the server knows
+    // about them before the check resolves, and it is enough to paint the
+    // loader instead. A crawler carries no cookies, so the SSR'd marketing page
+    // it reads is unchanged, and so is the first paint for a real signed-out
+    // visitor. If the cookie turns out to be stale the check says so and the
+    // landing page renders a moment later, which is the same place a visitor
+    // with no cookie at all lands.
+    if (!isLocalDeployment() && !isAuthenticated) {
+        return isLoading && hasSessionCookie ? <PageLoader /> : <LandingPage />;
     }
 
     if (isLoading) {

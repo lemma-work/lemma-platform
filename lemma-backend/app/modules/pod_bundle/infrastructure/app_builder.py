@@ -101,6 +101,19 @@ def zip_dir(source_dir: Path, *, exclude_build_dirs: bool = True) -> bytes:
     return buffer.getvalue()
 
 
+def zip_html_file(html_file: Path) -> bytes:
+    """Zip a single-file app's ``html.html`` as ``index.html``.
+
+    The CLI's bundle format lets a no-build app be one editable file. Without
+    this the server-side importer saw neither a ``source/`` directory nor a
+    ``dist.zip`` and failed a bundle the CLI imports happily.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", html_file.read_text(encoding="utf-8"))
+    return buffer.getvalue()
+
+
 def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> list[str]:
     """Deterministic ordered slug candidates: the preferred/normalized base first,
     then a stable ``(pod_id, app_name)`` hash suffix. Deterministic — never random
@@ -352,9 +365,11 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in a sandbox; a static source is deployed as-is; a bundle carrying only a
-        prebuilt ``dist.zip`` (widget/no-source app) is uploaded with no source."""
+        in a sandbox; a static source or a single ``html.html`` is deployed as-is;
+        a bundle carrying only a prebuilt ``dist.zip`` (widget/no-source app) is
+        uploaded with no source."""
         source_dir = resource_dir / "source"
+        html_file = resource_dir / "html.html"
         dist_zip = resource_dir / "dist.zip"
 
         if source_dir.is_dir():
@@ -371,12 +386,18 @@ class AppStepRunner:
                 dist_bytes = source_bytes
             return source_bytes, dist_bytes
 
+        if html_file.is_file():
+            # A single-file app's html IS its source; there is no build step
+            # making one tree from another, so the same archive is both.
+            bundle = await run_blocking(zip_html_file, html_file, limiter="cpu_bound")
+            return bundle, bundle
+
         if dist_zip.is_file():
             dist_bytes = await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
             return None, dist_bytes
 
         raise AppBuildFailedError(
-            f"App '{name}' bundle has neither a source/ directory nor a dist.zip."
+            f"App '{name}' bundle has no source/ directory, html.html, or dist.zip."
         )
 
     # --- phase 3 ---------------------------------------------------------

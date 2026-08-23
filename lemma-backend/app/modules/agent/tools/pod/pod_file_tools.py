@@ -53,6 +53,17 @@ async def pod_write_file(
     directory (`/me/c/{date}/{slug}`) — a stable, private location scoped to
     this conversation. Writes under your own `/me/...` (including that default
     location) never need approval; writes to a shared pod path may.
+
+    Durable facts belong here, not chat: `/memory/*.md` (+
+    `/memory/agents/<agent-name>/`) for pod-shared knowledge, `/me/*.md` (+
+    `/me/agents/<agent-name>/`) for private facts about the current user. The
+    moment you learn a durable fact, preference, or correction, write it here
+    immediately rather than waiting to be asked — one topic per file, update an
+    existing one rather than create a near-duplicate.
+
+    `AGENTS.md` in any of these four locations is read automatically into
+    every conversation's Runtime Context — keep it a short index (topic + a
+    pointer to the real file), never the facts themselves.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -164,6 +175,11 @@ async def pod_read_file(
     converted into at upload.
 
     Use ``pod_view_document_pages`` to *see* pages rather than read them.
+
+    Check `/memory/*.md` (pod-shared facts) and `/me/*.md` (private facts about
+    the current user) before answering when past context could change the answer.
+    Their `AGENTS.md` index is already in your Runtime Context, so start with
+    whatever topic file it points at rather than re-reading the index itself.
     """
 
     async def op(services: PodServices) -> JsonObject:
