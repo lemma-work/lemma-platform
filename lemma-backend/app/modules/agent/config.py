@@ -140,6 +140,32 @@ class AgentSettings(BaseSettings):
         default=None,
         description="Deepgram API key for the speech toolset (listen/say).",
     )
+    speech_stt_language: str = Field(
+        default="multi",
+        description=(
+            "Default language for transcription when the caller names none. "
+            "'multi' uses Nova-3 multilingual code-switching, which reads a "
+            "voice note that mixes languages (Hinglish, Spanglish) word by "
+            "word instead of forcing the whole file into one language. 'auto' "
+            "uses Deepgram's whole-file language detection, which reaches more "
+            "languages but commits to a single one. A BCP-47 code pins it."
+        ),
+    )
+    speech_tts_voice: str = Field(
+        default="aura-2-thalia-en",
+        description=(
+            "Default Aura-2 voice. Used when neither the caller nor the "
+            "spoken language selects one."
+        ),
+    )
+    speech_tts_bitrate: int = Field(
+        default=48000,
+        description=(
+            "Bitrate (bits/sec) for compressed TTS output. Deepgram's own "
+            "default for Opus is 12000, which is what a native voice note is "
+            "encoded at on WhatsApp and Telegram, and it sounds like it."
+        ),
+    )
 
     # Web research
     web_fetch_impersonate_browser: bool = Field(
