@@ -31,11 +31,10 @@ FAILURES_BEFORE_STOPPING = 5
 
 
 @pytest.fixture
-async def doomed(world):
+async def doomed(world, run):
     """A schedule whose target cannot possibly succeed."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     workflow = await alice.creates_a_workflow(in_pod=pod)
     # A step calling a function that is not in this pod. The graph is valid —

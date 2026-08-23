@@ -21,9 +21,8 @@ pytestmark = [
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("operations")
 
 
 @scenario("A person runs a function and gets its output")
@@ -159,7 +158,7 @@ async def test_a_job_function_completes(pod):
 async def test_an_outsider_cannot_run_a_function(world, pod):
     alice, the_pod = pod
     function = await alice.creates_a_function(in_pod=the_pod)
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     await outsider.is_refused_running_function(
         function["name"], with_input={"value": 1}, in_pod=the_pod

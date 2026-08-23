@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import BUNDLE_QUOTA
 from harness.steps.datastore import column
 
 pytestmark = [
@@ -20,11 +22,11 @@ pytestmark = [
 
 
 @pytest.fixture
-async def built_pod(world):
+async def built_pod(world, run):
     """A pod with a table, records and a function — something worth carrying."""
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod(named="Source Pod")
+    needs(BUNDLE_QUOTA)
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("source-pod"))
     table = await alice.creates_a_table(
         in_pod=pod, named="tickets", columns=[column("title"), column("rank", "INTEGER")],
         shared=True,
@@ -48,7 +50,7 @@ async def built_pod(world):
     "import.started",
     "import.completed",
 )
-async def test_a_bundle_round_trips(built_pod):
+async def test_a_bundle_round_trips(built_pod, run):
     alice, source, table_name = built_pod
 
     export = await alice.exports_pod(source)
@@ -56,7 +58,7 @@ async def test_a_bundle_round_trips(built_pod):
     archive = await alice.downloads_bundle(export)
     assert archive[:2] == b"PK", "an exported bundle is a zip archive"
 
-    destination = await alice.creates_a_pod(named="Destination Pod")
+    destination = await alice.creates_a_pod(named=run.name("destination-pod"))
     url = await alice.uploads_bundle(archive, into_pod=destination)
     plan = await alice.plans_import(url, into_pod=destination)
     assert plan["status"] == "AWAITING_CONFIRMATION", (
@@ -74,11 +76,11 @@ async def test_a_bundle_round_trips(built_pod):
 @scenario("Nothing is applied until the person approves the plan")
 @proves("PS-PACK-010")
 @covers("pod.bundle.import.start", "table.list")
-async def test_the_plan_changes_nothing(built_pod):
+async def test_the_plan_changes_nothing(built_pod, run):
     alice, source, table_name = built_pod
     export = await alice.exports_pod(source)
     archive = await alice.downloads_bundle(export)
-    destination = await alice.creates_a_pod(named="Untouched Pod")
+    destination = await alice.creates_a_pod(named=run.name("untouched-pod"))
 
     url = await alice.uploads_bundle(archive, into_pod=destination)
     await alice.plans_import(url, into_pod=destination)
@@ -91,11 +93,11 @@ async def test_the_plan_changes_nothing(built_pod):
 @scenario("An imported function runs in the pod it landed in")
 @proves("PS-PACK-014")
 @covers("pod.bundle.import.apply", "function.run")
-async def test_an_imported_function_actually_runs(built_pod):
+async def test_an_imported_function_actually_runs(built_pod, run):
     alice, source, _table = built_pod
     export = await alice.exports_pod(source)
     archive = await alice.downloads_bundle(export)
-    destination = await alice.creates_a_pod(named="Working Pod")
+    destination = await alice.creates_a_pod(named=run.name("working-pod"))
     url = await alice.uploads_bundle(archive, into_pod=destination)
     plan = await alice.plans_import(url, into_pod=destination)
     await alice.applies_import(plan, into_pod=destination)
@@ -111,11 +113,11 @@ async def test_an_imported_function_actually_runs(built_pod):
 @scenario("A person cancels an import and nothing is applied")
 @proves("PS-PACK-011")
 @covers("pod.bundle.import.cancel", "table.list")
-async def test_a_cancelled_import_applies_nothing(built_pod):
+async def test_a_cancelled_import_applies_nothing(built_pod, run):
     alice, source, _table = built_pod
     export = await alice.exports_pod(source)
     archive = await alice.downloads_bundle(export)
-    destination = await alice.creates_a_pod(named="Cancelled Pod")
+    destination = await alice.creates_a_pod(named=run.name("cancelled-pod"))
     url = await alice.uploads_bundle(archive, into_pod=destination)
     plan = await alice.plans_import(url, into_pod=destination)
 

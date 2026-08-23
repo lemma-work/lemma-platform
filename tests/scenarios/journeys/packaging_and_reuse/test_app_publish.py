@@ -30,10 +30,9 @@ def _dist_bytes() -> bytes:
 @scenario("A person publishes an app by shipping a release for it")
 @proves("PS-PACK-031")
 @covers("app.create", "app.bundle.upload", "app.get")
-async def test_shipping_a_release_publishes_the_app(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_shipping_a_release_publishes_the_app(world, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     app = await alice.creates_an_app(in_pod=pod)
 
     uploaded = await alice.api.call(
@@ -56,10 +55,9 @@ async def test_shipping_a_release_publishes_the_app(world):
 @scenario("Opening an app marks the session as theirs")
 @proves("PS-PACK-031")
 @covers("app.get", "app.asset.root.get")
-async def test_opening_an_app_starts_a_session(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_opening_an_app_starts_a_session(world, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     app = await alice.creates_an_app(in_pod=pod)
 
     uploaded = await alice.api.call(

@@ -104,6 +104,6 @@ class TestAsking:
     @covers("query.execute")
     async def test_an_outsider_cannot_query(self, world, stocked):
         alice, pod, table = stocked
-        outsider = await world.new_person("outsider")
+        outsider = await world.person("hannah")
 
         await outsider.is_refused_query(f"SELECT * FROM {table}", in_pod=pod)

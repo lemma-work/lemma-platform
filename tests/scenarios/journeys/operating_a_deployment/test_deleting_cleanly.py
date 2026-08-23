@@ -25,13 +25,13 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_doing_things(world):
+async def pod_doing_things(world, run):
     """A pod with standing work: a surface listening and a schedule waiting."""
     fake = start_fake_telegram()
     try:
-        alice = await world.new_person("alice")
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        alice = await world.person("priya")
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
 
         auth_config = await alice.installs_connector(
@@ -162,11 +162,10 @@ async def test_a_deleted_pod_runs_nothing_further(pod_doing_things):
 @scenario("Deleting a pod leaves every other pod running")
 @proves("PS-OPS-020", "PS-POD-051")
 @covers("pod.delete", "schedule.list", "pod.get")
-async def test_deleting_one_pod_leaves_the_others_working(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    doomed = await alice.creates_a_pod()
-    keeper = await alice.creates_a_pod()
+async def test_deleting_one_pod_leaves_the_others_working(world, run):
+    alice = await world.person("priya")
+    doomed = await alice.creates_a_pod(named=run.name("pod"))
+    keeper = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=keeper)
     survivor = await alice.creates_a_schedule(
         in_pod=keeper, agent=agent["name"], config={"cron": "0 9 * * *"}

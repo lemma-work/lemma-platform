@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness.run import a_name_for
+from harness.run import a_name_for, must_be_traceable
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -161,8 +161,15 @@ class IdentitySteps:
 
     # --- organizations ---------------------------------------------------
 
-    async def creates_an_organization(self, *, named: str | None = None) -> JSON:
+    async def creates_an_organization(
+        self, *, named: str | None = None, standing: bool = False
+    ) -> JSON:
         name = named or a_name_for(f"{self.label}_org")
+        if not standing:
+            # Stricter than it looks, and deliberately: an organization cannot
+            # be deleted through any API this product has, so one made under a
+            # name nobody can trace is there for good.
+            must_be_traceable(name, what="organization")
         organization = await self.api.post(
             "/organizations",
             what=f"{self.label} creating organization {name!r}",

@@ -81,6 +81,34 @@ class Run:
         return f"{MARK}{self.id}"
 
 
+def must_be_traceable(name: str, *, what: str) -> str:
+    """A name that outlives its scenario has to say which run made it.
+
+    Applied to pods and organizations, and to nothing else — which is the whole
+    rule, discovered by migrating the suite rather than guessed at beforehand.
+    A pod's name lives in its organization and an organization's lives in the
+    deployment; both of those stand between runs, so a literal name there is a
+    409 for whoever runs second. A table, an agent or a surface is named
+    *inside* a pod the scenario made and will delete, so it can keep the
+    readable name the scenario is actually about.
+
+    Enforced here rather than by reading the source, because the check that
+    matters is on the value that reaches the product — an f-string, a constant
+    imported from somewhere else and a name built in a helper all arrive here
+    the same way.
+    """
+    if made_by_a_run(name):
+        return name
+    raise AssertionError(
+        f"{what} {name!r} would outlive this scenario under a name that says "
+        f"nothing about which run made it. The tenant is shared with every run "
+        f"before and after this one, so the next run asking for {name!r} is "
+        f"refused for the name being taken — and cleanup cannot tell it from "
+        f"somebody's own work. Use run.name({name!r}), or pass standing=True "
+        f"if this is one of the pods the tenant is declared to have."
+    )
+
+
 def made_by_a_run(name: str) -> bool:
     """Did any run make it? What cleanup matches on."""
     return bool(MADE_BY_A_RUN.search(name))

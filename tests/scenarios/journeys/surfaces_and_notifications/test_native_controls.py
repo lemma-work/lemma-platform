@@ -46,7 +46,7 @@ def _update(*, text: str, update_id: int, handle: str, chat_id: int) -> dict:
 
 
 @pytest.fixture
-async def reachable_pod(world):
+async def reachable_pod(world, run):
     """A pod on Telegram, with a person the platform recognises."""
     fake = start_fake_telegram()
     # A Telegram account belongs to one person deployment-wide, and a chat id
@@ -55,10 +55,10 @@ async def reachable_pod(world):
     handle = f"alice_{uuid4().hex[:10]}"
     chat_id = 66600 + (uuid4().int % 9000)
     try:
-        alice = await world.new_person("alice")
+        alice = await world.person("daniel")
         await alice.is_known_on_telegram_as(handle)
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(
             in_pod=pod, toolsets=["POD", "USER_INTERACTION"]
         )

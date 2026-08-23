@@ -11,8 +11,7 @@ pytestmark = [journey("Connectors and accounts"), capability("Find what can be c
 @proves("PS-CONN-001")
 @covers("connector.list")
 async def test_the_connector_catalogue_is_browsable(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
+    alice = await world.person("priya")
 
     connectors = await alice.available_connectors()
 
@@ -23,8 +22,8 @@ async def test_the_connector_catalogue_is_browsable(world):
 @proves("PS-CONN-001")
 @covers("connector.status.get")
 async def test_connector_status_is_readable(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     status = await alice.connector_status_of(organization)
 

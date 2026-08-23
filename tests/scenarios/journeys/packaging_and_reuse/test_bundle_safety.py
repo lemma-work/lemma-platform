@@ -14,6 +14,8 @@ import zipfile
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import BUNDLE_QUOTA
 from harness.steps.datastore import column
 
 pytestmark = [
@@ -29,9 +31,10 @@ SECRET = "sentinel-credential-8f3a1c9e-do-not-export"
 @scenario("A bundle carries the work and leaves the secrets behind")
 @proves("PS-PACK-002")
 @covers("pod.bundle.export.start", "pod.bundle.export.get", "pod.bundle.download")
-async def test_an_exported_bundle_contains_no_credentials(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+async def test_an_exported_bundle_contains_no_credentials(world, provider, run):
+    needs(BUNDLE_QUOTA)
+    alice = await world.person("daniel")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url,
@@ -42,7 +45,7 @@ async def test_an_exported_bundle_contains_no_credentials(world, provider):
         auth_config=auth_config,
         credentials={"access_token": SECRET},
     )
-    pod = await alice.creates_a_pod()
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     await alice.adds_record({"title": "real work"}, to_table=table["name"], in_pod=pod)
 
@@ -68,10 +71,10 @@ async def test_an_exported_bundle_contains_no_credentials(world, provider):
 @scenario("An exported bundle still carries the work it was exported for")
 @proves("PS-PACK-002", "PS-OPS-021")
 @covers("pod.bundle.export.start", "pod.bundle.download")
-async def test_an_exported_bundle_is_readable_without_lemma(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_an_exported_bundle_is_readable_without_lemma(world, run):
+    needs(BUNDLE_QUOTA)
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     await alice.adds_record(
         {"title": "the work that must survive leaving"},
@@ -124,10 +127,9 @@ async def test_an_exported_bundle_is_readable_without_lemma(world):
 @scenario("A hostile bundle is rejected rather than unpacked")
 @proves("PS-PACK-013")
 @covers("pod.bundle.upload", "pod.bundle.import.start", "pod.bundle.import.get")
-async def test_a_hostile_bundle_cannot_reach_outside_the_pod(world, what, archive):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_a_hostile_bundle_cannot_reach_outside_the_pod(world, what, archive, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as bundle:

@@ -127,7 +127,7 @@ async def _company(owner: Person, company: tenant.Company, ledger: Ledger) -> JS
             ledger.already(f"{company.name} is there")
             owner.organization = existing
             return existing
-    made = await owner.creates_an_organization(named=company.name)
+    made = await owner.creates_an_organization(named=company.name, standing=True)
     ledger.did(f"created {company.name}, owned by {owner.label}")
     return made
 

@@ -12,9 +12,8 @@ pytestmark = [journey("Automating work"), capability("Build a workflow")]
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("operations")
 
 
 @scenario("A person changes a workflow's description without touching its graph")

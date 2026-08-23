@@ -14,12 +14,12 @@ pytestmark = [
 
 
 @pytest.fixture
-async def connected(world):
+async def connected(world, run):
     fake = start_fake_telegram()
     try:
-        alice = await world.new_person("alice")
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        alice = await world.person("daniel")
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
         auth_config = await alice.installs_connector("telegram", in_organization=organization)
         account = await alice.connects_account(

@@ -29,9 +29,9 @@ pytestmark = [journey("Clients we ship"), capability("Do the core journey")]
 @pytest.fixture
 async def signed_in(world):
     """A person with an organization and a pod, plus their bearer token."""
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    organization = alice.organization
+    pod = await alice.works_in("company-wide")
     return alice, organization, pod
 
 

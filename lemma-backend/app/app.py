@@ -794,6 +794,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     @app.get("/health/capabilities", include_in_schema=False)
     async def health_capabilities():
         from app.modules.datastore.module import embedding_capability
+        from app.modules.pod_bundle.config import pod_bundle_settings
 
         embeddings = embedding_capability()
         payload = {
@@ -852,6 +853,15 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 ),
                 "role_cache_ttl_seconds": (
                     settings.authorization_role_cache_ttl_seconds
+                ),
+                "bundle_daily_export_limit": (
+                    pod_bundle_settings.pod_bundle_daily_export_limit
+                ),
+                "bundle_daily_import_limit": (
+                    pod_bundle_settings.pod_bundle_daily_import_limit
+                ),
+                "usage_limit_overrides": bool(
+                    settings.usage_org_limit_overrides_json
                 ),
             }
         payload["configuration"] = configuration

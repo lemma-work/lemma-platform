@@ -5,16 +5,18 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import BUNDLE_QUOTA
 from harness.steps.datastore import column
 
 pytestmark = [journey("Packaging and reuse"), capability("Give the work an interface")]
 
 
 @pytest.fixture
-async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+async def pod(world, run):
+    needs(BUNDLE_QUOTA)
+    alice = await world.person("daniel")
+    return alice, await alice.creates_a_pod(named=run.name("pod"))
 
 
 @scenario("A person changes an app's description and address")
@@ -71,12 +73,12 @@ class TestFollowingAnImport:
     pytestmark = capability("Bring someone else's pod in")
 
     @pytest.fixture
-    async def planned(self, pod):
+    async def planned(self, pod, run):
         alice, the_pod = pod
         await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
         export = await alice.exports_pod(the_pod)
         archive = await alice.downloads_bundle(export)
-        destination = await alice.creates_a_pod(named="Following Pod")
+        destination = await alice.creates_a_pod(named=run.name("following-pod"))
         url = await alice.uploads_bundle(archive, into_pod=destination)
         plan = await alice.plans_import(url, into_pod=destination)
         return alice, destination, plan

@@ -19,9 +19,8 @@ pytestmark = [
 
 
 async def _a_pod_with_an_agent(world, *, toolsets=("POD", "USER_INTERACTION")):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    pod = await alice.works_in("customer-support")
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=list(toolsets))
     return alice, pod, agent
 

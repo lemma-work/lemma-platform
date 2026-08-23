@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness.run import a_name_for
+from harness.run import a_name_for, must_be_traceable
 from harness.drivers.api import items_of
 
 JSON = dict[str, Any]
@@ -37,6 +37,7 @@ class PodSteps:
         in_organization: JSON | None = None,
         named: str | None = None,
         pod_type: str = "HYBRID",
+        standing: bool = False,
     ) -> JSON:
         organization = in_organization or self.organization
         if organization is None:
@@ -45,6 +46,8 @@ class PodSteps:
                 f"call creates_an_organization() first"
             )
         name = named or a_name_for(f"{self.label}_pod")
+        if not standing:
+            must_be_traceable(name, what="pod")
         pod = await self.api.post(
             "/pods",
             what=f"{self.label} creating pod {name!r}",
@@ -81,7 +84,9 @@ class PodSteps:
             if pod.get("name") == name:
                 self.pod = pod
                 return pod
-        return await self.creates_a_pod(in_organization=organization, named=name)
+        return await self.creates_a_pod(
+            in_organization=organization, named=name, standing=True
+        )
 
     async def opens_pod(self, pod: JSON) -> JSON:
         return await self.api.get(

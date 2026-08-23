@@ -344,6 +344,15 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
         "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
         "AUTH_ABUSE_PROTECTION_ENABLED": "false",
+        # Export and import are capped at five a day *per user*, which is a
+        # sensible guard on a real deployment and an impossible one for a suite
+        # driven by a standing cast: the packaging journey alone spends more
+        # than that in a single run, and the cap is per UTC day, so the run
+        # after it would have none left. Off here, and reported by
+        # /health/capabilities so a deployment lane can say so rather than fail
+        # halfway through.
+        "POD_BUNDLE_DAILY_EXPORT_LIMIT": "0",
+        "POD_BUNDLE_DAILY_IMPORT_LIMIT": "0",
         # A deployment that states its own spend limits, so the refusal path in
         # PS-OPS-012 has somewhere to run. Only the probe organization is
         # capped; see SPEND_CAP_PROBE_SLUG_PREFIX.

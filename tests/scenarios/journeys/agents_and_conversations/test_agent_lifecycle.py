@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.credentials import needs
+from harness.environment import OPEN_SIGNUP
 from harness.steps.datastore import column
 
 pytestmark = [journey("Agents and conversations"), capability("Define an agent")]
@@ -12,9 +14,8 @@ pytestmark = [journey("Agents and conversations"), capability("Define an agent")
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("customer-support")
 
 
 @scenario("A person changes what an agent does")
@@ -176,6 +177,10 @@ class TestModelProfiles:
     @covers("agent.runtime.profiles.list")
     async def test_an_outsider_cannot_see_profiles(self, world, pod):
         alice, _the_pod = pod
+        # Somebody in no organization at all, which is what this promise is
+        # about. None of the standing cast is that, so this one stays a
+        # fresh person and says so.
+        needs(OPEN_SIGNUP)
         outsider = await world.new_person("outsider")
 
         response = await outsider.api.call(

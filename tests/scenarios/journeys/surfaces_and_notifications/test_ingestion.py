@@ -27,13 +27,13 @@ pytestmark = [
 
 
 @pytest.fixture
-async def telegram(world):
+async def telegram(world, run):
     """A pod reachable on Telegram, with the platform stood in for."""
     fake = start_fake_telegram()
     try:
-        alice = await world.new_person("alice")
-        organization = await alice.creates_an_organization()
-        pod = await alice.creates_a_pod()
+        alice = await world.person("daniel")
+        organization = alice.organization
+        pod = await alice.creates_a_pod(named=run.name("pod"))
         agent = await alice.creates_an_agent(in_pod=pod)
 
         auth_config = await alice.installs_connector("telegram", in_organization=organization)

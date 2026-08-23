@@ -448,6 +448,50 @@ def test_a_target_too_old_to_describe_itself_stops_the_run():
         forget()
 
 
+def test_a_pod_or_an_organization_cannot_be_named_untraceably():
+    """The two things whose names live somewhere that stands between runs.
+
+    A pod's name lives in its organization and an organization's in the
+    deployment, so a literal there is a 409 for whoever runs second — and
+    cleanup cannot tell it from somebody's own work. Everything else a scenario
+    makes is named *inside* a pod the scenario also made and deletes, and keeps
+    the readable name it is actually about. That distinction came out of doing
+    the migration; guessing it beforehand would have produced a rule that cried
+    wolf on two thirds of the suite.
+
+    Checked on the value that reaches the product rather than by reading the
+    source, because a constant, an f-string and a name built in a helper all
+    arrive the same way.
+    """
+    import inspect
+
+    from harness.run import must_be_traceable
+    from harness.steps.identity import IdentitySteps
+    from harness.steps.pod import PodSteps
+
+    for owner, verb, what in (
+        (PodSteps, "creates_a_pod", "pod"),
+        (IdentitySteps, "creates_an_organization", "organization"),
+    ):
+        body = inspect.getsource(getattr(owner, verb))
+        assert "must_be_traceable" in body, (
+            f"{verb} no longer checks that the name it is given can be traced "
+            f"to a run, so a scenario can leave a {what} the next run collides "
+            f"with and cleanup cannot recognise"
+        )
+        assert "standing" in body, (
+            f"{verb} lost its `standing` escape hatch; provisioning has to be "
+            f"able to make the tenant's own {what}s under their real names"
+        )
+
+    try:
+        must_be_traceable("Support", what="pod")
+    except AssertionError as refusal:
+        assert "run.name" in str(refusal), refusal
+    else:
+        raise AssertionError("a literal name was accepted for a durable resource")
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 

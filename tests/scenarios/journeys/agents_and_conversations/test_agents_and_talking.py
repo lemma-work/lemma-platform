@@ -15,9 +15,8 @@ pytestmark = [journey("Agents and conversations"), capability("Define an agent")
 
 @pytest.fixture
 async def pod(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
-    return alice, await alice.creates_a_pod()
+    alice = await world.person("daniel")
+    return alice, await alice.works_in("customer-support")
 
 
 @scenario("A person creates an agent and gives it a job")
@@ -110,6 +109,6 @@ class TestTalkingToAnAgent:
             in_pod=the_pod, with_agent=agent["name"], saying="something private"
         )
 
-        outsider = await world.new_person("outsider")
+        outsider = await world.person("hannah")
 
         await outsider.is_refused_conversation(conversation, in_pod=the_pod)

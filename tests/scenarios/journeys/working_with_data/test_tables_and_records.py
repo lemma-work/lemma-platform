@@ -27,6 +27,24 @@ async def pod(world):
     return daniel, await daniel.works_in("sales")
 
 
+@pytest.fixture
+async def pod_with_a_teammate(world, run):
+    """A pod of this run's own, and a colleague to put in it.
+
+    These scenarios decide what a *member* of a pod may see, so they have to put
+    somebody in one — and a standing pod that kept everyone every run added to it
+    would drift away from what `harness/tenant.py` says the tenant is. The pod
+    goes at the end of the scenario; Sofia's standing does not change.
+    """
+    priya = await world.person("priya")
+    pod = await priya.creates_a_pod(named=run.name("sharing"))
+    sofia = await world.person("sofia")
+    try:
+        yield priya, pod, sofia
+    finally:
+        await priya.deletes_pod(pod)
+
+
 @scenario("A person creates a table by declaring its columns")
 @proves("PS-DATA-001")
 @covers("table.create", "table.get", "table.list", "table.created")
@@ -261,7 +279,7 @@ class TestWhoCanSeeData:
         table = await alice.creates_a_table(in_pod=the_pod)
         await alice.adds_record({"title": "secret"}, to_table=table["name"], in_pod=the_pod)
 
-        outsider = await world.new_person("outsider")
+        outsider = await world.person("hannah")
 
         response = await outsider.api.call(
             "GET", f"/pods/{the_pod['id']}/datastore/tables/{table['name']}/records"
@@ -273,15 +291,12 @@ class TestWhoCanSeeData:
     @scenario("On a shared table, a pod viewer reads every row but writes none")
     @proves("PS-DATA-014")
     @covers("record.list", "record.create")
-    async def test_a_viewer_reads_a_shared_table_but_does_not_write(self, world, pod):
-        alice, the_pod = pod
+    async def test_a_viewer_reads_a_shared_table_but_does_not_write(self, pod_with_a_teammate):
+        alice, the_pod, bob = pod_with_a_teammate
         table = await alice.creates_a_table(
             in_pod=the_pod, columns=[column("title")], shared=True
         )
         await alice.adds_record({"title": "visible"}, to_table=table["name"], in_pod=the_pod)
-
-        bob = await world.new_person("bob")
-        await bob.accepts(await alice.invites(bob, to=alice.organization))
         await alice.adds(bob, to_pod=the_pod, as_role="POD_VIEWER")
 
         rows = await bob.records_in(table["name"], in_pod=the_pod)
@@ -294,14 +309,11 @@ class TestWhoCanSeeData:
     @scenario("On a per-owner table, one member does not see another's rows")
     @proves("PS-DATA-015")
     @covers("record.list", "record.create")
-    async def test_per_owner_rows_stay_with_their_owner(self, world, pod):
-        alice, the_pod = pod
+    async def test_per_owner_rows_stay_with_their_owner(self, pod_with_a_teammate):
+        alice, the_pod, bob = pod_with_a_teammate
         # No `shared=True`, so rows belong to whoever wrote them.
         table = await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
         await alice.adds_record({"title": "alice's"}, to_table=table["name"], in_pod=the_pod)
-
-        bob = await world.new_person("bob")
-        await bob.accepts(await alice.invites(bob, to=alice.organization))
         await alice.adds(bob, to_pod=the_pod, as_role="POD_EDITOR")
 
         assert await bob.records_in(table["name"], in_pod=the_pod) == [], (
@@ -321,13 +333,10 @@ class TestWhoCanSeeData:
     @scenario("An admin can ask for every member's rows, and a member cannot")
     @proves("PS-DATA-016")
     @covers("record.list")
-    async def test_admin_mode_shows_every_row_and_is_gated(self, world, pod):
-        alice, the_pod = pod
+    async def test_admin_mode_shows_every_row_and_is_gated(self, pod_with_a_teammate):
+        alice, the_pod, bob = pod_with_a_teammate
         table = await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
         await alice.adds_record({"title": "alice's"}, to_table=table["name"], in_pod=the_pod)
-
-        bob = await world.new_person("bob")
-        await bob.accepts(await alice.invites(bob, to=alice.organization))
         await alice.adds(bob, to_pod=the_pod, as_role="POD_EDITOR")
         await bob.adds_record({"title": "bob's"}, to_table=table["name"], in_pod=the_pod)
 

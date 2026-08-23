@@ -22,11 +22,11 @@ pytestmark = [
 
 
 @pytest.fixture
-async def after_a_run(world):
+async def after_a_run(world, run):
     """An organization whose agent has done something worth recording."""
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
     conversation = await alice.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"], saying="Say something short."
@@ -127,10 +127,10 @@ async def test_an_unknown_price_never_blocks_a_run(after_a_run):
 @scenario("A run that fails still costs, and is still recorded")
 @proves("PS-OPS-003")
 @covers("usage.organization.events.list", "agent.conversation.get")
-async def test_a_failed_run_is_recorded_too(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
+async def test_a_failed_run_is_recorded_too(world, run):
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD"])
 

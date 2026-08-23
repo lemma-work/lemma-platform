@@ -211,6 +211,33 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes"}
 
 
+BUNDLE_QUOTA = EnvironmentCapability(
+    name="room to export and import bundles",
+    demands=(
+        Demand("bundle_daily_export_limit", 0, "POD_BUNDLE_DAILY_EXPORT_LIMIT"),
+        Demand("bundle_daily_import_limit", 0, "POD_BUNDLE_DAILY_IMPORT_LIMIT"),
+    ),
+    how=(
+        "five exports and five imports per user per UTC day, which is a fair "
+        "guard on a real deployment and an impossible one for a standing cast: "
+        "the packaging journey spends more than that in a single run, and the "
+        "next run would start the day with none left. Zero disables the cap"
+    ),
+)
+
+
+SERVER_SPEND_CAPS = EnvironmentCapability(
+    name="a spend limit this run can actually reach",
+    demands=(Demand("usage_limit_overrides", True, "USAGE_ORG_LIMIT_OVERRIDES_JSON"),),
+    how=(
+        "the limit under test has to be *set* before anything can exceed it, "
+        "and a limit is deployment configuration rather than something a person "
+        "can ask for. The stack caps one slug prefix at zero; a deployment "
+        "that caps nothing has no refusal path to prove"
+    ),
+)
+
+
 _described: Deployment | None = None
 
 

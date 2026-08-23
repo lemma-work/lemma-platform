@@ -14,8 +14,7 @@ pytestmark = [
 @proves("PS-CONN-001")
 @covers("connector.get", "connector.list", "connector.skill.get")
 async def test_a_connector_reads_back(world):
-    alice = await world.new_person("alice")
-    await alice.creates_an_organization()
+    alice = await world.person("priya")
     listed = await alice.available_connectors()
     assert listed, "the catalogue should not be empty once seeded"
     connector_id = listed[0].get("id") or listed[0].get("connector_id")
@@ -31,8 +30,8 @@ async def test_a_connector_reads_back(world):
 @proves("PS-CONN-030")
 @covers("connector.auth_config.refresh_operations", "connector.operation.discover")
 async def test_operations_can_be_refreshed(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url, spec_url=provider.spec_url,
@@ -50,8 +49,8 @@ async def test_operations_can_be_refreshed(world, provider):
 @proves("PS-CONN-030")
 @covers("connector.operation.details.batch")
 async def test_operations_read_in_bulk(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url, spec_url=provider.spec_url,
@@ -69,8 +68,8 @@ async def test_operations_read_in_bulk(world, provider):
 @proves("PS-CONN-040")
 @covers("connector.trigger.get", "connector.trigger.list")
 async def test_a_trigger_reads_back(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
         server_url=provider.base_url, spec_url=provider.spec_url,
@@ -99,8 +98,8 @@ async def test_a_trigger_reads_back(world, provider):
 @proves("PS-CONN-010", "PS-CONN-011")
 @covers("connector.auth_config.create")
 async def test_an_oauth_connector_needs_credentials(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
 
     response = await alice.api.call(
         "POST", f"/organizations/{organization['id']}/connectors/auth-configs",
@@ -119,8 +118,8 @@ async def test_an_oauth_connector_needs_credentials(world):
 @proves("PS-CONN-021")
 @covers("connector.connect_request.create")
 async def test_connecting_needs_a_consent_flow(world, provider):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    alice = await world.person("priya")
+    organization = alice.organization
     # An API connected by its own credential has no consent screen to send
     # anyone to, so asking to start one is a request that cannot be honoured.
     auth_config = await alice.installs_http_connector(

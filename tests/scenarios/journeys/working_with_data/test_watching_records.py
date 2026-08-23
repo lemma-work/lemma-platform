@@ -131,7 +131,7 @@ async def test_updates_and_deletions_arrive(a_watched_table):
 @covers("record.create")
 async def test_a_stranger_is_sent_nothing(world, a_watched_table):
     alice, _organization, pod, table = a_watched_table
-    stranger = await world.new_person("stranger")
+    stranger = await world.person("hannah")
 
     # Either refusing the handshake or accepting it and forwarding nothing is a
     # correct answer. Leaking one row is not, and a scenario that only checked

@@ -14,12 +14,10 @@ pytestmark = [
 
 
 @pytest.fixture
-async def team(world):
-    alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
-    pod = await alice.creates_a_pod()
-    bob = await world.new_person("bob")
-    await bob.accepts(await alice.invites(bob, to=organization))
+async def team(world, run):
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    bob = await world.person("sofia")
     await alice.adds(bob, to_pod=pod, as_role="POD_USER")
     return alice, bob, pod
 
@@ -69,8 +67,7 @@ async def test_read_all_clears_everything(team):
 @covers("notification.mark_all_read", "notification.unread_count")
 async def test_read_state_is_personal(world, team):
     alice, bob, pod = team
-    carol = await world.new_person("carol")
-    await carol.accepts(await alice.invites(carol, to=alice.organization))
+    carol = await world.person("wei")
     await alice.adds(carol, to_pod=pod, as_role="POD_USER")
 
     await alice.notifies(bob, in_pod=pod, title="For Bob")
@@ -118,7 +115,7 @@ async def test_an_outsider_sees_no_notifications(world, team):
     alice, bob, pod = team
     await alice.notifies(bob, in_pod=pod, title="Internal")
 
-    outsider = await world.new_person("outsider")
+    outsider = await world.person("hannah")
 
     response = await outsider.api.call("GET", f"/pods/{pod['id']}/notifications")
     assert response.status_code >= 400, (
