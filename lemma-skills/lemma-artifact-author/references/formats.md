@@ -38,6 +38,11 @@ distribution, or accessibility value.
 - Keep JavaScript purposeful. Provide a readable static state if scripting fails,
   and avoid remote dependencies unless the user accepts their availability and
   privacy tradeoffs.
+- Revise generated markup by regenerating it from the content model, not by
+  patching the rendered file. When a patch is unavoidable, rewrite the file or
+  use a literal string replacement such as Python `str.replace`; never `sed -i`,
+  whose `&` and `/` are replacement syntax, so a swap silently duplicates the
+  matched text or grafts the replacement onto a fragment meant to be deleted.
 - Validate DOM structure and links, then render desktop, narrow mobile, and print
   output. Exercise interactions, overflow states, long content, and empty states.
 - Route an authenticated or data-backed Lemma app to `lemma-app-design` and
@@ -71,6 +76,10 @@ distribution, or accessibility value.
 - Preserve searchable text, selectable links, bookmarks, page labels, annotations,
   form behavior, fonts, page boxes, and metadata when they are part of the job.
   Preserve original scan images even when adding an OCR text layer.
+- Do not rely on emoji anywhere in a document rendered to PDF unless a font with
+  emoji coverage is confirmed present in the rendering environment. Engines such
+  as WeasyPrint draw uncovered codepoints as empty boxes, and only a page render
+  exposes it. Use text labels, inline SVG, or plain typographic marks instead.
 - Check file integrity, page count, page dimensions/orientation, text extraction,
   link targets, font substitution, blank pages, and forms where applicable.
 - Render every page. Inspect overview thumbnails plus dense pages at full size for
