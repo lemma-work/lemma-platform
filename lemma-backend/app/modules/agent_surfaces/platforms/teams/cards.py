@@ -55,6 +55,17 @@ def _teams_display_resource_card(
             }
         )
 
+    if render_plan.preview_block:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": render_plan.preview_block,
+                "fontType": "Monospace",
+                "wrap": False,
+                "spacing": "Small",
+            }
+        )
+
     card: dict[str, Any] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",

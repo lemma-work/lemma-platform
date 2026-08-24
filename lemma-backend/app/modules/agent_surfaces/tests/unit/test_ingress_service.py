@@ -30,6 +30,10 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
+from app.modules.agent_surfaces.services import surface_egress
+from app.modules.agent_surfaces.services.display_resource_content import (
+    PodFileDelivery,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceMessageMetadata,
@@ -1568,6 +1572,43 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     assert render_plan.primary_action is not None
     assert "/pod/" in render_plan.primary_action.url
     assert "tab=deals" in render_plan.primary_action.url
+
+
+async def test_a_delivered_file_carries_no_caption(monkeypatch):
+    """A file goes out as the file, and nothing is written on it.
+
+    The caption used to be the file's own name — which Telegram, WhatsApp and
+    Slack all print on the bubble already, so the one line a media message can
+    carry said only what the reader could see. Anything worth saying about the
+    file is its own message.
+    """
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="SLACK",
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=parsed_event.sender_external_user_id,
+        last_event=parsed_event.model_dump(mode="json"),
+    )
+    service = _build_service(
+        adapter=AsyncMock(), surfaces=[surface], existing_link=link
+    )
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    delivered = AsyncMock(return_value=PodFileDelivery(delivered=True))
+    monkeypatch.setattr(surface_egress, "deliver_pod_file", delivered)
+
+    sent = await service.send_display_resource_for_conversation(
+        conversation_id=conversation_id,
+        request={"type": "FILE", "path": "/me/reports/shiplog.pdf"},
+        tool_call_id="tool-file-caption",
+    )
+
+    assert sent is True
+    assert delivered.await_args.kwargs["caption"] is None
 
 
 async def _ask_user_link(surface, conversation_id, parsed_event):
