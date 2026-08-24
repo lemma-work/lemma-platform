@@ -12,10 +12,11 @@ the platform Lemma registered with whether it was told to stop.
 from __future__ import annotations
 
 import pytest
+from uuid import uuid4
 
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_telegram
+from harness.telegram_view import TelegramView
 from harness.waiting import never
 
 pytestmark = [
@@ -25,43 +26,34 @@ pytestmark = [
 
 
 @pytest.fixture
-async def pod_doing_things(world, run):
+async def pod_doing_things(world, run, egress):
     """A pod with standing work: a surface listening and a schedule waiting."""
-    fake = start_fake_telegram()
-    try:
-        alice = await world.person("priya")
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("pod"))
-        agent = await alice.creates_an_agent(in_pod=pod)
+    fake = TelegramView(egress)
+    alice = await world.person("priya")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
 
-        auth_config = await alice.installs_connector(
-            "telegram", in_organization=organization
-        )
-        account = await alice.connects_account(
-            in_organization=organization,
-            auth_config=auth_config,
-            credentials={
-                "bot_token": "424242:scenarios",
-                "api_base_url": fake.api_base,
-            },
-        )
-        await alice.connects_a_surface(
-            in_pod=pod,
-            platform="TELEGRAM",
-            named="tg",
-            agent=agent["name"],
-            account=account,
-        )
-        # Every quarter hour, which is as often as the product allows.
-        schedule = await alice.creates_a_schedule(
-            in_pod=pod, agent=agent["name"], config={"cron": "*/15 * * * *"}
-        )
-        # Keep the webhook registration; forget the setup traffic.
-        webhook_path, webhook_secret = fake.webhook_path, fake.webhook_secret
-        fake.clear()
-        yield alice, pod, schedule, fake, webhook_path, webhook_secret
-    finally:
-        fake.stop()
+    auth_config = await alice.installs_connector("telegram", in_organization=organization)
+    account = await alice.connects_account(
+        in_organization=organization,
+        auth_config=auth_config,
+        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
+    )
+    await alice.connects_a_surface(
+        in_pod=pod,
+        platform="TELEGRAM",
+        named="tg",
+        agent=agent["name"],
+        account=account,
+    )
+    # Every quarter hour, which is as often as the product allows.
+    schedule = await alice.creates_a_schedule(
+        in_pod=pod, agent=agent["name"], config={"cron": "*/15 * * * *"}
+    )
+    # Keep the webhook registration; forget the setup traffic.
+    webhook_path, webhook_secret = fake.webhook_path, fake.webhook_secret
+    yield alice, pod, schedule, fake, webhook_path, webhook_secret
 
 
 @scenario("A deleted pod stops answering on the surfaces it was reachable on")

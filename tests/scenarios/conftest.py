@@ -17,9 +17,9 @@ import pytest_asyncio
 from harness import environment, run as run_scope
 from harness.egress import Egress
 from harness.environment import Deployment
+from harness.provider_view import ProviderView
 from harness.provision import provision, sweep
 from harness.run import Run
-from harness.fake_platform import start_fake_provider
 from harness.stack import Stack, start_stack
 from harness.world import Sessions, World
 
@@ -186,15 +186,12 @@ async def egress(stack: Stack) -> AsyncIterator[Egress]:
 
 
 @pytest.fixture
-def provider() -> Iterator[object]:
+def provider(egress) -> ProviderView:
     """A third-party HTTP API a connector can be pointed at.
 
-    Per-scenario rather than session-scoped: scenarios assert on exactly which
-    calls arrived, and a shared recorder would make that depend on what ran
-    before it.
+    Served by the proxy, at a reserved hostname the product connects to as it
+    would any other. Nothing is started here — the `egress` fixture has already
+    forgotten the previous scenario's traffic, which is what keeps "exactly
+    which calls arrived" a per-scenario question.
     """
-    fake = start_fake_provider()
-    try:
-        yield fake
-    finally:
-        fake.stop()
+    return ProviderView(egress)

@@ -598,14 +598,10 @@ def _environment(
         # every one of those is a hard bounce at a reserved domain, charged to
         # the sending reputation of an account the product itself uses.
         **_real_email_settings(),
-        # The self-hosted posture. Off in production so an org admin cannot
-        # point a connector at the cloud metadata service; on here so a
-        # connector can target the fake provider this suite runs on loopback.
-        # Nothing is lost by flipping it: the guard's default-off behaviour is
-        # covered directly by `app/core/tests/unit/test_url_guard.py`, which
-        # asserts the refusal reason for loopback, private and link-local
-        # addresses. What this suite adds is the lifecycle *around* it.
-        "CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS": "true",
+        # `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS` is deliberately absent, so
+        # this stack runs the same SSRF posture as production. It used to be on
+        # because the stand-ins bound loopback and a connector had to reach
+        # them; the proxy answers for real hostnames now, so nothing does.
         # Placeholders, and only where the deployment configured nothing. In
         # mock mode none of them reaches a provider — the model is swapped for a
         # scripted one before any call is made — but they have to be *present*,
@@ -620,6 +616,16 @@ def _environment(
         ),
         "LEMMA_OPENAI_DEFAULT_MODEL": _configured_or(
             "LEMMA_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"
+        ),
+        # Where those credentials are actually valid. Passed through for the
+        # same reason as the key, and it was the one of the four that was not:
+        # a deployment serving its model from anywhere other than OpenAI — an
+        # OpenAI-compatible gateway, a self-hosted server — had the key and the
+        # model name carried over while the base URL silently fell back to
+        # api.openai.com. Every real-model scenario then failed on a provider
+        # error that looked like the model being unreliable.
+        "LEMMA_OPENAI_BASE_URL": _configured_or(
+            "LEMMA_OPENAI_BASE_URL", "https://api.openai.com/v1"
         ),
         # Needed before a sandbox can be provisioned at all.
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "scenarios-runtime-credential-key-32b",
