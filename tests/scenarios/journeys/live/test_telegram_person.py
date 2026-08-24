@@ -94,6 +94,19 @@ async def talking(world):
     bot = await _bot_handle()
     person = await a_person_on_telegram()
     try:
+        if not person.username:
+            pytest.skip(
+                "the Telegram account in TELEGRAM_SESSION has no @username, and "
+                "that is how Lemma recognises a sender — an inbound message from "
+                "it resolves to nobody, so the agent correctly answers a stranger "
+                "rather than a colleague. Set a username on that account in "
+                "Telegram's settings (Settings → Username); everyone the product "
+                "is built for has one."
+            )
+        # Tell Lemma which colleague this account is. Without it the sender is a
+        # stranger — which the product handles well, and is a different promise
+        # from the ones these scenarios are about.
+        await holder.is_known_on_telegram_as(person.username)
         async with person.talking_to(bot) as chat:
             yield holder, pod, chat
     finally:
