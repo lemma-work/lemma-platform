@@ -161,6 +161,13 @@ def _display_resource_card_html(plan: SurfaceDisplayRenderPlan) -> str:
         if detail_items
         else ""
     )
+    preview_html = (
+        '<pre style="background:#f6f8fa;border-radius:6px;color:#111827;'
+        'font-size:13px;margin:12px 0 0;overflow-x:auto;padding:12px;">'
+        f"{escape(plan.preview_block)}</pre>"
+        if plan.preview_block
+        else ""
+    )
     action_html = ""
     if action is not None:
         action_html = (
@@ -179,6 +186,7 @@ def _display_resource_card_html(plan: SurfaceDisplayRenderPlan) -> str:
         f'margin:0 0 8px;">{escape(plan.title)}</p>'
         f"{summary_html}"
         f"{details_html}"
+        f"{preview_html}"
         f"{action_html}"
         "</div>"
     )

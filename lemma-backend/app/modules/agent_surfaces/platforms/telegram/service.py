@@ -575,6 +575,8 @@ def _telegram_display_resource_text(render_plan: SurfaceDisplayRenderPlan) -> st
         parts.append(escape(render_plan.summary))
     for line in render_plan.detail_lines[:5]:
         parts.append(f"<blockquote>{escape(line)}</blockquote>")
+    if render_plan.preview_block:
+        parts.append(f"<pre>{escape(render_plan.preview_block)}</pre>")
     action = render_plan.primary_action
     if action is not None:
         parts.append(

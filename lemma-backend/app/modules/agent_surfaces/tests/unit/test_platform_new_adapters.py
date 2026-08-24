@@ -240,8 +240,8 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
         event,
         SurfaceDisplayRenderPlan(
             resource_type="FILE",
-            title="File: /me/report.pdf",
-            summary="A file is ready to inspect.",
+            title="report.pdf",
+            summary="PDF · 2.3 MB",
             actions=[
                 SurfaceDisplayAction(
                     label="Open file",
