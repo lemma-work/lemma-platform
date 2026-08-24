@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import os
+
 import pytest
 import pytest_asyncio
 from fastapi import status
@@ -58,6 +60,13 @@ def public_surface_api_url(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
+
+
+# Set before anything imports settings, so every reader sees it — including the
+# worker, which serves these tests from its own task and picked up an attribute
+# patched onto one Settings instance too late to matter. The fixture below says
+# why this suite is entitled to it.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
 
 
 @pytest.fixture(autouse=True)

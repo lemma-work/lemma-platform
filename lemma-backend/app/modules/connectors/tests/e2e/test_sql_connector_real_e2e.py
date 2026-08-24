@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
+import os
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -31,6 +33,11 @@ from app.modules.connectors.domain.errors import (
 from app.modules.connectors.infrastructure.adapters.sql_executor import SqlExecutor
 from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.execution import KindDispatcher
+
+
+# Before settings is read anywhere, so the worker and any other reader see it
+# too — patching the attribute alone reaches one instance and one moment.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
 
 
 @pytest.fixture(autouse=True)

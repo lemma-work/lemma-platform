@@ -19,6 +19,8 @@ import contextlib
 import socket
 from typing import Any
 
+import os
+
 import pytest
 import pytest_asyncio
 
@@ -33,6 +35,11 @@ from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.discovery.mcp_discoverer import discover_mcp
 from app.modules.connectors.services.execution import KindDispatcher
 from app.modules.test_support.e2e.waiters import eventually
+
+
+# Before settings is read anywhere, so the worker and any other reader see it
+# too — patching the attribute alone reaches one instance and one moment.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
 
 
 @pytest.fixture(autouse=True)
