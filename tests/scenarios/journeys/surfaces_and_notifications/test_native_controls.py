@@ -5,8 +5,8 @@ cannot be used from a phone. The promise is that a question or an approval
 reaches the person on the platform they are already on, using that platform's
 own controls where it has them.
 
-Telegram is stood in for by `harness.fake_platform`, pointed at through
-`api_base_url` — a documented product override. Lemma runs for real, and the
+Telegram is answered by the egress proxy — the product connects to
+`api.telegram.org` as it would in production. Lemma runs for real, and the
 scenario reads the buttons the platform was actually sent.
 """
 
@@ -17,10 +17,10 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.telegram_view import TelegramView
 from harness.credentials import needs
 from harness.steps.datastore import column
 from harness.environment import MODEL_IS_REAL
-from harness.fake_platform import start_fake_telegram
 from harness.waiting import eventually
 
 pytestmark = [
@@ -49,56 +49,47 @@ def _update(*, text: str, update_id: int, handle: str, chat_id: int) -> dict:
 
 
 @pytest.fixture
-async def reachable_pod(world, run):
+async def reachable_pod(world, run, egress):
     """A pod on Telegram, with a person the platform recognises."""
-    fake = start_fake_telegram()
+    fake = TelegramView(egress)
     # A Telegram account belongs to one person deployment-wide, and a chat id
     # addresses one conversation, so both are per-scenario. Sharing either would
     # make one scenario's sender collide with another's.
     handle = f"alice_{uuid4().hex[:10]}"
     chat_id = 66600 + (uuid4().int % 9000)
-    try:
-        alice = await world.person("daniel")
-        await alice.is_known_on_telegram_as(handle)
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("pod"))
-        table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
-        agent = await alice.creates_an_agent(
-            in_pod=pod,
-            toolsets=["POD", "USER_INTERACTION"],
-            # The agent is *told* how to behave, which is what a person does
-            # when they set one up — rather than the scenario injecting the tool
-            # call it wants to see. The instruction is product surface; the turn
-            # the model then takes is the thing under test.
-            instruction=(
-                "When somebody asks for a report, do not choose for them. Use "
-                "your question tool to ask which report they want, offering "
-                "exactly two choices: 'Weekly summary' and 'Full ledger'. "
-                "Before reading anything from the pod, ask for approval first."
-            ),
-        )
-        auth_config = await alice.installs_connector(
-            "telegram", in_organization=organization
-        )
-        account = await alice.connects_account(
-            in_organization=organization,
-            auth_config=auth_config,
-            credentials={
-                "bot_token": "424242:scenarios",
-                "api_base_url": fake.api_base,
-            },
-        )
-        await alice.connects_a_surface(
-            in_pod=pod,
-            platform="TELEGRAM",
-            named="tg",
-            agent=agent["name"],
-            account=account,
-        )
-        fake.clear()
-        yield alice, pod, fake, handle, chat_id, table
-    finally:
-        fake.stop()
+    alice = await world.person("daniel")
+    await alice.is_known_on_telegram_as(handle)
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
+    agent = await alice.creates_an_agent(
+        in_pod=pod,
+        toolsets=["POD", "USER_INTERACTION"],
+        # The agent is *told* how to behave, which is what a person does
+        # when they set one up — rather than the scenario injecting the tool
+        # call it wants to see. The instruction is product surface; the turn
+        # the model then takes is the thing under test.
+        instruction=(
+            "When somebody asks for a report, do not choose for them. Use "
+            "your question tool to ask which report they want, offering "
+            "exactly two choices: 'Weekly summary' and 'Full ledger'. "
+            "Before reading anything from the pod, ask for approval first."
+        ),
+    )
+    auth_config = await alice.installs_connector("telegram", in_organization=organization)
+    account = await alice.connects_account(
+        in_organization=organization,
+        auth_config=auth_config,
+        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
+    )
+    await alice.connects_a_surface(
+        in_pod=pod,
+        platform="TELEGRAM",
+        named="tg",
+        agent=agent["name"],
+        account=account,
+    )
+    yield alice, pod, fake, handle, chat_id, table
 
 
 async def _says_on_telegram(
@@ -136,7 +127,6 @@ async def _their_conversation(alice, pod, fake, handle, chat_id):
         describe="the agent to answer the first message",
         timeout=60.0,
     )
-    fake.clear()
     return threads[0]
 
 

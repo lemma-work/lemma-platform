@@ -36,7 +36,11 @@ def _factory(server_url, headers, timeout=None):
     return Client(_SERVER)
 
 
-CONN = {"server_url": "memory://test"}
+# A public https URL, not `memory://`: the executor guards `server_url` before
+# connecting, and the real factory only ever builds an HTTP transport, so a
+# scheme no deployment can produce is not worth keeping here. `_factory` ignores
+# the URL and hands back an in-memory client, so nothing is dialled either way.
+CONN = {"server_url": "https://mcp.scenarios.example/mcp"}
 
 
 @pytest.mark.asyncio
@@ -179,3 +183,52 @@ class TestTransportFailureClassification:
         first.__context__ = second
         second.__context__ = first
         assert _is_transport_failure(first) is False
+
+
+class TestTheServerUrlIsGuarded:
+    """The MCP target is re-checked when a tool is called, not only at install.
+
+    `server_url` is stored and tenant-supplied. Vetting it once, when the
+    install was created, leaves the window every other kind closes: DNS can be
+    repointed afterwards, and the address that was public then need not be
+    public when an agent calls a tool.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_url, reason",
+        [
+            ("https://169.254.169.254/mcp", "link_local_address"),
+            ("https://127.0.0.1/mcp", "loopback_address"),
+            ("https://10.0.0.5/mcp", "private_address"),
+        ],
+    )
+    async def test_a_private_target_is_refused_at_execution(self, server_url, reason):
+        called = False
+
+        def _never(url, headers, timeout=None):
+            nonlocal called
+            called = True
+            return Client(_SERVER)
+
+        executor = McpExecutor(client_factory=_never)
+        with pytest.raises(OperationExecutionValidationError) as raised:
+            await executor.execute(
+                connector_id="mcp",
+                operation_name="anything",
+                execution={"tool_name": "anything"},
+                payload={},
+                third_party_credentials=None,
+                connection_config={"server_url": server_url},
+            )
+        assert raised.value.details["reason"] == reason
+        # The guard runs before the client is built, so nothing was dialled.
+        assert not called
+
+    @pytest.mark.asyncio
+    async def test_discovery_refuses_a_private_target_too(self):
+        with pytest.raises(ValueError, match="unsafe MCP target"):
+            await discover_mcp(
+                connection_config={"server_url": "https://169.254.169.254/mcp"},
+                client_factory=lambda *a, **k: Client(_SERVER),
+            )

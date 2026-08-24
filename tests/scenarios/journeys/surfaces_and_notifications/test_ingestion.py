@@ -4,8 +4,8 @@ The full path: a person messages the bot on Telegram, Lemma verifies the
 delivery is genuine, resolves who they are, runs the agent, and replies in the
 same chat.
 
-Telegram itself is stood in for by `harness.fake_platform` — pointed at through
-`api_base_url` on the connected account, which the platform supports for
+Telegram itself is answered by the egress proxy — the product connects to
+`api.telegram.org`, which the proxy answers for
 self-hosted Bot API servers. Lemma runs entirely for real.
 """
 
@@ -15,8 +15,10 @@ import asyncio
 
 import pytest
 
+from uuid import uuid4
+
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_telegram
+from harness.telegram_view import TelegramView
 from harness.waiting import eventually, never
 
 pytestmark = [
@@ -26,39 +28,29 @@ pytestmark = [
 
 
 @pytest.fixture
-async def telegram(world, run):
+async def telegram(world, run, egress):
     """A pod reachable on Telegram, with the platform stood in for."""
-    fake = start_fake_telegram()
-    try:
-        alice = await world.person("daniel")
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("pod"))
-        agent = await alice.creates_an_agent(in_pod=pod)
+    fake = TelegramView(egress)
+    alice = await world.person("daniel")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
 
-        auth_config = await alice.installs_connector(
-            "telegram", in_organization=organization
-        )
-        account = await alice.connects_account(
-            in_organization=organization,
-            auth_config=auth_config,
-            credentials={
-                "bot_token": "424242:scenarios",
-                # The documented override for a self-hosted Bot API server.
-                "api_base_url": fake.api_base,
-            },
-        )
-        surface = await alice.connects_a_surface(
-            in_pod=pod,
-            platform="TELEGRAM",
-            named="tg",
-            agent=agent["name"],
-            account=account,
-        )
-        del surface
-        fake.clear()
-        yield alice, pod, fake
-    finally:
-        fake.stop()
+    auth_config = await alice.installs_connector("telegram", in_organization=organization)
+    account = await alice.connects_account(
+        in_organization=organization,
+        auth_config=auth_config,
+        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
+    )
+    surface = await alice.connects_a_surface(
+        in_pod=pod,
+        platform="TELEGRAM",
+        named="tg",
+        agent=agent["name"],
+        account=account,
+    )
+    del surface
+    yield alice, pod, fake
 
 
 def _update(*, chat_id: int, text: str, from_id: int, update_id: int = 1) -> dict:

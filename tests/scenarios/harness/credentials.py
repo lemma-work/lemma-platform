@@ -173,6 +173,28 @@ TELEGRAM = Capability(
     how="a bot token from @BotFather, which is what a surface authenticates as",
 )
 
+TELEGRAM_APP = Capability(
+    name="a Telegram app to sign a person in with",
+    requires=("TELEGRAM_API_ID", "TELEGRAM_API_HASH"),
+    how=(
+        "create them at https://my.telegram.org, API development tools, against "
+        "the account that will play the person. They authorize the app; signing "
+        "the person in is the separate step below"
+    ),
+)
+
+TELEGRAM_PERSON = Capability(
+    name="a real Telegram account the suite can send from",
+    requires=("TELEGRAM_SESSION",),
+    how=(
+        "run `uv run python -m harness.telegram_login` once and put the session "
+        "it prints in the environment. A bot cannot receive a message nobody "
+        "sent it, so every scenario about somebody messaging an agent needs a "
+        "real account on the other end. The code goes to a phone, which is why "
+        "a person runs it once rather than provisioning doing it"
+    ),
+)
+
 SLACK = Capability(
     name="Slack",
     requires=("SLACK_BOT_TOKEN",),

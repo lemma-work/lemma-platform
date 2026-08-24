@@ -26,7 +26,7 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.stack import RESEND_INBOUND_DOMAIN, RESEND_WEBHOOK_SECRET
+from harness.stack import RESEND_WEBHOOK_SECRET, inbound_email_domain
 from harness.waiting import eventually
 
 pytestmark = [
@@ -127,7 +127,7 @@ async def test_an_email_surface_has_an_address(mailbox):
     address = _address_of(surface)
 
     assert address, f"an email surface with no address cannot be written to: {surface}"
-    assert address.endswith(RESEND_INBOUND_DOMAIN), (
+    assert address.endswith(inbound_email_domain()), (
         f"the surface's address is not under this deployment's inbound domain, "
         f"so mail to it will never arrive: {address!r}"
     )
@@ -184,7 +184,7 @@ async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
 
     await _deliver(
         alice,
-        to=f"nobody-{uuid4().hex[:8]}@{RESEND_INBOUND_DOMAIN}",
+        to=f"nobody-{uuid4().hex[:8]}@{inbound_email_domain()}",
         subject="Hello?",
         text="Is anyone there?",
         message_id=f"<{uuid4().hex}@example.com>",
