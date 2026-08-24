@@ -100,15 +100,29 @@ class StreamingParts:
 
         A part that streamed has its text in ``part_content``; one that did not
         carries it on the part itself. Empty either way means there is nothing
-        to persist.
+        to persist -- and "empty" has to mean whitespace too. A model that goes
+        straight from a response into a tool call emits its text part as a bare
+        ``"\n\n"``, which is truthy, so each one was stored as a message and
+        rendered as its own chat bubble: one run produced twelve.
+
+        What is *not* decided here is whether text is the final answer. This
+        runs per part, at the moment the part ends, and a text part ends before
+        the tool call beside it has arrived -- so the one fact that would settle
+        it, whether the response went on to call a tool, is not known yet. Text
+        is therefore left unmarked and ``RunMessageWriter`` defaults it to
+        ``is_final_answer``, which is right for the last part of a run and wrong
+        for every preamble before a tool call. Deciding it needs the whole
+        response, the way the agent-host harness's ``_flush_messages`` does.
         """
         if isinstance(part, TextPart) or part_kind == "text":
             text = part_content if part_content is not None else part.content
-            return MessageDraft.of_text(text) if text else None
+            return MessageDraft.of_text(text) if (text or "").strip() else None
 
         if isinstance(part, ThinkingPart) or part_kind == "thinking":
             thinking = part_content if part_content is not None else part.content
-            return MessageDraft.of_thinking(thinking) if thinking else None
+            return (
+                MessageDraft.of_thinking(thinking) if (thinking or "").strip() else None
+            )
 
         if isinstance(part, ToolCallPart) or part_kind == "tool_call":
             return self._tool_call_message(part)

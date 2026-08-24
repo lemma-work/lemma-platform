@@ -7,7 +7,10 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 
-pytestmark = [journey("Building a pod"), capability("Define roles the built-ins do not cover")]
+pytestmark = [
+    journey("Building a pod"),
+    capability("Define roles the built-ins do not cover"),
+]
 
 
 @pytest.fixture
@@ -22,9 +25,7 @@ async def pod(world, run):
 async def test_a_custom_role_is_created_and_assignable(world, pod):
     alice, the_pod = pod
     catalog = await alice.permission_catalog_of(the_pod)
-    readable = [
-        p["id"] for p in catalog if str(p.get("id", "")).endswith(".read")
-    ][:3]
+    readable = [p["id"] for p in catalog if str(p.get("id", "")).endswith(".read")][:3]
     assert readable, catalog
 
     role = await alice.creates_a_role(

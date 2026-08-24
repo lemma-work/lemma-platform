@@ -7,6 +7,7 @@ sequence of things a person did, which is the point of the whole suite.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from harness.run import a_name_for, must_be_traceable
@@ -26,7 +27,22 @@ SIGNUP_PATH = "/st/auth/signup"
 #: an existing person coming back — was the one action never exercised.
 SIGNIN_PATH = "/st/auth/signin"
 
-PASSWORD = "ScenarioPassword@123"
+#: What the cast signs in with. A constant is right for a stack the suite boots
+#: and throws away, and wrong the moment the cast holds real grants: once
+#: somebody consents to GitHub, Slack or Gmail, this password and an address
+#: anybody can derive from `tenant.py` are together enough to sign in as that
+#: person and drive those accounts. On a deployment anyone can reach, that is
+#: the whole of the protection.
+#:
+#: So it is settable, and defaults to the constant. A locally-booted stack is
+#: unchanged — it is unreachable and holds nothing — and a deployment whose
+#: cast has consented to anything sets this and stops publishing its own key.
+PASSWORD_SETTING = "SCENARIOS_PASSWORD"
+DEFAULT_PASSWORD = "ScenarioPassword@123"
+
+
+def password() -> str:
+    return os.getenv(PASSWORD_SETTING, "").strip() or DEFAULT_PASSWORD
 
 
 def _already_registered(payload: JSON) -> bool:
@@ -109,16 +125,14 @@ class IdentitySteps:
         return {
             "formFields": [
                 {"id": "email", "value": self.email},
-                {"id": "password", "value": PASSWORD},
+                {"id": "password", "value": password()},
             ]
         }
 
     async def _enters(self, path: str, *, doing: str, **kwargs: Any) -> JSON:
         # Deliberately `call` rather than `expect`: the access token comes back
         # as a response *header*, so the decoded body alone is not enough.
-        response = await self.api.call(
-            "POST", path, json=self._credentials(), **kwargs
-        )
+        response = await self.api.call("POST", path, json=self._credentials(), **kwargs)
         if response.status_code != 200:
             raise AssertionError(
                 f"{self.label} could not {doing}: {response.status_code}\n"
@@ -342,7 +356,6 @@ class IdentitySteps:
         raise AssertionError(
             f"{person.label} is not a member of {in_organization.get('name')!r}"
         )
-
 
     async def removes_from_organization(self, person: Any, *, organization: JSON) -> None:
         member = await self.org_membership_of(person, in_organization=organization)

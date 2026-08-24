@@ -15,10 +15,11 @@ import pytest
 import pytest_asyncio
 
 from harness import environment, run as run_scope
+from harness.egress import Egress
 from harness.environment import Deployment
+from harness.provider_view import ProviderView
 from harness.provision import provision, sweep
 from harness.run import Run
-from harness.fake_platform import start_fake_provider
 from harness.stack import Stack, start_stack
 from harness.world import Sessions, World
 
@@ -168,16 +169,40 @@ async def a_pod_of_its_own(world: World, run: Run) -> AsyncIterator[tuple]:
         await daniel.deletes_pod(pod)
 
 
+@pytest_asyncio.fixture
+async def egress(stack: Stack) -> AsyncIterator[Egress]:
+    """What Lemma said to the outside world, during this scenario only.
+
+    Forgotten between scenarios, and for the same reason the old per-scenario
+    recorders were: a scenario asserting "the agent replied once" has to be
+    asking about *its* traffic. Shared, it would be asking about whatever ran
+    before it, which is a test that passes for the wrong reason on a good day
+    and flakes on a bad one.
+    """
+    live = stack.egress
+    if live is None:
+        # A deployment run owns no proxy, so nothing stands in for Telegram or
+        # the connector provider — and a scenario that needs one has nothing to
+        # talk to. A skip, not an error: `LOOPBACK_REACHABLE` used to say this
+        # before the stand-ins were retired, and deleting it took the sentence
+        # with it. Fifty-two scenarios turned from "skipped, and here is why"
+        # into a stack trace on every deployment run.
+        pytest.skip(
+            "no egress proxy: this run targets a deployment the suite does not "
+            "own, so nothing stands in for Telegram or the connector provider. "
+            "Run without --base-url to get these scenarios."
+        )
+    live.forget()
+    yield live
+
+
 @pytest.fixture
-def provider() -> Iterator[object]:
+def provider(egress) -> ProviderView:
     """A third-party HTTP API a connector can be pointed at.
 
-    Per-scenario rather than session-scoped: scenarios assert on exactly which
-    calls arrived, and a shared recorder would make that depend on what ran
-    before it.
+    Served by the proxy, at a reserved hostname the product connects to as it
+    would any other. Nothing is started here — the `egress` fixture has already
+    forgotten the previous scenario's traffic, which is what keeps "exactly
+    which calls arrived" a per-scenario question.
     """
-    fake = start_fake_provider()
-    try:
-        yield fake
-    finally:
-        fake.stop()
+    return ProviderView(egress)

@@ -9,7 +9,7 @@ no memory of their first. And a file sent to the bot has to reach the agent, or
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import FILE_CONTENTS
+from harness.fake_upstreams import FILE_CONTENTS
 from harness.waiting import eventually
 
 pytestmark = [
@@ -140,6 +140,6 @@ async def test_an_attachment_reaches_the_pod(reachable):
     # The bytes, not just the name. A file recorded but never fetched is the
     # failure this is really about: the agent is told there is a spreadsheet and
     # finds nothing in it.
-    assert await reachable.alice.downloads(landed, in_pod=reachable.pod) == FILE_CONTENTS, (
-        f"the file at {landed} does not contain what was sent"
-    )
+    assert (
+        await reachable.alice.downloads(landed, in_pod=reachable.pod) == FILE_CONTENTS
+    ), f"the file at {landed} does not contain what was sent"

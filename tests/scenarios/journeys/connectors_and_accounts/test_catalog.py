@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
 
-pytestmark = [journey("Connectors and accounts"), capability("Find what can be connected")]
+pytestmark = [
+    journey("Connectors and accounts"),
+    capability("Find what can be connected"),
+]
 
 
 @scenario("A person browses what the platform can connect to")

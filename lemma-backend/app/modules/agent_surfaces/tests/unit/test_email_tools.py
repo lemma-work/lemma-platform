@@ -127,8 +127,8 @@ def test_render_email_content_adds_display_resource_html_card():
         display_resource_plans=[
             SurfaceDisplayRenderPlan(
                 resource_type="FILE",
-                title="File: /me/report.pdf",
-                summary="A file is ready to inspect.",
+                title="report.pdf",
+                summary="PDF · 2.3 MB",
                 actions=[
                     SurfaceDisplayAction(
                         label="Open file",
@@ -140,7 +140,8 @@ def test_render_email_content_adds_display_resource_html_card():
     )
 
     assert "I prepared the report." in plain
-    assert "File: /me/report.pdf" in plain
+    assert "report.pdf" in plain
+    assert "PDF · 2.3 MB" in plain
     assert html is not None
     assert "Open file" in html
     assert "https://app.example.test" in html

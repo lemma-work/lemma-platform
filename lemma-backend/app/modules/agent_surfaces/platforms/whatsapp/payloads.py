@@ -234,6 +234,8 @@ def whatsapp_display_resource_text(
     if render_plan.summary:
         parts.append(render_plan.summary)
     parts.extend(render_plan.detail_lines[:5])
+    if render_plan.preview_block:
+        parts.append(f"```\n{render_plan.preview_block}\n```")
     action = render_plan.primary_action
     if include_action and action is not None:
         parts.append(f"{action.label}: {action.url}")

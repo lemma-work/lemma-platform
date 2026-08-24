@@ -67,11 +67,14 @@ class TestShapingRoles:
 
     @scenario("A custom role's permissions can be read and replaced")
     @proves("PS-POD-013")
-    @covers("pod.role.permissions.get", "pod.role.permissions.replace", "pod.roles.create")
+    @covers(
+        "pod.role.permissions.get", "pod.role.permissions.replace", "pod.roles.create"
+    )
     async def test_a_roles_permissions_can_change(self, team):
         alice, _bob, _organization, pod = team
         catalog = [
-            p["id"] for p in await alice.permission_catalog_of(pod)
+            p["id"]
+            for p in await alice.permission_catalog_of(pod)
             if str(p.get("id", "")).endswith(".read")
         ]
         role = await alice.creates_a_role(
@@ -81,11 +84,13 @@ class TestShapingRoles:
         table = await alice.creates_a_table(in_pod=pod)
         await alice.replaces_role_permissions(
             role["name"],
-            grants=[{
-                "resource_type": "datastore_table",
-                "resource_name": table["name"],
-                "permission_ids": ["datastore.table.read"],
-            }],
+            grants=[
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": table["name"],
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ],
             in_pod=pod,
         )
 
@@ -100,7 +105,8 @@ class TestShapingRoles:
     async def test_a_role_can_be_described_and_removed(self, team):
         alice, _bob, _organization, pod = team
         catalog = [
-            p["id"] for p in await alice.permission_catalog_of(pod)
+            p["id"]
+            for p in await alice.permission_catalog_of(pod)
             if str(p.get("id", "")).endswith(".read")
         ]
         role = await alice.creates_a_role(

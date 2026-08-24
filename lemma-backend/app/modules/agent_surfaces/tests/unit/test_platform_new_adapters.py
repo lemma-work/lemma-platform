@@ -240,8 +240,8 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
         event,
         SurfaceDisplayRenderPlan(
             resource_type="FILE",
-            title="File: /me/report.pdf",
-            summary="A file is ready to inspect.",
+            title="report.pdf",
+            summary="PDF · 2.3 MB",
             actions=[
                 SurfaceDisplayAction(
                     label="Open file",
@@ -510,7 +510,7 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
         SurfaceDisplayRenderPlan(
             resource_type="TABLE",
             title="Table: deals",
-            summary="A datastore view is ready.",
+            summary="3 of 41 records",
             actions=[
                 SurfaceDisplayAction(
                     label="Open in Lemma",

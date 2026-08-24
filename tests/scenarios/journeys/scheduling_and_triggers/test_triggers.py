@@ -37,8 +37,7 @@ async def _runs(alice, schedule, pod):
 
 @scenario("A change to a watched table fires the schedule")
 @proves("PS-SCHED-011", "PS-SCHED-021")
-@covers("schedule.create", "record.create", "schedule.run.list",
-        "schedule_run.completed")
+@covers("schedule.create", "record.create", "schedule.run.list", "schedule_run.completed")
 async def test_a_record_change_fires_a_schedule(watched_table):
     alice, pod, agent, table = watched_table
     schedule = await alice.creates_a_schedule(

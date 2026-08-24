@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramClient,
@@ -481,6 +482,10 @@ class TelegramPlatformService:
             if not file_path:
                 return None
             download_url = f"{self._client.file_base_url}/{file_path.lstrip('/')}"
+            # The file base is derived from the same tenant-supplied
+            # `api_base_url` as the API base, by a different function — so it
+            # needs its own check rather than inheriting the one in `call`.
+            await assert_safe_api_base(download_url, platform="Telegram")
             async with client.stream("GET", download_url) as file_response:
                 file_response.raise_for_status()
                 content = await read_capped(
@@ -575,6 +580,8 @@ def _telegram_display_resource_text(render_plan: SurfaceDisplayRenderPlan) -> st
         parts.append(escape(render_plan.summary))
     for line in render_plan.detail_lines[:5]:
         parts.append(f"<blockquote>{escape(line)}</blockquote>")
+    if render_plan.preview_block:
+        parts.append(f"<pre>{escape(render_plan.preview_block)}</pre>")
     action = render_plan.primary_action
     if action is not None:
         parts.append(

@@ -73,7 +73,9 @@ class Demand:
         return target.says(self.fact) == self.wanted
 
     def as_instruction(self) -> str:
-        wanted = str(self.wanted).lower() if isinstance(self.wanted, bool) else self.wanted
+        wanted = (
+            str(self.wanted).lower() if isinstance(self.wanted, bool) else self.wanted
+        )
         return f"{self.setting}={wanted}"
 
 
@@ -126,9 +128,7 @@ OPEN_SIGNUP = EnvironmentCapability(
     name="signing a new person up",
     demands=(
         Demand("abuse_protection", False, "AUTH_ABUSE_PROTECTION_ENABLED"),
-        Demand(
-            "email_verification_required", False, "AUTH_EMAIL_VERIFICATION_REQUIRED"
-        ),
+        Demand("email_verification_required", False, "AUTH_EMAIL_VERIFICATION_REQUIRED"),
         Demand(
             "email_deliverability_checks",
             False,
@@ -146,24 +146,6 @@ OPEN_SIGNUP = EnvironmentCapability(
         "meant to skip rather than run"
     ),
 )
-
-LOOPBACK_REACHABLE = EnvironmentCapability(
-    name="a stand-in on this machine the deployment can call",
-    demands=(
-        Demand(
-            "private_network_targets",
-            True,
-            "CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS",
-        ),
-    ),
-    how=(
-        "the fakes in harness/fake_platform.py bind loopback, so only a "
-        "deployment on this machine can reach them. Off in production on "
-        "purpose: it is what stops an org admin pointing a connector at the "
-        "cloud metadata service"
-    ),
-)
-
 
 #: Set this to the target's own instance id and the suite refuses to run
 #: anywhere else. Worth setting for any target you care about: it is what turns
@@ -236,6 +218,34 @@ SERVER_SPEND_CAPS = EnvironmentCapability(
         "that caps nothing has no refusal path to prove"
     ),
 )
+
+
+#: Not a fact about the deployment but about how this run was started, so it
+#: is checked differently — see `available` below. Kept here anyway, because a
+#: scenario asking "can I see what Lemma sent outward?" is asking the same kind
+#: of question as "is a real model configured?", and one `needs(...)` should
+#: answer both.
+@dataclass(frozen=True, slots=True)
+class EgressRecorded:
+    name: str = "a record of what Lemma sent outward"
+    how: str = (
+        "run with SCENARIOS_EGRESS=record to drive the real providers, or "
+        "=replay to serve what was recorded. Off by default, so the scenarios "
+        "that never talk to a third party pay nothing for it"
+    )
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        from harness import egress
+
+        return () if egress.wanted_mode() != "off" else ("SCENARIOS_EGRESS=replay",)
+
+    @property
+    def available(self) -> bool:
+        return not self.missing
+
+
+EGRESS_RECORDED = EgressRecorded()
 
 
 _described: Deployment | None = None

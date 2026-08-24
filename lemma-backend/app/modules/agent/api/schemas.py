@@ -22,6 +22,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
+from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
@@ -240,7 +241,16 @@ class CreateAgentRequest(BaseModel):
     description: str | None = None
     icon_url: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
-    toolsets: list[AgentToolset] = Field(default_factory=list)
+    # Omitting toolsets means "the sensible ones", not "none" -- see
+    # NEW_AGENT_DEFAULT_TOOLSETS. An explicit empty list still means none, so a
+    # bundle or an editor that states the toolsets keeps stating them exactly.
+    toolsets: list[AgentToolset] = Field(
+        default_factory=lambda: list(NEW_AGENT_DEFAULT_TOOLSETS),
+        description=(
+            "Toolsets the agent declares. Omit the field to start with web "
+            "search and memory; pass an explicit empty list for none."
+        ),
+    )
     input_schema: JsonObject | None = None
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility = ResourceVisibility.POD

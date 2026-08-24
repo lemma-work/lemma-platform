@@ -35,9 +35,68 @@ from dataclasses import dataclass
 DOMAIN_SETTING = "SCENARIOS_TENANT_DOMAIN"
 DEFAULT_DOMAIN = "example.com"
 
+#: One real mailbox the whole cast lives in, through sub-addressing.
+#:
+#: `example.com` is reserved by RFC 2606 and nothing delivers there, which is
+#: exactly right until an email surface answers somebody: the agent replies to
+#: the address that wrote to it, and against a real provider that reply is a
+#: hard bounce at a domain that can never accept it — charged to the sending
+#: reputation of an account the product itself uses.
+#:
+#: So point this at a mailbox that does accept mail and every colleague becomes
+#: `you+priya.raman@…`. One inbox, as many distinct, deliverable addresses as
+#: the cast needs, and a reply somebody can actually go and read.
+#:
+#: Never a literal in the source: a real address in a public repository is
+#: somebody's inbox, forever. `test_no_real_address_is_hardcoded` enforces it.
+MAILBOX_SETTING = "SCENARIOS_MAILBOX"
+
 
 def domain() -> str:
     return os.getenv(DOMAIN_SETTING, "").strip() or DEFAULT_DOMAIN
+
+
+def mailbox() -> str:
+    """The real mailbox the cast sub-addresses into, if there is one.
+
+    The environment only. This briefly also read `lemma-backend/.env`, on the
+    reasoning that it is where somebody would naturally write it — and that was
+    a mistake, because it makes *who the cast is* depend on a file belonging to
+    the backend rather than to this suite. A laptop with that file computes
+    `you+priya.raman@…` while CI computes `priya.raman@…`; both then provision
+    the same deployment, and it ends up with two parallel casts and five users
+    nobody meant to create.
+
+    One source, so the same command means the same thing everywhere.
+    """
+    return os.getenv(MAILBOX_SETTING, "").strip()
+
+
+def an_address_for(tag: str) -> str:
+    """A distinct address for `tag`, deliverable when a mailbox is configured.
+
+    Refuses the Resend inbound domain outright. Addresses there belong to
+    surfaces, not people: mail sent to one is either delivered back into a pod
+    — an agent answering a colleague who is itself — or rejected, and either
+    way the run stops meaning what it says.
+    """
+    configured = mailbox()
+    if not configured:
+        return f"{tag}@{domain()}"
+    local, _, host = configured.partition("@")
+    if not host:
+        raise AssertionError(
+            f"{MAILBOX_SETTING} must be a whole address like you@example.com, "
+            f"not {configured!r}"
+        )
+    inbound = (os.getenv("RESEND_INBOUND_DOMAIN", "") or "").strip().lower()
+    if inbound and host.lower() == inbound:
+        raise AssertionError(
+            f"{MAILBOX_SETTING} is on {host}, which is this deployment's Resend "
+            f"inbound domain. Every address there routes into a pod surface, so "
+            f"the cast would be writing to itself. Use an ordinary mailbox."
+        )
+    return f"{local}+{tag}@{host}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +138,7 @@ class Colleague:
 
     @property
     def email(self) -> str:
-        return f"{self.mailbox}@{domain()}"
+        return an_address_for(self.mailbox)
 
 
 CAST = (
@@ -156,6 +215,91 @@ STANDING_PODS = (
     StandingPod("internal-tools", "what the ops team builds for itself — bundles, apps"),
     StandingPod("company-wide", "sharing, roles, reach"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class StandingConnector:
+    """A connector the tenant keeps one auth config for, forever.
+
+    The durable thing is the auth config, because an account is bound to the
+    one it was consented against. Install a fresh auth config each run and
+    every OAuth connector needs a person in a browser again each run — which
+    makes the consent design unusable for exactly the connectors that need it.
+
+    So this is named without a run mark, deliberately. `must_be_traceable`
+    covers pods and organizations and not this, so nothing has to be relaxed:
+    a name with no mark is invisible to cleanup, which is the point.
+    """
+
+    connector: str
+    #: Which of the connector's kinds to install. `None` when it offers one.
+    #: `gmail` needs "composio": its own package kind is OAuth2 against a
+    #: Google client we do not have, while Composio brings its own OAuth app —
+    #: and that is the route this product's users take today.
+    kind: str | None = None
+    #: Whether a person has to open a browser. A bot token does not need one.
+    consented: bool = True
+
+
+#: One per provider the suite drives for real. `whatsapp` and the rest of the
+#: catalogue are deliberately absent: this list is what provisioning installs
+#: and asks somebody to connect, and asking for accounts no scenario uses is
+#: how a consent report becomes noise somebody learns to ignore.
+STANDING_CONNECTORS = (
+    StandingConnector("telegram", consented=False),
+    StandingConnector("github"),
+    StandingConnector("slack"),
+    StandingConnector("gmail", kind="composio"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StandingReach:
+    """A surface that stands between runs, because what it can reach does.
+
+    A bot cannot cold-DM. Outbound goes through a conversation the person
+    started, and that link is keyed by *surface* — so a surface created fresh
+    each run can never send to anybody, and the live scenario that tried it
+    waited two minutes for a reply to a message Lemma had refused to send.
+
+    Standing, one message from one person makes the surface reachable for every
+    run afterwards. The same trade as the standing pods, for the same reason.
+    """
+
+    pod: str
+    platform: str
+    connector: str
+    agent: str
+    name: str
+
+
+STANDING_REACH = (
+    StandingReach(
+        pod="customer-support",
+        platform="TELEGRAM",
+        connector="telegram",
+        agent="frontdesk",
+        name="telegram",
+    ),
+)
+
+
+#: Whose accounts they are. An account is scoped to the person who connected
+#: it — the list endpoint filters on `user_id` — so "is GitHub connected?" has
+#: no answer for the organization, only for a person in it. One nominated
+#: holder is what keeps that from being accidental: without it, provisioning
+#: asks the owner, a scenario asks whoever it happens to be acting as, and the
+#: same tenant answers yes and no to the same question.
+#:
+#: Daniel rather than the owner: he administers every standing pod, so the
+#: surfaces that bind these accounts are already his to manage, and an editor
+#: installing a connector is the ordinary case rather than the privileged one.
+CONNECTOR_HOLDER = "daniel"
+
+
+def standing_auth_config_name(connector: str) -> str:
+    """What the tenant's own auth config for a connector is called."""
+    return f"{connector}_standing"
 
 
 def colleague(label: str) -> Colleague:

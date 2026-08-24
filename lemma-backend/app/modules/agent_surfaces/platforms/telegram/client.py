@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 
 # The one canonical Telegram API base. ``api_base_url`` in the bot credentials
@@ -161,6 +162,10 @@ class TelegramClient:
     ) -> dict[str, Any]:
         """POST a Bot API method, returning the parsed result or raising
         :class:`TelegramApiError` with the real ``description`` preserved."""
+        # Guarded at the point of use: `api_base_url` is tenant-supplied and a
+        # self-hosted Bot API server is a supported thing to point it at, so it
+        # is checked rather than removed.
+        await assert_safe_api_base(self.base_url, platform="Telegram")
         url = f"{self.base_url}/{method}"
         if client is not None:
             response = await client.post(url, json=payload)
@@ -182,6 +187,7 @@ class TelegramClient:
             else str(value)
             for key, value in fields.items()
         }
+        await assert_safe_api_base(self.base_url, platform="Telegram")
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 f"{self.base_url}/{method}",

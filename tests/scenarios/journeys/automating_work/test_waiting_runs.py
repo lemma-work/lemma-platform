@@ -17,6 +17,7 @@ pytestmark = [
     capability("Run a workflow"),
 ]
 
+
 #: Two nodes is the smallest graph that can be *waiting* rather than merely
 #: started: something to stop on, and something left to do afterwards.
 def _asks_a_person(member_id: str) -> list[dict]:
@@ -92,7 +93,9 @@ async def test_answering_resumes_the_run(world):
     pod = await alice.works_in("operations")
     _workflow, run = await _a_waiting_run(alice, pod)
 
-    submitted = await alice.answers_form(run, node="ask", inputs={"approved": True}, in_pod=pod)
+    submitted = await alice.answers_form(
+        run, node="ask", inputs={"approved": True}, in_pod=pod
+    )
     assert submitted.status_code < 400, (
         f"the assigned person could not answer their own form: "
         f"{submitted.status_code} {submitted.text[:400]}"
@@ -100,8 +103,9 @@ async def test_answering_resumes_the_run(world):
 
     finished = await eventually(
         lambda: alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}"),
-        lambda state: str(state.get("status")).upper()
-        in {"COMPLETED", "FAILED", "CANCELLED"},
+        lambda state: (
+            str(state.get("status")).upper() in {"COMPLETED", "FAILED", "CANCELLED"}
+        ),
         describe="the run to carry on once it was answered",
         timeout=60.0,
     )
@@ -118,20 +122,25 @@ async def test_a_repeated_answer_resumes_once(world):
     pod = await alice.works_in("operations")
     _workflow, run = await _a_waiting_run(alice, pod)
 
-    first = await alice.answers_form(run, node="ask", inputs={"approved": True}, in_pod=pod)
+    first = await alice.answers_form(
+        run, node="ask", inputs={"approved": True}, in_pod=pod
+    )
     assert first.status_code < 400, (
         f"the assigned person could not answer their own form: "
         f"{first.status_code} {first.text[:400]}"
     )
-    again = await alice.answers_form(run, node="ask", inputs={"approved": True}, in_pod=pod)
+    again = await alice.answers_form(
+        run, node="ask", inputs={"approved": True}, in_pod=pod
+    )
 
     # The second submission must not be treated as a fresh completion. Whether
     # it is refused or absorbed is the product's choice; what it must not do is
     # run the rest of the workflow twice.
     finished = await eventually(
         lambda: alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}"),
-        lambda state: str(state.get("status")).upper()
-        in {"COMPLETED", "FAILED", "CANCELLED"},
+        lambda state: (
+            str(state.get("status")).upper() in {"COMPLETED", "FAILED", "CANCELLED"}
+        ),
         describe="the run to reach a terminal state",
         timeout=60.0,
     )
@@ -142,9 +151,7 @@ async def test_a_repeated_answer_resumes_once(world):
 
     steps = finished.get("step_history") or []
     ends = [step for step in steps if str(step.get("node_id")) == "done"]
-    assert len(ends) <= 1, (
-        f"the workflow ran its remaining steps more than once: {ends}"
-    )
+    assert len(ends) <= 1, f"the workflow ran its remaining steps more than once: {ends}"
 
 
 @scenario("A person stops a run that is still going")
@@ -162,8 +169,7 @@ async def test_cancelling_a_live_run_stops_it(world):
 
     cancelled = await alice.cancels_run(run, in_pod=pod)
     assert cancelled.status_code < 400, (
-        f"stopping a live run answered {cancelled.status_code}: "
-        f"{cancelled.text[:300]}"
+        f"stopping a live run answered {cancelled.status_code}: {cancelled.text[:300]}"
     )
 
     stopped = await eventually(

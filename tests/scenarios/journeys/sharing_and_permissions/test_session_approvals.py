@@ -193,10 +193,7 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     approved = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        saying=(
-            f"Delete the row titled 'first' from the "
-            f"{table['name']} table."
-        ),
+        saying=(f"Delete the row titled 'first' from the {table['name']} table."),
     )
     [request] = await alice.waits_for_an_approval_in(approved, in_pod=pod)
     await alice.answers_approval(
@@ -210,10 +207,7 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     fresh = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
-        saying=(
-            f"Delete the row titled 'second' from the "
-            f"{table['name']} table."
-        ),
+        saying=(f"Delete the row titled 'second' from the {table['name']} table."),
     )
 
     asked_again = await alice.waits_for_an_approval_in(fresh, in_pod=pod)

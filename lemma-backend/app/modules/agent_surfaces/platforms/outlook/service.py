@@ -6,6 +6,8 @@ import mimetypes
 from typing import Any
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
@@ -318,6 +320,9 @@ class OutlookPlatformService:
             f"{self._api_base.rstrip('/')}/v1.0/me/messages/"
             f"{message_id}/attachments/{attachment_id}"
         )
+        # Tenant-supplied base (sovereign-cloud endpoints are real), so the
+        # target is checked before the token is sent.
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(
                 url,
@@ -378,6 +383,7 @@ class OutlookPlatformService:
         params = {
             "$expand": "attachments",
         }
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(
                 url,
@@ -433,6 +439,7 @@ class OutlookPlatformService:
         }
 
         url = f"{self._api_base.rstrip('/')}/v1.0/me/messages/{message_id}/reply"
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,
@@ -443,6 +450,7 @@ class OutlookPlatformService:
 
     async def _create_reply_draft(self, *, message_id: str) -> str:
         url = f"{self._api_base.rstrip('/')}/v1.0/me/messages/{message_id}/createReply"
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,
@@ -479,6 +487,7 @@ class OutlookPlatformService:
             },
         }
         url = f"{self._api_base.rstrip('/')}/v1.0/me/messages/{message_id}"
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.patch(
                 url,
@@ -494,6 +503,7 @@ class OutlookPlatformService:
         attachment: dict[str, Any],
     ) -> None:
         url = f"{self._api_base.rstrip('/')}/v1.0/me/messages/{message_id}/attachments"
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,
@@ -504,6 +514,7 @@ class OutlookPlatformService:
 
     async def _send_draft(self, *, message_id: str) -> None:
         url = f"{self._api_base.rstrip('/')}/v1.0/me/messages/{message_id}/send"
+        await assert_safe_api_base(self._api_base, platform="Outlook")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,

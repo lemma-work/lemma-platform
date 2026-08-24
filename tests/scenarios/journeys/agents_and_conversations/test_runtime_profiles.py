@@ -33,10 +33,14 @@ async def org(world):
     priya = await world.person("priya")
     return priya, priya.organization
 
+
 @scenario("An organization configures its own model provider")
 @proves("PS-AGENT-004")
-@covers("agent.runtime.profiles.create", "agent.runtime.profiles.get",
-        "agent.runtime.profiles.list")
+@covers(
+    "agent.runtime.profiles.create",
+    "agent.runtime.profiles.get",
+    "agent.runtime.profiles.list",
+)
 async def test_an_organization_can_add_a_provider(org, run):
     alice, organization = org
 
@@ -92,8 +96,11 @@ async def test_a_provider_key_is_never_returned(org, run):
 
 @scenario("A provider can be renamed, archived, and brought back")
 @proves("PS-AGENT-004")
-@covers("agent.runtime.profiles.update", "agent.runtime.profiles.archive",
-        "agent.runtime.profiles.restore")
+@covers(
+    "agent.runtime.profiles.update",
+    "agent.runtime.profiles.archive",
+    "agent.runtime.profiles.restore",
+)
 async def test_a_provider_can_be_archived_and_restored(org, run):
     alice, organization = org
     created = await alice.api.post(
@@ -134,10 +141,13 @@ async def test_an_outsider_cannot_add_a_provider(world, org, run):
     outsider = await world.new_person("outsider")
 
     response = await outsider.api.call(
-        "POST", f"/organizations/{organization['id']}/agent-runtime/profiles",
+        "POST",
+        f"/organizations/{organization['id']}/agent-runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE", "name": run.name("trespass"),
-            "base_url": PROVIDER_BASE_URL, "api_key": "k",
+            "source": "OPENAI_COMPATIBLE",
+            "name": run.name("trespass"),
+            "base_url": PROVIDER_BASE_URL,
+            "api_key": "k",
             "model_names": ["m"],
         },
     )

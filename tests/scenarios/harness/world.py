@@ -26,7 +26,7 @@ from uuid import uuid4
 
 import httpx
 
-from harness import tenant
+from harness import consent, tenant
 from harness.drivers.api import ApiDriver, items_of
 from harness.steps.agent import AgentSteps
 from harness.steps.building import BuildingSteps
@@ -93,6 +93,11 @@ class Sessions:
     #: never asks for the cast pays nothing for it.
     build_tenant: Callable[[], Awaitable[Any]] | None = None
     _built: bool = False
+    _connections_read: bool = False
+
+    @property
+    def connections_read(self) -> bool:
+        return self._connections_read
 
     async def admit(self, person: Person) -> None:
         """Give this person their session, signing in only if there is none."""
@@ -127,6 +132,36 @@ class Sessions:
             f"changed it — run `make scenarios-provision`."
         )
 
+    async def note_who_is_connected(self, person: Person) -> None:
+        """Which third parties somebody has actually connected here.
+
+        Read from what the tenant *has*, not from what the deployment is
+        configured for: a Google client id in an `.env` says Lemma could connect
+        Gmail, never that anybody did.
+
+        Once, lazily, and only for a run that uses the cast at all. A
+        session-scoped fixture would have been the obvious home — this suite
+        pins its event loop per function, so there cannot be one, and the lookup
+        needs a signed-in person with a resolved organization anyway. It is
+        called at the end of `World.person`, which is the first moment both are
+        true.
+        """
+        if self._connections_read or not person.organization:
+            return
+        self._connections_read = True
+        try:
+            accounts = await person.accounts_in(person.organization)
+        except Exception:  # noqa: BLE001 — an unprovisioned tenant says so elsewhere
+            consent.remember(set())
+            return
+        consent.remember(
+            {
+                str(account.get("connector_id") or "")
+                for account in accounts
+                if account.get("connector_id")
+            }
+        )
+
     async def _tenant_exists(self) -> None:
         if self._built or self.build_tenant is None:
             return
@@ -157,6 +192,8 @@ class World:
     sessions: Sessions = field(default_factory=Sessions)
     _clients: list[httpx.AsyncClient] = field(default_factory=list)
     _people: dict[str, Person] = field(default_factory=dict)
+    #: Re-entrancy guard: the lookup asks for a person, and that asks to look up.
+    _reading_connections: bool = False
 
     async def new_person(self, label: str = "someone", *, sign_up: bool = True) -> Person:
         """A brand-new person, signed up and signed in.
@@ -196,7 +233,27 @@ class World:
         await self.sessions.admit(person)
         person.organization = await self.sessions.company_of(person, colleague)
         self._people[label] = person
+        await self._note_who_is_connected()
         return person
+
+    async def _note_who_is_connected(self) -> None:
+        """Ask the one person whose accounts are the tenant's, once.
+
+        An account is scoped to whoever connected it, so asking whichever
+        colleague a scenario happened to want first answers about them — and a
+        GitHub account connected by the holder reads as "nobody has connected
+        GitHub" to every scenario that acts as somebody else. Which is exactly
+        what happened: three GitHub scenarios skipped against a tenant that had
+        GitHub connected all along.
+        """
+        if self.sessions.connections_read or self._reading_connections:
+            return
+        self._reading_connections = True
+        try:
+            holder = await self.person(tenant.CONNECTOR_HOLDER)
+        finally:
+            self._reading_connections = False
+        await self.sessions.note_who_is_connected(holder)
 
     async def returning(self, person: Person, *, using: str | None = None) -> Person:
         """The same person, signing in again — a second device, a new day.

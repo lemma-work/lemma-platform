@@ -6,7 +6,10 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 
-pytestmark = [journey("Scheduling and triggers"), capability("Make work happen on a timer")]
+pytestmark = [
+    journey("Scheduling and triggers"),
+    capability("Make work happen on a timer"),
+]
 
 
 @pytest.fixture
@@ -99,7 +102,11 @@ async def test_an_outsider_cannot_touch_schedules(world, pod_with_agent):
     created = await outsider.api.call(
         "POST",
         f"/pods/{pod['id']}/schedules",
-        json={"name": "trespass", "schedule_type": "TIME", "config": {"cron": "0 9 * * *"}},
+        json={
+            "name": "trespass",
+            "schedule_type": "TIME",
+            "config": {"cron": "0 9 * * *"},
+        },
     )
     listed = await outsider.api.call("GET", f"/pods/{pod['id']}/schedules")
 
