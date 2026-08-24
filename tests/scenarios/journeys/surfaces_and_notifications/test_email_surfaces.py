@@ -26,7 +26,7 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.stack import RESEND_WEBHOOK_SECRET, inbound_email_domain
+from harness.stack import inbound_email_domain, webhook_signing_secret
 from harness.waiting import eventually
 
 pytestmark = [
@@ -48,7 +48,7 @@ def _svix_headers(body: bytes) -> dict[str, str]:
     """
     message_id = f"msg_{uuid4().hex[:16]}"
     timestamp = str(int(time.time()))
-    secret = base64.b64decode(RESEND_WEBHOOK_SECRET.removeprefix("whsec_"))
+    secret = base64.b64decode(webhook_signing_secret().removeprefix("whsec_"))
     signature = base64.b64encode(
         hmac.new(
             secret, f"{message_id}.{timestamp}.{body.decode()}".encode(), hashlib.sha256
