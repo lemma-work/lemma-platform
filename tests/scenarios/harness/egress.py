@@ -62,10 +62,20 @@ class ProxyUnavailable(AssertionError):
 
 
 def wanted_mode() -> str:
-    mode = os.getenv(MODE_SETTING, "off").strip().lower()
-    if mode not in {"off", "record", "replay"}:
+    """Which lane this run is: `fake` unless told otherwise.
+
+    `fake` is the default because the fast lane needs somebody to answer for
+    Telegram and for the connector provider, and the proxy is now who does.
+    Before, the suite ran servers on loopback and pointed the product at them —
+    which only worked with the SSRF guard turned off for every scenario.
+
+    `off` stays available and means exactly what it says: no proxy, so the
+    scenarios that need a third party have nothing to talk to.
+    """
+    mode = os.getenv(MODE_SETTING, "fake").strip().lower()
+    if mode not in {"off", "fake", "record", "replay"}:
         raise ProxyUnavailable(
-            f"{MODE_SETTING}={mode!r} is not one of off, record, replay"
+            f"{MODE_SETTING}={mode!r} is not one of off, fake, record, replay"
         )
     return mode
 
@@ -220,15 +230,22 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
         f"confdir={confdir}",
         "--set",
         f"control_port={control}",
+        # Lazily, or mitmproxy opens the upstream connection before the request
+        # hook runs — to copy the real server's TLS certificate — and a host
+        # that does not resolve fails there, before anything can redirect it.
+        "--set",
+        "connection_strategy=lazy",
         # Bodies are deliberately *not* streamed. mitmproxy streams a response
         # straight through without keeping it, so a recording made with
         # streaming on replays as "200 OK (content missing)" — which is a
         # response, and passes a status assertion, and contains nothing. That
         # cost an afternoon; leaving the default alone is the fix.
     ]
-    if mode == "record":
+    if mode == "fake":
+        settings += ["--set", "serve_fakes=true"]
+    elif mode == "record":
         settings += ["-w", str(recording)]
-    else:
+    elif mode == "replay":
         settings += [
             "--set",
             f"server_replay={recording}",
