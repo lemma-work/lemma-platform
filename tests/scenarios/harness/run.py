@@ -38,7 +38,15 @@ JOIN = "_"
 #: A trailing extension is allowed, because a file keeps one — `notes_scn7f3a1`
 #: and `notes_scn7f3a1.txt` are both this run's, and matching only the first
 #: would leave every uploaded file invisible to cleanup.
-MADE_BY_A_RUN = re.compile(rf"{JOIN}{MARK}[0-9a-f]{{4,}}(\.[A-Za-z0-9]{{1,8}})?$")
+#: Cleanup matches a hyphen as well as the join, because the product derives
+#: names from the ones we give it and slugifies them on the way. An agent
+#: called `agent_c2a102_scn7f3a1` gets an auto-provisioned Resend surface named
+#: `resend-agent-c2a102-scn7f3a1` (email_surface_provisioning.py), and the mark
+#: survives the slug in spirit but not in the separator. Requiring the join
+#: exactly meant those never matched, so nothing ever swept them: one standing
+#: pod on a real deployment reached 163 orphaned surfaces, every one of them
+#: still competing to receive inbound mail.
+MADE_BY_A_RUN = re.compile(rf"[{JOIN}-]{MARK}[0-9a-f]{{4,}}(\.[A-Za-z0-9]{{1,8}})?$")
 
 
 @dataclass(frozen=True, slots=True)

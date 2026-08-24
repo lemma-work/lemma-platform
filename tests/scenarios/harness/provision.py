@@ -293,11 +293,18 @@ async def _clear_run_debris(
     each other's work half way through. An operator running `--reset` takes
     every run's, which is the point of asking.
 
-    Tables and the top level of the file tree. A file inside a run-made folder
-    goes when the folder does; agents, schedules and workflows a run leaves
-    behind are still there afterwards — said plainly, because a cleanup that
-    quietly covers half of what it looks like it covers is worse than one that
-    admits its edges.
+    Tables, surfaces, and the top level of the file tree. A file inside a
+    run-made folder goes when the folder does; agents, schedules and workflows
+    a run leaves behind are still there afterwards — said plainly, because a
+    cleanup that quietly covers half of what it looks like it covers is worse
+    than one that admits its edges.
+
+    Surfaces are here for the reason `_uninstall_run_connectors` gives about
+    installations, and they had the same outcome: a standing pod reached 163
+    leftover Resend surfaces on a real deployment. Every inbound email then has
+    163 candidates to resolve against, and every run adds more — so the pod
+    gets slower and less predictable at exactly the thing the surfaces journey
+    is trying to prove.
     """
     for table in await owner.tables_in(pod):
         name = str(table.get("name", ""))
@@ -309,6 +316,18 @@ async def _clear_run_debris(
     # long as it exists, and a standing pod that accumulates a few runs' worth of
     # them starves document work for everything else in that pod. That is not
     # hygiene, it is the reason a later run sees a converter that never answers.
+    # A surface a run made is inert once the run ends — its agent may be gone,
+    # its account may be gone — but it still competes to receive.
+    for surface in await owner.surfaces_in(pod):
+        name = str(surface.get("name", ""))
+        if not mine(name):
+            continue
+        try:
+            await owner.deletes_surface(name, in_pod=pod)
+        except AssertionError:
+            continue
+        ledger.did(f"removed surface {name!r} from {pod.get('name')!r}")
+
     entries = _tree_entries(await owner.file_tree_of(pod))
     # Deepest first: removing a folder takes what is inside it, so a child that
     # has already gone would otherwise 404 and stop the sweep on its way past.
