@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ArrowUpRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
+import { ArrowRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -140,7 +140,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             {appRecipes.slice(0, 5).map((recipe) => (
                                 <RecipeCard
                                     key={recipe.id}
-                                    podId={podId}
                                     recipe={recipe}
                                     onLaunch={() => launchRecipe(recipe)}
                                 />
@@ -157,13 +156,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                 <span className="text-xs leading-5 text-[var(--text-tertiary)]">Open a conversation and tell the assistant what this app should help people do.</span>
                             </button>
                         </div>
-                        <Link
-                            href={`/pod/${podId}/recipes`}
-                            className="custom-focus-ring inline-flex w-fit items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                        >
-                            Add a surface agent or automate a loop
-                            <ArrowUpRight className="h-4 w-4" />
-                        </Link>
                     </div>
                 ) : (
                     <EmptyState

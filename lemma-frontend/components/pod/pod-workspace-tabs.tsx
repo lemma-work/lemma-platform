@@ -28,7 +28,6 @@ const routeTabKinds: Record<string, ProductIconKind> = {
     conversations: 'conversation',
     forms: 'files',
     widgets: 'apps',
-    recipes: 'workflows',
 };
 
 function RouteTabIcon({ routeKey, active }: { routeKey: string; active: boolean }) {

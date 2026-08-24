@@ -1090,13 +1090,6 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                         {expanded ? 'Hide ideas' : 'Show ideas'}
                         {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </Button>
-                    <Link
-                        href={`/pod/${podId}/recipes`}
-                        className="custom-focus-ring inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                    >
-                        Browse all
-                        <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
                     <Button
                         type="button"
                         variant="quiet"

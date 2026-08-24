@@ -1,7 +1,6 @@
 'use client';
 
-import Link from 'next/link';
-import { ArrowRight, PlayCircle, Sparkles } from '@/components/ui/icons';
+import { PlayCircle, Sparkles } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { RECIPE_OUTPUT_LABEL, getRecipeAccent, type Recipe } from '@/lib/recipes/recipes';
@@ -17,41 +16,24 @@ function ActionIcon({ recipe }: { recipe: Recipe }) {
         : <PlayCircle className="h-3.5 w-3.5" />;
 }
 
-export function RecipeCard({ podId, recipe, onLaunch }: { podId: string; recipe: Recipe; onLaunch: () => void }) {
-    const detailHref = `/pod/${podId}/recipes/${encodeURIComponent(recipe.id)}`;
+export function RecipeCard({ recipe, onLaunch }: { recipe: Recipe; onLaunch: () => void }) {
     const accent = getRecipeAccent(recipe);
-    const isPrompt = recipe.source.kind === 'prompt';
 
     return (
         <article className="resource-index-card group flex min-h-52 flex-col overflow-hidden p-0">
-            {isPrompt ? (
-                <Button
-                    type="button"
-                    variant="quiet"
-                    onClick={onLaunch}
-                    className="h-auto flex-1 items-stretch justify-start whitespace-normal rounded-none p-4 text-left"
-                >
-                    <RecipeCardBody recipe={recipe} accent={accent} />
-                </Button>
-            ) : (
-                <Link href={detailHref} className="custom-focus-ring block flex-1 p-4">
-                    <RecipeCardBody recipe={recipe} accent={accent} />
-                </Link>
-            )}
+            <Button
+                type="button"
+                variant="quiet"
+                onClick={onLaunch}
+                className="h-auto flex-1 items-stretch justify-start whitespace-normal rounded-none p-4 text-left"
+            >
+                <RecipeCardBody recipe={recipe} accent={accent} />
+            </Button>
             <div className="flex items-center gap-2 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_60%,transparent)] px-4 py-3">
                 <Button variant="primary" size="sm" onClick={onLaunch} className="h-8 gap-1.5 rounded-md px-3 text-xs">
                     <ActionIcon recipe={recipe} />
                     {actionLabel(recipe)}
                 </Button>
-                {!isPrompt ? (
-                    <Link
-                        href={detailHref}
-                        className="custom-focus-ring ml-auto inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                    >
-                        Details
-                        <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
-                ) : null}
             </div>
         </article>
     );

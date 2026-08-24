@@ -764,15 +764,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             New table
                                         </DropdownMenu.Item>
                                     ) : null}
-                                    {canWriteConversations ? (
-                                        <DropdownMenu.Item
-                                            onSelect={() => router.push(`${basePath}/recipes`)}
-                                            className="lemma-menu-row px-2"
-                                        >
-                                            <ProductIcon kind="apps" size="xs" />
-                                            Add from a starter
-                                        </DropdownMenu.Item>
-                                    ) : null}
                                     {canUpdatePod ? (
                                         <>
                                             <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
