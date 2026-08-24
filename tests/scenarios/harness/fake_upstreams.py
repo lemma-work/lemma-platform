@@ -99,31 +99,11 @@ class FakeTelegram:
     _server: HTTPServer
     _thread: threading.Thread
     sent: list[SentMessage] = field(default_factory=list)
-    _state: dict[str, str] = field(default_factory=dict)
 
     @property
     def port(self) -> int:
         """Where the proxy redirects to. The only address anything needs."""
         return int(self._server.server_address[1])
-
-    @property
-    def webhook_secret(self) -> str:
-        """The secret Lemma registered, which inbound updates must carry."""
-        return self._state.get("secret_token", "")
-
-    @property
-    def webhook_path(self) -> str:
-        """The path Lemma told the platform to deliver to.
-
-        Delivering here rather than to a hand-written path is the point: it
-        proves Lemma registered somewhere it actually listens. A scenario that
-        guesses the path can pass while real delivery is broken.
-        """
-        url = self._state.get("webhook_url", "")
-        if not url:
-            raise AssertionError("no webhook was registered; the surface never connected")
-        parsed = urlparse(url)
-        return parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
     #: Anything that puts words in front of a person. Not just `sendMessage`:
     #: the Telegram adapter reaches for `sendRichMessage` when the reply carries
@@ -151,7 +131,13 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
     recorded: list[SentMessage] = []
     #: Telegram remembers the webhook it was given, and Lemma reads it back to
     #: confirm registration took. A fake that forgets fails that confirmation.
-    state: dict[str, str] = {"webhook_url": "", "secret_token": ""}
+    #:
+    #: Keyed by bot token, because real Telegram is: one process now serves
+    #: every scenario, and a single shared slot means one surface's setWebhook
+    #: silently overwrites another's. Lemma compares getWebhookInfo against the
+    #: URL it just set, so the loser of that race fails to connect and its
+    #: agent never answers — which reads as the product being broken.
+    webhooks: dict[str, dict[str, str]] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: Any) -> None:
@@ -180,7 +166,10 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
                 self._serve_file()
                 return
             # Telegram's shape is /bot<token>/<method>.
-            method = urlparse(self.path).path.rsplit("/", 1)[-1]
+            parts = urlparse(self.path).path.strip("/").split("/")
+            method = parts[-1] if parts else ""
+            token = next((part[3:] for part in parts if part.startswith("bot")), "")
+            state = webhooks.setdefault(token, {"webhook_url": "", "secret_token": ""})
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b""
             try:
@@ -275,7 +264,6 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
         _server=server,
         _thread=thread,
         sent=recorded,
-        _state=state,
     )
 
 
