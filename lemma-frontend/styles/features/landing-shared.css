@@ -1,0 +1,140 @@
+/**
+ * §2 — what "shared" means.
+ *
+ * Three attempts failed here, and each failed the same way: they tried to draw
+ * the idea. An approval thread showed supervision, not sharing. A two-panel
+ * copies-versus-one diagram set both halves as the same label-then-value list,
+ * so the contrast it existed to make was invisible — two tables, no argument.
+ *
+ * Shared is structural, and structure resists illustration. So this section
+ * stopped drawing and started saying. A ladder of three things it is not,
+ * ending on the one thing it is, carries the whole contrast in type: the eye
+ * gets the shape before the sentences are read. The rights beside it are the
+ * qualifier — the section's other job is making sure "shared" never reads as
+ * "everyone can see everything."
+ *
+ * No cards, no rules between the halves, nothing boxed. The section is set on
+ * the page rather than on paper, because everything it says is about there
+ * being one of something rather than many.
+ */
+
+@layer components {
+  .lp-react .lp-shared-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    gap: clamp(32px, 5vw, 80px);
+    align-items: start;
+    margin-top: clamp(30px, 3.6vw, 48px);
+  }
+
+  /* ── the ladder ─────────────────────────────────────────────────────── */
+
+  .lp-react .lp-ladder {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(10px, 1.2vw, 16px);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-react .lp-ladder li {
+    color: var(--lp-faint);
+    font-size: clamp(1.05rem, 1.5vw, 1.32rem);
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+  }
+
+  /* The payoff. It is the only line in ink, and the space above it is doing
+     the work a bullet or an arrow would otherwise have to do. */
+  .lp-react .lp-ladder li.is-it {
+    margin-top: clamp(8px, 1vw, 14px);
+    color: var(--lp-ink);
+  }
+
+  .lp-react .lp-ladder li.is-it b {
+    font-weight: 500;
+  }
+
+  /* ── the rights ─────────────────────────────────────────────────────── */
+
+  .lp-react .lp-rights-label {
+    margin: 0 0 var(--space-4);
+    color: var(--lp-faint);
+    font-family: var(--lp-mono);
+    font-size: var(--lp-t-kicker);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .lp-react .lp-rights {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    gap: 0;
+  }
+
+  .lp-react .lp-rights li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding-top: 12px;
+    padding-bottom: 12px;
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-react .lp-rights-who {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex: none;
+    color: var(--lp-ink);
+    font-size: var(--lp-t-body);
+  }
+
+  .lp-react .lp-rights-who em {
+    color: var(--lp-faint);
+    font-family: var(--lp-mono);
+    font-size: 0.58rem;
+    font-style: normal;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .lp-react .lp-rights-can {
+    color: var(--lp-muted);
+    font-size: var(--lp-t-body);
+    line-height: 1.45;
+    text-align: right;
+  }
+
+  .lp-react .lp-shared-foot {
+    max-width: 46ch;
+    margin: clamp(18px, 2vw, 26px) 0 0;
+    color: var(--lp-muted);
+    font-size: var(--lp-t-body);
+    line-height: 1.6;
+  }
+
+  .lp-react .lp-shared-foot b {
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  @media (max-width: 900px) {
+    .lp-react .lp-shared-stage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-react .lp-rights li {
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .lp-react .lp-rights-can {
+      text-align: left;
+    }
+  }
+}

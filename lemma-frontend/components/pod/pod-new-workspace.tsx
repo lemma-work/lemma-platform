@@ -256,12 +256,10 @@ function PromptRow({
 }
 
 function BuildPanel({
-    podId,
     disabled,
     onPreparePrompt,
     onLaunchThemePrompt,
 }: {
-    podId: string;
     disabled: boolean;
     onPreparePrompt: (prompt: string) => void;
     onLaunchThemePrompt: (theme: StarterTheme, recipeId: string, prompt: string) => void;
@@ -302,11 +300,6 @@ function BuildPanel({
                         onSelect={() => setChosenThemeId(theme.id)}
                     />
                 ))}
-                <LauncherTile
-                    spec={{ id: 'all-starters', title: 'All starters', hint: 'Full catalog', icon: ArrowRight }}
-                    muted
-                    href={`/pod/${podId}/recipes`}
-                />
             </TileGrid>
 
             <div className="mt-2 flex flex-col">
@@ -449,7 +442,6 @@ export function PodNewWorkspace({
                 {/* A floor under every panel keeps the composer still between tabs. */}
                 <TabsContent value="build" className={panelHeight}>
                     <BuildPanel
-                        podId={podId}
                         disabled={disabled}
                         onPreparePrompt={onPreparePrompt}
                         onLaunchThemePrompt={(theme, recipeId, prompt) => {

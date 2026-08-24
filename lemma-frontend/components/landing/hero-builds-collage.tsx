@@ -470,15 +470,19 @@ const TILE_MOCKS: Record<TileKey, () => React.ReactElement> = {
 };
 
 /**
- * Static. The word used to cycle Builds/Runs/Ships/Lives every 2.6s, which put
- * a permanent flicker in the corner of the page while you read the tiles beside
- * it. "Runs" is the one that matters anyway — running is the whole claim.
+ * Not a tile — the label the tiles hang off. It used to wear the same paper,
+ * tilt, halftone and hover-lift as its neighbours, which promised something to
+ * open and then did nothing when you tried. It also carried the mark twice
+ * over a headline that already ends in the word "Lemma".
+ *
+ * Static, too. The word used to cycle Builds/Runs/Ships/Lives every 2.6s, which
+ * put a permanent flicker in the corner of the page while you read the tiles
+ * beside it. "Runs" is the one that matters anyway — running is the whole claim.
  */
 function BrandTile() {
   return (
     <div className="lp-build-tile lp-tile-brand">
       <Starburst className="lp-burst lp-burst-brand" />
-      <LemmaMark className="lp-brand-mark" size="lg" />
       <p className="lp-brand-line">
         <span className="lp-verb-wrap">
           <span className="lp-verb">Runs</span>
@@ -490,9 +494,6 @@ function BrandTile() {
         </span>
       </p>
       <DoodleArrow className="lp-doodle-arrow lp-arrow-brand" />
-      <span className="lp-brand-footer">
-        <LemmaMark size="xs" /> Lemma
-      </span>
     </div>
   );
 }

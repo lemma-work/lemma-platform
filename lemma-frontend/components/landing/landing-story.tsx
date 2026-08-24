@@ -11,74 +11,79 @@ import {
 } from "@/lib/templates/catalog";
 
 /**
- * §2 — the bottleneck moved.
+ * §2 — what "shared" means.
  *
- * Framed on YC's "A Cloud for Small Software": easy to build now, still hard to
- * deploy and share. But "shared" read as pure hosting, which undersells the
- * product — for agent-built software, shared has to mean *running*: the team is
- * in, the agents keep going, and it reaches people where they already work.
- * The turn names all three, which also sets up §3, §4 and §5.
+ * This section used to argue that building got easy and sharing didn't. That
+ * argument was written to follow a hero promising you could build; the hero now
+ * asserts shared apps and agents as a fact, so re-arguing the premise deflated
+ * it. The fold also deliberately does not define "shared", which leaves the
+ * share-a-copy misreading open — this is where that debt comes due.
+ *
+ * So: a definition, shown rather than claimed. One thread, and the records it
+ * moved. An agent and a person in the same channel is the multiplayer claim,
+ * and the column beside it is the context layer, which is the only thing on the
+ * page that proves "shared" meant running.
  */
 
-const GAP_BEATS = [
-  "Your agent writes it in an afternoon.",
-  "Then it sits on your laptop.",
-  "Getting it to nine people is the whole project.",
+const NOT_THIS = [
+  "Not a prompt to paste.",
+  "Not a skill to install.",
+  "Not a copy to keep in sync.",
 ] as const;
 
-const SHARED_MEANS = [
-  {
-    lead: "Your team is in.",
-    rest: "A link, and the access you chose — for people and for agents.",
-  },
-  {
-    lead: "It keeps working.",
-    rest: "Agents run on schedules and events, and stop where you want a human.",
-  },
-  {
-    lead: "It reaches them.",
-    rest: "Slack, ChatGPT, Claude, Telegram, email — or the app itself.",
-  },
+const RIGHTS = [
+  { who: "Priya", tag: null, can: "Approves refunds, any amount" },
+  { who: "Marco", tag: null, can: "His own jobs, no refunds" },
+  { who: "Classifier", tag: "agent", can: "Reads tickets, writes nothing" },
 ] as const;
 
-export function GapSection() {
+export function SharedSection() {
   return (
-    <section className="lp-section lp-gap-section" id="gap">
+    <section
+      className="lp-section lp-shared-section"
+      id="shared"
+      aria-labelledby="shared-title"
+    >
       <div className="lp-section-inner">
         <div className="lp-reveal">
-          <p className="lp-section-kicker">The bottleneck moved</p>
-          <h2 className="lp-section-title">
-            Building it got easy. <span>Sharing it didn&apos;t.</span>
+          <p className="lp-section-kicker">What shared means</p>
+          <h2 className="lp-section-title" id="shared-title">
+            One of it, <span>however many of you.</span>
           </h2>
           <p className="lp-section-subhead">
-            A tool for nine people should be as easy to hand over as a doc — and
-            it should still be working after you hand it over.
+            You share the agent itself, already running — so there is one of it
+            to fix, one of it to improve, and one set of records underneath.
           </p>
         </div>
 
-        <ol className="lp-gap-beats">
-          {GAP_BEATS.map((line) => (
-            <li className="lp-reveal" key={line}>
-              <span className="lp-gap-rail" />
-              <p className="lp-gap-beat">{line}</p>
-            </li>
-          ))}
-        </ol>
-
-        {/* The turn is the page's thesis, so it gets statement weight and its
-            own band rather than being the fourth item in a list. */}
-        <div className="lp-gap-turn lp-reveal">
-          <p className="lp-gap-turn-line">
-            On Lemma, <span>shared means running.</span>
-          </p>
-          <ul className="lp-gap-means">
-            {SHARED_MEANS.map((item) => (
-              <li key={item.lead}>
-                <b>{item.lead}</b>
-                <span>{item.rest}</span>
-              </li>
+        <div className="lp-shared-stage lp-reveal">
+          <ul className="lp-ladder">
+            {NOT_THIS.map((line) => (
+              <li key={line}>{line}</li>
             ))}
+            <li className="is-it">
+              <b>The agent itself, running once, for all of you.</b>
+            </li>
           </ul>
+
+          <div>
+            <p className="lp-rights-label">And not the same for everyone</p>
+            <ul className="lp-rights">
+              {RIGHTS.map((row) => (
+                <li key={row.who}>
+                  <span className="lp-rights-who">
+                    {row.who}
+                    {row.tag ? <em>{row.tag}</em> : null}
+                  </span>
+                  <span className="lp-rights-can">{row.can}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="lp-shared-foot">
+              Same system, different rights —{" "}
+              <b>and nobody working from their own version of it.</b>
+            </p>
+          </div>
         </div>
       </div>
     </section>
@@ -103,12 +108,12 @@ function ClaudeCodeTerminal() {
         <span className="lp-term-title">
           <em className="lp-term-star">✻</em> Claude Code
         </span>
-        <span className="lp-term-cwd">~/support-desk</span>
+        <span className="lp-term-cwd">~/support-ops</span>
       </header>
 
       <div className="lp-term-body">
         <p className="lp-term-user">
-          <b>&gt;</b> Build a support desk pod: tickets, a refund policy, a
+          <b>&gt;</b> Build a support ops pod: tickets, a refund policy, a
           classifier agent, and an approval before anything over $250 goes out.
         </p>
 
@@ -187,7 +192,7 @@ function CodexTerminal() {
         <span className="lp-term-title">
           <em className="lp-term-mark">◇</em> Codex
         </span>
-        <span className="lp-term-cwd">~/support-desk</span>
+        <span className="lp-term-cwd">~/support-ops</span>
       </header>
 
       <div className="lp-term-body">
@@ -237,7 +242,7 @@ function CodexTerminal() {
       <footer className="lp-term-foot">
         <span className="lp-term-chip">gpt-5-codex</span>
         <span className="lp-term-chip">workspace-write</span>
-        <span className="lp-term-hint">running in ~/support-desk</span>
+        <span className="lp-term-hint">running in ~/support-ops</span>
       </footer>
     </div>
   );
@@ -430,11 +435,11 @@ function PortableBand() {
         <pre className="lp-portable-code" aria-label="Export and import a pod">
           <code>
             <span>
-              <b>$</b> lemma pod export ./support-desk
+              <b>$</b> lemma pod export ./support-ops
               <em># the whole system, as files</em>
             </span>
             <span>
-              <b>$</b> lemma pod import ./support-desk
+              <b>$</b> lemma pod import ./support-ops
               <em># ship it back, or anywhere else</em>
             </span>
           </code>

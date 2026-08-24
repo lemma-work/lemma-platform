@@ -354,9 +354,6 @@ function getWorkspaceRouteKey(section: string) {
         case 'flows':
         case 'workflows':
             return 'workflows';
-        case 'kits':
-        case 'recipes':
-            return 'recipes';
         default:
             return section;
     }

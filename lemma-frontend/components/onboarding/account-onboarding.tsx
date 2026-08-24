@@ -911,7 +911,7 @@ function SetupAssistant({
     if (path === "templates") {
       clearOnboardingDraft();
       trackPodReady("new_org", signupAt);
-      router.push(`/pod/${pod.id}/recipes`);
+      router.push(`/pod/${pod.id}`);
       return true;
     }
     if (path === "coding-agents") return false;

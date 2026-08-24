@@ -94,9 +94,9 @@ export function FirstWinChecklist({ podId, agentCount, workflowCount, conversati
         },
         {
             id: 'structure',
-            label: 'Add a recipe or build a quick agentic app',
-            description: 'A recipe adds capability — a prompt the assistant builds, or a full kit. Or build an app yourself.',
-            href: `/pod/${podId}/recipes`,
+            label: 'Build a quick agentic app',
+            description: 'Describe what it should do and the assistant builds it, or lay it out yourself.',
+            href: `/pod/${podId}/app/pages`,
             done: appPages.length > 0 || workflowCount > 0,
         },
     ];

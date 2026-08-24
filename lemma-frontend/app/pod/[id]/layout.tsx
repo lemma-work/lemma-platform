@@ -109,9 +109,6 @@ function getPodSectionLabel(podId: string, pathname: string) {
             return "Widgets";
         case "app":
             return "Apps";
-        case "recipes":
-        case "kits":
-            return "Add capability";
         default:
             return formatDisplayName(section);
     }
@@ -154,8 +151,6 @@ function getPodRoutePolicyKey(podId: string, pathname: string): PodRoutePolicyKe
             return "settings";
         case "forms":
         case "widgets":
-        case "kits":
-        case "recipes":
             return null;
         default:
             return "home";

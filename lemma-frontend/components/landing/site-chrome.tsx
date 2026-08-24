@@ -101,7 +101,7 @@ export function SiteHeader({
                 <div className="lp-header-actions">
                     {showThemeToggle ? <ThemeToggle variant="icon" /> : null}
                     <Link className="lp-button primary" href="/auth">
-                        Start building
+                        Get started
                     </Link>
                     {/* Below the nav breakpoint this was the only control in the header,
                         leaving Templates, Docs and GitHub unreachable from a phone. */}
@@ -152,7 +152,7 @@ export function SiteFooter({ hashPrefix = '' }: { hashPrefix?: string }) {
                     <p className="lp-site-footer-label">Product</p>
                     <a href={`${hashPrefix}#loop`}>How it works</a>
                     <Link href="/templates">Templates</Link>
-                    <Link href="/auth">Start building</Link>
+                    <Link href="/auth">Get started</Link>
                 </nav>
 
                 <nav aria-label="Developers">
