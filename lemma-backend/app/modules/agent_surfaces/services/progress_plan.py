@@ -12,9 +12,16 @@ steps are done" is the whole answer to "is this still working". Here the
 checklist is parsed back out of the tool's own return value and drawn as a
 checklist.
 
-The drawing is deliberately emoji and plain text — no Markdown. It renders
-identically on WhatsApp, Telegram and Teams, and it cannot unbalance a delimiter
-or need per-platform escaping on the way out.
+The drawing is deliberately emoji and plain text — no Markdown. It cannot
+unbalance a delimiter or need per-platform escaping on the way out.
+
+It is drawn two ways, because a surface either has room for a checklist or it
+does not. WhatsApp and Teams get the checklist. Telegram's live update is a
+``tg-thinking`` chip whose HTML collapses newlines, so the checklist arrived
+there as one run-on sentence with the marks stranded between the words — five
+lines of structure flattened into something that read like a fault. What fits a
+chip is one line, and :func:`render_plan_line` draws it: how far along the run
+is, and the step it is on.
 """
 
 from __future__ import annotations
@@ -122,10 +129,36 @@ def render_plan(plan: SurfacePlan) -> str:
     return "\n".join(lines)
 
 
+def render_plan_line(plan: SurfacePlan) -> str:
+    """Draw the plan as one line, for a surface with room for exactly one.
+
+    Telegram's live progress is a thinking chip: one line of dimmed text, whose
+    HTML eats the newlines a checklist is made of. So the checklist is not
+    shortened here, it is replaced — by the count, which says whether the run is
+    moving, and the step it is on, which says what it is doing. The marks go
+    with the lines they belonged to: with nothing above or below it, ``⏳`` has
+    nothing left to distinguish.
+
+    The step also displaces the tool. A chip that said ``Using execute_python``
+    was reporting the same moment as "Render the video" in the language of the
+    machine rather than the language of the ask.
+    """
+    if not plan.items:
+        return ""
+    if plan.done_count >= plan.total:
+        return _headline(plan)
+    active = next(item for item in plan.items if not item.done)
+    return f"{_progress_count(plan)} · {_clip(active.text)}"
+
+
 def _headline(plan: SurfacePlan) -> str:
     if plan.done_count >= plan.total:
         return f"All {plan.total} steps done — writing up the answer now."
-    return f"Working on it — {plan.done_count} of {plan.total} steps done."
+    return f"{_progress_count(plan)}."
+
+
+def _progress_count(plan: SurfacePlan) -> str:
+    return f"Working on it — {plan.done_count} of {plan.total} steps done"
 
 
 def _body_lines(plan: SurfacePlan) -> list[str]:
