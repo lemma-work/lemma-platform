@@ -176,7 +176,17 @@ async def get_pod_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="pod_id is required",
         )
-    pod_id = UUID(str(raw_pod_id))
+    try:
+        pod_id = UUID(str(raw_pod_id))
+    except ValueError:
+        # The case the `is None` check above does not cover. Every pod-scoped
+        # route reaches this, so an unparseable path segment used to leave an
+        # unhandled ValueError and answer 500 — a server error for what is
+        # entirely a malformed request, and in debug a traceback with it.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="pod_id must be a UUID",
+        ) from None
     existing = getattr(request.state, "ctx", None)
     if (
         existing is not None

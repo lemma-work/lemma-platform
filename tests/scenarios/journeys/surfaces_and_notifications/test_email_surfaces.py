@@ -26,9 +26,8 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_resend
 from harness.stack import RESEND_INBOUND_DOMAIN, RESEND_WEBHOOK_SECRET
-from harness.waiting import eventually, never
+from harness.waiting import eventually
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -65,8 +64,15 @@ def _svix_headers(body: bytes) -> dict[str, str]:
 
 @pytest.fixture
 async def mailbox(world, run):
-    """A pod reachable by email, with the mail Lemma sends captured."""
-    fake = start_fake_resend()
+    """A pod reachable by email.
+
+    Nothing captures what Lemma *sends*, and nothing used to either. A Resend
+    surface authenticates with the deployment's own key and has no
+    `api_base_url` to point elsewhere, so outbound mail can only go to Resend —
+    the stand-in that used to be started here was never reached by anything.
+    Inbound is real: the scenarios below sign a Svix payload themselves and post
+    it to Lemma, which is what Resend does.
+    """
     try:
         alice = await world.person("daniel")
         organization = alice.organization
@@ -80,10 +86,9 @@ async def mailbox(world, run):
         surface = await alice.connects_a_surface(
             in_pod=pod, platform="RESEND", named="inbox", agent=agent["name"]
         )
-        fake.clear()
-        yield alice, pod, surface, fake
+        yield alice, pod, surface
     finally:
-        fake.stop()
+        pass
 
 
 async def _deliver(
@@ -116,14 +121,12 @@ async def _deliver(
 @proves("PS-SURF-022")
 @covers("agent.surface.create", "agent.surface.get")
 async def test_an_email_surface_has_an_address(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     del alice, pod
 
     address = _address_of(surface)
 
-    assert address, (
-        f"an email surface with no address cannot be written to: {surface}"
-    )
+    assert address, f"an email surface with no address cannot be written to: {surface}"
     assert address.endswith(RESEND_INBOUND_DOMAIN), (
         f"the surface's address is not under this deployment's inbound domain, "
         f"so mail to it will never arrive: {address!r}"
@@ -134,7 +137,7 @@ async def test_an_email_surface_has_an_address(mailbox):
 @proves("PS-SURF-022")
 @covers("surface.webhook.handle_platform", "agent.conversation.list")
 async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     address = _address_of(surface)
     incoming = f"<{uuid4().hex}@example.com>"
 
@@ -177,7 +180,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
 @proves("PS-SURF-022")
 @covers("surface.webhook.handle_platform")
 async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
-    alice, pod, _surface, fake = mailbox
+    alice, pod, _surface = mailbox
 
     await _deliver(
         alice,
@@ -187,12 +190,10 @@ async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
         message_id=f"<{uuid4().hex}@example.com>",
     )
 
-    await never(
-        lambda: _sent_to(fake, alice.email),
-        bool,
-        describe="a reply to mail addressed to no surface",
-        within=8.0,
-    )
+    # There used to be an assertion here that no reply was sent. It could not
+    # fail: nothing routed Lemma's outbound mail to the recorder it watched, so
+    # the recorder was empty whatever happened. What is left is the half that
+    # was always doing the work.
     assert not await alice.conversations_in(pod), (
         "mail to an address no surface owns started a conversation anyway"
     )
@@ -202,7 +203,7 @@ async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
 @proves("PS-SURF-022", "PS-SURF-010")
 @covers("surface.webhook.handle_platform")
 async def test_an_unsigned_email_is_refused(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     del pod
     address = _address_of(surface)
 
@@ -216,10 +217,6 @@ async def test_an_unsigned_email_is_refused(mailbox):
         f"an unsigned email was accepted ({refused.status_code}); anyone who "
         f"knows the address could start an agent"
     )
-
-
-async def _sent_to(fake, address: str):
-    return fake.to(address)
 
 
 def _address_of(surface) -> str:

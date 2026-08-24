@@ -37,52 +37,6 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## DATA — tables, records, files
 
-### DEV-DATA-002 — One of four pod-schema creators skips the lock that exists for it
-**Violates:** *(no promise — the retry hides it from every client. This is an
-internal invariant the code states and then breaks in one place.)*
-**Severity:** medium
-**Where:** [`postgres_search_service.py:83`](lemma-backend/app/modules/datastore/services/search/postgres_search_service.py#L83),
-against [`schema_manager.py:148`](lemma-backend/app/modules/datastore/infrastructure/schema_manager.py#L148)
-(`_lock_schema_bootstrap`)
-
-**Required:** Creating a pod's datastore schema is safe against a concurrent
-creator. The code already knows this and says so in the lock's own docstring:
-
-> PostgreSQL's `CREATE SCHEMA IF NOT EXISTS` is not race-free: two concurrent
-> transactions can both observe the namespace as absent and one later fails the
-> `pg_namespace.nspname` unique index. […] so they must share this
-> transaction-scoped advisory lock.
-
-**Actual:** Four places run `CREATE SCHEMA IF NOT EXISTS "pod_…"`. Three take
-`pg_advisory_xact_lock(hashtext(schema_name))` first. The search service's
-`_ensure_schema` does not — it builds the same name (`pod_{uuid}` at `:44`) and
-creates it bare.
-
-Observed rather than reasoned: a scenario run's worker log carries
-
-```
-IntegrityError: duplicate key value violates unique constraint
-  "pg_namespace_nspname_index"
-DETAIL:  Key (nspname)=(pod_01a015d9_51d1_75e0_aa86_4553f099eeca) already exists.
-[SQL: CREATE SCHEMA IF NOT EXISTS "pod_01a015d9_51d1_75e0_aa86_4553f099eeca"]
-```
-
-raised from `pod_schema_consumer.on_pod_created` — the locked path losing to the
-unlocked one.
-
-**Why it matters:** The pod-created consumer fails and retries, so the schema
-does arrive; the cost is a guaranteed error and burnt retry budget whenever a
-pod's first search initialisation overlaps its provisioning. It also puts a real
-`IntegrityError` in the log for a condition that is not a bug in the caller,
-which is how genuine integrity failures stop being noticed. A pod created and
-immediately used — the common shape for anything scripted, and for bundle
-import — is exactly the overlap.
-
-**Fix:** Take the same lock in `_ensure_schema`, or route it through
-`SchemaManager.create_datastore_schema`, which already does. The second is
-better: it keeps one creator, and the search service currently also misses the
-schema-level `try_grant` that `create_datastore_schema` does afterwards.
-
 ### DEV-DATA-003 — Documents no converter can read retry forever, and enough of them stall the worker for every pod
 
 **Violates:** *(no promise. The promise about unavailable converters not burning
@@ -138,6 +92,68 @@ charged with.
 **Found by:** the scenario suite running against a standing tenant. The old
 design gave every scenario a new pod and never accumulated enough stuck
 documents to notice; four were enough.
+
+## SURF — surfaces and notifications
+
+### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
+**Violates:** *(no promise, on the evidence — see below.)*
+**Severity:** medium
+**Where:** not localised. Observed through
+[`test_ingestion.py`](tests/scenarios/journeys/surfaces_and_notifications/test_ingestion.py),
+`test_an_unknown_sender_is_told_how_to_get_access`
+
+The promise this scenario carries — that an answer comes back where the question
+was asked — holds everywhere it has been checked: the scenario passes in
+isolation and in CI, and the live lane delivers a real message to a real
+Telegram account. What is recorded here is that a full local run does not get an
+answer within four minutes and that the cause is not known. Calling the promise
+broken would be claiming more than has been shown.
+
+**Required:** A message delivered to a surface is answered on that surface. The
+scenario signs a Telegram update, delivers it to the webhook path Lemma itself
+registered, and waits for the agent's reply.
+
+**Actual:** In a local run of the whole suite the reply never arrives. The wait
+gives up after **240 seconds and 2,377 polls** having seen nothing — not a slow
+answer, no answer. The same scenario passes:
+
+- on its own (0.7s),
+- with its own journey, all 38 of them,
+- paired with the file journey that was starving the worker,
+- and in CI, which shards by journey so no stack ever carries more than one.
+
+**What it is not.** Each of these was tested, not reasoned about:
+
+- *Not the worker queue.* `SCENARIOS_WORKERS=3` was added to run the replica
+  shape the product is built for — `schedule_poller` says "Every replica runs
+  this. Nothing elects a leader; the claim decides who fires" — and the failure
+  is identical with three workers as with one.
+- *Not the retrying-document storm.* That was real and is fixed separately: the
+  scenario that uploads an unreadable document now deletes it, which took its
+  own journey from 98s to 41s and one neighbouring scenario from 59.0s to 0.6s.
+  This failure survives that fix.
+- *Not the `channel_send_failed` warnings in the same log.* Those are Resend
+  401s from the fast lane's placeholder key, on a different platform.
+- *Not the mailbox change.* The journey passes 48/48 in isolation with real
+  sub-addressed addresses configured.
+
+**Why it matters:** it is the only red in an otherwise green suite, and the
+first thing a person or an agent runs locally is the whole suite. A failure
+that appears only at full size, with no error and no log line naming a cause,
+is the kind that gets re-diagnosed from scratch every time somebody meets it —
+which is what this file exists to stop. It may also be real: nothing here
+proves the product would answer given longer, only that it did not answer in
+four minutes.
+
+**Fix:** unknown, and finding it is the work. The next step is a bisect — halve
+the journey list until the smallest set that reproduces it is known — then look
+at whether the agent run was dispatched at all, dispatched and never completed,
+or completed with its reply never leaving. Those are three different bugs and
+the evidence so far does not distinguish them.
+
+**Found by:** running the full suite locally, repeatedly, while getting the rest
+of it green. It has failed the same way on every full local run in this
+sequence, before and after every change made to the suite.
 
 ## SDK — the clients we ship
 

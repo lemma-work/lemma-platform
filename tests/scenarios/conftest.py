@@ -15,6 +15,7 @@ import pytest
 import pytest_asyncio
 
 from harness import environment, run as run_scope
+from harness.egress import Egress
 from harness.environment import Deployment
 from harness.provision import provision, sweep
 from harness.run import Run
@@ -166,6 +167,22 @@ async def a_pod_of_its_own(world: World, run: Run) -> AsyncIterator[tuple]:
         yield daniel, pod
     finally:
         await daniel.deletes_pod(pod)
+
+
+@pytest_asyncio.fixture
+async def egress(stack: Stack) -> AsyncIterator[Egress]:
+    """What Lemma said to the outside world, during this scenario only.
+
+    Forgotten between scenarios, and for the same reason the old per-scenario
+    recorders were: a scenario asserting "the agent replied once" has to be
+    asking about *its* traffic. Shared, it would be asking about whatever ran
+    before it, which is a test that passes for the wrong reason on a good day
+    and flakes on a bad one.
+    """
+    live = stack.egress
+    assert live is not None, "the stack was built without an egress proxy"
+    live.forget()
+    yield live
 
 
 @pytest.fixture

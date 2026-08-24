@@ -31,9 +31,7 @@ async def _pod_whose_only_admin_is_not_an_owner(world, run):
 
     # The owner steps out of the pod, leaving exactly one administrator who
     # cannot fall back on being an owner.
-    await owner.removes_member(
-        await owner.membership_of(owner, in_pod=pod), from_pod=pod
-    )
+    await owner.removes_member(await owner.membership_of(owner, in_pod=pod), from_pod=pod)
     return administrator, pod
 
 

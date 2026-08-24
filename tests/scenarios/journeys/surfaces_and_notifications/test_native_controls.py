@@ -28,6 +28,7 @@ pytestmark = [
     capability("Answer where the person already is"),
 ]
 
+
 def _update(*, text: str, update_id: int, handle: str, chat_id: int) -> dict:
     return {
         "update_id": update_id,
@@ -153,7 +154,12 @@ async def test_a_question_is_asked_with_native_controls(reachable_pod):
 
     del conversation  # the surface owns the thread; this scenario just talks
     await _says_on_telegram(
-        alice, fake, "send me a report", update_id=chat_id * 10 + 1, handle=handle, chat_id=chat_id
+        alice,
+        fake,
+        "send me a report",
+        update_id=chat_id * 10 + 1,
+        handle=handle,
+        chat_id=chat_id,
     )
 
     asked = await eventually(
@@ -192,8 +198,12 @@ async def test_an_approval_is_offered_with_native_controls(reachable_pod):
     # than asking the agent nicely to request one, and is the path a person
     # actually walks into.
     await _says_on_telegram(
-        alice, fake, f"add a row titled 'hello' to the {table['name']} table",
-        update_id=chat_id * 10 + 2, handle=handle, chat_id=chat_id
+        alice,
+        fake,
+        f"add a row titled 'hello' to the {table['name']} table",
+        update_id=chat_id * 10 + 2,
+        handle=handle,
+        chat_id=chat_id,
     )
 
     offered = await eventually(

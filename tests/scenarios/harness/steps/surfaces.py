@@ -111,9 +111,7 @@ class SurfaceSteps:
 
     async def notifications_in(self, pod: JSON, **query: Any) -> list[JSON]:
         return items_of(
-            await self.api.get(
-                f"/pods/{pod['id']}/notifications", params=query or None
-            )
+            await self.api.get(f"/pods/{pod['id']}/notifications", params=query or None)
         )
 
     async def unread_count_in(self, pod: JSON) -> int:
@@ -137,9 +135,7 @@ class SurfaceSteps:
             f"/pods/{in_pod['id']}/notifications/{notification['id']}/acknowledge"
         )
 
-    async def answers(
-        self, notification: JSON, *, saying: str, in_pod: JSON
-    ) -> JSON:
+    async def answers(self, notification: JSON, *, saying: str, in_pod: JSON) -> JSON:
         return await self.api.post(
             f"/pods/{in_pod['id']}/notifications/{notification['id']}/respond",
             what=f"{self.label} answering a notification",

@@ -82,9 +82,7 @@ async def _run_until_settled(alice, pod, name: str, code: str):
         json={"input_data": {"value": 1}},
     )
     return await eventually(
-        lambda: alice.api.get(
-            f"/pods/{pod['id']}/functions/{name}/runs/{started['id']}"
-        ),
+        lambda: alice.api.get(f"/pods/{pod['id']}/functions/{name}/runs/{started['id']}"),
         lambda run: str(run.get("status")) in TERMINAL,
         describe=f"the run of {name!r} to reach a terminal state",
         timeout=LONG_ENOUGH_TO_KNOW,
@@ -104,9 +102,7 @@ async def a_pod(world):
 async def test_a_sleeping_function_is_stopped(a_pod):
     alice, pod = a_pod
 
-    settled = await _run_until_settled(
-        alice, pod, "dawdle_fn", _sleeps_for(3600)
-    )
+    settled = await _run_until_settled(alice, pod, "dawdle_fn", _sleeps_for(3600))
 
     assert str(settled.get("status")) == "FAILED", (
         f"a function asleep for an hour finished as {settled.get('status')!r}; "

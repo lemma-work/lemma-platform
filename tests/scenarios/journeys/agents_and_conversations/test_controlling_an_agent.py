@@ -22,9 +22,7 @@ async def test_a_pod_can_be_asked_without_building_an_agent(pod):
     alice, the_pod = pod
 
     conversation = await alice.starts_a_conversation(in_pod=the_pod, saying="hello")
-    messages = await alice.waits_for_a_reply(
-        in_conversation=conversation, in_pod=the_pod
-    )
+    messages = await alice.waits_for_a_reply(in_conversation=conversation, in_pod=the_pod)
 
     assert any(m.get("role") == "assistant" for m in messages), messages
 
@@ -75,8 +73,8 @@ async def test_deleting_an_agent_keeps_the_default(pod):
 
     await alice.deletes_agent(agent["name"], in_pod=the_pod)
 
-    conversation = await alice.starts_a_conversation(in_pod=the_pod, saying="still there?")
-    messages = await alice.waits_for_a_reply(
-        in_conversation=conversation, in_pod=the_pod
+    conversation = await alice.starts_a_conversation(
+        in_pod=the_pod, saying="still there?"
     )
+    messages = await alice.waits_for_a_reply(in_conversation=conversation, in_pod=the_pod)
     assert any(m.get("role") == "assistant" for m in messages), messages

@@ -118,9 +118,7 @@ class FakeTelegram:
         """
         url = self._state.get("webhook_url", "")
         if not url:
-            raise AssertionError(
-                "no webhook was registered; the surface never connected"
-            )
+            raise AssertionError("no webhook was registered; the surface never connected")
         parsed = urlparse(url)
         return parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
@@ -134,8 +132,7 @@ class FakeTelegram:
         return [
             message
             for message in self.sent
-            if message.method in self.SEND_METHODS
-            and message.chat_id == str(chat_id)
+            if message.method in self.SEND_METHODS and message.chat_id == str(chat_id)
         ]
 
     def clear(self) -> None:
@@ -145,7 +142,6 @@ class FakeTelegram:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
-
 
 
 def _only_where_the_deployment_can_call_back() -> None:
@@ -216,34 +212,40 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
                 # "received" and empty, which is the failure this exists to
                 # rule out.
                 file_id = str(payload.get("file_id") or "file")
-                self._reply({
-                    "ok": True,
-                    "result": {
-                        "file_id": file_id,
-                        "file_unique_id": file_id,
-                        "file_size": len(FILE_CONTENTS),
-                        "file_path": f"documents/{file_id}",
-                    },
-                })
+                self._reply(
+                    {
+                        "ok": True,
+                        "result": {
+                            "file_id": file_id,
+                            "file_unique_id": file_id,
+                            "file_size": len(FILE_CONTENTS),
+                            "file_path": f"documents/{file_id}",
+                        },
+                    }
+                )
             elif method == "getMe":
-                self._reply({
-                    "ok": True,
-                    "result": {
-                        "id": 424242,
-                        "is_bot": True,
-                        "first_name": "Lemma Scenarios",
-                        "username": bot_username,
-                    },
-                })
+                self._reply(
+                    {
+                        "ok": True,
+                        "result": {
+                            "id": 424242,
+                            "is_bot": True,
+                            "first_name": "Lemma Scenarios",
+                            "username": bot_username,
+                        },
+                    }
+                )
             elif method.startswith("send") and "chat_id" in payload:
-                self._reply({
-                    "ok": True,
-                    "result": {
-                        "message_id": len(recorded),
-                        "chat": {"id": payload.get("chat_id")},
-                        "text": payload.get("text", ""),
-                    },
-                })
+                self._reply(
+                    {
+                        "ok": True,
+                        "result": {
+                            "message_id": len(recorded),
+                            "chat": {"id": payload.get("chat_id")},
+                            "text": payload.get("text", ""),
+                        },
+                    }
+                )
             elif method == "setWebhook":
                 state["webhook_url"] = str(payload.get("url") or "")
                 state["secret_token"] = str(payload.get("secret_token") or "")
@@ -255,14 +257,16 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
             elif method == "getWebhookInfo":
                 # Lemma compares this against the URL it just set and fails the
                 # connection if they differ, so it has to be the real value.
-                self._reply({
-                    "ok": True,
-                    "result": {
-                        "url": state["webhook_url"],
-                        "has_custom_certificate": False,
-                        "pending_update_count": 0,
-                    },
-                })
+                self._reply(
+                    {
+                        "ok": True,
+                        "result": {
+                            "url": state["webhook_url"],
+                            "has_custom_certificate": False,
+                            "pending_update_count": 0,
+                        },
+                    }
+                )
             else:
                 # sendChatAction, and anything an adapter adds later.
                 self._reply({"ok": True, "result": True})
@@ -359,9 +363,7 @@ def _spec_for(base_url: str) -> JSON:
         # caller's token arrives would be asserting against a spec that never
         # asked for it.
         "components": {
-            "securitySchemes": {
-                "bearerAuth": {"type": "http", "scheme": "bearer"}
-            }
+            "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
         },
         "security": [{"bearerAuth": []}],
         "paths": {
@@ -373,9 +375,7 @@ def _spec_for(base_url: str) -> JSON:
                         "200": {
                             "description": "Widgets",
                             "content": {
-                                "application/json": {
-                                    "schema": {"type": "object"}
-                                }
+                                "application/json": {"schema": {"type": "object"}}
                             },
                         }
                     },
@@ -399,9 +399,7 @@ def _spec_for(base_url: str) -> JSON:
                         "201": {
                             "description": "Created",
                             "content": {
-                                "application/json": {
-                                    "schema": {"type": "object"}
-                                }
+                                "application/json": {"schema": {"type": "object"}}
                             },
                         }
                     },
@@ -436,7 +434,7 @@ def _spec_for(base_url: str) -> JSON:
                 }
             },
         },
-        }
+    }
 
 
 def start_fake_provider() -> FakeProvider:
@@ -513,104 +511,3 @@ def start_fake_provider() -> FakeProvider:
 
 
 # --- email ------------------------------------------------------------------
-
-
-@dataclass
-class SentEmail:
-    """One message the platform was asked to send."""
-
-    payload: JSON
-
-    @property
-    def to(self) -> list[str]:
-        recipients = self.payload.get("to")
-        if isinstance(recipients, str):
-            return [recipients]
-        return [str(item) for item in (recipients or [])]
-
-    @property
-    def subject(self) -> str:
-        return str(self.payload.get("subject") or "")
-
-    @property
-    def body(self) -> str:
-        for key in ("text", "html"):
-            value = self.payload.get(key)
-            if value:
-                return str(value)
-        return ""
-
-    @property
-    def headers(self) -> dict[str, str]:
-        """Threading headers, lowercased.
-
-        `In-Reply-To` and `References` are what make a reply land inside the
-        conversation a person is already reading, rather than starting a new one
-        beside it. They are the whole difference between "behaves like email"
-        and "sends email".
-        """
-        raw = self.payload.get("headers")
-        if not isinstance(raw, dict):
-            return {}
-        return {str(k).lower(): str(v) for k, v in raw.items()}
-
-
-@dataclass
-class FakeResend:
-    """Resend's API, so a scenario can read the mail Lemma actually sent.
-
-    Reached the same way the Telegram stand-in is: `api_base_url` on the
-    connected account, which the service reads in place of `api.resend.com`.
-    """
-
-    api_base: str
-    _server: HTTPServer
-    _thread: threading.Thread
-    sent: list[SentEmail] = field(default_factory=list)
-
-    def to(self, address: str) -> list[SentEmail]:
-        return [message for message in self.sent if address in message.to]
-
-    def clear(self) -> None:
-        self.sent.clear()
-
-    def stop(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
-
-
-def start_fake_resend() -> FakeResend:
-    _only_where_the_deployment_can_call_back()
-    recorded: list[SentEmail] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args: Any) -> None:
-            """Quiet."""
-
-        def do_POST(self) -> None:  # noqa: N802
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                payload = json.loads(raw)
-            except ValueError:
-                payload = {}
-            if isinstance(payload, dict):
-                recorded.append(SentEmail(payload=payload))
-            body = json.dumps({"id": f"email-{len(recorded)}"}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    return FakeResend(
-        api_base=f"http://{host}:{port}",
-        _server=server,
-        _thread=thread,
-        sent=recorded,
-    )
