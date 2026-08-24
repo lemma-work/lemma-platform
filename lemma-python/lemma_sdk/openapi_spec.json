@@ -4405,6 +4405,7 @@
             "description": "Optional resource grants to apply to the new agent in the same request. Equivalent to calling the permissions-replace endpoint right after create \u2014 grants are keyed by resource_name."
           },
           "toolsets": {
+            "description": "Toolsets the agent declares. Omit the field to start with web search and memory; pass an explicit empty list for none.",
             "items": {
               "$ref": "#/components/schemas/AgentToolset"
             },

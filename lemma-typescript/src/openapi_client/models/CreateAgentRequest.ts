@@ -19,6 +19,9 @@ export type CreateAgentRequest = {
      * Optional resource grants to apply to the new agent in the same request. Equivalent to calling the permissions-replace endpoint right after create — grants are keyed by resource_name.
      */
     permissions?: (AgentPermissionsReplaceRequest | null);
+    /**
+     * Toolsets the agent declares. Omit the field to start with web search and memory; pass an explicit empty list for none.
+     */
     toolsets?: Array<AgentToolset>;
     visibility?: ResourceVisibility;
 };
