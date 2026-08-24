@@ -100,6 +100,19 @@ async def test_unsupported_dialect_rejected():
 class TestEnginePooling:
     """The pool is keyed on connection identity, never on the password."""
 
+    @pytest.fixture(autouse=True)
+    def _reachable_host(self, monkeypatch):
+        """These are about the cache key, and they connect to `localhost`.
+
+        `_engine_for` now guards the host at execution, and production refuses
+        loopback — correctly. Opening the self-hosting hatch keeps these tests
+        about the thing they are named for; that the guard refuses loopback
+        with the hatch shut is asserted in `TestTheHostIsGuarded` below.
+        """
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
     @pytest.mark.asyncio
     async def test_same_connection_reuses_one_engine(self):
         executor = SqlExecutor()
@@ -138,3 +151,45 @@ class TestEnginePooling:
         assert first is not second
         assert len(executor._engines) == 2
         await executor.dispose_all()
+
+
+class TestTheHostIsGuarded:
+    """A database host is re-checked when the connection is opened.
+
+    Install-time validation is not enough on its own. The host is stored, and
+    tenant-supplied: DNS can be repointed after an install was approved, so the
+    address that was public when somebody vetted it need not be public when a
+    query runs. Every other kind re-checks at execution; this is that check.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "host, reason",
+        [
+            ("169.254.169.254", "link_local_address"),
+            ("127.0.0.1", "loopback_address"),
+            ("10.0.0.5", "private_address"),
+        ],
+    )
+    async def test_a_private_host_is_refused_when_the_engine_is_built(
+        self, host, reason
+    ):
+        executor = SqlExecutor()
+        with pytest.raises(OperationExecutionValidationError) as raised:
+            await executor._engine_for({**CONN, "host": host}, CREDS)
+        assert raised.value.details["reason"] == reason
+        # Nothing was pooled, so a refused target leaves no engine behind.
+        assert not executor._engines
+
+    @pytest.mark.asyncio
+    async def test_the_metadata_service_is_refused_even_when_self_hosting(
+        self, monkeypatch
+    ):
+        """The hatch is for reaching your own network, not the instance's keys."""
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        executor = SqlExecutor()
+        with pytest.raises(OperationExecutionValidationError) as raised:
+            await executor._engine_for({**CONN, "host": "169.254.169.254"}, CREDS)
+        assert raised.value.details["reason"] == "link_local_address"

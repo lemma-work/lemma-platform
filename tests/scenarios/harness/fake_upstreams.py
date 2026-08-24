@@ -1,25 +1,23 @@
-"""A stand-in for a messaging platform, so surfaces can be tested end to end.
+"""The far end of Telegram and of a third-party API, served by the proxy.
 
-A surface is the one part of the product whose other end is somebody else's
-server. Testing it for real would mean a Telegram bot, a Slack workspace, and a
-network — none of which belong in a suite that runs on every change.
+These are the same servers the suite used to run on loopback and point the
+product at with `api_base_url`. What changed is who reaches them: nothing does,
+directly. They are started *inside* the egress proxy, and the proxy redirects
+the real hostnames — `api.telegram.org`, `provider.scenarios.example` — to them.
 
-This is **not** a mock of Lemma. Lemma runs entirely for real; what stands in is
-Telegram, and it stands in the way a self-hosted Bot API server would. The
-platform supports that natively: `api_base_url` on a connected account overrides
-where the client sends, and the comment on `_TELEGRAM_API_BASE` names
-"self-hosted Bot API servers" as the reason it exists. So a scenario points a
-surface at this server using a documented product capability, not a patched
-constant.
+Three things follow from that, and they are the point:
 
-What it gives a scenario:
+* **The product talks to real hostnames.** It never targets loopback, so the
+  SSRF guard runs at full production strictness and
+  `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS` is not set anywhere.
+* **No scenario starts a server.** The stack owns these; a test only asks the
+  proxy what Lemma sent. A suite whose scenarios manage infrastructure is a
+  suite testing its own plumbing.
+* **They stay ordinary HTTP handlers.** Plain `http.server`, importable and
+  readable, rather than logic buried in a mitmproxy hook.
 
-* `getMe` and `setWebhook`, so connecting a surface succeeds.
-* `sendMessage`, recorded — which is how a scenario knows the agent replied,
-  and what it said.
-
-Everything else answers `{"ok": true}`, so an adapter calling something new
-fails on the assertion it cares about rather than on plumbing.
+Imported by `egress_addon`, which runs inside mitmproxy's own interpreter — so
+this module must stay standard-library only. It has no other callers.
 """
 
 from __future__ import annotations
@@ -101,26 +99,11 @@ class FakeTelegram:
     _server: HTTPServer
     _thread: threading.Thread
     sent: list[SentMessage] = field(default_factory=list)
-    _state: dict[str, str] = field(default_factory=dict)
 
     @property
-    def webhook_secret(self) -> str:
-        """The secret Lemma registered, which inbound updates must carry."""
-        return self._state.get("secret_token", "")
-
-    @property
-    def webhook_path(self) -> str:
-        """The path Lemma told the platform to deliver to.
-
-        Delivering here rather than to a hand-written path is the point: it
-        proves Lemma registered somewhere it actually listens. A scenario that
-        guesses the path can pass while real delivery is broken.
-        """
-        url = self._state.get("webhook_url", "")
-        if not url:
-            raise AssertionError("no webhook was registered; the surface never connected")
-        parsed = urlparse(url)
-        return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    def port(self) -> int:
+        """Where the proxy redirects to. The only address anything needs."""
+        return int(self._server.server_address[1])
 
     #: Anything that puts words in front of a person. Not just `sendMessage`:
     #: the Telegram adapter reaches for `sendRichMessage` when the reply carries
@@ -144,27 +127,17 @@ class FakeTelegram:
         self._thread.join(timeout=5)
 
 
-def _only_where_the_deployment_can_call_back() -> None:
-    """Every server below binds loopback, so only a local deployment reaches it.
-
-    Checked here rather than at each of the dozen fixtures that start one,
-    because the failure it prevents is somebody adding a thirteenth and not
-    knowing. Against a deployment these scenarios skip with a reason; the
-    stand-ins stay exactly as useful as they always were on a stack the suite
-    boots itself.
-    """
-    from harness.credentials import needs
-    from harness.environment import LOOPBACK_REACHABLE
-
-    needs(LOOPBACK_REACHABLE)
-
-
 def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTelegram:
-    _only_where_the_deployment_can_call_back()
     recorded: list[SentMessage] = []
     #: Telegram remembers the webhook it was given, and Lemma reads it back to
     #: confirm registration took. A fake that forgets fails that confirmation.
-    state: dict[str, str] = {"webhook_url": "", "secret_token": ""}
+    #:
+    #: Keyed by bot token, because real Telegram is: one process now serves
+    #: every scenario, and a single shared slot means one surface's setWebhook
+    #: silently overwrites another's. Lemma compares getWebhookInfo against the
+    #: URL it just set, so the loser of that race fails to connect and its
+    #: agent never answers — which reads as the product being broken.
+    webhooks: dict[str, dict[str, str]] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: Any) -> None:
@@ -193,7 +166,10 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
                 self._serve_file()
                 return
             # Telegram's shape is /bot<token>/<method>.
-            method = urlparse(self.path).path.rsplit("/", 1)[-1]
+            parts = urlparse(self.path).path.strip("/").split("/")
+            method = parts[-1] if parts else ""
+            token = next((part[3:] for part in parts if part.startswith("bot")), "")
+            state = webhooks.setdefault(token, {"webhook_url": "", "secret_token": ""})
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b""
             try:
@@ -288,7 +264,6 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
         _server=server,
         _thread=thread,
         sent=recorded,
-        _state=state,
     )
 
 
@@ -326,6 +301,11 @@ class FakeProvider:
     _server: HTTPServer
     _thread: threading.Thread
     received: list[ReceivedCall] = field(default_factory=list)
+
+    @property
+    def port(self) -> int:
+        """Where the proxy redirects to. The only address anything needs."""
+        return int(self._server.server_address[1])
 
     @property
     def spec_url(self) -> str:
@@ -438,7 +418,6 @@ def _spec_for(base_url: str) -> JSON:
 
 
 def start_fake_provider() -> FakeProvider:
-    _only_where_the_deployment_can_call_back()
     received: list[ReceivedCall] = []
     widgets: list[JSON] = []
 

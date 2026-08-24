@@ -62,10 +62,20 @@ class ProxyUnavailable(AssertionError):
 
 
 def wanted_mode() -> str:
-    mode = os.getenv(MODE_SETTING, "off").strip().lower()
-    if mode not in {"off", "record", "replay"}:
+    """Which lane this run is: `fake` unless told otherwise.
+
+    `fake` is the default because the fast lane needs somebody to answer for
+    Telegram and for the connector provider, and the proxy is now who does.
+    Before, the suite ran servers on loopback and pointed the product at them —
+    which only worked with the SSRF guard turned off for every scenario.
+
+    `off` stays available and means exactly what it says: no proxy, so the
+    scenarios that need a third party have nothing to talk to.
+    """
+    mode = os.getenv(MODE_SETTING, "fake").strip().lower()
+    if mode not in {"off", "fake", "record", "replay"}:
         raise ProxyUnavailable(
-            f"{MODE_SETTING}={mode!r} is not one of off, record, replay"
+            f"{MODE_SETTING}={mode!r} is not one of off, fake, record, replay"
         )
     return mode
 
@@ -162,11 +172,61 @@ class Egress:
             # Postgres, Redis and SuperTokens are reached by name on the local
             # network and speak no TLS here; everything else is a third party
             # and belongs in the recording.
+            #
+            # Everything else still *reaches* the proxy, but only the faked
+            # hosts are intercepted — see `--allow-hosts` in `start`. The rest
+            # is tunnelled through untouched, so the model's own certificate
+            # and its streaming response are exactly what they would be
+            # without any of this.
             "NO_PROXY": "localhost,127.0.0.1,::1",
             "no_proxy": "localhost,127.0.0.1,::1",
             "SSL_CERT_FILE": self.ca_bundle,
             "REQUESTS_CA_BUNDLE": self.ca_bundle,
         }
+
+
+def _trusted_bundle(mode: str, confdir: Path) -> str:
+    """What the product is told to trust, which differs by lane on purpose.
+
+    In `replay`, the proxy's own certificate and nothing else. That is a safety
+    property, not an oversight: a replay run must not be able to reach the real
+    internet, so a client that bypasses the proxy fails on the certificate
+    rather than quietly succeeding and passing for the wrong reason.
+
+    In `fake` and `record`, the public roots are added. The fast lane still has
+    to reach the model — which is not something this suite stands in for — and
+    that is a real host with a real certificate. Without the roots it fails with
+    `CERTIFICATE_VERIFY_FAILED`, which reaches the harness as a provider error
+    and reads exactly like the model being down.
+    """
+    proxy_ca = confdir / "mitmproxy-ca-cert.pem"
+    if mode == "replay":
+        return str(proxy_ca)
+    import certifi
+
+    combined = confdir / "trusted.pem"
+    combined.write_text(
+        proxy_ca.read_text(encoding="utf-8")
+        + "\n"
+        + Path(certifi.where()).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return str(combined)
+
+
+#: The only hosts this proxy is allowed to intercept. Everything else is
+#: tunnelled through it without being decrypted, so the product's other traffic
+#: — the model above all — behaves exactly as it would with no proxy at all.
+#:
+#: An allowlist, and at the proxy rather than in `NO_PROXY`, for two reasons.
+#: "Intercept everything, exclude what breaks" is a denylist that has to be
+#: right about every host the product will ever talk to, and it is wrong by
+#: default: it silently intercepted the model, whose certificate then failed to
+#: verify and surfaced as a provider error that read exactly like the model
+#: being down. And `NO_PROXY` cannot express an allowlist — httpx ignores the
+#: `!host` negation other tools accept, so `*,!api.telegram.org` sends
+#: everything direct, including the hosts meant to be caught.
+FAKED_HOSTS = ("api.telegram.org", "provider.scenarios.example")
 
 
 def _free_port() -> int:
@@ -220,15 +280,26 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
         f"confdir={confdir}",
         "--set",
         f"control_port={control}",
+        # Lazily, or mitmproxy opens the upstream connection before the request
+        # hook runs — to copy the real server's TLS certificate — and a host
+        # that does not resolve fails there, before anything can redirect it.
+        "--set",
+        "connection_strategy=lazy",
+        # Intercept only what this suite stands in for. Everything else is a
+        # blind tunnel: no certificate substitution, no buffering, no change in
+        # behaviour for traffic that has nothing to do with these tests.
+        *[arg for host in FAKED_HOSTS for arg in ("--allow-hosts", host)],
         # Bodies are deliberately *not* streamed. mitmproxy streams a response
         # straight through without keeping it, so a recording made with
         # streaming on replays as "200 OK (content missing)" — which is a
         # response, and passes a status assertion, and contains nothing. That
         # cost an afternoon; leaving the default alone is the fix.
     ]
-    if mode == "record":
+    if mode == "fake":
+        settings += ["--set", "serve_fakes=true"]
+    elif mode == "record":
         settings += ["-w", str(recording)]
-    else:
+    elif mode == "replay":
         settings += [
             "--set",
             f"server_replay={recording}",
@@ -270,6 +341,9 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
         _confdir=confdir,
     )
     _wait_for(egress, log)
+    # After the wait, because mitmproxy writes its CA on first start and there
+    # is nothing to combine until it exists.
+    egress.ca_bundle = _trusted_bundle(mode, confdir)
     return egress
 
 

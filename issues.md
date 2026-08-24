@@ -95,6 +95,94 @@ documents to notice; four were enough.
 
 ## SURF — surfaces and notifications
 
+### DEV-SURF-003 — Slack's api_base_url is only half guarded, because the client is synchronous
+**Violates:** *(no promise — this is the SSRF boundary, which the specification
+describes nowhere and every other surface now holds.)*
+**Severity:** medium
+**Where:** [`slack/client.py`](lemma-backend/app/modules/agent_surfaces/platforms/slack/client.py),
+`slack_base_url` / `build_slack_client`
+
+**Required:** A surface's `api_base_url` is tenant-supplied, so it is checked
+before a credential is sent to it — the same check every other platform makes
+through `assert_safe_api_base` → `assert_safe_url`, which resolves the host and
+refuses anything that lands in private space.
+
+**Actual:** Slack gets a literal-address check only. `slack_base_url` refuses a
+base URL *written as* loopback, RFC1918, link-local, reserved or multicast —
+honouring the same self-hosting hatch as every other surface, except for
+link-local, which is refused either way because the metadata service is never a
+Slack endpoint. Anything that is not a literal address is returned unexamined. A **hostname that resolves into private
+space** — the `internal.attacker.example → 10.0.0.5` case the URL guard exists
+for — passes.
+
+The reason is mechanical rather than principled. `assert_safe_url` is `async`
+because it resolves DNS; `build_slack_client` is synchronous and is reached
+from **30 call sites across five files** (`service.py`, `home.py`, `client.py`,
+`channel_reads.py`, `streaming.py`). Making it async is a real change through
+all of them, and doing it hurriedly alongside this one was the worse option.
+
+**Why it matters:** the highest-value target is already closed — the cloud
+metadata service has no hostname anybody uses, so it is reached as the literal
+`169.254.169.254`, which needs no DNS to recognise. What remains open is an
+attacker-controlled *name* pointed at internal infrastructure, which is a real
+SSRF and the reason the resolving guard exists.
+
+**Fix:** make `build_slack_client` async and call `assert_safe_api_base`, or
+resolve once where the account's credentials are read and pass a vetted base
+URL down. The literal check stays either way: it costs nothing and it is the
+one part that works without a resolver.
+
+**Found by:** review of the change that guarded the other five surfaces, then
+confirmed against the code — `slack/client.py:19` reads `api_base_url`
+identically to Gmail, Outlook and Resend, which are guarded.
+
+### DEV-SURF-002 — A plain answer on Telegram arrives as a message clients render as empty
+**Violates:** `PS-SURF-020`
+**Severity:** high
+**Where:** [`message_experience.py:29-44`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L29),
+fallback condition at
+[`:211`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L211)
+
+**Required:** The answer comes back where the question was asked. A person who
+messages an agent on Telegram reads its reply.
+
+**Actual:** The reply is sent with `sendRichMessage`, carrying the text as
+`rich_message.markdown`. Real Telegram answers that **`HTTP 200 {"ok":true}`**
+with a `message_id` — and the message it creates has no readable text. Read back
+over MTProto it is `text='' media=False`. The same content sent with
+`sendMessage` reads back correctly, so the difference is the method, not the
+client:
+
+```
+sendMessage      -> ok=True   read back: 'PLAIN-probe'
+sendRichMessage  -> ok=True   read back: ''            <- nothing to read
+```
+
+There is a fallback to `sendMessage`, and it cannot run. `can_fallback_from_rich_message`
+requires `status_code in {400, 404}`; the call succeeds, so nothing raises and
+the fallback is never reached.
+
+**Why it matters:** it is the whole of the promise for anybody on Telegram. An
+agent that answers correctly, promptly, and in good faith says nothing a person
+can see. Buttons are unaffected — `reply_markup` is ordinary — which is why the
+ask-a-question and approval scenarios pass while the two about plain text do
+not, and why this can look like a formatting quirk rather than silence.
+
+**How it was hidden:** the loopback stand-in answered `sendRichMessage` and
+echoed the text back in its recorded call, so every fast-lane scenario asserting
+"the agent replied" passed. This is the drift a hand-written fake cannot report,
+and it surfaced within a day of the suite driving the real platform.
+
+**Fix:** unknown at the API level — whether `sendRichMessage` is a real Bot API
+method that needs different parameters, or one Telegram accepts and discards,
+has to be established first. Two things are certain regardless: the fallback
+cannot be conditioned on an exception that never arrives, and the reply should
+be verified as readable rather than assumed from `ok:true`.
+
+**Found by:** `journeys/live/test_telegram_person.py`, a real account messaging
+the deployment's own bot. Both scenarios are `xfail(strict=True)`, so they turn
+green — and fail the build — the moment this is fixed.
+
 ### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
 **Violates:** *(no promise, on the evidence — see below.)*
 **Severity:** medium

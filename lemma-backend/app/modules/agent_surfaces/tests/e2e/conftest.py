@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import os
+
 import pytest
 import pytest_asyncio
 from fastapi import status
@@ -58,6 +60,34 @@ def public_surface_api_url(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
+
+
+# Set before anything imports settings, so every reader sees it — including the
+# worker, which serves these tests from its own task and picked up an attribute
+# patched onto one Settings instance too late to matter. The fixture below says
+# why this suite is entitled to it.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
+
+
+@pytest.fixture(autouse=True)
+def reachable_fake_providers(monkeypatch):
+    """Model a self-hosted deployment, because the fakes are on loopback.
+
+    Every surface here points `api_base_url` at a fake server on 127.0.0.1, and
+    that address is now checked before the client dials it — an unguarded
+    `api_base_url` is a straight path from a stored credential to the cloud
+    metadata service, so it is validated at the point of use like any other
+    tenant-supplied URL.
+
+    Production refuses loopback, correctly. Self-hosting is the supported way
+    to say "my network is the target", which is exactly the situation these
+    tests are in. The refusal itself is asserted in
+    `agent_surfaces/tests/unit/test_api_base_is_guarded.py`, including that the
+    metadata service stays refused even with this open.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
 
 
 @pytest.fixture(autouse=True)

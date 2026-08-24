@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_telegram
+from harness.telegram_view import TelegramView
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -14,31 +15,26 @@ pytestmark = [
 
 
 @pytest.fixture
-async def connected(world, run):
-    fake = start_fake_telegram()
-    try:
-        alice = await world.person("daniel")
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("pod"))
-        agent = await alice.creates_an_agent(in_pod=pod)
-        auth_config = await alice.installs_connector(
-            "telegram", in_organization=organization
-        )
-        account = await alice.connects_account(
-            in_organization=organization,
-            auth_config=auth_config,
-            credentials={"bot_token": "424242:managed", "api_base_url": fake.api_base},
-        )
-        surface = await alice.connects_a_surface(
-            in_pod=pod,
-            platform="TELEGRAM",
-            named="tg",
-            agent=agent["name"],
-            account=account,
-        )
-        yield alice, pod, agent, surface, fake
-    finally:
-        fake.stop()
+async def connected(world, run, egress):
+    fake = TelegramView(egress)
+    alice = await world.person("daniel")
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
+    auth_config = await alice.installs_connector("telegram", in_organization=organization)
+    account = await alice.connects_account(
+        in_organization=organization,
+        auth_config=auth_config,
+        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
+    )
+    surface = await alice.connects_a_surface(
+        in_pod=pod,
+        platform="TELEGRAM",
+        named="tg",
+        agent=agent["name"],
+        account=account,
+    )
+    yield alice, pod, agent, surface, fake
 
 
 @scenario("A person reads a connected surface and how far its setup got")

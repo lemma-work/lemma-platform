@@ -224,8 +224,20 @@ class TestSoftwareActingForSomeone:
         agent = await alice.creates_an_agent(in_pod=pod)
 
         grants = await alice.grants_of_agent(agent["name"], in_pod=pod)
-        assert grants.get("grants") == [], (
-            f"a new agent should start with no resource grants: {grants}"
+        # Nothing that belongs to anybody else. An agent is now made with its
+        # own memory folder, which is its scratch space rather than access to
+        # somebody's work — the promise is that it never exceeds the person it
+        # acts for, and a folder created with it reaches nothing they cannot.
+        # Asserting on an empty list instead was a count, and #476 changed the
+        # count without changing what the promise says.
+        held = [
+            grant
+            for grant in grants.get("grants") or []
+            if not str(grant.get("resource_name", "")).startswith("/memory")
+        ]
+        assert held == [], (
+            f"a new agent should start with no access to anything of anybody "
+            f"else's: {held}"
         )
 
     @scenario("A function is created with no standing access of its own")
