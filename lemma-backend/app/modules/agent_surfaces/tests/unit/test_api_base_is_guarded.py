@@ -84,6 +84,12 @@ class TestSlackRefusesAPrivateLiteral:
     literal needs no DNS to recognise.
     """
 
+    @pytest.fixture(autouse=True)
+    def _production(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", False)
+
     @pytest.mark.parametrize(
         "api_base, reason",
         [
@@ -99,6 +105,24 @@ class TestSlackRefusesAPrivateLiteral:
         with pytest.raises(UnsafeApiBaseError) as raised:
             slack_base_url({"api_base_url": api_base})
         assert raised.value.reason == reason
+
+    def test_self_hosting_reaches_its_own_network(self, monkeypatch):
+        """The hatch every other surface honours, honoured here too."""
+        from app.core.config import settings
+        from app.modules.agent_surfaces.platforms.slack.client import slack_base_url
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        assert slack_base_url({"api_base_url": "http://10.0.0.5"})
+
+    def test_the_metadata_service_is_refused_even_when_self_hosting(self, monkeypatch):
+        """Reaching your own subnet is not reaching the instance's credentials."""
+        from app.core.config import settings
+        from app.modules.agent_surfaces.platforms.slack.client import slack_base_url
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        with pytest.raises(UnsafeApiBaseError) as raised:
+            slack_base_url({"api_base_url": "http://169.254.169.254/api"})
+        assert raised.value.reason == "link_local_address"
 
     @pytest.mark.parametrize(
         "api_base",

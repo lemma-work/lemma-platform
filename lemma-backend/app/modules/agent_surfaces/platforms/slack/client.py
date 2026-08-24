@@ -47,6 +47,15 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     """
     if not base_url:
         return base_url
+    # The same escape hatch every other surface honours, through GuardPolicy:
+    # a deployment running Slack against its own network says so, and this must
+    # not be the one check that cannot be opted out of. Link-local stays
+    # refused below regardless — the metadata service is never a Slack endpoint.
+    from app.core.config import settings
+
+    self_hosted = bool(
+        getattr(settings, "connector_allow_private_network_targets", False)
+    )
     host = urlsplit(base_url).hostname or ""
     try:
         address = ipaddress.ip_address(host.strip("[]"))
@@ -54,10 +63,11 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
         return base_url  # a name; only the async guard can judge it
     if (
         address.is_link_local
-        or address.is_loopback
-        or address.is_private
-        or address.is_reserved
         or address.is_multicast
+        or (
+            not self_hosted
+            and (address.is_loopback or address.is_private or address.is_reserved)
+        )
     ):
         raise UnsafeApiBaseError(
             "Refusing to call the Slack API at an address that is not routable "

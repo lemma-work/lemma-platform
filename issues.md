@@ -108,8 +108,10 @@ through `assert_safe_api_base` → `assert_safe_url`, which resolves the host an
 refuses anything that lands in private space.
 
 **Actual:** Slack gets a literal-address check only. `slack_base_url` refuses a
-base URL *written as* loopback, RFC1918, link-local, reserved or multicast, and
-returns anything else unexamined. A **hostname that resolves into private
+base URL *written as* loopback, RFC1918, link-local, reserved or multicast —
+honouring the same self-hosting hatch as every other surface, except for
+link-local, which is refused either way because the metadata service is never a
+Slack endpoint. Anything that is not a literal address is returned unexamined. A **hostname that resolves into private
 space** — the `internal.attacker.example → 10.0.0.5` case the URL guard exists
 for — passes.
 
