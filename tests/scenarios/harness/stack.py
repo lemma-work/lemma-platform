@@ -114,6 +114,19 @@ RESEND_WEBHOOK_SECRET = (
 )
 
 
+def webhook_signing_secret() -> str:
+    """The key a signed inbound email must be signed with, wherever this points.
+
+    The constant above is what a stack the suite boots is configured with, and
+    asserting it against a deployment fails on a correct product for exactly
+    the reason `inbound_email_domain` gives one line down: the deployment has
+    its own, and ours describes a different machine. Signed with the
+    placeholder, a real deployment answers 401 `SURFACE_WEBHOOK_AUTH_FAILED` —
+    a scenario reporting the product broken when the product was right.
+    """
+    return _configured_or("RESEND_WEBHOOK_SECRET", RESEND_WEBHOOK_SECRET)
+
+
 def sandbox_images_present() -> bool:
     """Whether the sandbox images have been built.
 
