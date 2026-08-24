@@ -40,7 +40,13 @@ A_RED_DOT = base64.b64decode(
 )
 
 
-@pytest.mark.xfail(
+#: Anything that asserts on the *words* of a reply fails against real Telegram,
+#: and for one reason: `sendRichMessage` is accepted with `ok:true` and produces
+#: a message carrying no `text` field, so every real client renders it empty.
+#: Strict, so the day that is fixed these turn green and fail the build until
+#: the mark comes off. Buttons are unaffected — `reply_markup` is ordinary —
+#: which is why the native-controls scenarios pass on the same lane.
+UNREADABLE_ON_REAL_TELEGRAM = pytest.mark.xfail(
     telegram_is_live(),
     strict=True,
     reason=(
@@ -51,6 +57,9 @@ A_RED_DOT = base64.b64decode(
         "which is why the forged lane passes this and a person sees nothing."
     ),
 )
+
+
+@UNREADABLE_ON_REAL_TELEGRAM
 @scenario("Somebody messages the agent on a surface and is answered there")
 @proves("PS-SURF-010", "PS-SURF-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
@@ -67,6 +76,7 @@ async def test_a_message_is_answered(reachable):
     )
 
 
+@UNREADABLE_ON_REAL_TELEGRAM
 @scenario("An image sent to the agent is looked at, not just noticed")
 @proves("PS-SURF-011", "PS-AGENT-030")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
