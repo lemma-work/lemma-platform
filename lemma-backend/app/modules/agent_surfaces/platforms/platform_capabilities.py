@@ -18,8 +18,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.modules.agent_surfaces.platforms.attachment_limits import (
+    MediaKind,
     attachment_cap,
+    email_inline_cap,
     inline_cap,
+    media_cap_summary,
 )
 
 
@@ -81,6 +84,15 @@ class PlatformCapabilities:
     # ``ProgressStyle`` — the observer branches on this instead of on three
     # hand-maintained platform sets.
     progress_style: ProgressStyle = ProgressStyle.NONE
+    # Does the progress update land somewhere that holds only one line?
+    #
+    # Telegram's is a ``tg-thinking`` chip, and its HTML collapses newlines the
+    # way a browser does: a five-line checklist arrives as one run-on sentence
+    # with the ✅/⏳/⬜ marks stranded mid-paragraph, dimmed to the point of
+    # looking like glyphs the font is missing. The fix is not per-platform
+    # escaping — the text is already plain — it is sending one line where one
+    # line is what will be shown.
+    progress_is_one_line: bool = False
     # Hours after the person's last inbound message during which free-form
     # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
     # a send is refused unless it is a pre-approved template. None means no
@@ -127,8 +139,26 @@ class PlatformCapabilities:
 
     @property
     def inline_mb_cap(self) -> int:
-        """Effective inline cap in MB: ``min(hard ceiling, 5 MB soft cap)``."""
-        return inline_cap(self.platform) // (1024 * 1024)
+        """Effective inline cap in MB, as the number to quote to the agent.
+
+        The two surface families measure the file differently, and quoting the
+        wrong one is how the prompt came to promise email attachments the
+        provider would reject: a chat cap is raw bytes bounded by the soft cap,
+        while an email cap is raw bytes whose *base64* form must clear the
+        provider ceiling. On a platform with per-media ceilings this is the
+        document number — ``media_cap_summary`` carries the smaller kinds.
+        """
+        effective = (
+            email_inline_cap(self.platform)
+            if self.is_email
+            else inline_cap(self.platform, media_kind=MediaKind.DOCUMENT)
+        )
+        return effective // (1024 * 1024)
+
+    @property
+    def media_cap_note(self) -> str | None:
+        """Phrase for kinds capped below ``inline_mb_cap``, or None if uniform."""
+        return None if self.is_email else media_cap_summary(self.platform)
 
 
 _SLACK_FORMATTING = (
@@ -177,7 +207,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         platform="TEAMS",
         display_name="Microsoft Teams",
         supports_native_choices=True,
-        supports_native_files=True,
+        # False, and not an oversight: `TeamsSurfaceAdapter` never overrides
+        # `send_file_attachment`, so the base adapter's stub refuses and every
+        # Teams file — any size — is delivered as a link. Claiming True here told
+        # the agent its files would arrive as attachments, which they never do.
+        # Flip this back the day an outbound Teams file upload exists.
+        supports_native_files=False,
         is_email=False,
         is_channel_capable=True,
         markdown_mode="limited_markdown",
@@ -220,6 +255,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,
         progress_style=ProgressStyle.EDIT,
+        # A DM's live update is a thinking chip — one line, newlines collapsed.
+        # A group's is a plain edited message, which would hold a checklist, but
+        # a platform showing two different shapes of the same update is worth
+        # less than either shape: the DM is where nearly every run is watched,
+        # and one line is what a DM can show.
+        progress_is_one_line=True,
     ),
     "GMAIL": PlatformCapabilities(
         platform="GMAIL",
@@ -330,12 +371,33 @@ def platform_agent_guidance(platform: str | None) -> str:
         # Chat surfaces: files always, forms only where native.
         delivery: list[str] = ["## Delivering things"]
         if caps.supports_native_files:
+            media_note = (
+                f" {caps.display_name} is stricter about some kinds: "
+                f"{caps.media_cap_note} — over that they become a link too."
+                if caps.media_cap_note
+                else ""
+            )
             delivery.append(
-                "- Files: call `display_resource` with `type=FILE, path=<workspace "
-                "path>`. The surface delivers the file to the user automatically — "
-                "never paste raw bytes or a link. Files up to "
-                f"{caps.inline_mb_cap} MB attach natively; larger files are sent "
-                "as a download link automatically."
+                "- Files: call `display_resource` with `type=FILE, path=<pod file "
+                "path>` — a pod path such as `/me/reports/q3.pdf`, never a "
+                "sandbox/workspace path. The surface delivers the file to the user "
+                "automatically — never paste raw bytes or a link. Files up to "
+                f"{caps.inline_mb_cap} MB arrive as a real attachment in the chat."
+                f"{media_note} A file over the limit cannot be attached, so it is "
+                "sent as a link into Lemma instead — and that link only opens for "
+                "someone who can sign in to this pod. If the person may not have a "
+                "Lemma account, get the file under the limit (compress it, split "
+                "it, or send the part that matters) so it arrives as an attachment."
+            )
+        else:
+            delivery.append(
+                "- Files: call `display_resource` with `type=FILE, path=<pod file "
+                "path>` — a pod path such as `/me/reports/q3.pdf`, never a "
+                f"sandbox/workspace path. {caps.display_name} cannot receive a file "
+                "attachment from Lemma, so the file is always delivered as a link "
+                "into Lemma, which only opens for someone who can sign in to this "
+                "pod. If the person may not have a Lemma account, put what the file "
+                "would have told them in your reply as well."
             )
         if caps.supports_native_choices:
             delivery.append(
