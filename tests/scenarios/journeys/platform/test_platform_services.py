@@ -51,7 +51,8 @@ async def test_an_icon_round_trips(world, person):
 @covers("agent.tool.report_feedback")
 async def test_feedback_can_be_reported(person):
     response = await person.api.call(
-        "POST", "/tools/report-feedback",
+        "POST",
+        "/tools/report-feedback",
         json={
             "subject": "Table create rejects a valid column",
             "category": "BUG",
@@ -176,7 +177,8 @@ async def test_promoting_a_missing_result_is_refused(person):
     )
 
     response = await person.api.call(
-        "POST", f"/pods/{pod['id']}/apps/from-widget",
+        "POST",
+        f"/pods/{pod['id']}/apps/from-widget",
         json={
             "name": "promoted_app",
             "conversation_id": str(conversation["id"]),
@@ -189,13 +191,17 @@ async def test_promoting_a_missing_result_is_refused(person):
 
 @scenario("An unpaired machine cannot complete a pairing or publish harnesses")
 @proves("PS-AGENT-040")
-@covers("agent.host.pairing.complete", "agent.host.harnesses.publish",
-        "agent.host.self_revoke")
+@covers(
+    "agent.host.pairing.complete",
+    "agent.host.harnesses.publish",
+    "agent.host.self_revoke",
+)
 async def test_an_unpaired_host_cannot_claim_anything(world):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     completed = await anonymous.api.call(
-        "POST", "/agent-host/pairings:complete",
+        "POST",
+        "/agent-host/pairings:complete",
         json={"pairing_code": "not-a-code", "display_name": "Someone's laptop"},
     )
     published = await anonymous.api.call(

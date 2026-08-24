@@ -44,7 +44,8 @@ class CreateAgentRequest:
         permissions (AgentPermissionsReplaceRequest | None | Unset): Optional resource grants to apply to the new agent
             in the same request. Equivalent to calling the permissions-replace endpoint right after create — grants are
             keyed by resource_name.
-        toolsets (list[AgentToolset] | Unset):
+        toolsets (list[AgentToolset] | Unset): Toolsets the agent declares. Omit the field to start with web search and
+            memory; pass an explicit empty list for none.
         visibility (ResourceVisibility | Unset):
     """
 

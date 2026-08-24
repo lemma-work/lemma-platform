@@ -147,6 +147,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.fallback_reply_service.agent_surface_ignored_duplicate_unrouted.observed': EventSpec('debug', frozenset({'external_channel_id'})),
     'agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed': EventSpec('debug', frozenset({'reply_kind'})),
     'agent_surfaces.file_ingest.attachment_download_failed.degraded': EventSpec('warning', frozenset({'platform'})),
+    'agent_surfaces.file_ingest.attachment_name_unavailable.degraded': EventSpec('warning', frozenset({'attempts', 'platform'})),
     'agent_surfaces.file_ingest.attachment_over_cap': EventSpec('info', frozenset({'cap_bytes', 'platform'})),
     'agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded': EventSpec('warning', frozenset({'cap_bytes', 'platform', 'size_bytes'})),
     'agent_surfaces.file_ingest.attachment_store_failed.degraded': EventSpec('warning', frozenset({'platform'})),

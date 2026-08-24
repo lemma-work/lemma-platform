@@ -82,7 +82,6 @@ async def never(
         value = await probe()
         if becomes(value):
             raise AssertionError(
-                f"{describe} was not supposed to happen, but it did.\n"
-                f"  saw: {value!r}"
+                f"{describe} was not supposed to happen, but it did.\n  saw: {value!r}"
             )
         await asyncio.sleep(interval)

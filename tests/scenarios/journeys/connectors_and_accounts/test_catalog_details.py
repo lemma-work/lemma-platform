@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from harness import capability, covers, journey, proves, scenario
+from harness.drivers.api import items_of
+from harness.run import a_name_for
 
 pytestmark = [
     journey("Connectors and accounts"),
@@ -34,12 +38,11 @@ async def test_operations_can_be_refreshed(world, provider):
     organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
-        server_url=provider.base_url, spec_url=provider.spec_url,
+        server_url=provider.base_url,
+        spec_url=provider.spec_url,
     )
 
-    response = await alice.refreshes_operations(
-        auth_config, in_organization=organization
-    )
+    response = await alice.refreshes_operations(auth_config, in_organization=organization)
 
     assert response.status_code < 400, response.text[:300]
     assert await alice.operations_of(auth_config, in_organization=organization)
@@ -53,12 +56,14 @@ async def test_operations_read_in_bulk(world, provider):
     organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
-        server_url=provider.base_url, spec_url=provider.spec_url,
+        server_url=provider.base_url,
+        spec_url=provider.spec_url,
     )
 
     response = await alice.operation_details(
         ["create_a_widget", "list_widgets"],
-        auth_config=auth_config, in_organization=organization,
+        auth_config=auth_config,
+        in_organization=organization,
     )
 
     assert response.status_code < 400, response.text[:300]
@@ -72,7 +77,8 @@ async def test_a_trigger_reads_back(world, provider):
     organization = alice.organization
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
-        server_url=provider.base_url, spec_url=provider.spec_url,
+        server_url=provider.base_url,
+        spec_url=provider.spec_url,
     )
 
     triggers = await alice.triggers_of(auth_config, in_organization=organization)
@@ -101,12 +107,41 @@ async def test_an_oauth_connector_needs_credentials(world):
     alice = await world.person("priya")
     organization = alice.organization
 
+    # Asked of the catalogue rather than assumed. This named `slack`, which is
+    # unconfigured on a stack this suite boots and configured on any deployment
+    # that actually uses Slack — so the scenario failed against every real
+    # deployment while the product was right. The catalogue says which
+    # connectors have credentials behind them; the promise is about one that
+    # does not, so the scenario has to find one.
+    catalogue = items_of(await alice.api.get("/connectors"))
+    unconfigured = [
+        connector["id"]
+        for connector in catalogue
+        for kind in connector.get("kinds") or []
+        # The system default is the only thing that decides it: this installs
+        # without naming a config source, so the product looks for a system
+        # default and says so when there is none. Whether the connector *could*
+        # take org-custom credentials is what the refusal suggests, not what
+        # provokes it.
+        if kind.get("auth_scheme") == "OAUTH2"
+        and not kind.get("system_default_available")
+    ]
+    if not unconfigured:
+        pytest.skip(
+            "every OAuth connector in this catalogue has credentials behind "
+            "it, so there is no way to ask for one that has none"
+        )
+
     response = await alice.api.call(
-        "POST", f"/organizations/{organization['id']}/connectors/auth-configs",
-        json={"connector_id": "slack", "name": "slack_no_creds"},
+        "POST",
+        f"/organizations/{organization['id']}/connectors/auth-configs",
+        json={"connector_id": unconfigured[0], "name": a_name_for("no_creds")},
     )
 
-    assert response.status_code >= 400, response.status_code
+    assert response.status_code >= 400, (
+        f"installing {unconfigured[0]!r} answered {response.status_code}, but "
+        f"the catalogue says it has no OAuth credentials behind it"
+    )
     body = response.text.lower()
     assert "oauth" in body and "credential" in body, (
         f"the refusal should name what is missing and what to do instead: "
@@ -124,7 +159,8 @@ async def test_connecting_needs_a_consent_flow(world, provider):
     # anyone to, so asking to start one is a request that cannot be honoured.
     auth_config = await alice.installs_http_connector(
         in_organization=organization,
-        server_url=provider.base_url, spec_url=provider.spec_url,
+        server_url=provider.base_url,
+        spec_url=provider.spec_url,
     )
 
     response = await alice.starts_connecting(
@@ -144,7 +180,8 @@ async def test_an_unknown_callback_is_refused(world):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
-        "GET", "/connectors/connect-requests/oauth/callback",
+        "GET",
+        "/connectors/connect-requests/oauth/callback",
         params={"state": "not-a-state-we-issued", "code": "whatever"},
     )
 

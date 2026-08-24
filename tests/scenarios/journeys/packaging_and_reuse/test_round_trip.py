@@ -28,12 +28,15 @@ async def built_pod(world, run):
     alice = await world.person("daniel")
     pod = await alice.creates_a_pod(named=run.name("source-pod"))
     table = await alice.creates_a_table(
-        in_pod=pod, named="tickets", columns=[column("title"), column("rank", "INTEGER")],
+        in_pod=pod,
+        named="tickets",
+        columns=[column("title"), column("rank", "INTEGER")],
         shared=True,
     )
     await alice.adds_records(
         [{"title": "first", "rank": 1}, {"title": "second", "rank": 2}],
-        to_table=table["name"], in_pod=pod,
+        to_table=table["name"],
+        in_pod=pod,
     )
     await alice.creates_a_function(in_pod=pod, named="bump")
     return alice, pod, table["name"]

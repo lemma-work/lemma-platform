@@ -1035,7 +1035,7 @@ async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = _conversation("TELEGRAM")
+    conversation = _conversation("TEAMS")
 
     await observer.on_event(
         _plan_return("- [x] Pull the Q3 numbers", "- [ ] Draft the summary"),
@@ -1048,6 +1048,28 @@ async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
     assert "Working on it — 1 of 2 steps done." in body
     assert "✅ Pull the Q3 numbers" in body
     assert "⏳ Draft the summary" in body
+
+
+async def test_telegram_gets_the_plan_as_one_line_because_its_chip_holds_one():
+    """A checklist in a ``tg-thinking`` chip is a run-on sentence.
+
+    The chip collapses newlines, so five lines arrived as one paragraph with the
+    marks stranded between the words — and the tool name trailing it said the
+    same thing as the step, worse.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+
+    await observer.on_event(
+        _plan_return("- [x] Write the scene", "- [ ] Render the video"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    body = service.progress[-1]["progress_text"]
+    assert body == "Working on it — 1 of 2 steps done · Render the video"
+    assert "\n" not in body
 
 
 async def test_a_plan_that_has_not_moved_does_not_spend_an_update():
@@ -1189,3 +1211,26 @@ async def test_email_gets_no_indicator_from_the_observer():
 
     assert service.calls == []
     assert service.streamed == []
+
+
+async def test_a_one_line_surface_folds_a_multi_line_tool_comment():
+    """A tool's comment is free text, and Telegram's chip eats the newlines.
+
+    Two lines run together into one word without them, so the fold happens here
+    rather than in the surface that cannot show it.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+    event = AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_call(
+            tool_name="execute_python",
+            tool_call_id="tool-2",
+            tool_args={"request": {"comment": "Rendering the scene\nat 1080p"}},
+        ),
+    )
+
+    await observer.on_event(event, conversation, SimpleNamespace())
+
+    assert service.progress[-1]["progress_text"] == "Rendering the scene at 1080p"

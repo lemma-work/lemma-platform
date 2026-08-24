@@ -17,7 +17,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     GmailSurfaceEventMetadata,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import inline_cap
+from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
 from app.modules.agent_surfaces.platforms.common import text_or_none
 from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
@@ -194,7 +194,7 @@ class GmailPlatformService:
             attachments, links = await resolve_outbound_email_attachments(
                 ctx.deps,
                 request.attachment_paths,
-                inline_cap_bytes=inline_cap("GMAIL"),
+                inline_cap_bytes=email_inline_cap("GMAIL"),
             )
             return append_attachment_links(request.content, links), attachments, None
 

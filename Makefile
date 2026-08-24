@@ -29,7 +29,9 @@ SHELL := /bin/bash
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
+        scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
@@ -330,6 +332,8 @@ help:
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
 	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
 	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
+	@echo "    SCENARIOS_STANDING_STACK=1 make scenarios   keep the database between runs"
+	@echo "    make scenarios-standing-down   and remove it again"
 	@echo "    make scenarios-images   build the sandbox images the lane below needs"
 	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
 	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
@@ -1253,6 +1257,30 @@ scenarios-live:
 		SCENARIOS_CONNECTOR_CATALOGUE=all SCENARIOS_TELEGRAM_POLLING=true \
 		uv run pytest -q -m live --timeout=900 journeys/live
 
+# ── Real providers, recorded once ─────────────────────────────────────────────
+# Everything Lemma sends outward goes through one proxy. `record` drives the
+# real Telegram, Google, GitHub and Slack with real credentials and writes what
+# happened to tests/scenarios/cassettes/; `replay` serves that back and refuses
+# anything it has not seen, so a run cannot quietly reach the internet.
+#
+# The recordings are committed and reviewed like code: a diff in one is a third
+# party changing its API, which is the signal a hand-written fake could never
+# give. See tests/scenarios/harness/egress.py.
+#
+# `CASSETTE` names the recording — one per journey keeps the diffs small.
+CASSETTE ?= all
+
+scenarios-record:
+	@echo "→ Recording against the real providers…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=record SCENARIOS_CASSETTE="$(CASSETTE)" \
+		SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
+		uv run pytest -q --timeout=900 $(ARGS)
+
+scenarios-replay:
+	@echo "→ Replaying $(CASSETTE)…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=replay SCENARIOS_CASSETTE="$(CASSETTE)" \
+		uv run pytest -q $(ARGS)
+
 # ── The standing tenant ───────────────────────────────────────────────────────
 # The suite runs as a fixed cast of colleagues at Vantage Freight who sign *in*
 # rather than up — which is what lets it run against a deployment whose
@@ -1292,6 +1320,23 @@ scenarios-deployment:
 scenarios-guards:
 	@echo "→ Scenario suite guards…"
 	@cd $(SCENARIOS_DIR) && uv run pytest journeys/test_harness_contract.py -q
+
+# Infrastructure that stands between runs, so a connected account survives.
+#
+# GitHub, Slack and Gmail accounts exist only after a person consented in a
+# browser, and the product has no way to store one without that. A throwaway
+# database therefore discards the one thing the suite cannot recreate for
+# itself — so every re-run asked somebody to click through OAuth again.
+#
+# Opt-in: `SCENARIOS_STANDING_STACK=1 make scenarios`. Anything that would be
+# rude to leave behind is removed by the target below.
+scenarios-standing-down:
+	@echo "→ Removing the standing scenario infrastructure…"
+	@docker rm -f lemma-scenarios-postgres lemma-scenarios-redis \
+		lemma-scenarios-supertokens >/dev/null 2>&1 || true
+	@docker volume rm lemma-scenarios-postgres-data >/dev/null 2>&1 || true
+	@docker network rm lemma-scenarios >/dev/null 2>&1 || true
+	@echo "  gone — the tenant and every connected account with it."
 
 # What the scenario suite actually executes in the backend. Instruments the
 # uvicorn and worker subprocesses, so this measures the product being driven
@@ -1425,6 +1470,11 @@ format:
 	@cd $(STACK_DIR) && $(RUFF) format .
 	@echo "→ Pod bundle…"
 	@cd $(BUNDLE_DIR) && $(RUFF) format .
+	@# Scenarios was in `lint` but in neither of these, so `ruff check` held
+	@# while formatting drifted across 51 files. A directory that is checked
+	@# but never formatted is the one that drifts, because nothing says so.
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format .
 
 format-check:
 	@echo "→ Backend…"
@@ -1437,6 +1487,8 @@ format-check:
 	@cd $(STACK_DIR) && $(RUFF) format --check .
 	@echo "→ Pod bundle…"
 	@cd $(BUNDLE_DIR) && $(RUFF) format --check .
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format --check .
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #

@@ -178,9 +178,7 @@ async def test_removing_a_person_stops_their_delegations(world, run):
     )
     await bob.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
-    await alice.removes_member(
-        await alice.membership_of(bob, in_pod=pod), from_pod=pod
-    )
+    await alice.removes_member(await alice.membership_of(bob, in_pod=pod), from_pod=pod)
 
     # Removal itself worked: the pod is closed to him (PS-POD-040).
     await bob.is_refused_pod(pod)
