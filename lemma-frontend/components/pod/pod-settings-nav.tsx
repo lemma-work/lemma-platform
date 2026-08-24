@@ -17,7 +17,7 @@ const ITEMS = [
         segment: 'models',
     },
     {
-        label: 'Access',
+        label: 'Members',
         description: 'Who can enter the pod and what role they hold.',
         segment: 'members',
     },

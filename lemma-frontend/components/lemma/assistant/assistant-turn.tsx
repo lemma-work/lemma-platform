@@ -114,7 +114,7 @@ const docComponents: Components = {
     <blockquote className={cn("my-2 border-l-2 border-[var(--border-strong)] pl-4 text-[var(--text-secondary)] first:mt-0 last:mb-0", className)} {...stripMarkdownNode(props)} />
   ),
   code: ({ className, ...props }) => (
-    <code className={cn("rounded bg-[var(--surface-2)] px-1 py-0.5 font-mono text-xs text-[var(--text-primary)]", className)} {...stripMarkdownNode(props)} />
+    <code className={cn("lchat-code", className)} {...stripMarkdownNode(props)} />
   ),
   // Same JSON-fence detection as the transcript map, so a payload inside a
   // document still gets the structured block instead of raw text.
