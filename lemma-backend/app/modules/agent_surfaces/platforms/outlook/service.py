@@ -17,7 +17,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     OutlookSurfaceEventMetadata,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import inline_cap
+from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
 from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
     resolve_outbound_email_attachment_urls,
@@ -222,7 +222,7 @@ class OutlookPlatformService:
             inline_files, links = await resolve_outbound_email_attachments(
                 ctx.deps,
                 request.attachment_paths,
-                inline_cap_bytes=inline_cap("OUTLOOK"),
+                inline_cap_bytes=email_inline_cap("OUTLOOK"),
             )
             return (
                 append_attachment_links(request.content, links),

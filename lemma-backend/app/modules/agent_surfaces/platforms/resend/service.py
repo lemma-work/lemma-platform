@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     ResendSurfaceEventMetadata,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import attachment_cap
+from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
 from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
     resolve_outbound_email_attachments,
@@ -279,7 +279,7 @@ class ResendPlatformService:
         attachments, attachment_links = await resolve_outbound_email_attachments(
             ctx.deps,
             request.attachment_paths,
-            inline_cap_bytes=attachment_cap("RESEND"),
+            inline_cap_bytes=email_inline_cap("RESEND"),
         )
         content = append_attachment_links(request.content, attachment_links)
 
