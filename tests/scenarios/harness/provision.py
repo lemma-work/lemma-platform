@@ -549,6 +549,15 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
         account = await holder.account_for(
             reach.connector, in_organization=holder.organization
         )
+        if account is None and reach.connector == "telegram":
+            # Telegram is the one standing connector that is not OAuth: an
+            # account is a bot token, not a person clicking through a consent
+            # screen. So the thing every other connector has to wait for a
+            # human to do, this can simply do — which is what lets a stack
+            # booted from nothing have a reachable surface, rather than the
+            # live lane skipping everywhere except the one deployment somebody
+            # once set up by hand.
+            account = await _connect_telegram_bot(holder, ledger)
         if account is None:
             ledger.did(
                 f"no {reach.connector} account yet, so surface {reach.name!r} "
@@ -566,6 +575,38 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
             ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
         except Exception as exc:
             ledger.did(f"could not create surface {reach.name!r}: {_one_line(exc)}")
+
+
+async def _connect_telegram_bot(holder: Person, ledger: Ledger) -> JSON | None:
+    """Connect the configured bot as the tenant's standing Telegram account.
+
+    Against the tenant's *own* auth config, not a fresh one: an account belongs
+    to the config it was made under, so connecting it anywhere else would leave
+    it orphaned the moment a run tidied up after itself.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    name = tenant.standing_auth_config_name("telegram")
+    configs = {
+        str(config.get("name")): config
+        for config in await holder.auth_configs_in(holder.organization)
+    }
+    auth_config = configs.get(name)
+    if auth_config is None:
+        ledger.did(f"no {name!r} auth config, so the bot cannot be connected")
+        return None
+    try:
+        account = await holder.connects_account(
+            in_organization=holder.organization,
+            auth_config=auth_config,
+            credentials={"bot_token": token},
+        )
+    except Exception as exc:
+        ledger.did(f"could not connect the Telegram bot: {_one_line(exc)}")
+        return None
+    ledger.did("connected the Telegram bot as the tenant's standing account")
+    return account
 
 
 async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
