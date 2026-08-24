@@ -106,6 +106,12 @@ const figtree = Figtree({
   weight: ["400", "500", "600"],
   subsets: ["latin"],
   variable: "--font-figtree",
+  // Declared at the root because that is where next/font has to live, but only
+  // `.lp-react` ever renders in it. Preloading would make every product route
+  // eagerly fetch a face it never paints, which is 19KB past the font budget.
+  // `display: swap` covers the landing page while it arrives.
+  preload: false,
+  display: "swap",
 });
 
 const documentSans = DM_Sans({
