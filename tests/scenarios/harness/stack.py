@@ -747,8 +747,25 @@ def inbound_email_domain() -> str:
     A stack the suite boots uses the placeholder below. A deployment has its
     own, and asserting the placeholder against it fails on a correct product —
     the address really is on that deployment's domain, just not on ours.
+
+    Three cases, and the middle one was a trap. Targeting a deployment, the
+    domain is that deployment's and the run is told so in the environment.
+    Booting our own stack with real email asked for, the stack is handed the
+    configured domain and this returns the same one.
+
+    Booting our own stack *without* real email, the stack is handed the
+    placeholder — and this used to return whatever `RESEND_INBOUND_DOMAIN` a
+    developer happened to have in their backend `.env`, from the moment
+    `SCENARIOS_USE_DEPLOYMENT_ENV=1` opened that file. The address really was on
+    the placeholder domain, correctly; the assertion was measuring it against a
+    domain nothing had been configured with, and one scenario failed on a
+    working product for every developer whose `.env` names a real one. So this
+    reads from the same place the stack reads, and the two cannot disagree.
     """
-    return _configured_or("RESEND_INBOUND_DOMAIN", RESEND_INBOUND_DOMAIN)
+    told = os.environ.get("RESEND_INBOUND_DOMAIN")
+    if told:
+        return told
+    return _real_email_settings()["RESEND_INBOUND_DOMAIN"]
 
 
 def _real_email_settings() -> dict[str, str]:

@@ -73,9 +73,9 @@ def wanted_mode() -> str:
     scenarios that need a third party have nothing to talk to.
     """
     mode = os.getenv(MODE_SETTING, "fake").strip().lower()
-    if mode not in {"off", "fake", "record", "replay"}:
+    if mode not in {"off", "fake", "watch", "record", "replay"}:
         raise ProxyUnavailable(
-            f"{MODE_SETTING}={mode!r} is not one of off, fake, record, replay"
+            f"{MODE_SETTING}={mode!r} is not one of off, fake, watch, record, replay"
         )
     return mode
 
@@ -297,6 +297,14 @@ def start(mode: str, *, cassette: str, scratch: Path) -> Egress:
     ]
     if mode == "fake":
         settings += ["--set", "serve_fakes=true"]
+    elif mode == "watch":
+        # The provider is still stood in for — nothing real returns 500 on
+        # request or hangs for exactly thirty seconds — while Telegram is left
+        # alone and merely observed. The recording is what makes it more than
+        # "no proxy at all": `setWebhook` and every `sendMessage` still land in
+        # `calls_to("telegram.org")`, so a scenario can still ask what Lemma
+        # said to the platform even though the platform is the real one.
+        settings += ["--set", "serve_fakes=true", "--set", "real_telegram=true"]
     elif mode == "record":
         settings += ["-w", str(recording)]
     elif mode == "replay":

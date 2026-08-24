@@ -95,6 +95,17 @@ class Recorder:
             default=False,
             help="Answer for Telegram and the provider instead of the internet.",
         )
+        loader.add_option(
+            name="real_telegram",
+            typespec=bool,
+            default=False,
+            help=(
+                "Let Telegram traffic reach Telegram, and only watch it. The "
+                "provider is still answered for. This is what lets one run have "
+                "a real account on a real platform AND a third party that "
+                "misbehaves on cue, which no single stand-in can provide."
+            ),
+        )
 
     def running(self) -> None:
         if self._server is not None:
@@ -109,9 +120,14 @@ class Recorder:
             # worker thread rather than mitmproxy's event loop.
             fake_upstreams = _load_fake_upstreams()
 
-            self._telegram = fake_upstreams.start_fake_telegram()
+            if not ctx.options.real_telegram:
+                self._telegram = fake_upstreams.start_fake_telegram()
             self._provider = fake_upstreams.start_fake_provider()
-            ctx.log.info("egress serving the Telegram and provider fakes")
+            ctx.log.info(
+                "egress serving the provider fake"
+                + ("; Telegram goes to Telegram" if ctx.options.real_telegram
+                   else " and the Telegram fake")
+            )
 
     async def request(self, flow: http.HTTPFlow) -> None:
         """Send the two designated hosts to the fakes, and record the real name.

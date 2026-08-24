@@ -9,7 +9,6 @@ no memory of their first. And a file sent to the bot has to reach the agent, or
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_upstreams import FILE_CONTENTS
 from harness.waiting import eventually
 
 pytestmark = [
@@ -18,21 +17,17 @@ pytestmark = [
 ]
 
 
-async def _threads_in(reachable):
-    return await reachable.alice.conversations_in(reachable.pod)
-
-
 @scenario("Two messages in one chat continue one conversation")
 @proves("PS-SURF-013")
 @covers("agent.conversation.list", "agent.conversation.get")
 async def test_a_chat_is_one_conversation(reachable):
-    await reachable.says("first thing", update_id=101)
+    await reachable.says("first thing")
     await reachable.waits_for_a_reply()
 
-    await reachable.says("and a second thing", update_id=102)
+    await reachable.says("and a second thing")
     await reachable.waits_for_a_reply(after=1)
 
-    threads = await _threads_in(reachable)
+    threads = await reachable.conversations()
     assert len(threads) == 1, (
         "a second message in the same chat started a second conversation, so "
         f"the agent answers it having forgotten the first: {threads}"
@@ -51,15 +46,20 @@ async def test_a_chat_is_one_conversation(reachable):
 @proves("PS-SURF-013")
 @covers("agent.conversation.list")
 async def test_a_separate_chat_is_a_separate_conversation(reachable):
-    other_chat = reachable.chat_id + 1
+    # A person has exactly one chat with a bot: they cannot be in two places to
+    # prove the two are kept apart. Forging the second delivery is the only way
+    # to ask this question at all, so this scenario stays in the lane that can.
+    reachable.only_forged("two chats at once is something only a platform has")
 
-    await reachable.says("over here", update_id=111)
+    elsewhere = reachable.chat.in_another_chat()
+
+    await reachable.says("over here")
     await reachable.waits_for_a_reply()
-    await reachable.says("and over there", update_id=112, chat_id=other_chat)
-    await reachable.waits_for_a_reply(chat_id=other_chat)
+    await elsewhere.says("and over there")
+    await elsewhere.waits_for_a_reply()
 
     threads = await eventually(
-        lambda: _threads_in(reachable),
+        reachable.conversations,
         lambda found: len(found) >= 2,
         describe="a second chat to get its own conversation",
         timeout=60.0,
@@ -74,10 +74,10 @@ async def test_a_separate_chat_is_a_separate_conversation(reachable):
 @proves("PS-SURF-013")
 @covers("agent.conversation.get")
 async def test_a_surface_conversation_records_its_origin(reachable):
-    await reachable.says("hello from outside", update_id=121)
+    await reachable.says("hello from outside")
     await reachable.waits_for_a_reply()
 
-    [thread] = await _threads_in(reachable)
+    [thread] = await reachable.conversations()
     opened = await reachable.alice.opens_conversation(thread, in_pod=reachable.pod)
 
     # Somebody reading this in the workspace has to be able to tell it arrived
@@ -114,17 +114,7 @@ def _paths_in(tree) -> set[str]:
 @proves("PS-SURF-014")
 @covers("surface.webhook.handle_platform", "file.tree", "file.download")
 async def test_an_attachment_reaches_the_pod(reachable):
-    await reachable.says(
-        "here is the spreadsheet",
-        update_id=131,
-        document={
-            "file_id": "scenarios-doc-1",
-            "file_unique_id": "scenarios-doc-1",
-            "file_name": "quarter.csv",
-            "mime_type": "text/csv",
-            "file_size": len(FILE_CONTENTS),
-        },
-    )
+    sent = await reachable.sends_file("quarter.csv", caption="here is the spreadsheet")
 
     async def paths():
         return _paths_in(await reachable.alice.file_tree_of(reachable.pod))
@@ -139,7 +129,8 @@ async def test_an_attachment_reaches_the_pod(reachable):
 
     # The bytes, not just the name. A file recorded but never fetched is the
     # failure this is really about: the agent is told there is a spreadsheet and
-    # finds nothing in it.
-    assert (
-        await reachable.alice.downloads(landed, in_pod=reachable.pod) == FILE_CONTENTS
-    ), f"the file at {landed} does not contain what was sent"
+    # finds nothing in it. Compared against what was actually sent, because the
+    # two lanes cannot send the same thing by accident.
+    assert await reachable.alice.downloads(landed, in_pod=reachable.pod) == sent, (
+        f"the file at {landed} does not contain what was sent"
+    )

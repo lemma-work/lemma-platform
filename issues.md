@@ -173,15 +173,54 @@ echoed the text back in its recorded call, so every fast-lane scenario asserting
 "the agent replied" passed. This is the drift a hand-written fake cannot report,
 and it surfaced within a day of the suite driving the real platform.
 
-**Fix:** unknown at the API level — whether `sendRichMessage` is a real Bot API
-method that needs different parameters, or one Telegram accepts and discards,
-has to be established first. Two things are certain regardless: the fallback
-cannot be conditioned on an exception that never arrives, and the reply should
-be verified as readable rather than assumed from `ok:true`.
+**It blocks images too.** `test_an_image_is_understood` cannot pass while this
+stands: the agent is sent a photo, answers about it, and the answer renders
+empty like any other. It first looked like a separate defect — the run errored
+in 8s with a bare "Try again" — but that was a local stack booted without
+`SCENARIOS_USE_DEPLOYMENT_ENV=1`, so every agent run was failing on a 401 from
+a placeholder key. With the deployment's own model configuration in play the run
+completes and the failure moves to exactly this one: a 120s wait for words that
+never render.
 
-**Found by:** `journeys/live/test_telegram_person.py`, a real account messaging
-the deployment's own bot. Both scenarios are `xfail(strict=True)`, so they turn
-green — and fail the build — the moment this is fixed.
+**Worse for errors than for answers.** When a run fails,
+[`progress_observer.py:397-414`](lemma-backend/app/modules/agent_surfaces/services/progress_observer.py#L397)
+sends `self._run_error_text or "I couldn’t finish that request. You can try it
+again."` with `metadata={"retry_action": True}`. That message can never be
+empty — the `or` guarantees a fallback — and it goes out through the same
+`send_chunk`. So the person receives a bare **"Try again" button with no
+sentence above it**: not merely an answer they cannot read, but a failure they
+cannot diagnose, on a control whose only label invites them to repeat it.
+Observed as `Spoken(text='', choices=('Try again',))`.
+
+**Fix:** the open question above is now answered — `sendRichMessage` **is** a
+real Bot API method, and it is accepted rather than discarded. Probed directly
+against `api.telegram.org` with a live bot token:
+
+```
+POST /sendRichMessage {"chat_id":…,"rich_message":{"markdown":"READABLE-PROBE-12345"}}
+-> {"ok":true,"result":{"message_id":252,…,
+      "rich_message":{"blocks":[{"type":"paragraph","text":"READABLE-PROBE-12345"}]}}}
+```
+
+The text is stored, in `rich_message.blocks[].text`. What the result has **no**
+field for is `text` — and `text` is what MTProto carries, so every real client
+(phone, desktop, web) renders the bubble empty. Read back as the person in the
+same chat, `sendMessage` gives `text='probe'` and `sendRichMessage` gives
+`text=''`, no media. The method is not broken; it produces a message shape
+Telegram clients do not display as words.
+
+So the fix is not to fix the parameters. It is either to stop using
+`sendRichMessage` for anything a person must read, or to send the plain text
+alongside it. Two things hold regardless: the fallback cannot be conditioned on
+an exception that never arrives, and a reply should be verified as readable
+rather than assumed from `ok:true`.
+
+**Found by:** a real account messaging a deployment’s own bot —
+[`test_being_answered.py`](tests/scenarios/journeys/surfaces_and_notifications/test_being_answered.py),
+whose `xfail(strict=True)` is conditioned on the lane, so it turns green and
+fails the build the moment this is fixed. Reproduced twice since, independently:
+against dev, and against a locally booted stack driven through real Telegram in
+`SCENARIOS_EGRESS=watch`.
 
 ### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
 **Violates:** *(no promise, on the evidence — see below.)*

@@ -12,7 +12,6 @@ the platform Lemma registered with whether it was told to stop.
 from __future__ import annotations
 
 import pytest
-from uuid import uuid4
 
 
 from harness import capability, covers, journey, proves, scenario
@@ -30,23 +29,10 @@ async def pod_doing_things(world, run, egress):
     """A pod with standing work: a surface listening and a schedule waiting."""
     fake = TelegramView(egress)
     alice = await world.person("priya")
-    organization = alice.organization
     pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
 
-    auth_config = await alice.installs_connector("telegram", in_organization=organization)
-    account = await alice.connects_account(
-        in_organization=organization,
-        auth_config=auth_config,
-        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
-    )
-    await alice.connects_a_surface(
-        in_pod=pod,
-        platform="TELEGRAM",
-        named="tg",
-        agent=agent["name"],
-        account=account,
-    )
+    await alice.becomes_reachable_on_telegram(in_pod=pod, agent=agent["name"])
     # Every quarter hour, which is as often as the product allows.
     schedule = await alice.creates_a_schedule(
         in_pod=pod, agent=agent["name"], config={"cron": "*/15 * * * *"}
