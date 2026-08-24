@@ -12,6 +12,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent_surfaces.services.progress_plan import (
     plan_from_event,
     render_plan,
+    render_plan_line,
 )
 
 
@@ -99,3 +100,34 @@ def test_the_rendering_carries_no_markdown():
     plan = plan_from_event(_return({"todos": ["- [ ] Ship **it**"]}))
     assert plan is not None
     assert render_plan(plan) == "Working on it — 0 of 1 steps done.\n⏳ Ship **it**"
+
+
+def test_a_one_line_surface_gets_the_count_and_the_step_it_is_on():
+    """Telegram's thinking chip collapses newlines, so it gets one line.
+
+    Not a shortened checklist — the marks mean nothing with no lines to
+    distinguish, and what is left is the two things the person is asking: is it
+    moving, and what is it doing.
+    """
+    plan = plan_from_event(
+        _return({"todos": ["- [x] Write the scene", "- [ ] Render", "- [ ] Verify"]})
+    )
+    assert plan is not None
+    line = render_plan_line(plan)
+    assert line == "Working on it — 1 of 3 steps done · Render"
+    assert "\n" not in line
+
+
+def test_a_finished_plan_says_so_on_one_line_too():
+    # No step left to be on, so the headline is the whole line.
+    plan = plan_from_event(_return({"todos": ["- [x] One", "- [x] Two"]}))
+    assert plan is not None
+    assert render_plan_line(plan) == "All 2 steps done — writing up the answer now."
+
+
+def test_the_one_line_step_is_clipped_like_the_checklist_one():
+    plan = plan_from_event(_return({"todos": ["- [ ] " + "x" * 200]}))
+    assert plan is not None
+    line = render_plan_line(plan)
+    assert line.endswith("…")
+    assert len(line) < 130
