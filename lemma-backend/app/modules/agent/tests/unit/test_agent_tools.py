@@ -1928,7 +1928,12 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     )
 
     assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "Structure for state, prose for knowledge" in prompt
+    assert "## Where the work lands" in prompt
+    # Reply discipline is not keyed to a toolset: every agent replies, and the
+    # reply is the one thing the person always sees. It rode in on the surface
+    # fragment for a long time, which meant a run with no surface platform --
+    # the web UI -- was told nothing about length or narration.
+    assert "## Your reply is a chat message" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that
