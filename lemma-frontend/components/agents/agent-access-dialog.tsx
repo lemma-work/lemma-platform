@@ -65,12 +65,25 @@ type AccessCategory = {
     /** Rail label — the one noun this concept goes by everywhere in the product. */
     label: string;
     icon: LemmaIcon;
-    /** What granting this category actually lets the agent do. */
+    /**
+     * What granting this category actually lets the agent do, in one sentence or
+     * two. The header stays the thinnest thing in the dialog on purpose: it is
+     * read once, and the rows under it are what someone came here to switch.
+     */
     blurb: string;
 };
 
 const CATEGORIES: AccessCategory[] = [
-    { id: 'tools', label: 'Tools', icon: Wrench, blurb: 'Built-in abilities every conversation can draw on.' },
+    {
+        id: 'tools',
+        label: 'Tools',
+        icon: Wrench,
+        // The second half used to be its own paragraph listing all five always-on
+        // abilities by name, which cost eight lines of header to answer a question
+        // nobody had yet. What a person actually needs to know here is that the
+        // absent switches are absent on purpose.
+        blurb: 'Built-in abilities every conversation can draw on. Asking a person, task lists, messaging and pause-and-resume are always on; pod data and connected apps come from grants, not from a switch here.',
+    },
     { id: 'connectors', label: 'Connectors', icon: Plug, blurb: 'Outside apps this agent can act in, and whose account it uses.' },
     { id: 'tables', label: 'Tables', icon: TableIcon, blurb: 'Pod data it can read, and what it may change.' },
     { id: 'folders', label: 'Folders', icon: FolderOpen, blurb: 'Documents it can search, read, and cite.' },
@@ -89,8 +102,12 @@ const CATEGORIES: AccessCategory[] = [
  */
 const TOOL_COPY: Record<string, { label: string; description: string; icon: LemmaIcon }> = {
     WORKSPACE_CLI: {
-        label: 'Workspace',
-        description: 'Run shell commands and Python in its own sandbox.',
+        // "Computer", not "Workspace": the thing it gets is a machine it can run
+        // commands on. Said as "its own" because "This computer" elsewhere in
+        // the product means the *person's* paired machine, and these are not
+        // the same computer.
+        label: 'Computer',
+        description: 'Run shell commands and Python on a computer of its own.',
         icon: SquareTerminal,
     },
     POD: {
@@ -114,7 +131,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         icon: MessageCircle,
     },
     SUBAGENTS: {
-        label: 'Delegation',
+        label: 'Sub agents',
         description: 'Spawn other agents and collect what they find.',
         icon: Bot,
     },
@@ -183,17 +200,6 @@ const TOOL_ORDER: string[] = [
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';
-
-/**
- * Memory keeps its facts in pod files and carries no tools of its own to read or
- * write them with. Pod access is no longer a switch — it comes from granting a
- * folder or a table — so the two ways to make memory work are the workspace
- * shell or any data grant. Say so on the row rather than letting someone turn it
- * on and wonder why the agent never remembers.
- */
-function memoryNeedsAFileTool(tool: string, selected: readonly string[], grantedData: boolean) {
-    return tool === 'MEMORY' && !selected.includes('WORKSPACE_CLI') && !grantedData;
-}
 
 function toolCopy(tool: string) {
     return TOOL_COPY[tool] ?? {
@@ -484,9 +490,11 @@ export function AgentAccessDialog({
         setQuery('');
     };
 
-    // The folder tree browses rather than lists, so it brings its own
-    // navigation; a search box above it would filter nothing.
-    const isSearchable = category !== 'folders';
+    // Search is for lists that can outgrow the pane. The folder tree browses
+    // rather than lists, so it brings its own navigation and a box above it would
+    // filter nothing; Tools is a fixed five rows, all of them on screen at once,
+    // where a search box is a control that can only ever hide something.
+    const isSearchable = category !== 'folders' && category !== 'tools';
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -529,13 +537,6 @@ export function AgentAccessDialog({
                     <section className="agent-access-pane" aria-label={activeCategory.label}>
                         <header className="agent-access-pane-header">
                             <p className="agent-access-pane-blurb">{activeCategory.blurb}</p>
-                            {category === 'tools' ? (
-                                <p className="agent-access-pane-blurb">
-                                    Every agent can already ask you a question, request approval, keep a task
-                                    list, message people in this pod, and pause and resume. Reaching pod data
-                                    and connected apps comes from granting them, not from a switch here.
-                                </p>
-                            ) : null}
                             {isSearchable ? (
                                 <div className="agent-access-search">
                                     <Search className="agent-access-search-icon h-4 w-4" />
@@ -556,15 +557,9 @@ export function AgentAccessDialog({
                                 <div className="agent-access-list">
                                     {TOOL_ORDER
                                         .filter((tool) => Object.values(ToolSet).includes(tool as ToolSet))
-                                        .filter((tool) => matches(query, toolCopy(tool).label, toolCopy(tool).description))
                                         .map((tool) => {
                                             const copy = toolCopy(tool);
                                             const Icon = copy.icon;
-                                            const unmet = memoryNeedsAFileTool(
-                                                tool,
-                                                selectedTools,
-                                                selectedFolders.length > 0 || selectedTables.length > 0,
-                                            );
 
                                             return (
                                                 <AccessRow
@@ -572,11 +567,7 @@ export function AgentAccessDialog({
                                                     selected={selectedTools.includes(tool as ToolSet)}
                                                     icon={<Icon className="h-4 w-4" />}
                                                     title={copy.label}
-                                                    description={
-                                                        unmet
-                                                            ? `${copy.description} Add Workspace, or grant it a folder or table — without one of those it has no way to read or write its files.`
-                                                            : copy.description
-                                                    }
+                                                    description={copy.description}
                                                     onToggle={() => toggleTool(tool as ToolSet)}
                                                 />
                                             );
