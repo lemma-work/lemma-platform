@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.connectors.infrastructure.adapters.mcp_executor import (
     McpClientFactory,
     build_mcp_headers,
@@ -26,6 +27,14 @@ async def discover_mcp(
     server_url = (connection_config or {}).get("server_url")
     if not server_url:
         raise ValueError("MCP discovery requires 'server_url' in connection config.")
+    # Guard the target before connecting, as execution does. Discovery runs at
+    # install time behind the install-time guard, but a client_factory or a
+    # later re-discovery could reach here on its own; a bare SSRF hole in a
+    # "just list the tools" path is still an SSRF hole.
+    try:
+        await assert_safe_url(str(server_url))
+    except UnsafeUrlError as exc:
+        raise ValueError(f"Refusing to reach an unsafe MCP target: {exc}") from exc
     headers = build_mcp_headers(connection_config, credentials)
     factory = client_factory or default_mcp_client_factory
 
