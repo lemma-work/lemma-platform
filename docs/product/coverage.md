@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **161** |
 
-Scenario tests declaring a promise: 355.
+Scenario tests declaring a promise: 353.
 
 ## Contract coverage
 
@@ -45,7 +45,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_an_approval_is_offered_to_the_person`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
+| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent`, `test_an_image_is_understood` |
@@ -208,13 +208,13 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_person_is_answered`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
-| `PS-SURF-020` The answer comes back where the question was asked | `gap` | `test_a_real_message_reaches_a_real_person`, `test_a_person_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
-| `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_answered_by_pressing`, `test_an_approval_is_offered_to_the_person`, `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
+| `PS-SURF-020` The answer comes back where the question was asked | `gap` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
+| `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused` |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
