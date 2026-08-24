@@ -17,17 +17,20 @@ from uuid import UUID
 
 
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.factory import create_authorization_data_service
 
 from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.composition.surface_datastore import build_file_service
+from app.modules.agent_surfaces.services.display_resource_content import (
+    apply_file_facts,
+    apply_table_rows,
+    deliver_pod_file,
+    load_pod_file_bytes,
+    resolve_table_preview,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
 )
@@ -220,18 +223,36 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         # A FILE resource is delivered as a native attachment when it fits the
         # platform's cap; otherwise we fall through to the card render plan, whose
         # action is a Lemma app deep link — openable only by a recipient with pod
-        # access, so this fallback is a dead end for an outside contact.
-        if (
-            display_request.type is DisplayResourceType.FILE
-            and display_request.path
-            and await self._try_send_file_attachment(
+        # access, so this fallback is a dead end for an outside contact. Which is
+        # why that card carries the file's kind and size: it is the part a
+        # recipient who cannot follow the link can still act on.
+        if display_request.type is DisplayResourceType.FILE and display_request.path:
+            delivery = await deliver_pod_file(
+                uow=self.uow,
+                conversation_service=self.conversation_service,
                 target=target,
                 conversation_id=conversation_id,
                 path=display_request.path,
-                caption=render_plan.title,
+                # No caption. The file name used to be one, and every platform
+                # already prints it on the bubble — so the single line the
+                # message could carry said what the reader could already see.
+                caption=None,
+                page_preview=True,
             )
-        ):
-            return True
+            if delivery.delivered:
+                return True
+            render_plan = apply_file_facts(render_plan, delivery)
+        elif display_request.type is DisplayResourceType.TABLE:
+            render_plan = apply_table_rows(
+                render_plan,
+                await resolve_table_preview(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                    request=display_request,
+                ),
+            )
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
@@ -455,32 +476,20 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         # The caption is model-authored — strip any reasoning before delivery.
         caption = sanitize_user_visible_text(caption) if caption else caption
-        try:
-            conversation = await self.conversation_service.conversation_repository.get_conversation(
-                conversation_id
-            )
-            if conversation is None:
-                return False
-            auth_ctx = await create_authorization_data_service(
-                self.uow
-            ).build_user_context(
-                user_id=conversation.user_id,
-                pod_id=target.surface.pod_id,
-            )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(self.uow)
-                entity, content = await file_service.download_file_content_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-            finally:
-                reset_current_context(token)
-        except Exception:
+        loaded = await load_pod_file_bytes(
+            uow=self.uow,
+            conversation_service=self.conversation_service,
+            target=target,
+            conversation_id=conversation_id,
+            path=path,
+        )
+        if loaded is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
+        entity, content = loaded
 
         mime = entity.mime_type or "audio/ogg"
         # No connection held for the platform call; see `connection_released`.
@@ -501,80 +510,21 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     conversation_id=conversation_id,
                 )
             # Fallback: native file attachment (audio player), then a link card.
-            if await self._try_send_file_attachment(
+            attached = await deliver_pod_file(
+                uow=self.uow,
+                conversation_service=self.conversation_service,
                 target=target,
                 conversation_id=conversation_id,
                 path=path,
                 caption=caption,
-            ):
+            )
+            if attached.delivered:
                 return True
             return await self.send_display_resource_for_conversation(
                 conversation_id=conversation_id,
                 request=DisplayResourceRequest(
                     type=DisplayResourceType.FILE, path=path
                 ),
-            )
-
-    async def _try_send_file_attachment(
-        self,
-        *,
-        target: SurfaceEgressTarget,
-        conversation_id: UUID,
-        path: str,
-        caption: str | None,
-    ) -> bool:
-        """Attach a pod file's bytes natively when it fits the platform cap.
-
-        Returns True only when the file was delivered natively; on any failure
-        or an oversize file returns False so the caller sends a Lemma app deep
-        link instead — which only opens for a recipient who can sign in to the pod.
-        """
-        platform = target.surface.surface_type.value
-        try:
-            conversation = await self.conversation_service.conversation_repository.get_conversation(
-                conversation_id
-            )
-            if conversation is None:
-                return False
-            auth_ctx = await create_authorization_data_service(
-                self.uow
-            ).build_user_context(
-                user_id=conversation.user_id,
-                pod_id=target.surface.pod_id,
-            )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(self.uow)
-                entity = await file_service.get_file_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-                # The MIME type decides which ceiling applies on a platform that
-                # caps media types separately (WhatsApp: 5 MB an image, 100 MB a
-                # document), so pass it rather than let the largest one stand in.
-                if not fits_inline(
-                    platform, entity.size_bytes, mime_type=entity.mime_type
-                ):
-                    return False
-                _entity, content = await file_service.download_file_content_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-            finally:
-                reset_current_context(token)
-        except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_native_file_attach_skipped.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            return await target.adapter.send_file_attachment(
-                credentials=target.credentials,
-                event=target.event,
-                file_name=entity.name,
-                file_bytes=content,
-                mime_type=entity.mime_type or "application/octet-stream",
-                caption=caption,
             )
 
     async def send_processing_indicator_for_conversation(

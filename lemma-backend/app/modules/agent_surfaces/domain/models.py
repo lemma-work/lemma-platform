@@ -64,6 +64,11 @@ class SurfaceDisplayRenderPlan(BaseModel):
     title: str
     summary: str | None = None
     detail_lines: list[str] = Field(default_factory=list)
+    # Rows of the thing itself, already laid out in fixed-width columns. Kept
+    # apart from ``detail_lines`` because every platform has to wrap it in its
+    # own monospace fence -- proportional text turns aligned columns into
+    # ragged ones, which reads worse than not showing the rows at all.
+    preview_block: str | None = None
     actions: list[SurfaceDisplayAction] = Field(default_factory=list)
     tool_call_id: str | None = None
     request: dict[str, Any] = Field(default_factory=dict)
@@ -77,6 +82,8 @@ class SurfaceDisplayRenderPlan(BaseModel):
         if self.summary:
             lines.append(self.summary)
         lines.extend(line for line in self.detail_lines if line)
+        if self.preview_block:
+            lines.append(self.preview_block)
         action = self.primary_action
         if action:
             lines.append(f"{action.label}: {action.url}")

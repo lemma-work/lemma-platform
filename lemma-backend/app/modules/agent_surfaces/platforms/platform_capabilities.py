@@ -379,8 +379,10 @@ def platform_agent_guidance(platform: str | None) -> str:
             )
             delivery.append(
                 "- Files: call `display_resource` with `type=FILE, path=<pod file "
-                "path>` — a pod path such as `/me/reports/q3.pdf`, never a "
-                "sandbox/workspace path. The surface delivers the file to the user "
+                "path>` — a pod path such as `/me/reports/q3.pdf`. A "
+                "`/workspace/...` path is your sandbox and is rejected: upload it "
+                "with `lemma files upload` first and display the pod path that "
+                "comes back. The surface delivers the file to the user "
                 "automatically — never paste raw bytes or a link. Files up to "
                 f"{caps.inline_mb_cap} MB arrive as a real attachment in the chat."
                 f"{media_note} A file over the limit cannot be attached, so it is "
@@ -388,6 +390,14 @@ def platform_agent_guidance(platform: str | None) -> str:
                 "someone who can sign in to this pod. If the person may not have a "
                 "Lemma account, get the file under the limit (compress it, split "
                 "it, or send the part that matters) so it arrives as an attachment."
+            )
+            delivery.append(
+                "- Pictures: an image file arrives as a real picture in the chat, "
+                "and a PDF arrives with its first page shown above it. This is the "
+                f"only way anything visual can be seen on {caps.display_name} — a "
+                "WIDGET is a link here, not a rendering. So when the answer is a "
+                "chart, a diagram, a map or a layout, draw it, save it as a PNG in "
+                "pod files, and show that file."
             )
         else:
             delivery.append(
