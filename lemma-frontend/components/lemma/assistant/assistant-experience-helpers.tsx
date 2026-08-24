@@ -203,7 +203,7 @@ export function markdownComponentsForMessage(isUserMessage: boolean): Components
       <blockquote className={cn("my-3 border-l-2 pl-4 first:mt-0 last:mb-0", borderClassName, softTextClassName, className)} {...stripMarkdownNode(props)} />
     ),
     code: ({ className, ...props }) => (
-      <code className={cn("rounded px-1 py-0.5 font-mono text-sm", codeClassName, className)} {...stripMarkdownNode(props)} />
+      <code className={cn("lchat-code", className)} {...stripMarkdownNode(props)} />
     ),
     // Fenced blocks tagged json — and untagged fences that turn out to be JSON —
     // get the dedicated block. The raw source only survives on the hast node, so
