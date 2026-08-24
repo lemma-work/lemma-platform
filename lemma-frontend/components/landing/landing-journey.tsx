@@ -31,10 +31,10 @@ function BuildMock() {
           <i />
           <i />
           <i />
-          <small>support-desk</small>
+          <small>support-ops</small>
         </header>
         <p>
-          <b>$</b> lemma pod import ./support-desk
+          <b>$</b> lemma pod import ./support-ops
         </p>
         {[
           ["tables", "tickets, customers, refunds"],

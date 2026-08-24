@@ -14,8 +14,8 @@ const workSurfaces = [
     src: "/landing-page/app-logos/slack.svg",
   },
   {
-    label: "ChatGPT",
-    src: "/landing-page/app-logos/chatgpt.svg",
+    label: "Teams",
+    src: "/landing-page/app-logos/teams.svg",
   },
   {
     label: "Telegram",
@@ -31,7 +31,7 @@ export function WorkSurfaceStrip() {
   return (
     <div
       className="lp-work-surfaces"
-      aria-label="Use Lemma from Slack, ChatGPT, Telegram, WhatsApp, or anywhere you work"
+      aria-label="Use Lemma from Slack, Microsoft Teams, Telegram, WhatsApp, or anywhere you work"
     >
       <span className="lp-work-surfaces-lead">Use it from</span>
       <span className="lp-work-surface-list" aria-hidden="true">

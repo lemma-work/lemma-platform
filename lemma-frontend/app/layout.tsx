@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 // Product and landing share one voice: Inter for everything, DM Mono for
 // machine values. See the typography note in styles/tokens.css. The rest are
 // landing-only display faces.
-import { Bricolage_Grotesque, DM_Mono, DM_Sans, Fraunces, IBM_Plex_Mono, Inter, Playwrite_TZ, Source_Serif_4 } from "next/font/google";
+import { Bricolage_Grotesque, DM_Mono, DM_Sans, Figtree, Fraunces, IBM_Plex_Mono, Inter, Playwrite_TZ, Source_Serif_4 } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import "./auth/auth-portal.css";
@@ -100,6 +100,14 @@ const playwriteTz = Playwrite_TZ({
 });
 
 // Long-form document and legal pages.
+// The landing voice. Inter still sets the product; the marketing page asked
+// for a warmer geometric face, and `.lp-react` is the only scope that takes it.
+const figtree = Figtree({
+  weight: ["400", "500", "600"],
+  subsets: ["latin"],
+  variable: "--font-figtree",
+});
+
 const documentSans = DM_Sans({
   weight: ["300", "400", "500", "600"],
   subsets: ["latin"],
@@ -160,7 +168,7 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       data-scroll-behavior="smooth"
-      className={`${bricolageGrotesque.variable} ${fraunces.variable} ${sourceSerif.variable} ${inter.variable} ${dmMono.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
+      className={`${bricolageGrotesque.variable} ${fraunces.variable} ${sourceSerif.variable} ${inter.variable} ${figtree.variable} ${dmMono.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
     >
       <head>
         <Script src="/runtime-config.js" strategy="beforeInteractive" />

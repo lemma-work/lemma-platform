@@ -8493,7 +8493,6 @@
     flex: none;
     width: 16px;
     height: 16px;
-    border-radius: 50%;
     object-fit: contain;
     animation: lpSurfaceSignal 10s ease-in-out infinite;
     transform-origin: center;
