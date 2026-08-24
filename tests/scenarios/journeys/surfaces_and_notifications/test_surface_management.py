@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
 from harness.telegram_view import TelegramView
@@ -18,21 +17,10 @@ pytestmark = [
 async def connected(world, run, egress):
     fake = TelegramView(egress)
     alice = await world.person("daniel")
-    organization = alice.organization
     pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
-    auth_config = await alice.installs_connector("telegram", in_organization=organization)
-    account = await alice.connects_account(
-        in_organization=organization,
-        auth_config=auth_config,
-        credentials={"bot_token": f"{uuid4().int % 10**10}:scenarios"},
-    )
-    surface = await alice.connects_a_surface(
-        in_pod=pod,
-        platform="TELEGRAM",
-        named="tg",
-        agent=agent["name"],
-        account=account,
+    surface = await alice.becomes_reachable_on_telegram(
+        in_pod=pod, agent=agent["name"]
     )
     yield alice, pod, agent, surface, fake
 

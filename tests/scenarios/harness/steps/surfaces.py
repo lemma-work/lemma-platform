@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from harness.run import a_name_for
 from harness.drivers.api import items_of
@@ -20,6 +21,47 @@ class SurfaceSteps:
 
     async def surfaces_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/surfaces"))
+
+    async def becomes_reachable_on_telegram(
+        self,
+        *,
+        in_pod: JSON,
+        agent: str,
+        named: str = "tg",
+        bot_token: str | None = None,
+    ) -> JSON:
+        """Install the connector, connect a bot, and put a surface on the pod.
+
+        Three calls that are always made together and interesting on their own
+        exactly once: that a surface connects at all is its own scenario, in
+        `test_surfaces.py`. Everywhere else this is the setup a scenario needs
+        before it can ask its actual question, and four copies of it drifted
+        apart in the ways copies do.
+
+        The bot token is unique per call because whatever stands in for Telegram
+        remembers a webhook per token, and it outlives any one scenario.
+
+        No `api_base_url`: the product talks to the real Telegram host and
+        whatever answers for it — the proxy, or Telegram itself — is what
+        answers. That is what lets this run with the SSRF guard at production
+        strictness rather than a hole opened for the test.
+        """
+        organization = self.organization
+        auth_config = await self.installs_connector(
+            "telegram", in_organization=organization
+        )
+        account = await self.connects_account(
+            in_organization=organization,
+            auth_config=auth_config,
+            credentials={"bot_token": bot_token or f"{uuid4().int % 10**10}:scenarios"},
+        )
+        return await self.connects_a_surface(
+            in_pod=in_pod,
+            platform="TELEGRAM",
+            named=named,
+            agent=agent,
+            account=account,
+        )
 
     async def connects_a_surface(
         self,
