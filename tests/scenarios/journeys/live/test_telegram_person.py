@@ -91,6 +91,20 @@ async def talking(world):
             f"connected"
         )
 
+    # The product must be reaching *real* Telegram. In the fast lane the proxy
+    # answers for api.telegram.org, so the agent would be talking to a fake
+    # while the person talks to Telegram — two conversations that never meet,
+    # and a wait that times out with no explanation. Caught exactly that way.
+    from harness import egress as egress_module
+
+    if egress_module.wanted_mode() == "fake":
+        pytest.skip(
+            "the egress proxy is standing in for Telegram, so the agent's reply "
+            "goes to the fake rather than to the person. Run the live lane with "
+            "SCENARIOS_EGRESS=off (or record) so the product reaches the real "
+            "Telegram this account is signed in to."
+        )
+
     bot = await _bot_handle()
     person = await a_person_on_telegram()
     try:

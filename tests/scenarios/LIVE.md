@@ -125,6 +125,19 @@ Two things that account needs, and both are what a real colleague has anyway:
 The session is that account without a password prompt. Keep it out of the
 repository and out of anywhere shared.
 
+**Run the live lane with the proxy off.** The fast lane has the egress proxy
+answer for `api.telegram.org` so nothing leaves the machine, and that is exactly
+wrong here: the agent would reply to the fake while the person waits on real
+Telegram — two conversations that never meet, and a wait that times out saying
+nothing useful.
+
+```bash
+SCENARIOS_EGRESS=off uv run pytest -m live --base-url http://127.0.0.1:8000
+```
+
+The scenarios refuse to run against a faked Telegram rather than time out, so
+this is a message and not a mystery.
+
 ## Reporting
 
 The nightly workflow posts to Slack: how many scenarios passed, what was not run
