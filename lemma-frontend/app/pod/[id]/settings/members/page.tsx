@@ -367,7 +367,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     return (
         <PodSettingsShell
             podId={podId}
-            title="Access"
+            title="Members"
             action={canManageMembers ? (
                 <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>
@@ -517,7 +517,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 <ResourceMetricStrip className="lemma-index-tabs-left">
                     <ResourceMetricButton active={activeView === 'people'} label="People" count={members.length} onClick={() => setActiveView('people')} />
                     <ResourceMetricButton active={activeView === 'invites'} label="Email invites" count={pendingPodInvitations.length} onClick={() => setActiveView('invites')} />
-                    <ResourceMetricButton active={activeView === 'requests'} label="Access requests" count={pendingJoinRequests.length} onClick={() => setActiveView('requests')} />
+                    <ResourceMetricButton active={activeView === 'requests'} label="Join requests" count={pendingJoinRequests.length} onClick={() => setActiveView('requests')} />
                     <ResourceMetricButton active={activeView === 'roles'} label="Roles" count={roles.length || ROLE_GUIDANCE.length} onClick={() => setActiveView('roles')} />
                     {canManageMembers ? (
                         <ResourceMetricButton active={activeView === 'available'} label="Available" count={availableMembers.length} onClick={() => setActiveView('available')} />
