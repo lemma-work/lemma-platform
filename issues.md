@@ -95,6 +95,45 @@ documents to notice; four were enough.
 
 ## SURF — surfaces and notifications
 
+### DEV-SURF-003 — Slack's api_base_url is only half guarded, because the client is synchronous
+**Violates:** *(no promise — this is the SSRF boundary, which the specification
+describes nowhere and every other surface now holds.)*
+**Severity:** medium
+**Where:** [`slack/client.py`](lemma-backend/app/modules/agent_surfaces/platforms/slack/client.py),
+`slack_base_url` / `build_slack_client`
+
+**Required:** A surface's `api_base_url` is tenant-supplied, so it is checked
+before a credential is sent to it — the same check every other platform makes
+through `assert_safe_api_base` → `assert_safe_url`, which resolves the host and
+refuses anything that lands in private space.
+
+**Actual:** Slack gets a literal-address check only. `slack_base_url` refuses a
+base URL *written as* loopback, RFC1918, link-local, reserved or multicast, and
+returns anything else unexamined. A **hostname that resolves into private
+space** — the `internal.attacker.example → 10.0.0.5` case the URL guard exists
+for — passes.
+
+The reason is mechanical rather than principled. `assert_safe_url` is `async`
+because it resolves DNS; `build_slack_client` is synchronous and is reached
+from **30 call sites across five files** (`service.py`, `home.py`, `client.py`,
+`channel_reads.py`, `streaming.py`). Making it async is a real change through
+all of them, and doing it hurriedly alongside this one was the worse option.
+
+**Why it matters:** the highest-value target is already closed — the cloud
+metadata service has no hostname anybody uses, so it is reached as the literal
+`169.254.169.254`, which needs no DNS to recognise. What remains open is an
+attacker-controlled *name* pointed at internal infrastructure, which is a real
+SSRF and the reason the resolving guard exists.
+
+**Fix:** make `build_slack_client` async and call `assert_safe_api_base`, or
+resolve once where the account's credentials are read and pass a vetted base
+URL down. The literal check stays either way: it costs nothing and it is the
+one part that works without a resolver.
+
+**Found by:** review of the change that guarded the other five surfaces, then
+confirmed against the code — `slack/client.py:19` reads `api_base_url`
+identically to Gmail, Outlook and Resend, which are guarded.
+
 ### DEV-SURF-002 — A plain answer on Telegram arrives as a message clients render as empty
 **Violates:** `PS-SURF-020`
 **Severity:** high

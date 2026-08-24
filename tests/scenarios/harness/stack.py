@@ -728,6 +728,16 @@ def _deployment_settings() -> dict[str, str]:
 REAL_EMAIL_SETTING = "SCENARIOS_REAL_EMAIL"
 
 
+def inbound_email_domain() -> str:
+    """The domain a surface's address will be on, wherever this run points.
+
+    A stack the suite boots uses the placeholder below. A deployment has its
+    own, and asserting the placeholder against it fails on a correct product —
+    the address really is on that deployment's domain, just not on ours.
+    """
+    return _configured_or("RESEND_INBOUND_DOMAIN", RESEND_INBOUND_DOMAIN)
+
+
 def _real_email_settings() -> dict[str, str]:
     """Placeholder Resend credentials, or the deployment's real ones.
 

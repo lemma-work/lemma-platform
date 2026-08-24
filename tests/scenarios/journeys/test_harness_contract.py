@@ -588,6 +588,43 @@ def test_no_real_address_is_hardcoded():
     )
 
 
+def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
+    """What only a booted stack has must be skipped for, never asserted on.
+
+    A deployment run owns no proxy and no stand-ins, so `stack.egress` is None
+    there by design. A fixture that asserts on it turns "skipped, and here is
+    why" into a stack trace — and because fixtures are shared, one line did it
+    to fifty-two scenarios at once. The rule is the same one `needs()` follows:
+    absent is skipped, never failed.
+
+    Matched on `assert` against the optional parts of `Stack`, because that is
+    the shape the mistake takes; a fixture is free to assert on anything a
+    stack it booted itself is guaranteed to have.
+    """
+    optional = ("stack.egress", "stack.redis_url", "stack.database_url")
+    offenders: list[str] = []
+    for path in _python_files():
+        if path.name == "test_harness_contract.py":
+            continue
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if not stripped.startswith("assert "):
+                continue
+            if any(name in stripped for name in optional) or (
+                "is not None" in stripped and "egress" in stripped
+            ):
+                offenders.append(f"{path.relative_to(SUITE)}:{number}")
+
+    assert not offenders, (
+        f"these assert on something only a booted stack has: {offenders}. A "
+        f"deployment run has no proxy and no stand-ins, so this has to skip "
+        f"with a reason rather than error. See the `egress` fixture in "
+        f"conftest.py for the shape."
+    )
+
+
 def test_nothing_stands_in_on_loopback_any_more():
     """No scenario may reach for a server on this machine again.
 

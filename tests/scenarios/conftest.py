@@ -180,7 +180,18 @@ async def egress(stack: Stack) -> AsyncIterator[Egress]:
     and flakes on a bad one.
     """
     live = stack.egress
-    assert live is not None, "the stack was built without an egress proxy"
+    if live is None:
+        # A deployment run owns no proxy, so nothing stands in for Telegram or
+        # the connector provider — and a scenario that needs one has nothing to
+        # talk to. A skip, not an error: `LOOPBACK_REACHABLE` used to say this
+        # before the stand-ins were retired, and deleting it took the sentence
+        # with it. Fifty-two scenarios turned from "skipped, and here is why"
+        # into a stack trace on every deployment run.
+        pytest.skip(
+            "no egress proxy: this run targets a deployment the suite does not "
+            "own, so nothing stands in for Telegram or the connector provider. "
+            "Run without --base-url to get these scenarios."
+        )
     live.forget()
     yield live
 
