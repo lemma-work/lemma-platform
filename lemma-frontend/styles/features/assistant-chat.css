@@ -393,6 +393,42 @@
     color: var(--action-primary);
 }
 
+/* --- inline code: a machine value inside speech ------------------------------- */
+
+/* `FirstLaw_of_Motion.mp4` used to be DM Mono set at the sentence's own 14px on
+   a fixed --surface-2 plate. Two things went wrong. Mono's wider advance and
+   taller x-height made it read a size *up* from the words around it, so the
+   filename shouted louder than the sentence carrying it; and the plate was a
+   warm off-white punched into the bubble's neutral grey (in dark, a slightly
+   darker rectangle that just looked like a smudge).
+
+   So the value drops a step down the type scale — --text-xs against speech set
+   at --text-sm is where DM Mono's x-height meets Inter's — and its plate is
+   mixed out of the surrounding ink rather than named, so one rule lands
+   correctly on the assistant's grey, the user's brand fill and the doc card
+   alike, with no per-context override and no dark-mode variant.
+
+   The plate's padding is the pair `.tiptap-editor code` already uses, so the
+   value a document writes and the value the agent says it back in are set the
+   same way. */
+.lchat-code {
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    padding: var(--space-0-5) var(--space-1-5);
+    color: inherit;
+    font-family: var(--font-mono-family);
+    font-size: var(--text-xs);
+    /* A path or a long identifier breaks instead of pushing the bubble wide. */
+    overflow-wrap: anywhere;
+}
+
+/* Inside a fence the plate belongs to the block; the span must not double it. */
+pre .lchat-code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+}
+
 /* --- artifact cards ----------------------------------------------------------- */
 
 .lchat-atts {

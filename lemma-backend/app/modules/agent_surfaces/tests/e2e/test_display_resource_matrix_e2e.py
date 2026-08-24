@@ -8,24 +8,27 @@ tool entirely. These tests script the tool as a genuine LLM tool call so the
 tool's own size check and the surface's native-vs-link decision both run for
 real.
 
+The oversize cases lower ``SURFACE_INLINE_SOFT_BYTE_CAP`` rather than seeding a
+file past the real 20 MB cap — see ``_oversize_bytes``.
+
 N/A cells:
 - **Teams has no native file-send implementation at all**
   (``TeamsSurfaceAdapter`` doesn't override ``send_file_attachment``, so the
   base adapter's stub always returns ``False``) — every Teams file, regardless
   of size, falls back to a link card. Only one Teams case is needed since
   there is no size-threshold behavior to prove.
-- **WhatsApp's large-file link fallback isn't separately tested** — the
-  size-threshold decision (``fits_inline``) is generic, platform-agnostic
-  logic already proven on both Slack and Telegram; a third repetition would
-  just re-prove the same shared code path.
-- **Gmail/Outlook attachments never reach the recipient** — both use Composio
-  in this matrix (matching the existing Gmail/Outlook e2e pattern), and
-  Composio-connected Gmail/Outlook accounts don't support outbound
-  attachments yet (see ``GmailPlatformService.reply_email`` /
-  ``OutlookPlatformService.reply_email``): the tool call succeeds but reports
-  ``attachment_count=0`` with an explanatory message. That is the real,
-  current production behavior, so it's what's asserted here — not a
-  successful delivery.
+- **WhatsApp's per-media-kind thresholds are unit-tested, not covered here** —
+  ``fits_inline`` is no longer uniform across platforms: WhatsApp caps an image
+  at 5 MB and a document at 100 MB, so its threshold is the one that does *not*
+  follow from the Slack and Telegram cases. That branch is proven in
+  ``tests/unit/test_attachment_limits.py``; an e2e case driving an oversize
+  WhatsApp image through a real upload rejection is a genuine gap.
+- **Composio-connected Gmail/Outlook attach exactly one file, by URL** —
+  Composio's action takes a public/signed URL and fetches it server-side, so a
+  datastore path becomes a signed URL and any file after the first is appended
+  to the body as a link (see ``GmailPlatformService._resolve_reply_attachments``).
+  Both cases here assert ``attachment_count == 1``. Workspace paths cannot be
+  signed and come back as an "unresolved" note instead — also uncovered.
 """
 
 from __future__ import annotations
@@ -53,9 +56,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.modules.agent_surfaces.platforms.attachment_limits import (
-    SURFACE_INLINE_SOFT_BYTE_CAP,
-)
+from app.modules.agent_surfaces.platforms import attachment_limits
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -93,6 +94,21 @@ pytestmark = pytest.mark.e2e
 
 
 _TOOL_CALL_ID = "tool-display-1"
+
+# Threshold the oversize cases are driven at. The real soft cap is 20 MB, and a
+# 20 MB payload seeded through the datastore only to prove a branch that reads one
+# integer is memory and wall-clock for nothing — so lower the cap instead of
+# inflating the file. `inline_cap` reads the module global per call, which is what
+# makes this work.
+_TINY_INLINE_CAP_BYTES = 2048
+
+
+def _oversize_bytes(monkeypatch) -> bytes:
+    """Bytes guaranteed to exceed the inline cap, with the cap lowered to match."""
+    monkeypatch.setattr(
+        attachment_limits, "SURFACE_INLINE_SOFT_BYTE_CAP", _TINY_INLINE_CAP_BYTES
+    )
+    return b"x" * (_TINY_INLINE_CAP_BYTES + 1024)
 
 
 class _FakeScheduleManager:
@@ -206,7 +222,7 @@ async def test_display_resource_slack_large_file_falls_back_to_link(
         config={"type": "SLACK", "account_id": str(account.id)},
         toolsets=["USER_INTERACTION"],
     )
-    big = b"x" * (SURFACE_INLINE_SOFT_BYTE_CAP + 1024)
+    big = _oversize_bytes(monkeypatch)
     path = await _seed_pod_file(
         db_session,
         user_id=fixed_test_user["id"],
@@ -640,7 +656,7 @@ async def test_display_resource_telegram_large_file_falls_back_to_link(
         external_user_id=str(sender_id),
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
-    big = b"x" * (SURFACE_INLINE_SOFT_BYTE_CAP + 1024)
+    big = _oversize_bytes(monkeypatch)
     path = await _seed_pod_file(
         db_session,
         user_id=fixed_test_user["id"],
