@@ -5,7 +5,7 @@ tidy view of them. The proxy records the same calls — from the *real* platform
 now — and this is that view, rebuilt on top of it.
 
 Only the reading half moved. The normalisation below is a faithful port of what
-`fake_platform.SentMessage` did, because it is not incidental: it encodes which
+the old loopback recorder did, because it is not incidental: it encodes which
 envelope the product happens to use, and a scenario should assert on what was
 said rather than on which shape the adapter chose that day.
 

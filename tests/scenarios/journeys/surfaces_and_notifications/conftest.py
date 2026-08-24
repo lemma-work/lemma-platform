@@ -4,9 +4,9 @@ Shared because several scenarios need the same setup and none of them is about
 the setup: connecting a surface is proved elsewhere, and repeating it in every
 file makes each one longer than the thing it is testing.
 
-Telegram is stood in for by `harness.fake_platform`, pointed at through
-`api_base_url` — a documented product override for self-hosted Bot API servers.
-Lemma runs entirely for real.
+Telegram is answered by the egress proxy — the product connects to
+`api.telegram.org` exactly as it would in production, and nothing reaches the
+internet. Lemma runs entirely for real, at production SSRF strictness.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pytest
 
-from harness.fake_platform import start_fake_telegram
+from harness.telegram_view import TelegramView
 from harness.waiting import eventually
 
 
@@ -97,47 +97,47 @@ class Reachable:
 
 
 @pytest.fixture
-async def reachable(world, run):
-    fake = start_fake_telegram()
+async def reachable(world, run, egress):
+    """A pod on Telegram. Nothing here starts a server.
+
+    The product connects to `api.telegram.org` and the proxy answers, so this
+    builds the surface and then only *reads* what Lemma said. The bot token is
+    unique per scenario because the fake remembers a webhook per token, and the
+    proxy serving it outlives any one scenario.
+    """
+    fake = TelegramView(egress)
     # A Telegram account belongs to one person deployment-wide, and an update id
     # already handled is discarded as a duplicate. Both are per-scenario, or one
     # scenario's sender collides with another's.
     handle = f"alice_{uuid4().hex[:10]}"
     chat_id = 66600 + (uuid4().int % 9000)
-    try:
-        alice = await world.person("daniel")
-        await alice.is_known_on_telegram_as(handle)
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("surface"))
-        agent = await alice.creates_an_agent(
-            in_pod=pod, toolsets=["POD", "USER_INTERACTION"]
-        )
-        auth_config = await alice.installs_connector(
-            "telegram", in_organization=organization
-        )
-        account = await alice.connects_account(
-            in_organization=organization,
-            auth_config=auth_config,
-            credentials={
-                "bot_token": "424242:scenarios",
-                "api_base_url": fake.api_base,
-            },
-        )
-        await alice.connects_a_surface(
-            in_pod=pod,
-            platform="TELEGRAM",
-            named="tg",
-            agent=agent["name"],
-            account=account,
-        )
-        fake.clear()
-        yield Reachable(
-            alice=alice,
-            pod=pod,
-            fake=fake,
-            handle=handle,
-            chat_id=chat_id,
-            agent=agent,
-        )
-    finally:
-        fake.stop()
+    bot_token = f"{uuid4().int % 10**10}:scenarios"
+    alice = await world.person("daniel")
+    await alice.is_known_on_telegram_as(handle)
+    organization = alice.organization
+    pod = await alice.creates_a_pod(named=run.name("surface"))
+    agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD", "USER_INTERACTION"])
+    auth_config = await alice.installs_connector("telegram", in_organization=organization)
+    account = await alice.connects_account(
+        in_organization=organization,
+        auth_config=auth_config,
+        # No api_base_url: the product talks to the real Telegram host and
+        # the proxy is what answers. That is what lets this run with the
+        # SSRF guard at production strictness.
+        credentials={"bot_token": bot_token},
+    )
+    await alice.connects_a_surface(
+        in_pod=pod,
+        platform="TELEGRAM",
+        named="tg",
+        agent=agent["name"],
+        account=account,
+    )
+    yield Reachable(
+        alice=alice,
+        pod=pod,
+        fake=fake,
+        handle=handle,
+        chat_id=chat_id,
+        agent=agent,
+    )

@@ -385,7 +385,7 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     the other way round, a missing fact would look like a satisfied one and the
     suite would try to sign people up against a deployment that never agreed.
     """
-    from harness.environment import LOOPBACK_REACHABLE, OPEN_SIGNUP, Deployment
+    from harness.environment import OPEN_SIGNUP, Deployment
 
     silent = Deployment(
         base_url="https://lemma.example",
@@ -398,9 +398,6 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     assert OPEN_SIGNUP.missing_on(silent), (
         "a deployment that said nothing about its signup gates was read as "
         "having them open"
-    )
-    assert LOOPBACK_REACHABLE.missing_on(silent), (
-        "a deployment that said nothing was read as able to call back to this machine"
     )
 
 
@@ -591,44 +588,69 @@ def test_no_real_address_is_hardcoded():
     )
 
 
-def test_the_stand_ins_are_not_growing():
-    """`fake_platform.py` is being retired, one journey at a time.
+def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
+    """What only a booted stack has must be skipped for, never asserted on.
 
-    A ratchet rather than a ban, because the file still has legitimate callers
-    until their journeys move. What must not happen is a *new* one appearing
-    while it is being taken away — that is how a retirement becomes permanent.
+    A deployment run owns no proxy and no stand-ins, so `stack.egress` is None
+    there by design. A fixture that asserts on it turns "skipped, and here is
+    why" into a stack trace — and because fixtures are shared, one line did it
+    to fifty-two scenarios at once. The rule is the same one `needs()` follows:
+    absent is skipped, never failed.
+
+    Matched on `assert` against the optional parts of `Stack`, because that is
+    the shape the mistake takes; a fixture is free to assert on anything a
+    stack it booted itself is guaranteed to have.
     """
+    optional = ("stack.egress", "stack.redis_url", "stack.database_url")
+    offenders: list[str] = []
+    for path in _python_files():
+        if path.name == "test_harness_contract.py":
+            continue
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if not stripped.startswith("assert "):
+                continue
+            if any(name in stripped for name in optional) or (
+                "is not None" in stripped and "egress" in stripped
+            ):
+                offenders.append(f"{path.relative_to(SUITE)}:{number}")
 
-    def imports_a_fake(path: Path) -> bool:
-        # Imports, not mentions: this file and the capability that gates the
-        # fakes both *talk about* them, which is not the same as using one.
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        return any(
-            isinstance(node, ast.ImportFrom) and node.module == "harness.fake_platform"
-            for node in ast.walk(tree)
-        )
+    assert not offenders, (
+        f"these assert on something only a booted stack has: {offenders}. A "
+        f"deployment run has no proxy and no stand-ins, so this has to skip "
+        f"with a reason rather than error. See the `egress` fixture in "
+        f"conftest.py for the shape."
+    )
 
-    callers = sorted(
+
+def test_nothing_stands_in_on_loopback_any_more():
+    """No scenario may reach for a server on this machine again.
+
+    `fake_platform.py` is gone. What replaced it is the egress proxy answering
+    for real hostnames, and the difference is not stylistic: a stand-in on
+    loopback could only be reached with the product's SSRF guard switched off,
+    so the whole suite ran a posture no deployment uses and 43 scenarios
+    skipped anywhere else.
+
+    A new one would bring that back, quietly, which is why this is a rule
+    rather than a note.
+    """
+    offenders = sorted(
         str(path.relative_to(SUITE))
         for path in _python_files()
-        if path.name != "fake_platform.py" and imports_a_fake(path)
+        # The addon is the one place that *should* start them: it is the proxy,
+        # and the proxy is what the product was pointed at.
+        if path.name
+        not in {"fake_upstreams.py", "egress_addon.py", "test_harness_contract.py"}
+        and "start_fake_" in path.read_text(encoding="utf-8")
     )
-    # Shrinks as journeys move to real providers; when it empties, the file goes.
-    still_using = {
-        "conftest.py",
-        "journeys/operating_a_deployment/test_deleting_cleanly.py",
-        "journeys/surfaces_and_notifications/conftest.py",
-        "journeys/surfaces_and_notifications/test_ingestion.py",
-        "journeys/surfaces_and_notifications/test_native_controls.py",
-        "journeys/surfaces_and_notifications/test_surface_management.py",
-        "journeys/surfaces_and_notifications/test_threads_and_files.py",
-    }
-    appeared = set(callers) - still_using
-    assert not appeared, (
-        f"these newly reach for a loopback stand-in: {sorted(appeared)}. It is "
-        f"being retired — a deployment cannot reach a server on this machine. "
-        f"Drive the real provider through the egress proxy instead; see "
-        f"harness/egress.py"
+    assert not offenders, (
+        f"these start a stand-in server themselves: {offenders}. The stack owns "
+        f"the fakes now — they run inside the egress proxy, which answers for "
+        f"api.telegram.org and provider.scenarios.example. A scenario asks what "
+        f"Lemma sent; it does not run the far end. See harness/fake_upstreams.py."
     )
 
 

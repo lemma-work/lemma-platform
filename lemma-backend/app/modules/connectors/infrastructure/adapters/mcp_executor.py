@@ -21,6 +21,7 @@ from fastmcp.exceptions import FastMCPError, McpError
 from lemma_connectors.core.results import BinaryContentResult
 
 from app.core.log.log import get_logger
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
     OperationExecutionValidationError,
@@ -130,6 +131,17 @@ class McpExecutor:
                 "MCP connection requires 'server_url'.",
                 details={"reason": "missing_server_url"},
             )
+        # Re-check the target at execution, not only at install: the stored
+        # server_url is tenant-supplied, and a DNS rebind (or any change since
+        # install) could aim it at the metadata service or an internal host.
+        # The HTTP executor does the same for exactly this reason.
+        try:
+            await assert_safe_url(str(server_url))
+        except UnsafeUrlError as exc:
+            raise OperationExecutionValidationError(
+                f"Refusing to call an unsafe MCP target: {exc}",
+                details={"reason": exc.reason},
+            ) from exc
         tool_name = (execution or {}).get("tool_name") or operation_name
         headers = build_mcp_headers(connection_config, third_party_credentials)
 

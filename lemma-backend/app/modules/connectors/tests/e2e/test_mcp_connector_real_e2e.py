@@ -19,6 +19,8 @@ import contextlib
 import socket
 from typing import Any
 
+import os
+
 import pytest
 import pytest_asyncio
 
@@ -33,6 +35,27 @@ from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.discovery.mcp_discoverer import discover_mcp
 from app.modules.connectors.services.execution import KindDispatcher
 from app.modules.test_support.e2e.waiters import eventually
+
+
+# Before settings is read anywhere, so the worker and any other reader see it
+# too — patching the attribute alone reaches one instance and one moment.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
+
+
+@pytest.fixture(autouse=True)
+def _reachable_local_server(monkeypatch):
+    """These connect to a real server on loopback, so model self-hosting.
+
+    The kind re-checks its target when the call is made now, not only when the
+    install was created, and production refuses loopback — correctly. Scoped to
+    this file rather than the whole e2e suite on purpose: a blanket fixture
+    would also disable the guard for the tests that assert it *refuses*, which
+    is how a security check quietly stops being tested.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
