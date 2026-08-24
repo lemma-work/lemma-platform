@@ -38,7 +38,8 @@ from uuid import uuid4
 
 import pytest
 
-from harness.credentials import REAL_MODEL, TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON, needs
+from harness.credentials import TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON, needs
+from harness.environment import MODEL_IS_REAL
 from harness.telegram_chat import (
     Chat,
     ForgedChat,
@@ -197,7 +198,16 @@ async def _forged(world, run, egress):
 
 async def _live(world):
     """A real account, on real Telegram, messaging the deployment's own bot."""
-    needs(TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON, REAL_MODEL)
+    # MODEL_IS_REAL, not credentials.REAL_MODEL. The two sound alike and are
+    # asked of different people: REAL_MODEL asks whether *this suite* holds an
+    # API key, which is the right question only when the suite is booting the
+    # stack itself. Here the target is somebody's deployment, and whether it
+    # runs agents on a real model is its own business — it says so at
+    # /health/capabilities, and dev answers `llm_mode: real`. Demanding the key
+    # instead would skip every one of these on the one target they exist for,
+    # because a deployment run has no reason to be given model credentials and
+    # is not given any.
+    needs(TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON, MODEL_IS_REAL)
     from harness.telegram_person import a_person_on_telegram
     from harness.tenant import CONNECTOR_HOLDER, STANDING_REACH
 
