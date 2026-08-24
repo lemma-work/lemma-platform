@@ -168,7 +168,7 @@ async def deliver_pod_file(
             lambda: _send_page_preview(
                 uow=uow, target=target, ctx=ctx, path=path, caption=caption
             ),
-            event="agent_surfaces.display_resource_content.page_preview_skipped.diagnostic",
+            step="page_preview",
             path=path,
         )
         if shown:
@@ -232,7 +232,7 @@ async def resolve_table_preview(
             conversation_id=conversation_id,
             request=request,
         ),
-        event="agent_surfaces.display_resource_content.table_preview_skipped.diagnostic",
+        step="table_preview",
         conversation_id=conversation_id,
     )
 
@@ -341,7 +341,7 @@ async def _load_pod_file(
             path=path,
             require_inline_fit=require_inline_fit,
         ),
-        event="agent_surfaces.display_resource_content.pod_file_read_skipped.diagnostic",
+        step="pod_file_read",
         conversation_id=conversation_id,
     )
 
@@ -450,17 +450,32 @@ async def _send_page_preview(
 
 
 async def _best_effort(
-    action: Callable[[], Awaitable[T]], *, event: str, **fields: Any
+    action: Callable[[], Awaitable[T]],
+    *,
+    step: str,
+    conversation_id: UUID | None = None,
+    path: str | None = None,
 ) -> T | None:
     """Run an enrichment read, returning ``None`` if anything at all goes wrong.
 
     Broad on purpose, and broad in one place: the caller is mid-delivery, and
     the alternative to "no extra detail" is a message the person never receives.
+
+    One event covers all three reads, with ``step`` naming which one gave up.
+    The log catalog wants a literal event and named fields at the call site, and
+    it is right to: three near-identical event names would have said no more
+    than one name and a field, while costing three contracts to keep in step.
     """
     try:
         return await action()
     except Exception:
-        logger.debug(event, exc_info=True, **fields)
+        logger.debug(
+            "agent_surfaces.display_resource_content.enrichment_skipped.diagnostic",
+            step=step,
+            conversation_id=conversation_id,
+            path=path,
+            exc_info=True,
+        )
         return None
 
 
