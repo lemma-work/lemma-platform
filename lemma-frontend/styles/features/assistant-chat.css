@@ -402,18 +402,22 @@
    warm off-white punched into the bubble's neutral grey (in dark, a slightly
    darker rectangle that just looked like a smudge).
 
-   So the value is sized against the sentence rather than in absolute px, and
-   its plate is mixed out of the surrounding ink rather than named — one rule
-   that lands correctly on the assistant's grey, the user's brand fill and the
-   doc card alike, with no per-context override. */
+   So the value drops a step down the type scale — --text-xs against speech set
+   at --text-sm is where DM Mono's x-height meets Inter's — and its plate is
+   mixed out of the surrounding ink rather than named, so one rule lands
+   correctly on the assistant's grey, the user's brand fill and the doc card
+   alike, with no per-context override and no dark-mode variant.
+
+   The plate's padding is the pair `.tiptap-editor code` already uses, so the
+   value a document writes and the value the agent says it back in are set the
+   same way. */
 .lchat-code {
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, currentColor 8%, transparent);
-    padding: 0.1em 0.32em;
+    padding: var(--space-0-5) var(--space-1-5);
     color: inherit;
     font-family: var(--font-mono-family);
-    /* Where DM Mono's x-height meets Inter's. */
-    font-size: 0.9em;
+    font-size: var(--text-xs);
     /* A path or a long identifier breaks instead of pushing the bubble wide. */
     overflow-wrap: anywhere;
 }
