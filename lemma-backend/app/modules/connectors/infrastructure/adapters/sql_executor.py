@@ -29,6 +29,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from app.core.log.log import get_logger
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_host
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
@@ -246,6 +247,17 @@ class SqlExecutor:
                 details={"reason": "missing_host_or_database"},
             )
         port = connection_config.get("port") or 5432
+        # Re-check the host at execution, not only at install. The stored host is
+        # tenant-supplied; a rebind since install would otherwise open a database
+        # connection straight into the internal network. `assert_safe_host` is
+        # the URL guard's bare host/port form, made for exactly this.
+        try:
+            await assert_safe_host(str(host), int(port))
+        except UnsafeUrlError as exc:
+            raise OperationExecutionValidationError(
+                f"Refusing to connect to an unsafe database host: {exc}",
+                details={"reason": exc.reason},
+            ) from exc
         user = quote_plus(str(creds.get("username") or ""))
         password = quote_plus(str(creds.get("password") or ""))
         userinfo = f"{user}:{password}@" if user else ""

@@ -147,24 +147,6 @@ OPEN_SIGNUP = EnvironmentCapability(
     ),
 )
 
-LOOPBACK_REACHABLE = EnvironmentCapability(
-    name="a stand-in on this machine the deployment can call",
-    demands=(
-        Demand(
-            "private_network_targets",
-            True,
-            "CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS",
-        ),
-    ),
-    how=(
-        "the fakes in harness/fake_platform.py bind loopback, so only a "
-        "deployment on this machine can reach them. Off in production on "
-        "purpose: it is what stops an org admin pointing a connector at the "
-        "cloud metadata service"
-    ),
-)
-
-
 #: Set this to the target's own instance id and the suite refuses to run
 #: anywhere else. Worth setting for any target you care about: it is what turns
 #: a mistyped host from a silent write into a stopped run.

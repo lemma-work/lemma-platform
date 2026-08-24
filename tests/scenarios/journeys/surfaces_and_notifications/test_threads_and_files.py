@@ -9,7 +9,7 @@ no memory of their first. And a file sent to the bot has to reach the agent, or
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import FILE_CONTENTS
+from harness.fake_upstreams import FILE_CONTENTS
 from harness.waiting import eventually
 
 pytestmark = [

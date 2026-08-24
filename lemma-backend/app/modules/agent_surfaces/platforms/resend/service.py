@@ -12,6 +12,8 @@ import base64
 from typing import Any
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
@@ -117,6 +119,7 @@ class ResendPlatformService:
             raise AgentSurfaceValidationError("Resend receive requires an api_key.")
         if not email_id:
             raise AgentSurfaceValidationError("Resend receive requires an email id.")
+        await assert_safe_api_base(self._api_base, platform="Resend")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
@@ -140,6 +143,7 @@ class ResendPlatformService:
         params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
         if after:
             params["after"] = after
+        await assert_safe_api_base(self._api_base, platform="Resend")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving",
@@ -166,6 +170,7 @@ class ResendPlatformService:
         if not (self._api_key and email_id and attachment_id):
             return None
 
+        await assert_safe_api_base(self._api_base, platform="Resend")
         async with httpx.AsyncClient(timeout=30.0) as client:
             described = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/"
@@ -178,6 +183,9 @@ class ResendPlatformService:
             if not url:
                 return None
             # The signed URL is not the Resend API and must not carry the key.
+            # It also comes out of a response body, so it is the least trusted
+            # URL in this file: guarded before anything is fetched from it.
+            await assert_safe_api_base(url, platform="Resend attachment")
             content = await client.get(url)
             content.raise_for_status()
             name = str(
@@ -359,6 +367,7 @@ class ResendPlatformService:
                 for name, file_bytes, _mime in attachments
             ]
 
+        await assert_safe_api_base(self._api_base, platform="Resend")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._api_base.rstrip('/')}/emails",

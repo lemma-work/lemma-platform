@@ -6,6 +6,8 @@ from email.message import EmailMessage
 from typing import Any
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
@@ -244,6 +246,9 @@ class GmailPlatformService:
             f"{self._api_base.rstrip('/')}/gmail/v1/users/me/messages/"
             f"{attachment.message_id}/attachments/{attachment.id}"
         )
+        # Tenant-supplied base (sovereign-cloud endpoints are real), so the
+        # target is checked before the token is sent.
+        await assert_safe_api_base(self._api_base, platform="Gmail")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(
                 url,
@@ -352,6 +357,7 @@ class GmailPlatformService:
             payload["threadId"] = thread_id
 
         url = f"{self._api_base.rstrip('/')}/gmail/v1/users/me/messages/send"
+        await assert_safe_api_base(self._api_base, platform="Gmail")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,
