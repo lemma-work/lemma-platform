@@ -93,12 +93,23 @@ class Conversation:
         return found
 
     async def waits_for_a_reply(self, *, timeout: float = REPLY_TIMEOUT) -> Reply:
-        """Wait for the agent to answer, or say plainly that it never did."""
+        """Wait for the agent to say something, or say plainly that it never did.
+
+        Something, not anything: Lemma streams, so the first message in the chat
+        is an empty placeholder it fills in as the answer arrives. Returning that
+        is how a scenario ends up asserting against `''` and reporting a working
+        product as broken. A person waits until there are words — or buttons,
+        which are an answer without words — so this waits for the same.
+        """
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
-            said = await self.replies()
-            if said:
-                return said[-1]
+            spoken = [
+                reply
+                for reply in await self.replies()
+                if reply.text.strip() or reply.choices
+            ]
+            if spoken:
+                return spoken[-1]
             await asyncio.sleep(POLL_EVERY)
         raise AssertionError(
             f"waited {timeout:.0f}s for the agent to answer on Telegram, and it "

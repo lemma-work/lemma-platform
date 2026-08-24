@@ -95,6 +95,53 @@ documents to notice; four were enough.
 
 ## SURF — surfaces and notifications
 
+### DEV-SURF-002 — A plain answer on Telegram arrives as a message clients render as empty
+**Violates:** `PS-SURF-020`
+**Severity:** high
+**Where:** [`message_experience.py:29-44`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L29),
+fallback condition at
+[`:211`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L211)
+
+**Required:** The answer comes back where the question was asked. A person who
+messages an agent on Telegram reads its reply.
+
+**Actual:** The reply is sent with `sendRichMessage`, carrying the text as
+`rich_message.markdown`. Real Telegram answers that **`HTTP 200 {"ok":true}`**
+with a `message_id` — and the message it creates has no readable text. Read back
+over MTProto it is `text='' media=False`. The same content sent with
+`sendMessage` reads back correctly, so the difference is the method, not the
+client:
+
+```
+sendMessage      -> ok=True   read back: 'PLAIN-probe'
+sendRichMessage  -> ok=True   read back: ''            <- nothing to read
+```
+
+There is a fallback to `sendMessage`, and it cannot run. `can_fallback_from_rich_message`
+requires `status_code in {400, 404}`; the call succeeds, so nothing raises and
+the fallback is never reached.
+
+**Why it matters:** it is the whole of the promise for anybody on Telegram. An
+agent that answers correctly, promptly, and in good faith says nothing a person
+can see. Buttons are unaffected — `reply_markup` is ordinary — which is why the
+ask-a-question and approval scenarios pass while the two about plain text do
+not, and why this can look like a formatting quirk rather than silence.
+
+**How it was hidden:** the loopback stand-in answered `sendRichMessage` and
+echoed the text back in its recorded call, so every fast-lane scenario asserting
+"the agent replied" passed. This is the drift a hand-written fake cannot report,
+and it surfaced within a day of the suite driving the real platform.
+
+**Fix:** unknown at the API level — whether `sendRichMessage` is a real Bot API
+method that needs different parameters, or one Telegram accepts and discards,
+has to be established first. Two things are certain regardless: the fallback
+cannot be conditioned on an exception that never arrives, and the reply should
+be verified as readable rather than assumed from `ok:true`.
+
+**Found by:** `journeys/live/test_telegram_person.py`, a real account messaging
+the deployment's own bot. Both scenarios are `xfail(strict=True)`, so they turn
+green — and fail the build — the moment this is fixed.
+
 ### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
 **Violates:** *(no promise, on the evidence — see below.)*
 **Severity:** medium

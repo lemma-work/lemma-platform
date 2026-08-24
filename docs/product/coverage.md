@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 157 |
-| `gap` | 1 |
+| `covered` | 156 |
+| `gap` | 2 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -213,7 +213,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
-| `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_person_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
+| `PS-SURF-020` The answer comes back where the question was asked | `gap` | `test_a_real_message_reaches_a_real_person`, `test_a_person_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_answered_by_pressing`, `test_an_approval_is_offered_to_the_person`, `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused` |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |

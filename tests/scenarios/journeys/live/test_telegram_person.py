@@ -127,6 +127,16 @@ async def talking(world):
         await person.aclose()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DEV-SURF-002 — a plain answer goes out as sendRichMessage, which real "
+        "Telegram accepts with ok:true and then renders as an empty message. "
+        "The fallback to sendMessage only fires on a 400/404, so it never runs. "
+        "The loopback fake accepted sendRichMessage and echoed the text back, "
+        "which is why the fast lane never saw it."
+    ),
+)
 @scenario("A person messages the agent on Telegram and is answered there")
 @proves("PS-SURF-010", "PS-SURF-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
@@ -143,6 +153,16 @@ async def test_a_person_is_answered(talking):
     )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DEV-SURF-002 — a plain answer goes out as sendRichMessage, which real "
+        "Telegram accepts with ok:true and then renders as an empty message. "
+        "The fallback to sendMessage only fires on a 400/404, so it never runs. "
+        "The loopback fake accepted sendRichMessage and echoed the text back, "
+        "which is why the fast lane never saw it."
+    ),
+)
 @scenario("A person sends an image and the agent describes what is in it")
 @proves("PS-SURF-011", "PS-AGENT-030")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
