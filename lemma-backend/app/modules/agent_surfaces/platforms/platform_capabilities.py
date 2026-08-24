@@ -81,6 +81,15 @@ class PlatformCapabilities:
     # ``ProgressStyle`` — the observer branches on this instead of on three
     # hand-maintained platform sets.
     progress_style: ProgressStyle = ProgressStyle.NONE
+    # Does the progress update land somewhere that holds only one line?
+    #
+    # Telegram's is a ``tg-thinking`` chip, and its HTML collapses newlines the
+    # way a browser does: a five-line checklist arrives as one run-on sentence
+    # with the ✅/⏳/⬜ marks stranded mid-paragraph, dimmed to the point of
+    # looking like glyphs the font is missing. The fix is not per-platform
+    # escaping — the text is already plain — it is sending one line where one
+    # line is what will be shown.
+    progress_is_one_line: bool = False
     # Hours after the person's last inbound message during which free-form
     # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
     # a send is refused unless it is a pre-approved template. None means no
@@ -220,6 +229,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,
         progress_style=ProgressStyle.EDIT,
+        # A DM's live update is a thinking chip — one line, newlines collapsed.
+        # A group's is a plain edited message, which would hold a checklist, but
+        # a platform showing two different shapes of the same update is worth
+        # less than either shape: the DM is where nearly every run is watched,
+        # and one line is what a DM can show.
+        progress_is_one_line=True,
     ),
     "GMAIL": PlatformCapabilities(
         platform="GMAIL",

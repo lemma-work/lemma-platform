@@ -14,7 +14,9 @@ the whole design:
     same message is closed with it, so steps and answer are one thing. Slack.
 ``EDIT``
     One live message, rewritten as the work moves. Cheap — an edit costs no new
-    notification — so it can be refreshed freely. Telegram, Teams.
+    notification — so it can be refreshed freely. Telegram, Teams. How much fits
+    in it is the platform's own answer (``progress_is_one_line``): Teams holds
+    the checklist, Telegram's thinking chip holds a line.
 ``POST``
     No edit API at all. An update can only be a *new* message in someone's chat,
     which costs their attention and, on WhatsApp, sits inside a metered 24-hour
@@ -36,7 +38,10 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.agent_surfaces.services.progress_events import (
     _progress_text_from_event,
 )
-from app.modules.agent_surfaces.services.progress_plan import render_plan
+from app.modules.agent_surfaces.services.progress_plan import (
+    render_plan,
+    render_plan_line,
+)
 
 # How often a live, edited progress message may be rewritten. Slack never comes
 # through here: it streams the answer token by token, and a step chunk appended
@@ -48,11 +53,20 @@ _MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
 # an agent only writes one for real multi-step work, and "here are the five
 # things I am about to do" is the most useful thing the person can be told at the
 # start of a long run. Everything after it waits its turn.
-_POST_PROGRESS_MIN_INTERVAL_SECONDS = 45.0
+#
+# Two minutes, not the 45s this started at. The number is not a throttle on how
+# fast we *could* send; it is how long a person is willing to be told nothing
+# before they read silence as broken. Under a minute is well inside the time an
+# ordinary multi-step run takes to move one step, so the second message arrived
+# saying nearly the same thing as the first — which is how a progress feed turns
+# into noise. At two minutes an update means a step actually landed.
+_POST_PROGRESS_MIN_INTERVAL_SECONDS = 120.0
 _POST_PROGRESS_MAX_PER_RUN = 5
 # With no plan there is nothing substantive to report, so a long run gets one
-# acknowledgement that it is still alive and nothing more.
-_POST_HEARTBEAT_DELAY_SECONDS = 60.0
+# acknowledgement that it is still alive and nothing more. Held to the same two
+# minutes: a run that finishes in ninety seconds should never have said anything
+# at all, and at a minute most of them were still going to beat the answer to it.
+_POST_HEARTBEAT_DELAY_SECONDS = 120.0
 _POST_HEARTBEAT_TEXT = (
     "Still working on this — it is a longer one. "
     "I will send the answer as soon as I have it."
@@ -80,11 +94,21 @@ class ProgressDisplayMixin:
             return
         activity = _progress_text_from_event(event)
         if capabilities.progress_style is ProgressStyle.EDIT:
-            await self._edit_live_progress(conversation_id, activity)
+            await self._edit_live_progress(
+                conversation_id,
+                activity,
+                one_line=capabilities.progress_is_one_line,
+            )
         elif capabilities.progress_style is ProgressStyle.POST:
             await self._maybe_post_progress(conversation_id, activity)
 
-    async def _edit_live_progress(self, conversation_id, activity: str | None) -> None:
+    async def _edit_live_progress(
+        self,
+        conversation_id,
+        activity: str | None,
+        *,
+        one_line: bool,
+    ) -> None:
         """Rewrite the one live message: the plan, then what is happening now.
 
         A plan that has moved is always worth an edit — that is the update the
@@ -105,7 +129,7 @@ class ProgressDisplayMixin:
                 < _MIN_TEXT_PROGRESS_INTERVAL_SECONDS
             ):
                 return
-        body = self._live_progress_body(activity)
+        body = self._live_progress_body(activity, one_line=one_line)
         if not body:
             return
         self._last_text_progress = activity
@@ -114,8 +138,22 @@ class ProgressDisplayMixin:
             self._shown_plan_signature = self._plan.signature
         await self._stream_progress(conversation_id, body)
 
-    def _live_progress_body(self, activity: str | None) -> str:
-        """The checklist over the current step, for a message that gets edited."""
+    def _live_progress_body(self, activity: str | None, *, one_line: bool) -> str:
+        """The checklist over the current step, for a message that gets edited.
+
+        Where the surface holds one line, the plan is drawn as that one line and
+        the activity is dropped rather than appended: the step being worked on
+        already names the moment the tool name was naming, and a chip that has
+        to choose is better off saying "Render the video" than "Using
+        execute_python". With no plan there is nothing but the activity, which is
+        what this showed before plans were drawn at all — folded onto one line
+        too, because a tool's comment is free text and a surface that collapses
+        newlines will run a two-line one together without the space.
+        """
+        if one_line:
+            if self._plan is not None:
+                return render_plan_line(self._plan)
+            return " ".join((activity or "").split())
         plan_text = render_plan(self._plan) if self._plan is not None else ""
         if plan_text and activity:
             return f"{plan_text}\n\n{activity}"
