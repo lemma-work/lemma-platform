@@ -32,6 +32,22 @@ from app.modules.connectors.infrastructure.adapters.sql_executor import SqlExecu
 from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.execution import KindDispatcher
 
+
+@pytest.fixture(autouse=True)
+def _reachable_local_server(monkeypatch):
+    """These connect to a real server on loopback, so model self-hosting.
+
+    The kind re-checks its target when the call is made now, not only when the
+    install was created, and production refuses loopback — correctly. Scoped to
+    this file rather than the whole e2e suite on purpose: a blanket fixture
+    would also disable the guard for the tests that assert it *refuses*, which
+    is how a security check quietly stops being tested.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
+
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 

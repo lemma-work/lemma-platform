@@ -61,6 +61,27 @@ def public_surface_api_url(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reachable_fake_providers(monkeypatch):
+    """Model a self-hosted deployment, because the fakes are on loopback.
+
+    Every surface here points `api_base_url` at a fake server on 127.0.0.1, and
+    that address is now checked before the client dials it — an unguarded
+    `api_base_url` is a straight path from a stored credential to the cloud
+    metadata service, so it is validated at the point of use like any other
+    tenant-supplied URL.
+
+    Production refuses loopback, correctly. Self-hosting is the supported way
+    to say "my network is the target", which is exactly the situation these
+    tests are in. The refusal itself is asserted in
+    `agent_surfaces/tests/unit/test_api_base_is_guarded.py`, including that the
+    metadata service stays refused even with this open.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
+
+@pytest.fixture(autouse=True)
 def configured_email_domain(monkeypatch):
     """Model a deployment that has actually set up inbound email.
 
