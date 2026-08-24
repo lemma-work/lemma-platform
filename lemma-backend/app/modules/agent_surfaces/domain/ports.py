@@ -342,7 +342,8 @@ class SurfacePlatformAdapterPort(Protocol):
     ) -> bool: ...
 
     # True when the file was delivered natively; False → caller should fall back
-    # to sending an app/public URL link instead.
+    # to sending a Lemma app deep link instead (not a public download URL —
+    # it only opens for a recipient with pod access).
 
     async def list_channels(
         self, *, credentials: dict[str, Any]

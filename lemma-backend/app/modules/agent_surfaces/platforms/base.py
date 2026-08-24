@@ -364,7 +364,8 @@ class BaseSurfaceAdapter:
         """Deliver a file's bytes natively on the platform.
 
         Default: platform has no native file send → return False so the caller
-        falls back to sending an app/public URL link.
+        falls back to sending a Lemma app deep link (not a public download
+        URL — it only opens for a recipient with pod access).
         """
         del credentials, event, file_name, file_bytes, mime_type, caption
         return False

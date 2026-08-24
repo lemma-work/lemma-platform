@@ -218,7 +218,9 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             tool_output=tool_output,
         )
         # A FILE resource is delivered as a native attachment when it fits the
-        # platform's cap; otherwise we fall through to the card+URL render plan.
+        # platform's cap; otherwise we fall through to the card render plan, whose
+        # action is a Lemma app deep link — openable only by a recipient with pod
+        # access, so this fallback is a dead end for an outside contact.
         if (
             display_request.type is DisplayResourceType.FILE
             and display_request.path
@@ -524,7 +526,8 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         """Attach a pod file's bytes natively when it fits the platform cap.
 
         Returns True only when the file was delivered natively; on any failure
-        or an oversize file returns False so the caller sends a URL link instead.
+        or an oversize file returns False so the caller sends a Lemma app deep
+        link instead — which only opens for a recipient who can sign in to the pod.
         """
         platform = target.surface.surface_type.value
         try:
@@ -545,7 +548,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 entity = await file_service.get_file_by_path(
                     target.surface.pod_id, path, auth_ctx
                 )
-                if not fits_inline(platform, entity.size_bytes):
+                # The MIME type decides which ceiling applies on a platform that
+                # caps media types separately (WhatsApp: 5 MB an image, 100 MB a
+                # document), so pass it rather than let the largest one stand in.
+                if not fits_inline(
+                    platform, entity.size_bytes, mime_type=entity.mime_type
+                ):
                     return False
                 _entity, content = await file_service.download_file_content_by_path(
                     target.surface.pod_id, path, auth_ctx
