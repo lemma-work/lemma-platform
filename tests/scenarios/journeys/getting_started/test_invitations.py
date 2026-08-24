@@ -80,7 +80,9 @@ async def test_a_person_sees_their_invitations(world, owner):
 @covers("org.update")
 async def test_only_an_owner_changes_the_organization(world, owner):
     bob = await world.new_person("bob")
-    await bob.accepts(await owner.invites(bob, to=owner.organization, as_role="ORG_MEMBER"))
+    await bob.accepts(
+        await owner.invites(bob, to=owner.organization, as_role="ORG_MEMBER")
+    )
 
     await bob.is_refused_renaming(owner.organization, to="Bob's Organization Now")
 

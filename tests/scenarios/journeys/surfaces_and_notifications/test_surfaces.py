@@ -27,9 +27,7 @@ async def test_available_platforms_are_listed(pod):
     available = await alice.platforms_available_to(the_pod)
 
     assert isinstance(available, list), available
-    assert await alice.surfaces_in(the_pod) == [], (
-        "a new pod is connected to nothing"
-    )
+    assert await alice.surfaces_in(the_pod) == [], "a new pod is connected to nothing"
 
 
 @scenario("A person is told what a platform needs before they start")
@@ -78,7 +76,8 @@ async def test_an_outsider_cannot_touch_surfaces(world, pod):
 
     listed = await outsider.api.call("GET", f"/pods/{the_pod['id']}/surfaces")
     created = await outsider.api.call(
-        "POST", f"/pods/{the_pod['id']}/surfaces",
+        "POST",
+        f"/pods/{the_pod['id']}/surfaces",
         json={"platform": "slack", "name": "trespass"},
     )
 

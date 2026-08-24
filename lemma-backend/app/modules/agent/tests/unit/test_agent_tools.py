@@ -486,6 +486,45 @@ def test_display_resource_validates_widget_form_and_table_payloads():
     )
 
 
+def test_display_resource_rejects_the_agents_own_sandbox_paths():
+    """A workspace path is caught here, where the agent can still fix it.
+
+    `/workspace/...` is the agent's cwd, so it is the path in hand when it
+    decides to show a file it just made. It used to pass validation and fail
+    three layers down, where the only thing left was a card whose "Open file"
+    button pointed into a pod directory that does not exist.
+    """
+    error = _payload_error(
+        type=DisplayResourceType.FILE,
+        path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
+    )
+    assert "sandbox path" in error
+    # The message has to carry the fix, or the model retries the same call.
+    assert "lemma files upload" in error
+
+    for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
+        assert _payload_error(type=DisplayResourceType.FILE, path=private_root)
+
+    # A pod path is still a pod path, including one that merely starts with the
+    # same letters.
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/me/reports/q3.pdf"
+            )
+        )
+        is None
+    )
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/workspaces/notes.md"
+            )
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_display_resource_invalid_payload_returns_success_false():
     """An invalid payload comes back as a uniform success:false/error result."""
@@ -1889,7 +1928,12 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     )
 
     assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "Structure for state, prose for knowledge" in prompt
+    assert "## Where the work lands" in prompt
+    # Reply discipline is not keyed to a toolset: every agent replies, and the
+    # reply is the one thing the person always sees. It rode in on the surface
+    # fragment for a long time, which meant a run with no surface platform --
+    # the web UI -- was told nothing about length or narration.
+    assert "## Your reply is a chat message" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that

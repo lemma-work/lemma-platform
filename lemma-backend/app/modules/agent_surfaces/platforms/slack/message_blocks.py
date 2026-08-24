@@ -196,6 +196,8 @@ def _display_resource_blocks(
         text_parts.append(_slack_escape(render_plan.summary))
     for line in render_plan.detail_lines[:4]:
         text_parts.append(f"> {_slack_escape(line)}")
+    if render_plan.preview_block:
+        text_parts.append(f"```\n{_slack_escape(render_plan.preview_block)}\n```")
 
     blocks: list[dict[str, Any]] = [
         {

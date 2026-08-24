@@ -135,10 +135,13 @@ async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
     assert len(finals) == 1, (
         f"final answer must be delivered exactly once, got {len(finals)} in {delivered}"
     )
-    widget_index = next(
-        i for i, text in enumerate(delivered) if "A widget is ready." in text
-    )
-    assert finals[0] > widget_index
+    # Matched on the card's heading rather than its body copy, and gathered the
+    # same way as `finals` above: a bare `next()` over a generator answers a
+    # card that no longer says what this line expected with a naked
+    # StopIteration, which names neither the string nor the reason.
+    widgets = [i for i, text in enumerate(delivered) if "Widget ready" in text]
+    assert widgets, f"the widget card was never delivered: {delivered}"
+    assert finals[0] > widgets[0]
 
 
 async def test_multi_tool_turn_teams_two_widgets_then_one_final_answer(

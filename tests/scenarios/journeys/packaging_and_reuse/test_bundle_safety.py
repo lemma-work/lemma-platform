@@ -99,8 +99,7 @@ async def test_an_exported_bundle_is_readable_without_lemma(world, run):
         )
 
     assert mentions_the_table, (
-        f"the export does not mention the table it was exporting; it holds "
-        f"{names[:20]}"
+        f"the export does not mention the table it was exporting; it holds {names[:20]}"
     )
 
 

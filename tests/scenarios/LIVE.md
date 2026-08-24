@@ -98,6 +98,46 @@ GitHub sidesteps the problem: a fine-grained PAT is a bearer token and is a real
 way to connect GitHub, so those scenarios run on a fresh stack with no browser
 involved.
 
+**Being a person on Telegram** is the third shape of this, and the sharpest. A
+bot never receives a message nobody sent it, and cannot send one *as* a human —
+so the half of a messaging surface that matters most could not be driven at all
+until the suite had a real account to be. That needs MTProto, which needs a
+session, and Telegram mints a session by sending a code to a phone.
+
+So it is a person's job, once:
+
+```bash
+cd tests/scenarios && uv run python -m harness.telegram_login
+```
+
+Put the `TELEGRAM_SESSION` it prints in the environment and the person-driven
+scenarios (`journeys/live/test_telegram_person.py`) run unattended from then on
+— text in and an answer out, an image the agent has to look at, a question
+answered by pressing a button, an approval offered as something to press.
+
+Two things that account needs, and both are what a real colleague has anyway:
+
+* **a @username** — Lemma resolves a Telegram sender by it, and without one every
+  message is from a stranger. The scenarios skip and say so.
+* **to have messaged the bot once** — a bot cannot open a conversation, which is
+  why the surface it talks to stands between runs (`tenant.STANDING_REACH`).
+
+The session is that account without a password prompt. Keep it out of the
+repository and out of anywhere shared.
+
+**Run the live lane with the proxy off.** The fast lane has the egress proxy
+answer for `api.telegram.org` so nothing leaves the machine, and that is exactly
+wrong here: the agent would reply to the fake while the person waits on real
+Telegram — two conversations that never meet, and a wait that times out saying
+nothing useful.
+
+```bash
+SCENARIOS_EGRESS=off uv run pytest -m live --base-url http://127.0.0.1:8000
+```
+
+The scenarios refuse to run against a faked Telegram rather than time out, so
+this is a message and not a mystery.
+
 ## Reporting
 
 The nightly workflow posts to Slack: how many scenarios passed, what was not run

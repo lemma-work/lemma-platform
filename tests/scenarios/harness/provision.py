@@ -50,7 +50,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from harness import environment, tenant
+from harness import consent, credentials, environment, tenant
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
@@ -119,12 +119,20 @@ async def provision(
                 colleague.label: world.arriving(colleague.label, colleague.email)
                 for colleague in tenant.CAST
             }
+            newcomers: list[str] = []
             for colleague in tenant.CAST:
                 person = people[colleague.label]
                 if await person.arrives():
+                    newcomers.append(colleague.email)
                     ledger.did(f"registered {colleague.full_name} <{colleague.email}>")
                 else:
                     ledger.already(f"{colleague.full_name} already has an account")
+            if os.getenv("SCENARIOS_ALLOW_NEW_CAST", "").lower() not in {
+                "1",
+                "true",
+                "yes",
+            }:
+                _refuse_a_second_cast(newcomers, target)
 
         companies: dict[str, JSON] = {}
         for company in tenant.COMPANIES:
@@ -145,11 +153,20 @@ async def provision(
         boss = people[owner_of(tenant.VANTAGE).label]
         boss.organization = companies[tenant.VANTAGE.key]
         administrator = people["daniel"]
+        # Connectors belong to one nominated person, not to whoever provisions:
+        # an account is scoped to the user who connected it. See CONNECTOR_HOLDER.
+        holder = people[tenant.CONNECTOR_HOLDER]
+        holder.organization = companies[tenant.VANTAGE.key]
+        await _standing_connectors(holder, ledger)
+        standing_pods: dict[str, JSON] = {}
         for standing_pod in tenant.STANDING_PODS:
             pod = await _pod(boss, standing_pod, ledger)
+            standing_pods[standing_pod.name] = pod
             await _administers(boss, administrator, pod, ledger)
             if reset:
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
+        await _known_on_telegram(holder, ledger)
+        await _standing_reach(holder, standing_pods, ledger)
         if reset:
             for company in tenant.COMPANIES:
                 owner = people[owner_of(company).label]
@@ -158,12 +175,47 @@ async def provision(
                 await _uninstall_run_connectors(owner, ledger, mine=made_by_a_run)
                 await _only_the_cast(owner, ledger)
 
-        return ledger.report(
-            f"{'Reset' if reset else 'Provisioned'} {base_url} "
-            f"({target.environment})"
+        written = ledger.report(
+            f"{'Reset' if reset else 'Provisioned'} {base_url} ({target.environment})"
         )
+        return written + await _still_needs_a_person(holder)
     finally:
         await world.aclose()
+
+
+def _refuse_a_second_cast(newcomers: list[str], target) -> None:
+    """Stop a run inventing a parallel cast on a tenant that already has one.
+
+    The addresses are computed from settings, so two machines can disagree — a
+    laptop with SCENARIOS_MAILBOX set and a CI job without it produce different
+    casts for the same tenant. Nothing refused it: the second cast signed up,
+    made its own organization under the same display name, and the next
+    `--reset` evicted the first as strangers.
+
+    The signal is that *every* colleague was new. One is somebody being added;
+    all five, on a deployment, is a different cast arriving. Read from what
+    registration already returned rather than by signing in to look: a sign-in
+    failure per person is a real failure a deployment counts, and ten of them
+    put a proof-of-work challenge in front of the next attempt.
+
+    Raised before any organization exists, which is the part that matters —
+    accounts are cheap and an organization cannot be deleted.
+    """
+    if target.environment in {"testing", "unknown"}:
+        return
+    if len(newcomers) < len(tenant.CAST):
+        return
+    raise AssertionError(
+        f"every one of the cast was new on {target.base_url}, which is not a "
+        f"stack this suite booted. Either it has never been provisioned — run "
+        f"again with SCENARIOS_ALLOW_NEW_CAST=1 — or it already has a cast "
+        f"under different addresses, and these would join it as a second, "
+        f"parallel one:\n\n  " + "\n  ".join(newcomers) + "\n\n"
+        f"The addresses come from {tenant.MAILBOX_SETTING} and "
+        f"{tenant.DOMAIN_SETTING}. Set them to what the tenant was built with, "
+        f"rather than letting each machine choose. Stopped before any "
+        f"organization was made, because an organization cannot be deleted."
+    )
 
 
 async def _company(owner: Person, company: tenant.Company, ledger: Ledger) -> JSON:
@@ -193,16 +245,13 @@ async def _standing(
         invitation = await owner.invites(person, to=company, as_role=colleague.role)
         await person.accepts(invitation)
         ledger.did(
-            f"{colleague.full_name} joined {colleague.company.name} "
-            f"as {colleague.role}"
+            f"{colleague.full_name} joined {colleague.company.name} as {colleague.role}"
         )
         return
     if str(mine.get("role")) != colleague.role:
         was = mine.get("role")
         await owner.changes_role(person, to=colleague.role, in_organization=company)
-        ledger.did(
-            f"{colleague.full_name} put back to {colleague.role} (was {was})"
-        )
+        ledger.did(f"{colleague.full_name} put back to {colleague.role} (was {was})")
         return
     ledger.already(f"{colleague.full_name} is {colleague.role}")
 
@@ -244,11 +293,18 @@ async def _clear_run_debris(
     each other's work half way through. An operator running `--reset` takes
     every run's, which is the point of asking.
 
-    Tables and the top level of the file tree. A file inside a run-made folder
-    goes when the folder does; agents, schedules and workflows a run leaves
-    behind are still there afterwards — said plainly, because a cleanup that
-    quietly covers half of what it looks like it covers is worse than one that
-    admits its edges.
+    Tables, surfaces, and the top level of the file tree. A file inside a
+    run-made folder goes when the folder does; agents, schedules and workflows
+    a run leaves behind are still there afterwards — said plainly, because a
+    cleanup that quietly covers half of what it looks like it covers is worse
+    than one that admits its edges.
+
+    Surfaces are here for the reason `_uninstall_run_connectors` gives about
+    installations, and they had the same outcome: a standing pod reached 163
+    leftover Resend surfaces on a real deployment. Every inbound email then has
+    163 candidates to resolve against, and every run adds more — so the pod
+    gets slower and less predictable at exactly the thing the surfaces journey
+    is trying to prove.
     """
     for table in await owner.tables_in(pod):
         name = str(table.get("name", ""))
@@ -260,10 +316,24 @@ async def _clear_run_debris(
     # long as it exists, and a standing pod that accumulates a few runs' worth of
     # them starves document work for everything else in that pod. That is not
     # hygiene, it is the reason a later run sees a converter that never answers.
+    # A surface a run made is inert once the run ends — its agent may be gone,
+    # its account may be gone — but it still competes to receive.
+    for surface in await owner.surfaces_in(pod):
+        name = str(surface.get("name", ""))
+        if not mine(name):
+            continue
+        try:
+            await owner.deletes_surface(name, in_pod=pod)
+        except AssertionError:
+            continue
+        ledger.did(f"removed surface {name!r} from {pod.get('name')!r}")
+
     entries = _tree_entries(await owner.file_tree_of(pod))
     # Deepest first: removing a folder takes what is inside it, so a child that
     # has already gone would otherwise 404 and stop the sweep on its way past.
-    for entry in sorted(entries, key=lambda e: str(e.get("path", "")).count("/"), reverse=True):
+    for entry in sorted(
+        entries, key=lambda e: str(e.get("path", "")).count("/"), reverse=True
+    ):
         path = str(entry.get("path") or "")
         if not mine(str(entry.get("name") or "")):
             continue
@@ -335,9 +405,7 @@ async def sweep(base_url: str) -> str:
             standing = {pod.name for pod in tenant.STANDING_PODS}
             for pod in await owner.pods_in(owner.organization):
                 if pod.get("name") in standing:
-                    await _clear_run_debris(
-                        owner, pod, ledger, mine=current().made_this
-                    )
+                    await _clear_run_debris(owner, pod, ledger, mine=current().made_this)
         if not swept:
             return "nothing to sweep: the tenant is not provisioned here"
         return ledger.report(f"Swept {current()} from {base_url}")
@@ -431,6 +499,263 @@ async def _clear_run_pods(
             ledger.did(f"removed leftover pod {name!r}")
 
 
+async def _known_on_telegram(holder: Person, ledger: Ledger) -> None:
+    """Tell Lemma which Telegram account the holder is.
+
+    Without it every inbound message is from a stranger — correctly, and the
+    stranger is told how to get access rather than answered. So the live lane
+    would prove the refusal path and never the conversation.
+    """
+    handle = os.getenv("SCENARIOS_TELEGRAM_HANDLE", "").strip().lstrip("@")
+    if not handle:
+        return
+    try:
+        await holder.is_known_on_telegram_as(handle)
+        ledger.did(f"{holder.label} is known on Telegram as @{handle}")
+    except Exception as exc:
+        ledger.did(f"could not set the Telegram handle: {_one_line(exc)}")
+
+
+async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger) -> None:
+    """Give the tenant a surface that keeps its reach between runs.
+
+    Needs a connected account, so it is best-effort: a deployment where nobody
+    has connected Telegram yet gets the pod and the agent, and the surface the
+    next time somebody runs this after consenting.
+    """
+    for reach in tenant.STANDING_REACH:
+        pod = pods.get(reach.pod)
+        if pod is None:
+            continue
+        agents = {str(a.get("name")) for a in await holder.agents_in(pod)}
+        if reach.agent not in agents:
+            await holder.creates_an_agent(
+                in_pod=pod,
+                named=reach.agent,
+                toolsets=["POD", "USER_INTERACTION"],
+                instruction=(
+                    "You answer on a messaging surface. Be brief and friendly, "
+                    "and say what you can see in this pod when asked."
+                ),
+            )
+            ledger.did(f"created agent {reach.agent!r} in {reach.pod!r}")
+        else:
+            ledger.already(f"agent {reach.agent!r} is in {reach.pod!r}")
+
+        surfaces = {str(s.get("name")) for s in await holder.surfaces_in(pod)}
+        if reach.name in surfaces:
+            ledger.already(f"surface {reach.name!r} is on {reach.pod!r}")
+            continue
+        account = await holder.account_for(
+            reach.connector, in_organization=holder.organization
+        )
+        if account is None and reach.connector == "telegram":
+            # Telegram is the one standing connector that is not OAuth: an
+            # account is a bot token, not a person clicking through a consent
+            # screen. So the thing every other connector has to wait for a
+            # human to do, this can simply do — which is what lets a stack
+            # booted from nothing have a reachable surface, rather than the
+            # live lane skipping everywhere except the one deployment somebody
+            # once set up by hand.
+            account = await _connect_telegram_bot(holder, ledger)
+        if account is None:
+            ledger.did(
+                f"no {reach.connector} account yet, so surface {reach.name!r} "
+                f"is not made — connect it and run this again"
+            )
+            continue
+        try:
+            await holder.connects_a_surface(
+                in_pod=pod,
+                platform=reach.platform,
+                named=reach.name,
+                agent=reach.agent,
+                account=account,
+            )
+            ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
+        except Exception as exc:
+            ledger.did(f"could not create surface {reach.name!r}: {_one_line(exc)}")
+
+
+async def _connect_telegram_bot(holder: Person, ledger: Ledger) -> JSON | None:
+    """Connect the configured bot as the tenant's standing Telegram account.
+
+    Against the tenant's *own* auth config, not a fresh one: an account belongs
+    to the config it was made under, so connecting it anywhere else would leave
+    it orphaned the moment a run tidied up after itself.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    name = tenant.standing_auth_config_name("telegram")
+    configs = {
+        str(config.get("name")): config
+        for config in await holder.auth_configs_in(holder.organization)
+    }
+    auth_config = configs.get(name)
+    if auth_config is None:
+        ledger.did(f"no {name!r} auth config, so the bot cannot be connected")
+        return None
+    try:
+        account = await holder.connects_account(
+            in_organization=holder.organization,
+            auth_config=auth_config,
+            credentials={"bot_token": token},
+        )
+    except Exception as exc:
+        ledger.did(f"could not connect the Telegram bot: {_one_line(exc)}")
+        return None
+    ledger.did("connected the Telegram bot as the tenant's standing account")
+    return account
+
+
+async def _standing_connectors(owner: Person, ledger: Ledger) -> None:
+    """Install the tenant's own auth config for each provider the suite drives.
+
+    Once, under a name with no run mark, so it is here next time. This is what
+    makes consent worth giving: an account belongs to the auth config it was
+    consented against, so a run that installs its own throws away every OAuth
+    account the moment it finishes cleaning up after itself.
+    """
+    for declared in tenant.STANDING_CONNECTORS:
+        name = tenant.standing_auth_config_name(declared.connector)
+        installed = {
+            str(config.get("name")): config
+            for config in await owner.auth_configs_in(owner.organization)
+        }
+        config = installed.get(name)
+        if config is None:
+            try:
+                config = await owner.installs_connector(
+                    declared.connector,
+                    in_organization=owner.organization,
+                    named=name,
+                    kind=declared.kind,
+                )
+                ledger.did(f"installed {declared.connector} as {name!r}")
+            except Exception as exc:
+                # Not fatal. A deployment with no Slack credentials configured
+                # cannot install Slack, and every scenario that does not need
+                # Slack is unaffected — `_still_needs_a_person` says so at the
+                # end.
+                ledger.did(f"could not install {declared.connector}: {_one_line(exc)}")
+                continue
+        else:
+            ledger.already(f"{declared.connector} installed as {name!r}")
+        if not declared.consented:
+            await _connect_without_a_person(owner, declared, config, ledger)
+
+
+async def _connect_without_a_person(
+    owner: Person, declared: tenant.StandingConnector, config: JSON, ledger: Ledger
+) -> None:
+    """Connect the ones that need no browser, so the tenant is whole.
+
+    Telegram authenticates as a bot token, so nothing about it needs a person —
+    and until this existed, provisioning installed the auth config, left the
+    account unconnected, and therefore never built the standing surface either.
+    The live Telegram scenario then skipped saying the surface was missing,
+    which was true and told nobody why.
+    """
+    if await owner.account_for(declared.connector, in_organization=owner.organization):
+        ledger.already(f"{declared.connector} account is connected")
+        return
+    secret = CREDENTIALS_WITHOUT_A_PERSON.get(declared.connector)
+    if secret is None:
+        return
+    capability, field, setting = secret
+    if not capability.available:
+        ledger.did(f"no {setting} configured, so {declared.connector} is not connected")
+        return
+    try:
+        await owner.connects_account(
+            in_organization=owner.organization,
+            auth_config=config,
+            credentials={field: capability.value(setting)},
+        )
+        ledger.did(f"connected {declared.connector} from {setting}")
+    except Exception as exc:
+        ledger.did(f"could not connect {declared.connector}: {_one_line(exc)}")
+
+
+#: What a connector needs when it needs no person: the capability that carries
+#: the secret, the credential field the product wants it in, and the setting it
+#: is read from. Only bot-token style connectors belong here — an OAuth2 one
+#: cannot be filled in this way and `connector_service` refuses to try.
+CREDENTIALS_WITHOUT_A_PERSON = {
+    "telegram": (credentials.TELEGRAM, "bot_token", "TELEGRAM_BOT_TOKEN"),
+}
+
+
+def _one_line(exc: Exception) -> str:
+    return " ".join(str(exc).split())[:160]
+
+
+async def _where_to_consent(owner: Person, connector: str) -> str:
+    """The URL a person opens to connect one provider, or why there is none."""
+    name = tenant.standing_auth_config_name(connector)
+    config = next(
+        (
+            c
+            for c in await owner.auth_configs_in(owner.organization)
+            if c.get("name") == name
+        ),
+        None,
+    )
+    if config is None:
+        return "not installed — this deployment has no credentials for it"
+    try:
+        asked = await owner.api.post(
+            f"/organizations/{owner.organization['id']}/connectors/connect-requests",
+            json={"auth_config_id": config["id"]},
+        )
+    except Exception as exc:
+        return f"could not be asked for: {_one_line(exc)}"
+    for key in ("redirect_url", "url", "authorization_url"):
+        if asked.get(key):
+            return str(asked[key])
+    return f"answered without a url ({sorted(asked)})"
+
+
+async def _still_needs_a_person(owner: Person) -> str:
+    """What provisioning cannot do, spelled out for whoever can.
+
+    Gmail, GitHub and Slack are OAuth2, and the product has no way to store one
+    without a browser — correctly, because consenting in a browser is what a
+    real person does. So this cannot connect them, and the useful thing it can
+    do is say exactly what is left and how, once, at the end.
+
+    Reported rather than raised. A tenant with no Gmail account is perfectly
+    usable for the ninety per cent of scenarios that never ask for one.
+    """
+    connected = {
+        str(account.get("connector_id") or "")
+        for account in await owner.accounts_in(owner.organization)
+    }
+    waiting = [action for action in consent.EVERY if action.connector not in connected]
+    if not waiting:
+        return "\n\nEvery third party this suite drives is connected."
+
+    lines = [
+        "",
+        "",
+        f"Still needs a person ({len(waiting)} of {len(consent.EVERY)}):",
+        "",
+    ]
+    for number, action in enumerate(waiting, start=1):
+        lines.append(f"  {number}. {action.name}")
+        lines.append(f"     {action.how}")
+        # The link, not just the instruction. Everything above this describes
+        # what to do; without the URL somebody still has to go and find the
+        # organization, the connector, and the button — which is where a
+        # to-do list stops being followed.
+        lines.append(f"     open: {await _where_to_consent(owner, action.connector)}")
+        lines.append("")
+    lines.append("Scenarios needing these skip until they are done — they do not fail, ")
+    lines.append("which is why this is printed rather than left to be noticed.")
+    return "\n".join(lines)
+
+
 def _load_authenticator(spec: str) -> Authenticator:
     """``spec`` is ``path/to/module.py:function_name``.
 
@@ -494,7 +819,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(
             asyncio.run(
-                provision(arguments.base_url, reset=arguments.reset, authenticate=authenticate)
+                provision(
+                    arguments.base_url, reset=arguments.reset, authenticate=authenticate
+                )
             )
         )
     except (environment.Unreachable, AssertionError) as stopped:

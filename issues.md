@@ -37,52 +37,6 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## DATA — tables, records, files
 
-### DEV-DATA-002 — One of four pod-schema creators skips the lock that exists for it
-**Violates:** *(no promise — the retry hides it from every client. This is an
-internal invariant the code states and then breaks in one place.)*
-**Severity:** medium
-**Where:** [`postgres_search_service.py:83`](lemma-backend/app/modules/datastore/services/search/postgres_search_service.py#L83),
-against [`schema_manager.py:148`](lemma-backend/app/modules/datastore/infrastructure/schema_manager.py#L148)
-(`_lock_schema_bootstrap`)
-
-**Required:** Creating a pod's datastore schema is safe against a concurrent
-creator. The code already knows this and says so in the lock's own docstring:
-
-> PostgreSQL's `CREATE SCHEMA IF NOT EXISTS` is not race-free: two concurrent
-> transactions can both observe the namespace as absent and one later fails the
-> `pg_namespace.nspname` unique index. […] so they must share this
-> transaction-scoped advisory lock.
-
-**Actual:** Four places run `CREATE SCHEMA IF NOT EXISTS "pod_…"`. Three take
-`pg_advisory_xact_lock(hashtext(schema_name))` first. The search service's
-`_ensure_schema` does not — it builds the same name (`pod_{uuid}` at `:44`) and
-creates it bare.
-
-Observed rather than reasoned: a scenario run's worker log carries
-
-```
-IntegrityError: duplicate key value violates unique constraint
-  "pg_namespace_nspname_index"
-DETAIL:  Key (nspname)=(pod_01a015d9_51d1_75e0_aa86_4553f099eeca) already exists.
-[SQL: CREATE SCHEMA IF NOT EXISTS "pod_01a015d9_51d1_75e0_aa86_4553f099eeca"]
-```
-
-raised from `pod_schema_consumer.on_pod_created` — the locked path losing to the
-unlocked one.
-
-**Why it matters:** The pod-created consumer fails and retries, so the schema
-does arrive; the cost is a guaranteed error and burnt retry budget whenever a
-pod's first search initialisation overlaps its provisioning. It also puts a real
-`IntegrityError` in the log for a condition that is not a bug in the caller,
-which is how genuine integrity failures stop being noticed. A pod created and
-immediately used — the common shape for anything scripted, and for bundle
-import — is exactly the overlap.
-
-**Fix:** Take the same lock in `_ensure_schema`, or route it through
-`SchemaManager.create_datastore_schema`, which already does. The second is
-better: it keeps one creator, and the search service currently also misses the
-schema-level `try_grant` that `create_datastore_schema` does afterwards.
-
 ### DEV-DATA-003 — Documents no converter can read retry forever, and enough of them stall the worker for every pod
 
 **Violates:** *(no promise. The promise about unavailable converters not burning
@@ -138,6 +92,195 @@ charged with.
 **Found by:** the scenario suite running against a standing tenant. The old
 design gave every scenario a new pod and never accumulated enough stuck
 documents to notice; four were enough.
+
+## SURF — surfaces and notifications
+
+### DEV-SURF-003 — Slack's api_base_url is only half guarded, because the client is synchronous
+**Violates:** *(no promise — this is the SSRF boundary, which the specification
+describes nowhere and every other surface now holds.)*
+**Severity:** medium
+**Where:** [`slack/client.py`](lemma-backend/app/modules/agent_surfaces/platforms/slack/client.py),
+`slack_base_url` / `build_slack_client`
+
+**Required:** A surface's `api_base_url` is tenant-supplied, so it is checked
+before a credential is sent to it — the same check every other platform makes
+through `assert_safe_api_base` → `assert_safe_url`, which resolves the host and
+refuses anything that lands in private space.
+
+**Actual:** Slack gets a literal-address check only. `slack_base_url` refuses a
+base URL *written as* loopback, RFC1918, link-local, reserved or multicast —
+honouring the same self-hosting hatch as every other surface, except for
+link-local, which is refused either way because the metadata service is never a
+Slack endpoint. Anything that is not a literal address is returned unexamined. A **hostname that resolves into private
+space** — the `internal.attacker.example → 10.0.0.5` case the URL guard exists
+for — passes.
+
+The reason is mechanical rather than principled. `assert_safe_url` is `async`
+because it resolves DNS; `build_slack_client` is synchronous and is reached
+from **30 call sites across five files** (`service.py`, `home.py`, `client.py`,
+`channel_reads.py`, `streaming.py`). Making it async is a real change through
+all of them, and doing it hurriedly alongside this one was the worse option.
+
+**Why it matters:** the highest-value target is already closed — the cloud
+metadata service has no hostname anybody uses, so it is reached as the literal
+`169.254.169.254`, which needs no DNS to recognise. What remains open is an
+attacker-controlled *name* pointed at internal infrastructure, which is a real
+SSRF and the reason the resolving guard exists.
+
+**Fix:** make `build_slack_client` async and call `assert_safe_api_base`, or
+resolve once where the account's credentials are read and pass a vetted base
+URL down. The literal check stays either way: it costs nothing and it is the
+one part that works without a resolver.
+
+**Found by:** review of the change that guarded the other five surfaces, then
+confirmed against the code — `slack/client.py:19` reads `api_base_url`
+identically to Gmail, Outlook and Resend, which are guarded.
+
+### DEV-SURF-002 — A plain answer on Telegram arrives as a message clients render as empty
+**Violates:** `PS-SURF-020`
+**Severity:** high
+**Where:** [`message_experience.py:29-44`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L29),
+fallback condition at
+[`:211`](lemma-backend/app/modules/agent_surfaces/platforms/telegram/message_experience.py#L211)
+
+**Required:** The answer comes back where the question was asked. A person who
+messages an agent on Telegram reads its reply.
+
+**Actual:** The reply is sent with `sendRichMessage`, carrying the text as
+`rich_message.markdown`. Real Telegram answers that **`HTTP 200 {"ok":true}`**
+with a `message_id` — and the message it creates has no readable text. Read back
+over MTProto it is `text='' media=False`. The same content sent with
+`sendMessage` reads back correctly, so the difference is the method, not the
+client:
+
+```
+sendMessage      -> ok=True   read back: 'PLAIN-probe'
+sendRichMessage  -> ok=True   read back: ''            <- nothing to read
+```
+
+There is a fallback to `sendMessage`, and it cannot run. `can_fallback_from_rich_message`
+requires `status_code in {400, 404}`; the call succeeds, so nothing raises and
+the fallback is never reached.
+
+**Why it matters:** it is the whole of the promise for anybody on Telegram. An
+agent that answers correctly, promptly, and in good faith says nothing a person
+can see. Buttons are unaffected — `reply_markup` is ordinary — which is why the
+ask-a-question and approval scenarios pass while the two about plain text do
+not, and why this can look like a formatting quirk rather than silence.
+
+**How it was hidden:** the loopback stand-in answered `sendRichMessage` and
+echoed the text back in its recorded call, so every fast-lane scenario asserting
+"the agent replied" passed. This is the drift a hand-written fake cannot report,
+and it surfaced within a day of the suite driving the real platform.
+
+**It blocks images too.** `test_an_image_is_understood` cannot pass while this
+stands: the agent is sent a photo, answers about it, and the answer renders
+empty like any other. It first looked like a separate defect — the run errored
+in 8s with a bare "Try again" — but that was a local stack booted without
+`SCENARIOS_USE_DEPLOYMENT_ENV=1`, so every agent run was failing on a 401 from
+a placeholder key. With the deployment's own model configuration in play the run
+completes and the failure moves to exactly this one: a 120s wait for words that
+never render.
+
+**Worse for errors than for answers.** When a run fails,
+[`progress_observer.py:397-414`](lemma-backend/app/modules/agent_surfaces/services/progress_observer.py#L397)
+sends `self._run_error_text or "I couldn’t finish that request. You can try it
+again."` with `metadata={"retry_action": True}`. That message can never be
+empty — the `or` guarantees a fallback — and it goes out through the same
+`send_chunk`. So the person receives a bare **"Try again" button with no
+sentence above it**: not merely an answer they cannot read, but a failure they
+cannot diagnose, on a control whose only label invites them to repeat it.
+Observed as `Spoken(text='', choices=('Try again',))`.
+
+**Fix:** the open question above is now answered — `sendRichMessage` **is** a
+real Bot API method, and it is accepted rather than discarded. Probed directly
+against `api.telegram.org` with a live bot token:
+
+```
+POST /sendRichMessage {"chat_id":…,"rich_message":{"markdown":"READABLE-PROBE-12345"}}
+-> {"ok":true,"result":{"message_id":252,…,
+      "rich_message":{"blocks":[{"type":"paragraph","text":"READABLE-PROBE-12345"}]}}}
+```
+
+The text is stored, in `rich_message.blocks[].text`. What the result has **no**
+field for is `text` — and `text` is what MTProto carries, so every real client
+(phone, desktop, web) renders the bubble empty. Read back as the person in the
+same chat, `sendMessage` gives `text='probe'` and `sendRichMessage` gives
+`text=''`, no media. The method is not broken; it produces a message shape
+Telegram clients do not display as words.
+
+So the fix is not to fix the parameters. It is either to stop using
+`sendRichMessage` for anything a person must read, or to send the plain text
+alongside it. Two things hold regardless: the fallback cannot be conditioned on
+an exception that never arrives, and a reply should be verified as readable
+rather than assumed from `ok:true`.
+
+**Found by:** a real account messaging a deployment’s own bot —
+[`test_being_answered.py`](tests/scenarios/journeys/surfaces_and_notifications/test_being_answered.py),
+whose `xfail(strict=True)` is conditioned on the lane, so it turns green and
+fails the build the moment this is fixed. Reproduced twice since, independently:
+against dev, and against a locally booted stack driven through real Telegram in
+`SCENARIOS_EGRESS=watch`.
+
+### DEV-SURF-001 — A surface message goes unanswered for 240s in a full local run, and nothing says why
+**Violates:** *(no promise, on the evidence — see below.)*
+**Severity:** medium
+**Where:** not localised. Observed through
+[`test_ingestion.py`](tests/scenarios/journeys/surfaces_and_notifications/test_ingestion.py),
+`test_an_unknown_sender_is_told_how_to_get_access`
+
+The promise this scenario carries — that an answer comes back where the question
+was asked — holds everywhere it has been checked: the scenario passes in
+isolation and in CI, and the live lane delivers a real message to a real
+Telegram account. What is recorded here is that a full local run does not get an
+answer within four minutes and that the cause is not known. Calling the promise
+broken would be claiming more than has been shown.
+
+**Required:** A message delivered to a surface is answered on that surface. The
+scenario signs a Telegram update, delivers it to the webhook path Lemma itself
+registered, and waits for the agent's reply.
+
+**Actual:** In a local run of the whole suite the reply never arrives. The wait
+gives up after **240 seconds and 2,377 polls** having seen nothing — not a slow
+answer, no answer. The same scenario passes:
+
+- on its own (0.7s),
+- with its own journey, all 38 of them,
+- paired with the file journey that was starving the worker,
+- and in CI, which shards by journey so no stack ever carries more than one.
+
+**What it is not.** Each of these was tested, not reasoned about:
+
+- *Not the worker queue.* `SCENARIOS_WORKERS=3` was added to run the replica
+  shape the product is built for — `schedule_poller` says "Every replica runs
+  this. Nothing elects a leader; the claim decides who fires" — and the failure
+  is identical with three workers as with one.
+- *Not the retrying-document storm.* That was real and is fixed separately: the
+  scenario that uploads an unreadable document now deletes it, which took its
+  own journey from 98s to 41s and one neighbouring scenario from 59.0s to 0.6s.
+  This failure survives that fix.
+- *Not the `channel_send_failed` warnings in the same log.* Those are Resend
+  401s from the fast lane's placeholder key, on a different platform.
+- *Not the mailbox change.* The journey passes 48/48 in isolation with real
+  sub-addressed addresses configured.
+
+**Why it matters:** it is the only red in an otherwise green suite, and the
+first thing a person or an agent runs locally is the whole suite. A failure
+that appears only at full size, with no error and no log line naming a cause,
+is the kind that gets re-diagnosed from scratch every time somebody meets it —
+which is what this file exists to stop. It may also be real: nothing here
+proves the product would answer given longer, only that it did not answer in
+four minutes.
+
+**Fix:** unknown, and finding it is the work. The next step is a bisect — halve
+the journey list until the smallest set that reproduces it is known — then look
+at whether the agent run was dispatched at all, dispatched and never completed,
+or completed with its reply never leaving. Those are three different bugs and
+the evidence so far does not distinguish them.
+
+**Found by:** running the full suite locally, repeatedly, while getting the rest
+of it green. It has failed the same way on every full local run in this
+sequence, before and after every change made to the suite.
 
 ## SDK — the clients we ship
 

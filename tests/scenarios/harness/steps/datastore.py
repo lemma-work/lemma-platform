@@ -455,8 +455,6 @@ class DatastoreSteps:
         header on a websocket handshake, so this is the shape a real client
         uses too.
         """
-        base = self.api.base_url.replace("https://", "wss://").replace(
-            "http://", "ws://"
-        )
+        base = self.api.base_url.replace("https://", "wss://").replace("http://", "ws://")
         url = f"{base}/pods/{pod['id']}/datastore/changes?access_token={self.api.token}"
         return f"{url}&since={since}" if since else url

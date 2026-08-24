@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _POD_ASSISTANT_PROMPT_PATH = _PROMPT_DIR / "pod_assistant.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
+_REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
 _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
@@ -72,6 +73,18 @@ def load_pod_assistant_base_prompt() -> str:
 
 def load_agent_base_prompt() -> str:
     return _read_required_prompt(_AGENT_BASE_PROMPT_PATH)
+
+
+def load_replies_prompt() -> str:
+    """What an assistant message is, and how long it is allowed to be.
+
+    Not keyed to a toolset: every agent replies, whatever tools it has, and the
+    reply is the one thing the person always sees. Gating it on a toolset is how
+    the narration in the Lemma UI went unruled for so long -- the equivalent
+    rules existed only in the per-platform surface fragment, so a run with no
+    surface platform (the web UI) was told nothing about length or narration.
+    """
+    return _read_required_prompt(_REPLIES_PROMPT_PATH)
 
 
 def load_workspace_cli_prompt() -> str:
@@ -135,8 +148,9 @@ def build_agent_instructions(
 ) -> str:
     """Compose the full system prompt for an agent run.
 
-    Layering: base prompt (pod-default vs user-agent) → per-toolset fragments →
-    agent instruction → conversation instructions → runtime context brief.
+    Layering: base prompt (pod-default vs user-agent) → reply discipline →
+    per-toolset fragments → agent instruction → conversation instructions →
+    runtime context brief.
 
     ``include_toolset_prompts`` controls whether the per-toolset fragments are
     folded in here. The in-process LEMMA harness passes ``False`` because those
@@ -154,6 +168,12 @@ def build_agent_instructions(
         sections = [load_pod_assistant_base_prompt()]
     else:
         sections = [load_agent_base_prompt()]
+
+    # Unconditional, on both harness paths: reply discipline is not a toolset.
+    # A surface run narrows this further -- ``platform_agent_guidance`` appends
+    # its own ``soft_char_limit`` below -- but a run with no surface platform
+    # would otherwise be told nothing at all about length or narration.
+    sections.append(load_replies_prompt())
 
     enabled = _fragment_toolsets(agent=agent, conversation=conversation)
 
@@ -298,11 +318,9 @@ def _task_list_section(
         "done):\n\n"
         f"{rendered}\n\n"
         f"Pick up at the first unchecked item — **{first_open}** — unless this "
-        "message sends you somewhere else. The moment you finish an item, call "
-        "`write_todos` with that one line checked "
-        f'(`["- [x] {first_open}"]`) and only then start the next. A finished '
-        "item still showing unchecked is not a cosmetic problem: it is what the "
-        "person is reading to know where you are."
+        "message sends you somewhere else. Check each item off with "
+        f'`write_todos` (`["- [x] {first_open}"]`) as you finish it, before '
+        "starting the next."
     )
 
 

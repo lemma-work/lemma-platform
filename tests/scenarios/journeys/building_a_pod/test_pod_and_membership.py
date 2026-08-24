@@ -259,7 +259,9 @@ class TestLettingPeopleAskToJoin:
 
     @scenario("A person asks for access and an admin grants it")
     @proves("PS-POD-021")
-    @covers("pod.join_request.create", "pod.join_request.list", "pod.join_request.approve")
+    @covers(
+        "pod.join_request.create", "pod.join_request.list", "pod.join_request.approve"
+    )
     async def test_a_join_request_is_approved(self, world, run):
         alice = await world.person("priya")
         pod = await alice.creates_a_pod(named=run.name("pod"))

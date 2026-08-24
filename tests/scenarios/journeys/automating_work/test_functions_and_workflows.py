@@ -109,9 +109,7 @@ class TestWorkflows:
         alice, the_pod = pod
         workflow = await alice.creates_a_workflow(in_pod=the_pod)
 
-        await alice.is_refused_creating_a_workflow(
-            in_pod=the_pod, named=workflow["name"]
-        )
+        await alice.is_refused_creating_a_workflow(in_pod=the_pod, named=workflow["name"])
 
     @scenario("A person can see the shape of a workflow without running it")
     @proves("PS-FLOW-002")

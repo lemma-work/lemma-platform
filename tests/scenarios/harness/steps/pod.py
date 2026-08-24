@@ -94,9 +94,7 @@ class PodSteps:
         )
 
     async def pods_in(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/pods/organization/{organization['id']}")
-        )
+        return items_of(await self.api.get(f"/pods/organization/{organization['id']}"))
 
     async def sees_pod(self, pod: JSON) -> None:
         listed = await self.pods_in({"id": pod["organization_id"]})
@@ -365,9 +363,7 @@ class PodSteps:
             )
 
     async def opens_membership(self, member: JSON, *, in_pod: JSON) -> JSON:
-        return await self.api.get(
-            f"/pods/{in_pod['id']}/members/{_member_id(member)}"
-        )
+        return await self.api.get(f"/pods/{in_pod['id']}/members/{_member_id(member)}")
 
     async def finds_member_by_email(self, email: str, *, in_pod: JSON) -> JSON:
         return await self.api.get(

@@ -173,6 +173,28 @@ TELEGRAM = Capability(
     how="a bot token from @BotFather, which is what a surface authenticates as",
 )
 
+TELEGRAM_APP = Capability(
+    name="a Telegram app to sign a person in with",
+    requires=("TELEGRAM_API_ID", "TELEGRAM_API_HASH"),
+    how=(
+        "create them at https://my.telegram.org, API development tools, against "
+        "the account that will play the person. They authorize the app; signing "
+        "the person in is the separate step below"
+    ),
+)
+
+TELEGRAM_PERSON = Capability(
+    name="a real Telegram account the suite can send from",
+    requires=("TELEGRAM_SESSION",),
+    how=(
+        "run `uv run python -m harness.telegram_login` once and put the session "
+        "it prints in the environment. A bot cannot receive a message nobody "
+        "sent it, so every scenario about somebody messaging an agent needs a "
+        "real account on the other end. The code goes to a phone, which is why "
+        "a person runs it once rather than provisioning doing it"
+    ),
+)
+
 SLACK = Capability(
     name="Slack",
     requires=("SLACK_BOT_TOKEN",),
@@ -192,13 +214,27 @@ TELEGRAM_CHAT = Capability(
     ),
 )
 
+TELEGRAM_HANDLE = Capability(
+    name="the Telegram account the cast is known by",
+    requires=("SCENARIOS_TELEGRAM_HANDLE",),
+    how=(
+        "the @username (without the @) of the Telegram account that messages "
+        "the bot. It is what turns an inbound message into a message from "
+        "somebody rather than from a stranger"
+    ),
+)
+
 GITHUB_REPO = Capability(
     name="a GitHub repository to write to",
-    requires=("SCENARIOS_GITHUB_REPO", "SCENARIOS_GITHUB_TOKEN"),
+    # The repository only. A PAT was required here too, from when this scenario
+    # injected one — which `connector_service` refuses for an OAuth2 connector,
+    # so it never worked. The credentials come from the connected account now,
+    # and asking for a token nothing reads only skipped the scenario.
+    requires=("SCENARIOS_GITHUB_REPO",),
     how=(
-        "'owner/name' of a throwaway repository, and a fine-grained PAT for it. "
-        "A PAT is a real way to connect GitHub and needs no browser consent — "
-        "the OAuth app above is what a person would use instead"
+        "'owner/name' of a throwaway repository. Scenarios open a real issue "
+        "there and close it again, using the GitHub account somebody connected "
+        "— so that account needs write access to it"
     ),
 )
 
@@ -223,12 +259,22 @@ def needs(*capabilities: Requirement) -> None:
     absent = [capability for capability in capabilities if not capability.available]
     if not absent:
         return
-    pytest.skip(
-        "this deployment is not configured for it. "
-        + "; ".join(
-            f"{capability.name}: set {', '.join(capability.missing)} — {capability.how}"
-            for capability in absent
-        )
+    pytest.skip("; ".join(_why(capability) for capability in absent))
+
+
+def _why(capability: Requirement) -> str:
+    """One sentence saying what is missing and what to do about it.
+
+    A capability may phrase its own, because not everything reads as a setting.
+    "set a connected gmail account" is not something anybody can do — that one
+    is a person opening a browser, and the sentence should say so.
+    """
+    written = getattr(capability, "sentence", None)
+    if written is not None:
+        return str(written)
+    return (
+        f"this deployment is not configured for it. {capability.name}: set "
+        f"{', '.join(capability.missing)} — {capability.how}"
     )
 
 

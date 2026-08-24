@@ -33,7 +33,9 @@ async def test_a_file_lands_where_it_was_put(pod):
     alice, the_pod, home = pod
 
     uploaded = await alice.uploads(
-        content=b"hello from a scenario", named="notes.txt", directory=home,
+        content=b"hello from a scenario",
+        named="notes.txt",
+        directory=home,
         in_pod=the_pod,
     )
 
@@ -85,7 +87,10 @@ async def test_the_original_bytes_survive(pod):
     content = b"\x00\x01binary-ish content \xc3\xa9 and text"
 
     uploaded = await alice.uploads(
-        content=content, named="payload.bin", directory=home, in_pod=the_pod,
+        content=content,
+        named="payload.bin",
+        directory=home,
+        in_pod=the_pod,
         content_type="application/octet-stream",
     )
 

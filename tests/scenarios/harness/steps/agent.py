@@ -204,7 +204,12 @@ class AgentSteps:
         )
 
     async def waits_for_a_reply(
-        self, *, in_conversation: JSON, in_pod: JSON, after: int = 0, timeout: float = 60.0
+        self,
+        *,
+        in_conversation: JSON,
+        in_pod: JSON,
+        after: int = 0,
+        timeout: float = 60.0,
     ) -> list[JSON]:
         """Wait until the agent has added at least one message beyond ``after``.
 
@@ -214,11 +219,11 @@ class AgentSteps:
         """
         return await eventually(
             lambda: self.messages_in(in_conversation, in_pod=in_pod),
-            lambda messages: len(messages) > after
-            and any(m.get("role") == "assistant" for m in messages),
-            describe=(
-                f"the agent to reply in conversation {in_conversation['id']}"
+            lambda messages: (
+                len(messages) > after
+                and any(m.get("role") == "assistant" for m in messages)
             ),
+            describe=(f"the agent to reply in conversation {in_conversation['id']}"),
             timeout=timeout,
         )
 
@@ -227,8 +232,10 @@ class AgentSteps:
     ) -> JSON:
         return await eventually(
             lambda: self.opens_conversation(conversation, in_pod=in_pod),
-            lambda payload: str(payload.get("status") or "").upper() in SETTLED
-            or payload.get("status") is None,
+            lambda payload: (
+                str(payload.get("status") or "").upper() in SETTLED
+                or payload.get("status") is None
+            ),
             describe=f"conversation {conversation['id']} to reach a terminal state",
             timeout=timeout,
         )
@@ -412,7 +419,9 @@ class AgentSteps:
             )
         )
 
-    async def opens_runtime_profile(self, profile_id: str, *, in_organization: JSON) -> JSON:
+    async def opens_runtime_profile(
+        self, profile_id: str, *, in_organization: JSON
+    ) -> JSON:
         return await self.api.get(
             f"/organizations/{in_organization['id']}/agent-runtime/profiles/{profile_id}"
         )

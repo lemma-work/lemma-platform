@@ -27,6 +27,42 @@ _PLATFORM_WEBHOOK_TYPES = frozenset(
 )
 
 
+class UnsafeApiBaseError(Exception):
+    """A surface's API base URL points somewhere we will not send credentials."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+async def assert_safe_api_base(api_base: str, *, platform: str) -> str:
+    """Refuse a surface API base that is not on the public internet.
+
+    ``api_base_url`` is a real feature — a self-hosted Telegram Bot API server,
+    a sovereign-cloud Graph or Slack endpoint — so it stays. What it must not be
+    is unguarded: it arrives from stored account credentials
+    (``credential_resolver._CONTEXT_KEYS``), which makes it tenant-supplied
+    input, and every platform client dialled it with a bare ``httpx`` client
+    that asks no questions. Pointed at ``169.254.169.254`` it would fetch the
+    instance's own credentials and hand them back through the surface; pointed
+    at an internal host it walks the cluster.
+
+    The connector kinds already re-check their targets this way. This is the
+    same check, at the same moment — the point of use — reusing the same guard
+    so there is one definition of "not the public internet" in the product.
+    """
+    from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
+
+    try:
+        await assert_safe_url(api_base)
+    except UnsafeUrlError as exc:
+        raise UnsafeApiBaseError(
+            f"Refusing to call the {platform} API at an unsafe address: {exc}",
+            reason=exc.reason,
+        ) from exc
+    return api_base
+
+
 def public_https_api_url_available() -> bool:
     """True when ``settings.api_url`` is a public HTTPS URL.
 

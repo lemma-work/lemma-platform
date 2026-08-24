@@ -64,11 +64,22 @@ def _grants(table_name: str) -> dict:
 
 
 async def _granted_tables(authenticated_client, pod_id: str, kind: str, name: str):
+    """Only the table grants, which is what this file is about.
+
+    It used to return every grant, and read as if it returned tables because an
+    agent had no other kind. Then MEMORY became a default and each agent arrived
+    holding a derived `/memory` folder grant, which is not the subject here and
+    must not be able to break an exact comparison against it.
+    """
     response = await authenticated_client.get(
         f"/pods/{pod_id}/{kind}s/{name}/permissions"
     )
     assert response.status_code == status.HTTP_200_OK, response.text
-    return {grant["resource_name"] for grant in response.json().get("grants") or []}
+    return {
+        grant["resource_name"]
+        for grant in response.json().get("grants") or []
+        if grant["resource_type"] == "datastore_table"
+    }
 
 
 @pytest.mark.asyncio

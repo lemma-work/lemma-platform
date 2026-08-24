@@ -176,3 +176,26 @@ def test_the_pod_default_assistant_still_gets_its_fixed_set():
     resolved = resolve_toolsets(None, _conversation())
 
     assert set(POD_DEFAULT_AGENT_TOOLSETS) <= set(resolved.names)
+
+
+def test_a_new_agent_starts_with_web_search_and_memory():
+    """Creating an agent without naming toolsets is not a request for none. The
+    two defaults are the ones every author turns on anyway; the expensive
+    decisions -- a sandbox, fan-out, a voice bill -- stay off."""
+    from app.modules.agent.api.schemas import CreateAgentRequest
+    from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
+
+    request = CreateAgentRequest(name="scout", instruction="look things up")
+
+    assert request.toolsets == list(NEW_AGENT_DEFAULT_TOOLSETS)
+    assert request.toolsets == [AgentToolset.WEB_SEARCH, AgentToolset.MEMORY]
+    assert set(NEW_AGENT_DEFAULT_TOOLSETS) <= set(DECLARABLE_TOOLSETS)
+
+
+def test_an_explicit_empty_toolset_list_still_means_none():
+    """A bundle or an editor that states the toolsets is stating them exactly —
+    the default fills an absent field, never an empty one, or importing an agent
+    with no tools would quietly hand it two."""
+    from app.modules.agent.api.schemas import CreateAgentRequest
+
+    assert CreateAgentRequest(name="inert", instruction="x", toolsets=[]).toolsets == []

@@ -69,8 +69,7 @@ def test_suite_is_black_box():
                         f"{path.relative_to(SUITE)}:{node.lineno} imports {root!r}"
                     )
     assert not offenders, (
-        "the scenario suite must reach Lemma only over HTTP:\n  "
-        + "\n  ".join(offenders)
+        "the scenario suite must reach Lemma only over HTTP:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -87,7 +86,9 @@ def test_scenarios_do_not_mock():
                             f"{path.relative_to(SUITE)}:{node.lineno} "
                             f"imports {alias.name!r}"
                         )
-            elif isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES:
+            elif (
+                isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES
+            ):
                 offenders.append(
                     f"{path.relative_to(SUITE)}:{node.lineno} imports from "
                     f"{node.module!r}"
@@ -100,9 +101,7 @@ def test_scenarios_do_not_mock():
                 # The `monkeypatch` fixture, taken as a test argument.
                 name = node.arg
             if name in FORBIDDEN_NAMES:
-                offenders.append(
-                    f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}"
-                )
+                offenders.append(f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}")
     assert not offenders, (
         "a scenario asserts against the real system, never a substituted one:\n  "
         + "\n  ".join(offenders)
@@ -148,8 +147,7 @@ def test_every_scenario_declares_what_it_proves(path: Path):
         decorators = {
             decorator.func.id
             for decorator in node.decorator_list
-            if isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Name)
+            if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
         }
         absent = {"scenario", "proves"} - decorators
         if absent:
@@ -183,12 +181,11 @@ def test_step_names_do_not_collide():
                     continue
                 if item.name in seen and seen[item.name] != path.name:
                     clashes.append(
-                        f"{item.name!r} defined in both {seen[item.name]} and "
-                        f"{path.name}"
+                        f"{item.name!r} defined in both {seen[item.name]} and {path.name}"
                     )
                 seen[item.name] = path.name
-    assert not clashes, (
-        "step verbs must be unique across mixins:\n  " + "\n  ".join(clashes)
+    assert not clashes, "step verbs must be unique across mixins:\n  " + "\n  ".join(
+        clashes
     )
 
 
@@ -221,7 +218,7 @@ def test_stack_never_inherits_real_infrastructure():
     # With inheritance on, which is when the danger exists at all.
     os.environ["SCENARIOS_USE_DEPLOYMENT_ENV"] = "1"
     try:
-            stack = _environment(
+        stack = _environment(
             port=12345,
             database_url="postgresql://scenarios/disposable",
             redis_url="redis://scenarios/9",
@@ -388,7 +385,7 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     the other way round, a missing fact would look like a satisfied one and the
     suite would try to sign people up against a deployment that never agreed.
     """
-    from harness.environment import LOOPBACK_REACHABLE, OPEN_SIGNUP, Deployment
+    from harness.environment import OPEN_SIGNUP, Deployment
 
     silent = Deployment(
         base_url="https://lemma.example",
@@ -401,10 +398,6 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     assert OPEN_SIGNUP.missing_on(silent), (
         "a deployment that said nothing about its signup gates was read as "
         "having them open"
-    )
-    assert LOOPBACK_REACHABLE.missing_on(silent), (
-        "a deployment that said nothing was read as able to call back to this "
-        "machine"
     )
 
 
@@ -532,6 +525,135 @@ def test_no_scenario_scripts_the_model():
     )
 
 
+def test_a_replay_run_cannot_reach_the_real_internet():
+    """The one setting the whole record/replay design rests on.
+
+    A replay lane exists to be deterministic and credential-free. If an
+    unrecorded request were *forwarded* instead of killed, a run would quietly
+    reach the real provider — passing, slowly, with real side effects, and
+    telling nobody. `server_replay_extra=kill` is what makes a gap in the
+    recording an error rather than a silent live call.
+
+    Asserted on the arguments the proxy is actually started with, because that
+    is the thing that would be edited away.
+    """
+    import inspect
+
+    from harness import egress
+
+    started = inspect.getsource(egress.start)
+    assert "server_replay_extra=kill" in started, (
+        "replay no longer kills unrecorded requests, so a run with a stale "
+        "cassette would reach the real internet instead of failing"
+    )
+    assert "stream_large_bodies" not in started, (
+        "streaming is back. mitmproxy streams a response through without "
+        "keeping it, so the recording replays as '200 OK (content missing)' — "
+        "a response that satisfies a status assertion and contains nothing"
+    )
+
+
+def test_no_real_address_is_hardcoded():
+    """A real mailbox is configured, never written down.
+
+    The cast needs deliverable addresses the moment an email surface answers
+    one of them — `example.com` is reserved and a reply there is a hard bounce.
+    The answer is `SCENARIOS_MAILBOX`, sub-addressed per colleague.
+
+    What must not happen is somebody committing the mailbox instead of setting
+    it. This is a public repository: a real address in it is somebody's inbox,
+    for as long as the history exists, and no later commit takes it back.
+    """
+    import re
+
+    from harness import tenant
+
+    reserved = re.compile(
+        r"@([A-Za-z0-9.-]*\.)?(example\.(com|net|org)|example|invalid|test|localhost)$"
+    )
+    address = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+    found: list[str] = []
+    for path in _python_files():
+        for literal in address.findall(path.read_text(encoding="utf-8")):
+            _, _, host = literal.partition("@")
+            if not reserved.search("@" + host):
+                found.append(f"{path.relative_to(SUITE)}: {literal}")
+
+    assert not found, (
+        f"these look like real email addresses, written into the suite: "
+        f"{sorted(found)}. Set {tenant.MAILBOX_SETTING} instead — every "
+        f"colleague is sub-addressed from it, so one mailbox covers the cast "
+        f"and nothing anybody owns ends up in a public repository."
+    )
+
+
+def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
+    """What only a booted stack has must be skipped for, never asserted on.
+
+    A deployment run owns no proxy and no stand-ins, so `stack.egress` is None
+    there by design. A fixture that asserts on it turns "skipped, and here is
+    why" into a stack trace — and because fixtures are shared, one line did it
+    to fifty-two scenarios at once. The rule is the same one `needs()` follows:
+    absent is skipped, never failed.
+
+    Matched on `assert` against the optional parts of `Stack`, because that is
+    the shape the mistake takes; a fixture is free to assert on anything a
+    stack it booted itself is guaranteed to have.
+    """
+    optional = ("stack.egress", "stack.redis_url", "stack.database_url")
+    offenders: list[str] = []
+    for path in _python_files():
+        if path.name == "test_harness_contract.py":
+            continue
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if not stripped.startswith("assert "):
+                continue
+            if any(name in stripped for name in optional) or (
+                "is not None" in stripped and "egress" in stripped
+            ):
+                offenders.append(f"{path.relative_to(SUITE)}:{number}")
+
+    assert not offenders, (
+        f"these assert on something only a booted stack has: {offenders}. A "
+        f"deployment run has no proxy and no stand-ins, so this has to skip "
+        f"with a reason rather than error. See the `egress` fixture in "
+        f"conftest.py for the shape."
+    )
+
+
+def test_nothing_stands_in_on_loopback_any_more():
+    """No scenario may reach for a server on this machine again.
+
+    `fake_platform.py` is gone. What replaced it is the egress proxy answering
+    for real hostnames, and the difference is not stylistic: a stand-in on
+    loopback could only be reached with the product's SSRF guard switched off,
+    so the whole suite ran a posture no deployment uses and 43 scenarios
+    skipped anywhere else.
+
+    A new one would bring that back, quietly, which is why this is a rule
+    rather than a note.
+    """
+    offenders = sorted(
+        str(path.relative_to(SUITE))
+        for path in _python_files()
+        # The addon is the one place that *should* start them: it is the proxy,
+        # and the proxy is what the product was pointed at.
+        if path.name
+        not in {"fake_upstreams.py", "egress_addon.py", "test_harness_contract.py"}
+        and "start_fake_" in path.read_text(encoding="utf-8")
+    )
+    assert not offenders, (
+        f"these start a stand-in server themselves: {offenders}. The stack owns "
+        f"the fakes now — they run inside the egress proxy, which answers for "
+        f"api.telegram.org and provider.scenarios.example. A scenario asks what "
+        f"Lemma sent; it does not run the far end. See harness/fake_upstreams.py."
+    )
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 
@@ -544,17 +666,15 @@ def test_every_journey_runs_in_ci():
     import re
 
     workflow = (
-        Path(__file__).resolve().parents[3]
-        / ".github"
-        / "workflows"
-        / "scenarios.yml"
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "scenarios.yml"
     )
     named = set(re.findall(r"journeys/([a-z_]+)", workflow.read_text()))
 
     on_disk = {
         directory.name
         for directory in (Path(__file__).resolve().parent).iterdir()
-        if directory.is_dir() and not directory.name.startswith(("_", "."))
+        if directory.is_dir()
+        and not directory.name.startswith(("_", "."))
         # The live lane is deliberately elsewhere: it needs real providers and
         # runs nightly, never on a pull request.
         and directory.name != "live"

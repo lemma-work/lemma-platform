@@ -38,9 +38,7 @@ async def after_a_run(world, run):
 
 
 async def _events(alice, organization) -> list[dict]:
-    payload = await alice.api.get(
-        f"/usage/organizations/{organization['id']}/events"
-    )
+    payload = await alice.api.get(f"/usage/organizations/{organization['id']}/events")
     return list(payload.get("items") or payload.get("events") or [])
 
 
@@ -111,17 +109,13 @@ async def test_an_unknown_price_never_blocks_a_run(after_a_run):
     conversation = await alice.starts_a_conversation(
         in_pod=pod, with_agent=agent["name"], saying="And again, please."
     )
-    messages = await alice.waits_for_a_reply(
-        in_conversation=conversation, in_pod=pod
-    )
+    messages = await alice.waits_for_a_reply(in_conversation=conversation, in_pod=pod)
 
     assert any(message.get("role") == "assistant" for message in messages), (
         "the second run produced no answer, so the platform refused work over "
         "its own pricing"
     )
-    limits = await alice.api.get(
-        f"/usage/organizations/{organization['id']}/limits"
-    )
+    limits = await alice.api.get(f"/usage/organizations/{organization['id']}/limits")
     assert limits is not None, "a deployment must be able to report its limits"
 
 

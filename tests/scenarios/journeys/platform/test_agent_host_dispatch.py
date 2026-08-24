@@ -43,9 +43,7 @@ def _harness_snapshot() -> dict:
         "health": "READY",
         "config_revision": "rev-1",
         "config_options": [],
-        "stale_after": (
-            datetime.now(timezone.utc) + timedelta(minutes=30)
-        ).isoformat(),
+        "stale_after": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
     }
 
 
@@ -119,9 +117,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     hosts = await alice.api.get("/me/runtime/agent-hosts")
     listed = hosts if isinstance(hosts, list) else hosts.get("items", [])
     [host] = listed
-    harness_list = await alice.api.get(
-        f"/me/runtime/agent-hosts/{host['id']}/harnesses"
-    )
+    harness_list = await alice.api.get(f"/me/runtime/agent-hosts/{host['id']}/harnesses")
     rows = harness_list if isinstance(harness_list, list) else harness_list["items"]
     assert rows, "the paired host announces no harnesses"
     harness_id = rows[0]["id"]
@@ -160,9 +156,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
         if command.get("kind") == "START_RUN"
     }
 
-    conversation = await alice.starts_a_conversation(
-        in_pod=pod, with_agent=agent["name"]
-    )
+    conversation = await alice.starts_a_conversation(in_pod=pod, with_agent=agent["name"])
     # The send endpoint streams until the run finishes, and this run finishes
     # only when a host does the work — which is the thing under test. Send
     # without holding the stream: once the message commits, the run is
@@ -180,9 +174,9 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
             if answer.status_code != 200:
                 return None
             commands = [
-                c for c in answer.json().get("commands", [])
-                if c.get("kind") == "START_RUN"
-                and c.get("command_id") not in outstanding
+                c
+                for c in answer.json().get("commands", [])
+                if c.get("kind") == "START_RUN" and c.get("command_id") not in outstanding
             ]
             return commands or None
 
@@ -209,9 +203,9 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
             answer = await _poll(alice, host_secret)
             assert answer.status_code == 200, answer.text[:300]
             offers = [
-                c for c in answer.json().get("commands", [])
-                if c.get("kind") == "START_RUN"
-                and c.get("command_id") not in outstanding
+                c
+                for c in answer.json().get("commands", [])
+                if c.get("kind") == "START_RUN" and c.get("command_id") not in outstanding
             ]
             assert len(offers) <= 1, (
                 f"a single handout carried {len(offers)} START_RUN commands "
