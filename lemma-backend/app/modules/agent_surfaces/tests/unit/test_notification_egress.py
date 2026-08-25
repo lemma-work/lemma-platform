@@ -876,3 +876,73 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     assert order.index("commit") < order.index("send"), (
         f"connection held across the send; call order was {order}"
     )
+
+
+async def test_a_cold_open_carries_both_names_to_the_platform():
+    """Email puts the attribution in the From line, so it has to travel.
+
+    ``attribute()`` writes "Priya, on behalf of Deepak" into the body, which is
+    invisible until the message is opened. The sender column is what a person
+    scans in a list, and it named the deployment rather than the agent.
+    """
+    surface = _email_surface()
+    notification = _notification()
+    conversation_id = uuid4()
+    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+
+    egress = NotificationEgress(
+        egress=egress_port,
+        conversation_service=_conversation_service(conversation_id),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=conversation_id,
+        notification=notification,
+        message="What did you ship?",
+        agent_name="Priya",
+        actor_display_name="Deepak Jha",
+    )
+
+    metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
+    assert metadata["agent_display_name"] == "Priya"
+    assert metadata["actor_display_name"] == "Deepak Jha"
+
+
+async def test_an_unknown_agent_name_is_absent_rather_than_None():
+    """A present key beats ``setdefault``, and would unname every chat bot.
+
+    ``_egress_metadata_with_agent_name`` fills ``agent_display_name`` from the
+    surface with ``setdefault``, so writing an explicit None here does not mean
+    "we don't know" — it wins, and the reply goes out with no name and no icon
+    on a platform that had both.
+    """
+    surface = _email_surface()
+    link = _link_for(surface)
+    conversation_id = uuid4()
+    egress_port = _egress_double()
+
+    egress = NotificationEgress(
+        egress=egress_port,
+        conversation_service=_conversation_service(conversation_id),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, external_user_id="U123", link=link),
+        conversation_id=conversation_id,
+        notification=_notification(),
+        message="What did you ship?",
+        agent_name=None,
+        actor_display_name=None,
+    )
+
+    kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
+    assert "agent_display_name" not in kwargs["metadata"]
+    assert "actor_display_name" not in kwargs["metadata"]
