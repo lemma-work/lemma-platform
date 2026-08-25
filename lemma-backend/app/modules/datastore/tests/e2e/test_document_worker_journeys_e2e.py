@@ -136,16 +136,31 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         )
         assert hit["page_number"] == 1
 
-        assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
-
         # Redis redelivery carries the same durable event id. The inbox must
         # acknowledge it without creating another extraction/job side effect.
+        #
+        # Measured as "unchanged by the redelivery", not "exactly one, ever.
+        # The absolute form asserted that no transient retry had happened on
+        # the way here, which is not something the product promises and is not
+        # what this test is about: `KREUZBERG_REQUEST_TIMEOUT_SECONDS` is 1, so
+        # a loaded runner can time the first extract out, `release_claim`
+        # returns the row to PENDING with its attempt refunded (PS-DATA-041),
+        # and the re-drive extracts again — correct behaviour that read as a
+        # duplicate. It cost a red required check on an unrelated pull request.
+        before_redelivery = fake_document_processor_server.requests[
+            "kreuzberg:success.pdf"
+        ]
+        assert before_redelivery >= 1, "the document was never extracted at all"
+
         event = await _outbox_event_for_file(db_manager, uploaded["id"])
         bus = get_message_bus()
         await bus.publish(event.stream, event.payload)
         await bus.publish(event.stream, event.payload)
         await asyncio.sleep(0.5)
-        assert fake_document_processor_server.requests["kreuzberg:success.pdf"] == 1
+        assert (
+            fake_document_processor_server.requests["kreuzberg:success.pdf"]
+            == before_redelivery
+        ), "a redelivered event with the same id extracted the document again"
 
 
 # `slow` keeps this out of the fast lane every PR runs and puts it in the
