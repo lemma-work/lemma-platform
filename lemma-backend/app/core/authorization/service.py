@@ -541,12 +541,19 @@ class AuthorizationDataService:
             pod = await self.session.get(Pod, pod_id)
             if pod is not None:
                 organization_id = pod.organization_id
-            # The row is already in hand, so learning whether the pod still
-            # exists costs nothing here — and this is the only place it is
-            # read. A pod that has been deleted, or was never there, is not
-            # one whose contents anybody may enumerate; `get_pod_context`
-            # turns that into the refusal.
-            pod_is_deleted = pod is None or bool(pod.is_deleted)
+            # The row is already in hand, so learning whether the pod was
+            # deleted costs nothing here, and this is the only place it is read.
+            # `get_pod_context` turns it into the refusal.
+            #
+            # A *missing* row is deliberately not "deleted". This verdict is
+            # cached in the role snapshot, so treating absence as deletion means
+            # one moment where the row is not visible to this session — a create
+            # not yet committed, a transaction boundary, replica lag — is
+            # remembered as "deleted" and 404s every pod-scoped request for the
+            # rest of the cache's life. A pod that genuinely does not exist is
+            # already 404'd by the routes that read it, which is the right place
+            # for that answer because it is not cached.
+            pod_is_deleted = pod is not None and bool(pod.is_deleted)
 
         if cached is not None:
             return Context(
