@@ -24,26 +24,37 @@ class SkillLookupRequest(BaseModel):
     )
 
 
+_POD_PATH_NOTE = (
+    "This is a pod file path, not a path on the workspace filesystem: nothing "
+    "mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. "
+    "Read it with `load_skill`, or with `lemma files cat <path>` from a "
+    "workspace shell."
+)
+
+
 class SkillSummary(BaseModel):
     name: str = Field(description="Unique skill name.")
     description: str = Field(description="Short description of what the skill does.")
     path: str = Field(
         description="Backing path to the skill's `SKILL.md` file. Pod skills use `/skills/...` paths."
     )
-    workspace_path: str = Field(
-        description="Workspace-visible absolute path to the skill's `SKILL.md` file."
+    pod_path: str = Field(
+        description=f"Pod file path of the skill's `SKILL.md`. {_POD_PATH_NOTE}"
     )
-    workspace_dir: str = Field(
-        description="Workspace-visible absolute path to the root directory for this skill."
+    pod_dir: str = Field(
+        description=f"Pod file path of this skill's root directory. {_POD_PATH_NOTE}"
     )
 
 
 class SkillResourceSummary(BaseModel):
     path: str = Field(
-        description="Relative path to the resource inside the skill directory."
+        description=(
+            "Relative path to the resource inside the skill directory. Pass it "
+            "back as `load_skill`'s `resource_path` to read the resource."
+        )
     )
-    workspace_path: str = Field(
-        description="Workspace-visible absolute path to the resource file."
+    pod_path: str = Field(
+        description=f"Pod file path of the resource. {_POD_PATH_NOTE}"
     )
     kind: str = Field(
         description="High-level resource type such as `text`, `script`, or `file`."

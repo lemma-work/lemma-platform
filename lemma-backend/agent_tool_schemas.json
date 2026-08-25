@@ -1054,12 +1054,12 @@
               "description": "Backing path to the skill's `SKILL.md` file. Pod skills use `/skills/...` paths.",
               "type": "string"
             },
-            "workspace_path": {
-              "description": "Workspace-visible absolute path to the skill's `SKILL.md` file.",
+            "pod_path": {
+              "description": "Pod file path of the skill's `SKILL.md`. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
               "type": "string"
             },
-            "workspace_dir": {
-              "description": "Workspace-visible absolute path to the root directory for this skill.",
+            "pod_dir": {
+              "description": "Pod file path of this skill's root directory. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
               "type": "string"
             }
           },
@@ -1067,8 +1067,8 @@
             "name",
             "description",
             "path",
-            "workspace_path",
-            "workspace_dir"
+            "pod_path",
+            "pod_dir"
           ],
           "title": "SkillSummary",
           "type": "object"
@@ -1247,11 +1247,11 @@
         "SkillResourceSummary": {
           "properties": {
             "path": {
-              "description": "Relative path to the resource inside the skill directory.",
+              "description": "Relative path to the resource inside the skill directory. Pass it back as `load_skill`'s `resource_path` to read the resource.",
               "type": "string"
             },
-            "workspace_path": {
-              "description": "Workspace-visible absolute path to the resource file.",
+            "pod_path": {
+              "description": "Pod file path of the resource. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
               "type": "string"
             },
             "kind": {
@@ -1265,7 +1265,7 @@
           },
           "required": [
             "path",
-            "workspace_path",
+            "pod_path",
             "kind",
             "executable"
           ],

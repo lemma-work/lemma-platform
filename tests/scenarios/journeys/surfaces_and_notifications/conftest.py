@@ -79,9 +79,7 @@ class Reachable:
     async def conversations(self) -> list[Any]:
         """The conversations this scenario opened, newest excluded of nothing."""
         found = await self.alice.conversations_in(self.pod)
-        return [
-            thread for thread in found if str(_thread_id(thread)) not in self._before
-        ]
+        return [thread for thread in found if str(_thread_id(thread)) not in self._before]
 
     def only_forged(self, why: str) -> None:
         """Skip unless this lane can deliver what Telegram never sent."""
