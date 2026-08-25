@@ -205,6 +205,14 @@ jobs:
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
+            # `make coverage-backend-unit` has always written this and nothing
+            # has ever collected it, so the unit lane's slow tail is invisible
+            # -- 195 seconds with no way to see whether that is a broad spread
+            # or three slow tests, which is the difference between needing
+            # per-worker database isolation for xdist and needing to split
+            # three tests. The e2e shards upload theirs and get a slowest-tests
+            # summary out of it; this is the same line.
+            lemma-backend/coverage-backend/junit-*.xml
             lemma-backend/coverage-backend/html
           if-no-files-found: ignore
   backend-lint:

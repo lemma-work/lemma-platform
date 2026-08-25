@@ -4,29 +4,51 @@
     "serial_seconds": 1558.5,
     "tests": 819,
     "directories": 14,
-    "files": 125
+    "files": 126
   },
   "shards": [
     {
       "name": "sandbox",
-      "args": "app/modules/function/tests/e2e app/modules/workspace/tests/e2e",
+      "args": "app/modules/function/tests/e2e app/modules/workspace/tests/e2e --ignore=app/modules/function/tests/e2e/test_function_e2e.py --ignore=app/modules/workspace/tests/e2e/test_sandbox_end_to_end.py --ignore=app/modules/workspace/tests/e2e/test_workspace_cli_concurrency_bench.py --ignore=app/modules/workspace/tests/e2e/test_workspace_durability_e2e.py",
       "workers": 1,
       "markers": "e2e and not slow and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": true,
-      "serial_seconds": 310.3,
-      "tests": 54,
-      "estimated_seconds": 444.3,
+      "serial_seconds": 154.4,
+      "tests": 27,
+      "estimated_seconds": 288.4,
       "why_serial": "real Docker sandbox provisioning contends for the runner's CPU"
     },
     {
-      "name": "agent",
-      "args": "app/modules/agent/tests/e2e",
+      "name": "sandbox-2",
+      "args": "app/modules/function/tests/e2e/test_function_e2e.py app/modules/workspace/tests/e2e/test_sandbox_end_to_end.py app/modules/workspace/tests/e2e/test_workspace_cli_concurrency_bench.py app/modules/workspace/tests/e2e/test_workspace_durability_e2e.py",
+      "workers": 1,
+      "markers": "e2e and not slow and not provider and not local_cli and not indexing and not protected",
+      "needs_sandbox_images": true,
+      "serial_seconds": 155.9,
+      "tests": 27,
+      "estimated_seconds": 289.9,
+      "why_serial": "real Docker sandbox provisioning contends for the runner's CPU"
+    },
+    {
+      "name": "agent-workspace",
+      "args": "app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
       "workers": 1,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": true,
-      "serial_seconds": 192.7,
-      "tests": 123,
-      "estimated_seconds": 326.7,
+      "serial_seconds": 99.2,
+      "tests": 27,
+      "estimated_seconds": 233.2,
+      "why_serial": "provisions a real Docker workspace, same CPU contention as sandbox"
+    },
+    {
+      "name": "agent",
+      "args": "app/modules/agent/tests/e2e --ignore=app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py --ignore=app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
+      "workers": 1,
+      "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
+      "needs_sandbox_images": false,
+      "serial_seconds": 93.5,
+      "tests": 96,
+      "estimated_seconds": 205.5,
       "why_serial": "MEASURED 2026-08-22: xdist coverage race disproven, but the per-run spread is 0.4pt against a 0.2pt bar -- re-measure before raising"
     },
     {

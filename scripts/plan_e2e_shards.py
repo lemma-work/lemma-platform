@@ -72,8 +72,34 @@ PINNED = [
         # groups that need the built images, and splitting them meant paying
         # the same image build twice against one racing cache key.
         "why": "real Docker sandbox provisioning contends for the runner's CPU",
-        # One bin keeps today's grouping. Raising it needs the 200s file inside
-        # this group split first, or the extra bin has nothing to take.
+        # Two bins, now that the 200s file is two ~100s files and there is
+        # something for the second bin to take. Split across runners rather
+        # than across xdist workers: the reason above is about two workers
+        # inside *one* four-vCPU runner, and separate jobs each get their own.
+        "bins": 2,
+    },
+    {
+        # The agent module's `fast_workspace` journeys, and only those. They
+        # provision a real Docker workspace, so wherever they run pays ~67s to
+        # restore the image -- and while they sat in the `agent` shard, all 123
+        # of its tests waited for that restore on behalf of five of them.
+        #
+        # Its own group rather than folded into `sandbox`, because the marker
+        # filter is the whole point. `fast_workspace` suppresses the auto-added
+        # `workspace` marker, so these are selected under FAST_MARKERS; under
+        # SANDBOX_MARKERS the same two files would also select eleven
+        # `workspace` tests that belong to the protected lane and have never
+        # run on a PR. Measured, not assumed: 27 selected under FAST_MARKERS,
+        # 38 under SANDBOX_MARKERS.
+        "name": "agent-workspace",
+        "dirs": [
+            "app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py",
+            "app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
+        ],
+        "workers": 1,
+        "markers": FAST_MARKERS,
+        "needs_sandbox_images": True,
+        "why": "provisions a real Docker workspace, same CPU contention as sandbox",
         "bins": 1,
     },
     {
@@ -81,16 +107,17 @@ PINNED = [
         "dirs": ["app/modules/agent/tests/e2e"],
         "workers": 1,
         "markers": FAST_MARKERS,
-        # True, even though the agent module is not the sandbox module. Its
-        # `fast_workspace` journeys provision a real Docker workspace, and
-        # conftest exempts them from the `workspace` marker precisely so they
-        # stay in the fast lane -- so this shard needs the image too. Without
-        # this it still got one: the `workspace_image` fixture built it on
-        # demand, inside the test step, uncached, and invisibly (pytest
-        # captures the build output, so the job log shows no build at all). The
-        # sandbox shard pays 79s to build and 27s to restore from cache; this
-        # shard was paying the 79s every run with nothing to show for it.
-        "needs_sandbox_images": True,
+        # False now, and derived rather than declared: with the two
+        # `fast_workspace` files in their own group above, nothing left in this
+        # shard asks for an image, and
+        # test_every_shard_that_provisions_a_sandbox_declares_the_image reads
+        # that off the sources rather than believing this line. It was True for
+        # a real reason -- without it the `workspace_image` fixture built the
+        # image on demand, inside the test step, uncached and invisibly,
+        # because pytest captures the build output, so the job log showed no
+        # build at all and the shard paid 79s every run. The fix then was to
+        # declare it. The fix now is not to need it.
+        "needs_sandbox_images": False,
         # MEASURED 2026-08-22, kept. The original reason -- "worker-subprocess
         # coverage files race under xdist" -- is false: .coveragerc sets
         # parallel=true and relative_files=true, so filenames cannot collide.
