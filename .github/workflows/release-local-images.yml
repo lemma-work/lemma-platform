@@ -597,6 +597,24 @@ jobs:
             --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip" \
             --archive-existing
 
+      # Before the archive is uploaded, on the pack that is actually shipped.
+      #
+      # `check_host_pack.py` existed and ran only in `host-pack-macos`, which is
+      # a merge-to-main lane on `macos-14`. So the pack users download was never
+      # checked at all, and the Windows one was checked by nothing on any
+      # trigger. That is the wrong way round: the merge lane is the rehearsal,
+      # this is the performance.
+      #
+      # Runs against the built directory rather than the zip, because that is
+      # what the archive is made from one step earlier. It executes the packed
+      # interpreters, which is what catches a relocatable CPython that still
+      # believes it lives on the build machine -- the failure that unpacks
+      # perfectly and fails at the first import, four minutes into a user's
+      # first run.
+      - name: The packed runtimes execute
+        shell: bash
+        run: python scripts/check_host_pack.py host-pack-out/local-runtime
+
       - name: Upload host pack
         uses: actions/upload-artifact@v4
         with:

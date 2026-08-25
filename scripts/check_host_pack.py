@@ -71,7 +71,10 @@ def check_python(pack: Path) -> None:
     # `sys.prefix` is the whole point. A relocatable build that did not get
     # relocated reports the build machine's path here, and every import after
     # it resolves against a directory that does not exist on this computer.
-    prefix = Path(check_output(python, "-c", "import sys; print(sys.prefix)"))
+    prefix = Path(check_output(python, "-c", "import sys; print(sys.prefix)")).resolve()
+    # `resolve()` on both sides, because Windows hands back a path that may
+    # differ in case or arrive as an 8.3 short name, and a string-ish comparison
+    # would then call a correctly relocated interpreter broken.
     if not prefix.is_relative_to(pack.resolve()):
         raise SystemExit(
             f"the packed Python thinks it lives at {prefix}, which is outside "

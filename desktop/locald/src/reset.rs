@@ -17,8 +17,8 @@
 //!   different program as far as the vault is concerned.
 
 use std::io::{self, Write};
-// Only the macOS reclaim names a path; Windows unregisters a WSL distribution.
-#[cfg(target_os = "macos")]
+// Both managed-guest reclaims name executable paths; no other platform has one.
+#[cfg(any(target_os = "macos", windows))]
 use std::path::Path;
 
 use serde_json::json;
@@ -118,11 +118,35 @@ fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
     runtime.reclaim_owned_macos_vm()
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: unregister the private distribution, which is where the data is.
+///
+/// This used to be a no-op with a comment saying the path "is not wired up
+/// yet" -- while the dialog above it promised "Everything Lemma keeps on this
+/// PC is deleted: your pods and files, your AI provider settings and stored
+/// keys, and the downloaded runtime". Removing the state directory leaves the
+/// `LemmaRuntime` distribution and its multi-gigabyte `ext4.vhdx` registered
+/// and full, and the next install reuses the same name -- so "Start Over"
+/// returned to the old data, having said it had deleted it.
+///
+/// `unregister_windows_guest` existed on the manager the whole time; nothing
+/// called it from here.
+#[cfg(windows)]
+fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
+    use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig, DEFAULT_WSL_DISTRIBUTION};
+
+    let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+        wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_owned(),
+        local_root: paths.root.clone(),
+        artifact_root: paths.root.join("runtime"),
+        bridge_executable: Path::new("lemma-runtime").to_path_buf(),
+        wsl_executable: Path::new("wsl.exe").to_path_buf(),
+    })?;
+    runtime.unregister_windows_guest()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn reclaim_running_vm(_paths: &LocalPaths) -> io::Result<()> {
-    // Windows unregisters its WSL distribution rather than unlinking a disk,
-    // and that path is not wired up yet. Removing the state directory is still
-    // correct and is what this subcommand does next.
+    // No managed guest on any other platform, so there is nothing to reclaim.
     Ok(())
 }
 

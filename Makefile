@@ -21,7 +21,8 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-host-pack desktop-host-pack-check \
+        desktop-lint desktop-guestd desktop-check-windows \
+        desktop-host-pack desktop-host-pack-check \
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
@@ -327,6 +328,7 @@ help:
 	@echo "    make desktop-dmg        self-contained macOS test DMG (needs runtime-fetch first)"
 	@echo "    make desktop-exe        Windows installer — says how to build it on Windows"
 	@echo "    make desktop-guestd     build and test the Linux guest daemon (Linux only)"
+	@echo "    make desktop-check-windows  compile the Windows paths from a Mac"
 	@echo "    make desktop-host-pack  build the shipped host pack and run its interpreters"
 	@echo "    make desktop-verify-guest  workspace sandbox + file persistence in the real VM"
 	@echo "    make desktop-clean      remove desktop build output and staged runtime"
@@ -996,6 +998,30 @@ desktop-host-pack:
 # Just the checks, against a pack you already have.
 desktop-host-pack-check:
 	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Compile the Windows code paths from a Mac, before pushing.
+#
+# The `desktop-windows` CI job is not in the desktop path filter, so its result
+# arrives a push later -- and it has now caught four separate things one round
+# at a time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
+# breaking source searches, and tests that spawn `/bin/sh`.
+#
+# This catches the *compile* half of that class locally. `lemma-agent-host` is
+# left out on purpose: it pulls `libsqlite3-sys`, whose build script needs a
+# Windows C toolchain that a Mac does not have. locald is where every one of
+# those failures was.
+#
+# The runtime half -- a POSIX binary that is simply not there -- is not a
+# compile error, and is caught by the source lint in `host_process.rs` instead.
+desktop-check-windows:
+	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
+		echo "→ Adding the Windows target…"; \
+		rustup target add x86_64-pc-windows-msvc)
+	@echo "→ Windows compile check (locald, runtime manager, tests included)…"
+	@cd $(DESKTOP_DIR) && cargo clippy \
+		-p lemma-locald -p lemma-runtime-manager \
+		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+	@echo "  ✓ the Windows code paths compile and lint"
 
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs
