@@ -1,4 +1,5 @@
 from __future__ import annotations
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -602,3 +603,53 @@ async def test_list_pods_by_org_editor_sees_only_member_pods(
         None,
     )
     pod_repository_mock.list_by_org.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_pod_frees_its_inbound_addresses_in_the_same_request(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The pod's name is freed here, so its addresses have to be too.
+
+    ``_build_deleted_pod_name`` renames the pod immediately, which releases the
+    org-unique name — while surface teardown waited on the pod-deleted event in
+    the worker. Recreating a pod under that name in between asked for an
+    address the deleted pod still held: either the new pod took a suffixed form
+    and the readable one was orphaned on a row nobody can reach, or, once the
+    worker caught up, it inherited an address the deleted pod's correspondents
+    are still writing to. Which one you got came down to queue lag.
+    """
+    release = AsyncMock(return_value=1)
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.release_pod_inbound_addresses", release
+    )
+    uow = SimpleNamespace(after_commit=lambda _hook: None)
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=uow,
+    )
+
+    requester_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=requester_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=requester_id)
+    organization_repository_mock.get_member.return_value = org_member
+    # `delete_pod` reads through the soft delete, so this is the accessor it
+    # actually uses; `get` would leave `is_deleted` a truthy mock and the
+    # already-deleted short circuit would return before any teardown ran.
+    pod_repository_mock.get_even_if_deleted.return_value = pod
+
+    assert await service.delete_pod(pod.id, requester_id) is True
+
+    release.assert_awaited_once_with(uow, pod_id=pod.id)
