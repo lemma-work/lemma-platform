@@ -462,7 +462,22 @@ function SetupAssistant({
    * one call that cannot fail on a name.
    */
   const createFirstOrganization = async (): Promise<Organization> => {
-    const useDomainJoin = Boolean(normalizedWorkDomain);
+    // Respects the consent toggle, where it used to infer domain-join purely
+    // from the address. On a local install that inference was never shown to
+    // anyone: this runs from the identity step, and the flow then jumps
+    // straight to intelligence, skipping the step the toggle lives on. So the
+    // owner got an organization anyone with an address at their work domain
+    // could join, without being asked and without being told.
+    //
+    // That is not theoretical on a shared installation. Email verification is
+    // off for local mode, so the address is never proven — typing one is
+    // enough to be auto-joined as a member, which grants the full member
+    // roster and the ability to create pods inside the owner's organization.
+    //
+    // `allowDomainJoin` defaults to true when a work domain is present, so a
+    // hosted signup that *does* see the toggle behaves exactly as before.
+    const useDomainJoin =
+      allowDomainJoin && Boolean(normalizedWorkDomain) && !isLocal;
 
     return createOrganization.mutateAsync({
       name: organizationNameCandidate({

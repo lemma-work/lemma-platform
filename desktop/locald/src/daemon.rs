@@ -2278,6 +2278,23 @@ fn sharing_environment(
         ("SESSION_COOKIE_DOMAIN".into(), String::new()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED".into(), "false".into()),
         ("CORS_ORIGIN_REGEX".into(), exact_origin),
+        // Raised, not merely rewritten.
+        //
+        // The host pack turns every abuse control off, which is right for an
+        // installation only this Mac can reach. This overlay is applied when
+        // that stops being true -- and it used to change URLs and nothing else,
+        // so an installation reachable from the LAN or the open internet still
+        // had no rate limit on sign-in, no ceiling on account creation, and no
+        // ALTCHA. Anyone who found the address got unlimited, unthrottled
+        // password guessing against the owner's account.
+        //
+        // `DEBUG` matters for the same reason: the backend's own config
+        // validator explains that it makes every unhandled error answer with a
+        // source-annotated traceback, and it is set unconditionally for local
+        // mode.
+        ("AUTH_ABUSE_PROTECTION_ENABLED".into(), "true".into()),
+        ("AUTH_ALTCHA_ENABLED".into(), "true".into()),
+        ("DEBUG".into(), "false".into()),
     ]);
     let frontend = HashMap::from([
         ("NEXT_PUBLIC_API_URL".into(), api_url),
@@ -2754,5 +2771,32 @@ mod tests {
             exact_origin_regex("http://192.168.1.20:51234"),
             "^http://192\\.168\\.1\\.20:51234$"
         );
+    }
+
+    /// Exposing an installation raises its defences, in every mode.
+    ///
+    /// The host pack turns every abuse control off, which is correct while only
+    /// this Mac can reach the stack. This overlay is what runs when that stops
+    /// being true, and it used to rewrite URLs and nothing else -- so a
+    /// workspace on the LAN or the open internet had no sign-in rate limit, no
+    /// ceiling on account creation, no ALTCHA, and answered unhandled errors
+    /// with a source-annotated traceback.
+    #[test]
+    fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
+        for (origin, mode) in [
+            ("https://lemma.example.com", SharingMode::Public),
+            ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
+        ] {
+            let (backend, _) = sharing_environment(origin, mode);
+            assert_eq!(
+                backend["AUTH_ABUSE_PROTECTION_ENABLED"], "true",
+                "{origin} is reachable by someone other than this Mac"
+            );
+            assert_eq!(backend["AUTH_ALTCHA_ENABLED"], "true", "{origin}");
+            assert_eq!(
+                backend["DEBUG"], "false",
+                "{origin} must not answer strangers with tracebacks"
+            );
+        }
     }
 }

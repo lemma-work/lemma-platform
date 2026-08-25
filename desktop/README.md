@@ -205,8 +205,15 @@ export LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1
 ```
 
 Only that explicitly selected manifest may use `file://` artifact sources.
-Packaged releases ignore development port overrides and do not enable arbitrary
-local artifacts.
+
+These are **development-build overrides and a packaged release ignores them
+entirely** — along with `LEMMA_DESKTOP_HOST_PACK_ROOT`,
+`LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`, and the port overrides below. That is not
+tidiness: the manifest carries the digests every downloaded artifact is verified
+against, so honouring an override in a signed build would let anything already
+running as the user choose both the runtime Lemma executes and the check on it.
+`dev_override` in `desktop/src/main.rs` is the single gate, and a test asserts
+none of those variables is read around it.
 
 ## Build a test installer
 

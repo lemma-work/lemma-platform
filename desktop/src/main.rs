@@ -829,8 +829,32 @@ fn bundled_locald() -> Option<PathBuf> {
     candidate.exists().then_some(candidate)
 }
 
+/// A development override, honoured only by a development build.
+///
+/// These three point the app at a different runtime: a host pack, a managed
+/// runtime, or the signed manifest that names both and carries the digests
+/// everything else is checked against. Each was read unconditionally and took
+/// precedence over the bundled resource, so in a shipped, notarized,
+/// hardened-runtime app, anything already running as the user could set one and
+/// have Lemma download and execute a runtime of its choosing -- and, through
+/// the manifest, choose the digests that runtime was verified against.
+///
+/// That is a persistence and trust-laundering primitive rather than initial
+/// access, but it defeats the entire point of a signed manifest.
+///
+/// `network.rs` has always done this correctly for the port overrides, with the
+/// same reasoning: packaged releases use app-owned allocation and overrides
+/// exist only to make source runs deterministic. This is that rule, applied to
+/// the three places it was missing.
+fn dev_override(name: &str) -> Option<std::ffi::OsString> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os(name).filter(|value| !value.is_empty())
+}
+
 fn bundled_host_pack_root() -> Option<PathBuf> {
-    if let Some(root) = std::env::var_os("LEMMA_DESKTOP_HOST_PACK_ROOT") {
+    if let Some(root) = dev_override("LEMMA_DESKTOP_HOST_PACK_ROOT") {
         let root = PathBuf::from(root);
         if root.join("release.json").is_file() {
             return Some(root);
@@ -870,7 +894,7 @@ fn host_pack_root() -> Option<PathBuf> {
 }
 
 fn bundled_managed_runtime_root() -> Option<PathBuf> {
-    if let Some(root) = std::env::var_os("LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT") {
+    if let Some(root) = dev_override("LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT") {
         let root = PathBuf::from(root);
         if managed_runtime_marker(&root).is_file() {
             return Some(root);
@@ -899,7 +923,7 @@ fn managed_runtime_root() -> Option<PathBuf> {
 }
 
 fn bundled_release_manifest() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("LEMMA_DESKTOP_RELEASE_MANIFEST") {
+    if let Some(path) = dev_override("LEMMA_DESKTOP_RELEASE_MANIFEST") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
@@ -3770,10 +3794,18 @@ fn locald_request_blocking(command: Value) -> Result<Value, String> {
 /// the main thread, so any command that waits on the daemon, the network or a
 /// child process freezes every window for its whole duration.
 async fn discover_provider_models(
-    _window: Webview,
+    window: Webview,
     app: AppHandle,
     payload: Value,
 ) -> Result<Value, String> {
+    // This binds the window and checks it, where it used to take `_window` and
+    // discard it -- while `configure_ai_provider`, its sibling one screen down,
+    // has always checked. The command is granted to remote origins, and an
+    // omitted `api_key` means "use the one in the Keychain", which is then
+    // attached as a bearer token to a `base_url` the *caller* chose. So one
+    // invoke from any granted origin handed the user's provider key to a host
+    // of the caller's choosing, with no dialog and nothing logged.
+    require_agent_host_caller(&window, &app)?;
     tauri::async_runtime::spawn_blocking(move || discover_provider_models_impl(app, payload))
         .await
         .map_err(|error| error.to_string())?
@@ -6346,6 +6378,45 @@ mod tests {
             .find("\nfn ")
             .map_or(source.len(), |offset| start + offset);
         &source[start..end]
+    }
+
+    /// A release build honours no runtime-redirecting environment variable.
+    ///
+    /// These three point the app at a different host pack, managed runtime, or
+    /// signed manifest -- and the manifest carries the digests everything else
+    /// is verified against, so overriding it chooses both the bytes and the
+    /// check on them. Read unconditionally, they let anything already running
+    /// as the user make a notarized, hardened-runtime Lemma fetch and execute a
+    /// runtime of its choosing.
+    ///
+    /// Asserted on the source because the property is "the read is gated", and
+    /// a test running under `cfg(test)` is a debug build -- it cannot observe
+    /// the release behaviour by calling the function.
+    #[test]
+    fn a_release_build_ignores_every_runtime_redirecting_env_var() {
+        let source = include_str!("main.rs");
+        for name in [
+            "LEMMA_DESKTOP_HOST_PACK_ROOT",
+            "LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT",
+            "LEMMA_DESKTOP_RELEASE_MANIFEST",
+        ] {
+            assert!(
+                !source.contains(&format!("std::env::var_os(\"{name}\")")),
+                "{name} must be read through dev_override, which is inert in a \
+                 release build, not directly",
+            );
+            assert!(
+                source.contains(&format!("dev_override(\"{name}\")")),
+                "{name} should still be honoured in a development build",
+            );
+        }
+        // The gate itself, so this cannot pass against a `dev_override` that
+        // forgot to check.
+        assert!(
+            function_body(source, "fn dev_override(name: &str)")
+                .contains("if !cfg!(debug_assertions)"),
+            "dev_override must be inert outside a development build",
+        );
     }
 
     #[test]
