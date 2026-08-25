@@ -77,7 +77,36 @@ impl LocalPaths {
     pub fn socket_name(&self) -> io::Result<Name<'_>> {
         #[cfg(unix)]
         {
-            self.socket_path().to_fs_name::<GenericFilePath>()
+            let path = self.socket_path();
+            // `sun_path` is 104 bytes on macOS and 108 on Linux, and the
+            // interprocess crate's own message for exceeding it -- "local
+            // socket name length exceeds capacity of sun_path of sockaddr_un"
+            // -- names a struct field and no path, so it reads as a bug in
+            // Lemma rather than as something about where the state directory
+            // is. The daemon then exits during startup and the app reports
+            // "exit status: 1".
+            //
+            // Unreachable at the default root, which is ~60 characters plus a
+            // username. Very reachable via LEMMA_LOCALD_ROOT, which is how the
+            // test harnesses and every developer point an installation at a
+            // temporary directory -- and macOS hands those out under
+            // /private/var/folders with paths well over a hundred characters
+            // before anything is appended.
+            const SUN_PATH_LIMIT: usize = 104;
+            let length = path.as_os_str().len();
+            if length >= SUN_PATH_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "the control socket path is {length} characters and the \
+                         operating system allows at most {}: {}. Set \
+                         LEMMA_LOCALD_ROOT to a shorter directory.",
+                        SUN_PATH_LIMIT - 1,
+                        path.display(),
+                    ),
+                ));
+            }
+            path.to_fs_name::<GenericFilePath>()
         }
 
         #[cfg(windows)]
@@ -259,6 +288,31 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let error = quarantine_aside(&root.path().join("absent")).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    /// A path too long for a Unix socket says so, and says what to do.
+    ///
+    /// Hit for real while testing the quit path: the daemon exited immediately
+    /// with "local socket name length exceeds capacity of sun_path of
+    /// sockaddr_un", which names a C struct field and no path at all. Every
+    /// temporary directory macOS hands out lives under /private/var/folders
+    /// and is already most of the budget, so this is what a harness pointed at
+    /// one gets -- and what it used to get was a daemon that would not start
+    /// for reasons it did not explain.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_path_too_long_for_the_kernel_explains_itself() {
+        let roomy = LocalPaths::new(PathBuf::from("/tmp/lemma-test"));
+        assert!(roomy.socket_name().is_ok());
+
+        let long = LocalPaths::new(PathBuf::from(format!("/tmp/{}", "d".repeat(120))));
+        let error = long.socket_name().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(message.contains("control socket path"), "{message}");
+        assert!(message.contains("LEMMA_LOCALD_ROOT"), "{message}");
+        // The path itself, because "too long" without it is not actionable.
+        assert!(message.contains("dddd"), "{message}");
     }
 
     #[test]
