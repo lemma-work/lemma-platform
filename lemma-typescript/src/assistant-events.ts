@@ -26,6 +26,12 @@ export interface ParsedAssistantStreamEvent {
   token?: string;
   tokenKind?: string;
   error?: string;
+  /**
+   * The transport gave up, not the run. Carries no status on purpose: the run
+   * is still going, and a consumer that treats this as an ending stops reading
+   * a conversation the server is still writing to.
+   */
+  interrupted?: boolean;
 }
 
 function isRecord(value: unknown): value is ParsedRecord {
@@ -155,7 +161,17 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
     return { status: "STOPPED" };
   }
 
-  if (eventType === "error" || eventType === "stream_error") {
+  if (eventType === "stream_error") {
+    // The subscription behind the stream died while the run kept going. No
+    // status: the run's own is unchanged, and reporting FAILED here is what
+    // turned a reconnect instruction into a dead transcript.
+    return {
+      interrupted: true,
+      error: extractErrorMessage(payload) ?? "Realtime stream interrupted.",
+    };
+  }
+
+  if (eventType === "error") {
     return {
       status: "FAILED",
       error: extractErrorMessage(payload) ?? "Agent run failed.",
