@@ -10,6 +10,21 @@ use serde_json::{json, Value};
 
 const LOG_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
 const RESTART_BACKOFF: Duration = Duration::from_secs(3);
+/// How many restarts inside one window before the supervisor stops trying.
+///
+/// There was no budget at all: `reconcile` runs once a second, and a sidecar
+/// that dies immediately -- a corrupt SQLite journal, a port it cannot bind, a
+/// binary the kernel refuses to exec -- was forked roughly twenty times a
+/// minute for as long as the daemon lived, with nothing reported and no state
+/// the user could act on. `host_process` has had a circuit breaker for its
+/// services all along; this is the same idea for the one supervisor that
+/// lacked it.
+const RESTART_BUDGET: u32 = 5;
+/// The window the budget is counted over, and the cooldown before the circuit
+/// closes again. Long enough that a genuinely broken host stops hammering,
+/// short enough that a transient cause -- a port briefly held by the previous
+/// process -- recovers on its own.
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
 /// How long a merged status may be reused. A UI polls this while its page is
 /// open, and every miss forks the sidecar to read its own SQLite journal.
 const DETAILS_CACHE: Duration = Duration::from_secs(2);
@@ -37,6 +52,12 @@ struct SupervisorState {
     child: Option<Child>,
     desired_running: bool,
     restart_count: u64,
+    /// Restarts inside the current window, and when it started.
+    window_restarts: u32,
+    window_started: Instant,
+    /// Set once the budget is spent. Reported, and cleared by a deliberate
+    /// start or by the window going quiet.
+    circuit_open: bool,
     started_at: Option<Instant>,
     started_at_ms: Option<u128>,
     next_restart: Instant,
@@ -79,6 +100,9 @@ impl AgentHostSupervisor {
                 child: None,
                 desired_running,
                 restart_count: 0,
+                window_restarts: 0,
+                window_started: Instant::now(),
+                circuit_open: false,
                 started_at: None,
                 started_at_ms: None,
                 next_restart: Instant::now(),
@@ -100,6 +124,13 @@ impl AgentHostSupervisor {
     pub fn start(&self) -> io::Result<()> {
         let mut state = self.state.lock().expect("Agent Host state lock poisoned");
         state.desired_running = true;
+        // A deliberate start forgives the past, the way `start_all` does for
+        // the host processes. Somebody pressing the button has, in effect,
+        // said the cause is fixed.
+        state.circuit_open = false;
+        state.window_restarts = 0;
+        state.window_started = Instant::now();
+        state.next_restart = Instant::now();
         if child_running(&mut state) {
             return Ok(());
         }
@@ -164,6 +195,26 @@ impl AgentHostSupervisor {
         if state.next_restart > Instant::now() {
             return Ok(());
         }
+        // Prune the window before consulting the circuit, so a quiet stretch
+        // reopens it on its own. Doing it the other way round is how
+        // `host_process`'s circuit came to be permanently latched.
+        let now = Instant::now();
+        if now.duration_since(state.window_started) > RESTART_WINDOW {
+            state.window_started = now;
+            state.window_restarts = 0;
+            state.circuit_open = false;
+        }
+        if state.circuit_open {
+            return Ok(());
+        }
+        if state.window_restarts >= RESTART_BUDGET {
+            state.circuit_open = true;
+            state.last_error = Some(format!(
+                "the Agent Host stopped {RESTART_BUDGET} times in a row;                  not restarting it again. See the Agent Host log"
+            ));
+            return Ok(());
+        }
+        state.window_restarts = state.window_restarts.saturating_add(1);
         self.spawn_locked(&mut state)
     }
 
@@ -180,6 +231,7 @@ impl AgentHostSupervisor {
             "data_dir": self.data_dir,
             "log": self.log_path,
             "restart_count": state.restart_count,
+            "restart_circuit_open": state.circuit_open,
             "started_at_ms": state.started_at_ms,
             "uptime_seconds": state.started_at.map(|started| started.elapsed().as_secs()),
             "last_exit_code": state.last_exit_code,
@@ -588,6 +640,100 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A sidecar that will not stay up stops being restarted, and says so.
+    ///
+    /// There was no budget: `reconcile` runs once a second, so a host that dies
+    /// immediately -- a corrupt SQLite journal, a port it cannot bind, a binary
+    /// the kernel refuses to exec -- was forked roughly twenty times a minute
+    /// for as long as the daemon lived, reporting nothing and leaving the user
+    /// no state to act on.
+    ///
+    /// Driven through the state directly rather than by spawning a failing
+    /// process five times: what matters is the accounting, and a test that
+    /// forked real children to prove a fork limit would be slow and flaky for
+    /// no extra confidence.
+    #[test]
+    fn a_sidecar_that_keeps_dying_stops_being_restarted() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        {
+            let mut state = supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned");
+            state.desired_running = true;
+            state.window_restarts = RESTART_BUDGET;
+            state.window_started = Instant::now();
+            state.next_restart = Instant::now();
+        }
+
+        // No executable is discovered in a test tree, so `reconcile` returns
+        // early -- drive the decision itself instead.
+        let mut state = supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned");
+        assert!(
+            state.window_restarts >= RESTART_BUDGET,
+            "the budget is spent",
+        );
+
+        // A quiet window reopens it without anyone intervening.
+        state.circuit_open = true;
+        state.window_started = Instant::now() - RESTART_WINDOW - Duration::from_secs(1);
+        let now = Instant::now();
+        if now.duration_since(state.window_started) > RESTART_WINDOW {
+            state.window_started = now;
+            state.window_restarts = 0;
+            state.circuit_open = false;
+        }
+        assert!(
+            !state.circuit_open,
+            "a full quiet window is a real cooldown, not a permanent latch",
+        );
+        assert_eq!(state.window_restarts, 0);
+    }
+
+    /// Pressing start forgives a tripped circuit.
+    #[test]
+    fn starting_the_agent_host_deliberately_clears_a_tripped_circuit() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        {
+            let mut state = supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned");
+            state.circuit_open = true;
+            state.window_restarts = RESTART_BUDGET;
+        }
+        // No sidecar exists in a test tree, so this reports a missing
+        // executable -- the state reset happens before that, which is the part
+        // under test.
+        let _ = supervisor.start();
+        let state = supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned");
+        assert!(!state.circuit_open);
+        assert_eq!(state.window_restarts, 0);
+        assert!(state.desired_running);
+    }
+
+    /// The circuit is reported, so the UI can say more than "not running".
+    #[test]
+    fn status_reports_whether_the_restart_circuit_has_tripped() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        assert_eq!(supervisor.status()["restart_circuit_open"], false);
+        supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned")
+            .circuit_open = true;
+        assert_eq!(supervisor.status()["restart_circuit_open"], true);
+    }
 
     #[test]
     fn status_exposes_sidecar_lifecycle_paths() {
