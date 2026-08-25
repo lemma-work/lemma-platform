@@ -381,7 +381,14 @@ locald/runtime/macos/console.log
 
 Set `LEMMA_DESKTOP_DEVTOOLS=1` for the WKWebView inspector and
 `LEMMA_DESKTOP_DEBUG=1` for protocol event output. The in-app Diagnostics view
-is the preferred user-facing path; it returns bounded redacted data.
+is the preferred user-facing path; it returns bounded data, redacted two ways.
+
+Values read out of `control.token` and the on-disk secret files are substituted
+exactly. Everything else is masked **by shape** — vendor key prefixes, JWTs, and
+whatever follows an `Authorization:` header — because the operator's 19 secrets
+live in the OS credential vault, not on disk, and reading them back to redact
+them would put every one of them into a diagnostics buffer. Treat the shape
+pass as best effort: skim a log before pasting it into a support thread.
 
 Development-only dynamic-port overrides require both variables:
 

@@ -1370,12 +1370,59 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Turn an installer failure into something the person reading it can do.
+///
+/// This had exactly one branch, and it answered the one case *we* hit: a 404
+/// told the reader to "publish its runtime artifacts", which is an instruction
+/// to a maintainer shipped to a stranger. Everything else fell through
+/// verbatim, so a corporate proxy became "artifact download failed with HTTP
+/// 403" and a dropped connection became a reqwest debug string.
+///
+/// Each arm names what happened and what to try. The raw text stays in the
+/// installer log, which the error screen links to.
 fn actionable_runtime_install_error(error: &str) -> String {
+    let lowered = error.to_ascii_lowercase();
+    let version = env!("CARGO_PKG_VERSION");
+
     if error.contains("artifact download failed with HTTP 404") {
         return format!(
-            "The runtime package for Lemma {} is not published yet (HTTP 404). \
-             Publish its runtime artifacts, or use the compressed PR test DMG for this exact commit.",
-            env!("CARGO_PKG_VERSION")
+            "Lemma {version}'s runtime is not available for download. If this is a \
+             nightly build, it may have been superseded — download the current one \
+             and install it again."
+        );
+    }
+    if lowered.contains("http 401")
+        || lowered.contains("http 403")
+        || lowered.contains("http 429")
+    {
+        return "The download was blocked or rate-limited. A VPN, proxy or firewall \
+                may be intercepting github.com. Try again on a different network."
+            .to_owned();
+    }
+    if lowered.contains("could not connect") || lowered.contains("dns") {
+        return "Lemma could not reach github.com to download its runtime. Check \
+                your internet connection and try again."
+            .to_owned();
+    }
+    if lowered.contains("timed out") || lowered.contains("timeout") {
+        return "The download stopped responding. Try again — it resumes from where \
+                it stopped rather than starting over."
+            .to_owned();
+    }
+    if lowered.contains("sha-256") || lowered.contains("digest") {
+        return "The downloaded runtime did not match what Lemma expected. This is \
+                usually a network that modifies downloads, such as a captive Wi-Fi \
+                portal — sign in to the network first, then try again."
+            .to_owned();
+    }
+    if lowered.contains("not enough disk space") {
+        // Already actionable and carries real numbers; do not flatten it.
+        return error.to_owned();
+    }
+    if lowered.contains("does not match desktop release") {
+        return format!(
+            "This copy of Lemma and its runtime do not match. Reinstalling Lemma \
+             {version} fixes it."
         );
     }
     error.to_owned()
@@ -2894,7 +2941,77 @@ fn redact_diagnostic_text(mut text: String) -> String {
     for secret in secrets {
         text = text.replace(&secret, "[redacted]");
     }
-    text
+    mask_secret_shapes(text)
+}
+
+/// Mask credentials by what they look like, not by having seen them before.
+///
+/// Substitution alone cannot cover the ones that matter. All 19 operator
+/// secrets -- the AI provider key, Slack and Telegram tokens, OAuth client
+/// secrets, the encryption keyset -- live in the OS credential vault, and
+/// `operator-config.json` holds none of them. So the values were unredactable
+/// by construction, while the README told the user this view returned bounded,
+/// redacted data.
+///
+/// Reading them back out of the vault to redact them would put every secret
+/// this installation owns into a diagnostics buffer and possibly raise a
+/// system authorisation prompt, so this recognises their shapes instead.
+/// Deliberately conservative: a missed token is worse than a masked path, but a
+/// log so heavily masked that nobody can read it is not a diagnostic.
+fn mask_secret_shapes(text: String) -> String {
+    text.lines()
+        .map(|line| {
+            let lowered = line.to_ascii_lowercase();
+            // An Authorization header carries a credential in full, whatever
+            // scheme it names.
+            if let Some(index) = lowered.find("authorization:") {
+                let (head, _) = line.split_at(index + "authorization:".len());
+                return format!("{head} [redacted]");
+            }
+            line.split_whitespace()
+                .map(|word| {
+                    let trimmed = word.trim_matches(|c: char| {
+                        c == '"' || c == '\'' || c == ',' || c == ';' || c == ')'
+                    });
+                    if looks_like_a_credential(trimmed) {
+                        word.replace(trimmed, "[redacted]")
+                    } else {
+                        word.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether one whitespace-delimited word is a credential rather than prose.
+///
+/// Prefix-anchored on the vendor forms actually stored here, plus JWTs. Length
+/// alone is not enough -- a file path or a container digest would match, and
+/// masking those makes a log useless for the thing it is being read for.
+fn looks_like_a_credential(word: &str) -> bool {
+    const VENDOR_PREFIXES: [&str; 7] = ["sk-", "xoxb-", "xoxp-", "xapp-", "re_", "ghp_", "ghs_"];
+    if VENDOR_PREFIXES
+        .iter()
+        .any(|prefix| word.len() > prefix.len() + 12 && word.starts_with(prefix))
+    {
+        return true;
+    }
+    // A JWT: three dot-separated base64url segments, the first of which decodes
+    // to a JSON header. Checking the shape rather than the length keeps
+    // version strings and digests out of it.
+    let segments: Vec<&str> = word.split('.').collect();
+    segments.len() == 3
+        && segments[0].len() >= 8
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+        && segments[0].starts_with("eyJ")
 }
 
 fn collect_secret_file_values(path: &Path, output: &mut Vec<String>) {
@@ -6380,6 +6497,107 @@ mod tests {
         &source[start..end]
     }
 
+    /// Install failures say what happened and what to try.
+    ///
+    /// This mapper had one branch, and it told the reader to "publish its
+    /// runtime artifacts" -- an instruction to a maintainer, shipped to
+    /// strangers. Everything else reached the error screen verbatim.
+    #[test]
+    fn install_failures_are_explained_rather_than_dumped() {
+        let cases = [
+            ("artifact download failed with HTTP 404", "superseded"),
+            ("artifact download failed with HTTP 403", "proxy or firewall"),
+            ("artifact download failed with HTTP 429", "rate-limited"),
+            ("could not connect to the artifact host", "internet connection"),
+            ("the request timed out", "resumes from where it stopped"),
+            (
+                "artifact size or SHA-256 did not match the signed manifest",
+                "captive Wi-Fi portal",
+            ),
+            (
+                "signed runtime release 0.9.0 does not match desktop release 0.7.0",
+                "do not match",
+            ),
+        ];
+        for (raw, expected) in cases {
+            let shown = actionable_runtime_install_error(raw);
+            assert!(
+                shown.contains(expected),
+                "{raw:?} should explain {expected:?}, got {shown:?}"
+            );
+            assert!(
+                !shown.contains("HTTP 4"),
+                "a status code is not an explanation: {shown:?}"
+            );
+        }
+
+        // Nobody outside this team can act on either of these.
+        let shown = actionable_runtime_install_error("artifact download failed with HTTP 404");
+        assert!(!shown.contains("Publish"), "{shown:?}");
+        assert!(!shown.contains("PR test DMG"), "{shown:?}");
+
+        // A message that is already specific keeps its numbers.
+        let disk = "not enough disk space for Lemma's local runtime: 7 GiB required, 3 GiB available";
+        assert_eq!(actionable_runtime_install_error(disk), disk);
+    }
+
+    /// Diagnostics masks the secrets it has never seen.
+    ///
+    /// Every operator secret lives in the OS credential vault, and the file
+    /// substitution this used to be could only mask values it had read off
+    /// disk -- so the AI provider key, the Slack and Telegram tokens and the
+    /// OAuth client secrets were unredactable by construction, while the
+    /// README promised bounded, redacted output.
+    #[test]
+    fn diagnostics_masks_credentials_it_has_never_seen() {
+        let masked = mask_secret_shapes(
+            [
+                "provider rejected key sk-EXAMPLE-NOT-A-REAL-KEY-FOR-TESTS",
+                "slack bot xoxb-EXAMPLE-NOT-A-REAL-SLACK-TOKEN responded 200",
+                "GET /v1/models Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
+                "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.QWxhZGRpbjpvcGVu expired",
+                "resend re_EXAMPLE-NOT-A-REAL-RESEND-KEY accepted",
+            ]
+            .join("\n"),
+        );
+
+        for leaked in [
+            "sk-EXAMPLE-NOT-A-REAL-KEY-FOR-TESTS",
+            "xoxb-EXAMPLE-NOT-A-REAL-SLACK-TOKEN",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.QWxhZGRpbjpvcGVu",
+            "re_EXAMPLE-NOT-A-REAL-RESEND-KEY",
+        ] {
+            assert!(!masked.contains(leaked), "{leaked} survived redaction");
+        }
+        assert!(
+            !masked.contains("Bearer eyJ"),
+            "an Authorization header carries the credential in full: {masked}"
+        );
+        // Still a diagnostic afterwards. A log masked so heavily that nobody
+        // can read it does not help the person reading it.
+        assert!(masked.contains("provider rejected key"));
+        assert!(masked.contains("responded 200"));
+        assert!(masked.contains("expired"));
+    }
+
+    /// Redaction must not eat the things a log is read for.
+    #[test]
+    fn diagnostics_keeps_paths_versions_and_digests_readable() {
+        let text = [
+            "installed /Applications/Lemma.app/Contents/MacOS/lemma-locald",
+            "release 0.7.0 pinned docker.io/pgvector/pgvector:0.8.3-pg18",
+            "sha256:c8a919765f2ef63681329fa21021b830cd4d79d1165bdca730dd016014e4da84",
+            "listening on http://app.lemma.localhost:49180",
+        ]
+        .join("\n");
+
+        assert_eq!(
+            mask_secret_shapes(text.clone()),
+            text,
+            "paths, versions and digests are not credentials"
+        );
+    }
+
     /// A release build honours no runtime-redirecting environment variable.
     ///
     /// These three point the app at a different host pack, managed runtime, or
@@ -7407,11 +7625,17 @@ mod tests {
 
     #[test]
     fn unpublished_online_runtime_error_is_actionable_and_logged_in_app() {
+        // "Actionable" now means actionable *by the person reading it*. This
+        // used to assert the previous copy -- "publish its runtime artifacts,
+        // or use the compressed PR test DMG for this exact commit" -- which is
+        // an instruction to a maintainer that shipped to strangers.
         let message = actionable_runtime_install_error(
             "could not install local runtime: artifact download failed with HTTP 404",
         );
-        assert!(message.contains("not published yet"));
-        assert!(message.contains("compressed PR test DMG"));
+        assert!(message.contains("superseded"), "{message}");
+        assert!(message.contains("download the current one"), "{message}");
+        assert!(!message.contains("Publish"), "{message}");
+        assert!(!message.contains("PR test DMG"), "{message}");
 
         let splash = include_str!("../ui/index.html");
         assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));

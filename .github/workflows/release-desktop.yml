@@ -225,6 +225,12 @@ jobs:
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
       - name: Build native local sidecars
+        # The telemetry key is compiled into locald here. Absent, install
+        # telemetry stays off -- which is the behaviour every local build gets
+        # and a safe default, but it means a release built without the secret
+        # reports nothing about installs that fail on a new macOS version.
+        env:
+          LEMMA_TELEMETRY_KEY: ${{ secrets.LEMMA_TELEMETRY_KEY }}
         run: desktop/scripts/build-sidecar.sh
 
       - name: Lint

@@ -217,6 +217,27 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The ingestion key, baked in at build time or supplied at run time.
+///
+/// `option_env!` is what makes this work at all in a shipped app. The key was
+/// read only from the process environment, and a `.app` launched from Finder
+/// inherits a login environment that has never heard of it -- so telemetry
+/// could not fire in *any* packaged build, which is precisely the situation
+/// this module's own opening comment says it exists for: without it, the first
+/// signal that a runtime install broke on a new macOS release is a GitHub issue
+/// three weeks later.
+///
+/// The runtime variable still wins, so a developer can point a local build at a
+/// throwaway project. Absent both, telemetry stays off, which remains the
+/// default for every locally built binary.
+fn ingestion_key() -> Option<String> {
+    let candidate = std::env::var(KEY_ENV)
+        .ok()
+        .or_else(|| option_env!("LEMMA_TELEMETRY_KEY").map(str::to_owned))?;
+    let candidate = candidate.trim().to_owned();
+    (!candidate.is_empty()).then_some(candidate)
+}
+
 pub fn is_enabled(root: &Path) -> bool {
     let disabled = std::env::var(DISABLE_ENV)
         .map(|v| matches!(v.trim(), "0" | "false" | "off" | "no"))
@@ -224,10 +245,7 @@ pub fn is_enabled(root: &Path) -> bool {
     if disabled {
         return false;
     }
-    if std::env::var(KEY_ENV)
-        .map(|k| k.trim().is_empty())
-        .unwrap_or(true)
-    {
+    if ingestion_key().is_none() {
         return false;
     }
     load_state(root).enabled != Some(false)
@@ -238,9 +256,8 @@ pub fn record(root: &Path, event: InstallEvent) {
     if !is_enabled(root) {
         return;
     }
-    let key = match std::env::var(KEY_ENV) {
-        Ok(key) if !key.trim().is_empty() => key,
-        _ => return,
+    let Some(key) = ingestion_key() else {
+        return;
     };
     let host = std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let payload = serde_json::json!({

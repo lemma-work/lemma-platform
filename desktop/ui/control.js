@@ -167,7 +167,7 @@ async function closeLocalSettings() {
   try {
     await invoke("close_local_settings");
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -249,7 +249,7 @@ function configureInteractionHandlers() {
         action: "preflight",
         id: nextId("sharing-preflight"),
         payload: { provider: sharingProvider },
-      }).catch((error) => toast(String(error), true));
+      }).catch((error) => toast(friendlyError(error), true));
     });
   });
   $("cloudflare-setup").addEventListener("change", () => {
@@ -343,7 +343,7 @@ async function discoverModels() {
     // happened to be listening.
     applyDiscoveredModels(Array.isArray(models) ? models : []);
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -503,7 +503,7 @@ async function saveConfiguration(button) {
   } catch (error) {
     button.disabled = false;
     button.textContent = original;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -556,6 +556,11 @@ async function runDesktopAction(button) {
     // Both confirm natively inside the command rather than here: one dialog,
     // and the splash reaches the same commands without needing a dialog
     // primitive of its own.
+    if (action === "retry-snapshot") {
+      clearTimeout(snapshotRetryTimer);
+      snapshotRetryTimer = null;
+      requestSnapshot();
+    }
     if (action === "reset-local-data") {
       button.disabled = true;
       button.textContent = "Resetting…";
@@ -569,7 +574,7 @@ async function runDesktopAction(button) {
       toast("Everything local was removed. Choose how to run Lemma to set up again.");
     }
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   } finally {
     for (const [action, label] of [
       ["reset-local-data", "Reset local data"],
@@ -853,7 +858,7 @@ async function enableLanSharing() {
     toast("Preparing the local-network gateway…");
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -898,7 +903,7 @@ async function activatePublicSharing() {
     toast(`Starting ${sharingProvider === "cloudflare" ? "Cloudflare" : "ngrok"} and validating the public origin…`);
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -913,7 +918,7 @@ async function disableSharing() {
     toast("Restoring This computer mode…");
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -953,21 +958,94 @@ async function loadRuntimeInfo() {
     runtimeInfo = await invoke("runtime_info");
     renderRuntime();
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
+
+/* The page that exists to explain a problem must not be the page that gives up.
+ *
+ * This used to be called once on load and thereafter only from the daemon
+ * event handler -- which needs a live daemon. So if the first call rejected,
+ * nothing ever asked again: `render()` returns early with no snapshot, the
+ * state pill stays "Connecting…" forever, and the only feedback is a toast that
+ * clears itself after five seconds. That is the state a user reaches by opening
+ * Local settings *because* the stack is broken.
+ *
+ * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
+ * while it is trying.
+ */
+const SNAPSHOT_RETRY_MS = 5000;
+let snapshotRetryTimer = null;
 
 function requestSnapshot() {
   clearTimeout(snapshotTimer);
   snapshotTimer = setTimeout(() => {
-    invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => toast(String(error), true));
+    invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => {
+      showSnapshotUnavailable(String(error));
+      scheduleSnapshotRetry();
+    });
   }, 100);
+}
+
+function scheduleSnapshotRetry() {
+  if (snapshot || snapshotRetryTimer) return;
+  snapshotRetryTimer = setTimeout(() => {
+    snapshotRetryTimer = null;
+    if (!snapshot) requestSnapshot();
+  }, SNAPSHOT_RETRY_MS);
+}
+
+/* Daemon errors, said in a way a person can act on.
+ *
+ * These strings are `io::Error` and `Err(String)` values from locald, written
+ * for whoever is reading a stack trace. Shown verbatim they tell a user
+ * "control endpoint unavailable: No such file or directory (os error 2)",
+ * which names an internal component, describes a syscall, and suggests
+ * nothing. The raw text is still available in the logs below.
+ */
+const FRIENDLY_ERRORS = [
+  [/control endpoint unavailable|is not connected|disconnected/i,
+   "Lemma's background service isn't running. Starting Lemma usually brings it back."],
+  [/control token/i,
+   "Lemma couldn't authenticate with its own background service. Restarting Lemma replaces the credential."],
+  [/local data must be reset/i,
+   "The workspace data on this Mac can't be read by this version of Lemma. Reset local data below to start clean."],
+  [/another local operation is running|busy/i,
+   "Lemma is already doing something. Wait for it to finish and try again."],
+  [/broken pipe|connection reset/i,
+   "The background service stopped mid-request. Try again."],
+  [/permission denied/i,
+   "macOS refused Lemma access to its own files. Check that Lemma is in Applications and try again."],
+];
+
+function friendlyError(reason) {
+  const text = String(reason ?? "");
+  const match = FRIENDLY_ERRORS.find(([pattern]) => pattern.test(text));
+  return match ? match[1] : text.replace(/^Error:\s*/, "");
+}
+
+function showSnapshotUnavailable(reason) {
+  if (snapshot) return;
+  const banner = $("snapshot-unavailable");
+  if (!banner) return;
+  banner.hidden = false;
+  const detail = $("snapshot-unavailable-detail");
+  // textContent: `reason` is a daemon error string, not something to parse.
+  if (detail) detail.textContent = friendlyError(reason);
+}
+
+function clearSnapshotUnavailable() {
+  clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = null;
+  const banner = $("snapshot-unavailable");
+  if (banner) banner.hidden = true;
 }
 
 function handleLocaldEvent(event) {
   if (event.event === "control.snapshot") {
     snapshot = event;
     state = event.state;
+    clearSnapshotUnavailable();
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();

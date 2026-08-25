@@ -46,6 +46,20 @@
         <div class="state-pill" id="state-pill">Connecting…</div>
       </header>
 
+      <!-- Shown when no snapshot has arrived. Without it this page draws
+           nothing at all and the state pill reads "Connecting…" forever, which
+           is exactly what a user sees when they open Local settings because
+           something is already broken. -->
+      <div class="warning-box" id="snapshot-unavailable" hidden>
+        <strong>Can't reach Lemma's background service.</strong>
+        <p>Settings can't be shown until it answers. Retrying every few seconds.</p>
+        <p class="limitation-note" id="snapshot-unavailable-detail"></p>
+        <div class="button-row">
+          <button class="btn" data-action="retry-snapshot">Try again</button>
+          <button class="btn" data-action="logs">Open logs folder</button>
+        </div>
+      </div>
+
       <section class="page active" data-page="overview">
         <div class="attention-banner" id="attention-banner" hidden>
           <span class="attention-icon">!</span>
