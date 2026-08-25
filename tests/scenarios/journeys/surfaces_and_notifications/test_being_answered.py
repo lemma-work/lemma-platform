@@ -32,10 +32,21 @@ pytestmark = [
     capability("Receive a message from outside"),
 ]
 
-#: A 1×1 red PNG. Small enough to inline, and a real image — Telegram rejects
-#: bytes that are not, and the model is being asked to look at it.
+#: A 64×64 solid red PNG, still small enough to inline.
+#:
+#: It was 1×1, which is a real PNG and which Telegram accepts — and which the
+#: model then refused: "the file that came through is only 288 bytes and isn't
+#: recognized as a valid image". Telegram re-encodes an inbound photo, and a
+#: one-pixel image comes out below what a vision preprocessor will look at. The
+#: scenario was asserting that the agent can see a picture while handing it one
+#: nothing can see, so a red result would have been luck and the red result it
+#: got was a refusal.
+#:
+#: 64×64 is still trivially and unambiguously red, and survives re-encoding.
 A_RED_DOT = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PQQkAAAgAsetf"
+    "WiP4FgYrsKZeS0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA"
+    "QEDgsqnc8OJg6Ln3AAAAAElFTkSuQmCC"
 )
 
 
