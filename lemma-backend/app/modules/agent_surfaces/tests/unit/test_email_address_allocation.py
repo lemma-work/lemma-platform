@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from app.modules.agent_surfaces.services.email_address_allocation import (
     MAX_LOCAL_PART,
+    RESERVED_LOCAL_PARTS,
     build_agent_email,
     build_local_part,
     candidate_addresses,
+    is_reserved,
     slugify,
 )
 
@@ -110,3 +112,56 @@ def test_a_very_long_pod_name_is_cut_to_the_rfc_limit():
 
     assert len(local) <= MAX_LOCAL_PART
     assert local.endswith("-k3p9")
+
+
+# ------------------------------------------------- addresses nobody may hold
+
+
+def test_a_pod_named_after_a_role_address_never_gets_the_bare_form():
+    """The assistant's shape is the only one that can produce ``postmaster@``.
+
+    The inbound domain is one catch-all shared by every organization, so this is
+    not the pod's address to take: mail systems and abuse desks expect a person
+    behind it, and the first tenant to name a pod "Postmaster" would be the one
+    reading their bounce traffic.
+    """
+    candidates = candidate_addresses(
+        agent_name=None, pod_name="Postmaster", domain="ops.example.com", attempts=5
+    )
+
+    assert "postmaster@ops.example.com" not in candidates
+    assert all(address.startswith("postmaster-") for address in candidates)
+    assert len(candidates) == 5, "dropping it must not cost a retry"
+    assert len(set(candidates)) == len(candidates)
+
+
+def test_an_ordinary_pod_name_is_still_offered_plain_first():
+    """The guard is a denylist, not a policy of suffixing everything."""
+    candidates = candidate_addresses(
+        agent_name=None, pod_name="Acme Ops", domain="ops.example.com"
+    )
+
+    assert candidates[0] == "acme-ops@ops.example.com"
+
+
+def test_an_agent_inside_a_role_named_pod_is_left_alone():
+    """``triage.support@`` is nobody's role address, so nothing should stop it."""
+    candidates = candidate_addresses(
+        agent_name="Triage", pod_name="Support", domain="ops.example.com"
+    )
+
+    assert candidates[0] == "triage.support@ops.example.com"
+
+
+def test_reserved_matches_the_whole_local_part_not_a_prefix():
+    assert is_reserved("support")
+    assert is_reserved("  Postmaster  ")
+    assert not is_reserved("triage.support")
+    assert not is_reserved("support-triage.acme")
+
+
+def test_the_rfc_2142_roles_are_all_covered():
+    """The ones a mail system or an abuse desk expects a human behind."""
+    assert {"postmaster", "abuse", "hostmaster", "webmaster", "security"} <= (
+        RESERVED_LOCAL_PARTS
+    )

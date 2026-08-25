@@ -82,6 +82,26 @@ class PodService:
                 added_by_user_id=creator_user_id,
             )
 
+        # The pod's assistant gets its mailbox here, the way an agent gets one in
+        # `create_agent`. It used to be minted on the assistant's first outbound
+        # notification instead, which reads as thrift and is not: inbound routes
+        # on the address, so until something was sent, mail to the obvious guess
+        # matched no surface and started nothing. A pod that cannot be written to
+        # is not cheaper than one that can.
+        #
+        # Best-effort by design, exactly as for an agent: creating a pod must not
+        # fail because a mail domain is unset. `_uow` is absent only where a
+        # caller built the service without one -- the same guard `delete_pod`
+        # uses for its role-cache hook.
+        if self._uow is not None:
+            from app.composition.agent_email_surface import (
+                provision_pod_assistant_email_surface,
+            )
+
+            await provision_pod_assistant_email_surface(
+                self._uow, pod_id=pod.id, pod_name=pod.name
+            )
+
         return pod
 
     async def get_pod(

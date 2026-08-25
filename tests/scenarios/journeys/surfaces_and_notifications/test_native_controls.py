@@ -93,9 +93,7 @@ async def test_an_approval_is_offered_with_native_controls(reachable):
     # "cancel" is in this list because the product uses it, and it is a refusal
     # a person reads as one. Asserting on a vocabulary the product does not
     # share is how a scenario reports a working control as a missing one.
-    assert any(
-        word in labels for word in ("den", "reject", "decline", "cancel", "no")
-    ), (
+    assert any(word in labels for word in ("den", "reject", "decline", "cancel", "no")), (
         f"an approval reached the person without a control to refuse it: "
         f"{labels or 'no buttons at all'}"
     )
