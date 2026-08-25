@@ -297,6 +297,70 @@ export function resolveStreamingThinking({
   return pending.text;
 }
 
+export interface HeldStreamingText {
+  conversationId: string;
+  text: string;
+}
+
+/** Bridge the streamed answer to its durable message.
+ *
+ * The same one-commit gap `resolveStreamingThinking` covers, with one rule
+ * changed: a thought that outlives its run is noise, so that bridge drops on
+ * `!isRunning`. An *answer* that outlives its run is the answer. Dropping it
+ * there is what made a reply type itself out in front of the reader and then
+ * vanish the moment the turn settled — with the text sitting in the database
+ * the whole time, which is why reloading brought it back.
+ *
+ * The frame can genuinely go missing: publishing is best-effort and the
+ * realtime fan-out drops a subscriber that falls behind. The session reconciles
+ * that with one list when it sees a buffer nothing claimed; this keeps the
+ * words on screen until they do land, so the recovery is invisible rather than
+ * a blank turn followed by a reappearance.
+ *
+ * Bounded by the things that make the buffer meaningless rather than by time:
+ * the durable message landing, the conversation changing, a new turn being
+ * sent, or the run ending in a failure that is now the truer thing to show.
+ */
+export function resolveStreamingText({
+  held,
+  conversationId,
+  streamed,
+  messages,
+  failed,
+}: {
+  held: { current: HeldStreamingText | null };
+  conversationId: string;
+  streamed: string;
+  messages: AssistantApiConversationMessage[];
+  failed: boolean;
+}): string {
+  if (streamed.length > 0) {
+    held.current = { conversationId, text: streamed };
+    return streamed;
+  }
+
+  const pending = held.current;
+  if (!pending || pending.conversationId !== conversationId || failed) {
+    held.current = null;
+    return "";
+  }
+
+  // Backwards: the message this is waiting for is the last thing the run wrote,
+  // and in the steady state there is no pending buffer to scan for at all.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant" || message.kind === "THINKING") continue;
+    if (typeof message.text !== "string") continue;
+    // Prefix, not equality: the durable text is the buffer plus whatever the
+    // model emitted between the last token flush and the message.
+    if (message.text.trim().startsWith(pending.text)) {
+      held.current = null;
+      return "";
+    }
+  }
+  return pending.text;
+}
+
 function normalizeToolResult(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   if (Array.isArray(value)) return { output: value };
@@ -571,6 +635,12 @@ function approvalResultPresent(
   );
 }
 
+/** A run that ended badly: its error is the truer thing to show than whatever
+ *  text it had streamed before it went. */
+function isConversationFailed(status: unknown): boolean {
+  return typeof status === "string" && status.trim().toLowerCase() === "failed";
+}
+
 function isConversationRunning(status: unknown): boolean {
   if (typeof status !== "string") return false;
   const normalized = status.trim().toLowerCase();
@@ -702,6 +772,7 @@ export function useAssistantController({
   const activeConversationIdRef = useRef<string | null>(null);
   const conversationsRef = useRef<Conversation[]>([]);
   const heldStreamingThinkingRef = useRef<HeldStreamingThinking | null>(null);
+  const heldStreamingTextRef = useRef<HeldStreamingText | null>(null);
   const isStreamingRef = useRef(false);
   const sessionIsStreamingRef = useRef(false);
   // Which conversations have had their history loaded in this session. A set,
@@ -1154,6 +1225,7 @@ export function useAssistantController({
       && sessionStreamingText.trim().length === 0
       && sessionStreamingThinking.trim().length === 0
       && heldStreamingThinkingRef.current === null
+      && heldStreamingTextRef.current === null
     ) return [];
 
     const nextMessages = mapConversationMessages(normalized);
@@ -1184,7 +1256,13 @@ export function useAssistantController({
         kind: "THINKING",
       });
     }
-    const pendingText = sessionStreamingText.trim();
+    const pendingText = resolveStreamingText({
+      held: heldStreamingTextRef,
+      conversationId: activeConversationId,
+      streamed: sessionStreamingText.trim(),
+      messages: normalized,
+      failed: isConversationFailed(sessionStatus),
+    });
     if (pendingText.length > 0) {
       const streamingId = `streaming-${activeConversationId}`;
       nextMessages.push({
@@ -1609,6 +1687,9 @@ export function useAssistantController({
     }
 
     let conversationId = forceNewConversation ? null : activeConversationId;
+    // A new turn is where the held answer from the last one stops being worth
+    // holding: whatever it was waiting for either arrived, or is not coming.
+    heldStreamingTextRef.current = null;
     // Raised before the create, not after it. This is what the transcript reads
     // to know it is no longer an empty conversation, so leaving it down for the
     // length of the round-trip left the empty state and its centred composer on
@@ -1784,7 +1865,13 @@ export function useAssistantController({
         { pod_id: resolvedPodId ?? undefined },
       );
       await loadConversationMessages(conversationId);
-      void sessionResumeIfRunning(conversationId).catch((error) => {
+      // Answering is what starts the next run, so this is the one caller that
+      // knows one is coming. An approved `request_approval` reconciles in a
+      // worker and answers `"queued"`, which means the record can still read
+      // WAITING for a moment after this returns — and a single read landing
+      // there is how the answer to a question you just answered ended up
+      // needing a reload to see.
+      void sessionResumeIfRunning(conversationId, { expectRun: true }).catch((error) => {
         setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
       });
     } catch (err) {
@@ -1794,7 +1881,8 @@ export function useAssistantController({
       // self-clears and the user can keep chatting instead of retrying a dead card.
       const items = await loadConversationMessages(conversationId);
       if (approvalResultPresent(items, approvalId)) {
-        void sessionResumeIfRunning(conversationId).catch(() => {});
+        // The decision did land, so a run is still coming — same race.
+        void sessionResumeIfRunning(conversationId, { expectRun: true }).catch(() => {});
         return;
       }
       setLocalError(err instanceof Error ? err.message : "Failed to resolve approval");

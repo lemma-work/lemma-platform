@@ -632,6 +632,8 @@ export class AgentController {
     this.clearStreamingText();
     this.clearStreamingThinking();
     let sawTerminalStatus = false;
+    // Set where the buffer is cleared, read where the turn is reconciled.
+    let unclaimedAnswer = false;
     let streamFailure: unknown = null;
 
     try {
@@ -642,6 +644,12 @@ export class AgentController {
         this.options.onEvent?.(event, payload);
 
         const parsed = parseAssistantStreamEvent(payload);
+        if (parsed.interrupted) {
+          // The transport gave up, not the run. Leaving `sawTerminalStatus`
+          // false is what sends this into the catch-up-and-reconnect path
+          // below, which is what the server is asking for.
+          continue;
+        }
         if (parsed.error) {
           const streamError = new Error(parsed.error);
           this.patch({ error: streamError });
@@ -694,6 +702,9 @@ export class AgentController {
           this.setConversationStatus(parsed.status);
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
+            // Read before the clear below: an answer still in the buffer when
+            // the run ends never got its durable message.
+            unclaimedAnswer = this.streamingBuffer.trim().length > 0;
             this.clearStreamingText();
             this.clearStreamingThinking();
             this.clearStreamingTool();
@@ -749,9 +760,22 @@ export class AgentController {
               streamFailure = reconnectError;
             }
           }
-        } else if (syncConversationId && (syncAfterStream ?? this.options.syncOnTurnEnd)) {
-          await this.refreshConversation(syncConversationId);
-          await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+        } else if (syncConversationId) {
+          // Text streamed as tokens that no durable message ever claimed is a
+          // frame that never arrived: every assistant or tool message clears
+          // the buffer as it lands, so anything left in it here is missing
+          // from the transcript. Publishing is best-effort — it swallows its
+          // own failures, and the fan-out drops a subscriber that falls behind
+          // — so one list, when we can see something is gone. The buffer and
+          // not the patched state: the state trails it by a flush.
+          const answerWentMissing = unclaimedAnswer
+            || this.streamingBuffer.trim().length > 0;
+          if (syncAfterStream ?? this.options.syncOnTurnEnd) {
+            await this.refreshConversation(syncConversationId);
+            await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+          } else if (answerWentMissing) {
+            await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+          }
         }
 
         if (!controller.signal.aborted && streamFailure) {

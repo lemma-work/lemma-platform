@@ -394,7 +394,15 @@ async def test_stream_conversation_forwards_active_run_events(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -> None:
+async def test_send_message_encodes_a_dead_subscription_as_stream_error(
+    monkeypatch,
+) -> None:
+    """A dead subscription is not a failed run, and must not be named like one.
+
+    `stream_error` is what tells the client to reconnect; `error` is what tells
+    it the run is over. Sending the second while the run is still writing left
+    the client sitting on a transcript that stopped moving.
+    """
     result = AgentRunStartResult(
         conversation_id=uuid4(),
         agent_run_id=uuid4(),
@@ -424,7 +432,7 @@ async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -
     payload = json.loads(chunks[0].removeprefix("data: ").strip())
 
     assert payload == {
-        "type": "error",
+        "type": "stream_error",
         "data": "Realtime stream interrupted. Reconnect to continue.",
         "agent_run_id": str(result.agent_run_id),
     }
