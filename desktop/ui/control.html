@@ -229,6 +229,13 @@
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
         </article>
+        <!-- A separate panel, not more buttons in the one above: that panel
+             promises it does not delete workspace data, and these do. -->
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Destructive recovery</h2><p>These permanently delete data on this Mac. Use them when Lemma cannot start and repair has not helped.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button><button class="btn danger solid" data-action="full-reinstall">Start over</button></div>
+          <p class="limitation-note" id="recovery-note">Reset local data erases your pods, files and accounts and keeps your AI provider settings and the downloaded runtime. Start over erases everything, including stored keys, and downloads the runtime again.</p>
+        </article>
       </section>
 
       <section class="page" data-page="updates">

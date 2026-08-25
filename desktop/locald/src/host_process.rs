@@ -605,7 +605,23 @@ impl HostProcessManager {
         Ok(())
     }
 
-    /// Whether a failed setup should stop the start, or only be recorded.
+    /// Whether any component should be reported as having failed.
+///
+/// `circuit_trips`, not just `circuit_open`. The circuit now closes on its own
+/// after a quiet window, so reading only the live flag would let a service that
+/// trips once per window report healthy in every gap -- oscillating the splash
+/// between "error" and "starting" while nothing actually improved.
+///
+/// A free function so this is testable without racing a real supervisor: the
+/// interesting state (circuit closed again, trip remembered, service still
+/// down) exists for a fraction of a second in a live manager.
+fn components_report_failure(components: &[HostProcessStatus]) -> bool {
+    components
+        .iter()
+        .any(|component| component.circuit_open || component.circuit_trips > 0)
+}
+
+/// Whether a failed setup should stop the start, or only be recorded.
     ///
     /// Hoisted out of `run_setups` because `optional` used to be honoured at
     /// exactly one of the three places a setup can fail. A setup that *exited*
@@ -798,13 +814,7 @@ impl HostProcessManager {
             && !self.startup_in_progress.load(Ordering::Acquire)
             && dependency_ready;
         let desired = self.desired_running();
-        // `circuit_trips`, not just `circuit_open`: the circuit now closes on
-        // its own after a quiet window, so reading only the live flag would let
-        // a service that trips every minute report healthy in between and
-        // oscillate the splash between "error" and "starting".
-        let failed = components
-            .iter()
-            .any(|component| component.circuit_open || component.circuit_trips > 0)
+        let failed = Self::components_report_failure(&components)
             || (desired && dependency_error.is_some());
         let mut event = json!({
             "v": 1,
@@ -3134,18 +3144,53 @@ mod tests {
             !backend.circuit_open,
             "a quiet window reopens the circuit without an app restart"
         );
-        // ...but the trip is remembered, so a service that flaps every window
-        // does not get to report healthy in the gaps.
+        // ...but the trip is remembered. This is the durable half: without it,
+        // a service that trips once per window would report healthy in every
+        // gap and oscillate the splash between "error" and "starting".
+        //
+        // Deliberately not asserted through `status_event` here. Once the
+        // service actually comes back, `ready` wins over `failed` and the
+        // status is legitimately "running" -- so an assertion on the status
+        // string would be racing the very recovery this test is proving works.
+        // The trip count is what the UI keys on while a component is still
+        // down, and it is what this pins.
         assert_eq!(backend.circuit_trips, 1);
-        // `failed` is not a field of its own -- it decides the reported status,
-        // which is what the splash and Local settings actually render.
-        let event = manager.status_event(None);
-        assert_eq!(
-            event["status"], "error",
-            "a component that has tripped still reads as failed once the circuit closes"
-        );
 
         manager.stop_all().unwrap();
+    }
+
+    /// A remembered trip keeps a component reading as failed after its circuit
+    /// closes.
+    ///
+    /// Asserted on the predicate rather than through a live manager: the state
+    /// that matters -- circuit closed again, trip remembered, service still
+    /// down -- exists for a fraction of a second in a real supervisor, and a
+    /// test that raced it would be a flake pretending to be coverage.
+    #[test]
+    fn a_component_that_has_tripped_still_reads_as_failed_after_the_circuit_closes() {
+        let component = |circuit_open: bool, circuit_trips: u32| HostProcessStatus {
+            id: "backend".into(),
+            running: false,
+            pid: None,
+            circuit_open,
+            circuit_trips,
+            restart_count: 0,
+            last_exit: None,
+        };
+
+        assert!(
+            !HostProcessManager::components_report_failure(&[component(false, 0)]),
+            "a component that has never tripped is not a failure"
+        );
+        assert!(
+            HostProcessManager::components_report_failure(&[component(true, 1)]),
+            "an open circuit is a failure"
+        );
+        assert!(
+            HostProcessManager::components_report_failure(&[component(false, 1)]),
+            "a closed circuit with a remembered trip is still a failure, or a \
+             service that flaps once a window would read healthy in every gap"
+        );
     }
 
     /// An optional setup that *hangs* is tolerated, exactly like one that fails.

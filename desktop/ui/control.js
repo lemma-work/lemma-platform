@@ -553,9 +553,33 @@ async function runDesktopAction(button) {
       await loadRuntimeInfo();
       toast("Runtime verification finished. Lemma is starting.");
     }
+    // Both confirm natively inside the command rather than here: one dialog,
+    // and the splash reaches the same commands without needing a dialog
+    // primitive of its own.
+    if (action === "reset-local-data") {
+      button.disabled = true;
+      button.textContent = "Resetting…";
+      await invoke("reset_local_data");
+      toast("Local data was erased. Lemma is starting with a clean workspace.");
+    }
+    if (action === "full-reinstall") {
+      button.disabled = true;
+      button.textContent = "Starting over…";
+      await invoke("reset_full_reinstall");
+      toast("Everything local was removed. Choose how to run Lemma to set up again.");
+    }
   } catch (error) {
     toast(String(error), true);
   } finally {
+    for (const [action, label] of [
+      ["reset-local-data", "Reset local data"],
+      ["full-reinstall", "Start over"],
+    ]) {
+      document.querySelectorAll(`[data-action="${action}"]`).forEach((item) => {
+        item.disabled = false;
+        item.textContent = label;
+      });
+    }
     document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
       item.disabled = !runtimeInfo?.repairAvailable;
       item.textContent = "Verify & repair runtime";

@@ -37,6 +37,9 @@ const COMMANDS: &[&str] = &[
     "close_local_settings",
     "confirm_destructive_action",
     "open_developer_tools",
+    "local_recovery_options",
+    "reset_local_data",
+    "reset_full_reinstall",
 ];
 
 fn main() {

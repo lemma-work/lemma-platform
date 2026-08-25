@@ -680,6 +680,8 @@
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
       <button class="dark" id="retry" type="button">Try again</button>
+      <button class="dark" id="reset-data" type="button" hidden>Reset local data</button>
+      <button id="full-reinstall" type="button" hidden>Start over</button>
       <button id="error-logs" type="button">View log</button>
     </div>
   </div>
@@ -724,6 +726,9 @@
         chooseConnectionMode: () => invoke("choose_connection_mode"),
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
+        recoveryOptions: () => invoke("local_recovery_options"),
+        resetLocalData: () => invoke("reset_local_data"),
+        resetFullReinstall: () => invoke("reset_full_reinstall"),
         onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
         onState: (cb) => { tauri.event.listen("lemma:state", (e) => cb(e.payload)); },
       };
@@ -768,6 +773,14 @@
       chooseConnectionMode: () => console.log("[demo] switch mode"),
       setConnectionMode: (mode) => { console.log("[demo] mode:", mode); if (mode === "local") window.lemmaDesktop.start(); },
       getState: () => Promise.resolve({ status: "waiting", phaseKey: "boot", progress: 2, ready: false, running: false, error: false, setup: true, mode: "undecided" }),
+      recoveryOptions: () => Promise.resolve({
+        dataResetAvailable: true,
+        fullReinstallAvailable: true,
+        installedRuntimeRelease: "0.0.0-demo",
+        dataDiskAllocatedBytes: 0,
+      }),
+      resetLocalData: () => console.log("[demo] reset local data"),
+      resetFullReinstall: () => console.log("[demo] full reinstall"),
       onLog: (cb) => listeners.log.push(cb),
       onState: (cb) => listeners.state.push(cb),
     };
@@ -804,6 +817,8 @@
   const errdetail = document.getElementById("errdetail");
   const retryBtn = document.getElementById("retry");
   const prepareWindowsBtn = document.getElementById("prepare-windows");
+  const resetDataBtn = document.getElementById("reset-data");
+  const fullReinstallBtn = document.getElementById("full-reinstall");
   const operationStatus = document.getElementById("operation-status");
   const operationDetail = document.getElementById("operation-detail");
   const operationMeta = document.getElementById("operation-meta");
@@ -957,7 +972,13 @@
       prepareWindowsBtn.hidden = !needsWindowsSetup;
       prepareWindowsBtn.disabled = false;
       prepareWindowsBtn.textContent = "Set up Windows runtime";
-      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart;
+      // Data this release cannot read: retrying reproduces it exactly, and
+      // offering Try again is how someone learns the app has nothing for them.
+      const dataIsUnreadable = s.errorCode === "local-data-incompatible";
+      const cannotStart = ["locald-start-failed", "locald-disconnected", "runtime-install-failed"]
+        .includes(s.errorCode);
+      showRecoveryButtons(dataIsUnreadable || cannotStart, dataIsUnreadable);
+      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart || dataIsUnreadable;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -967,6 +988,7 @@
     errwrap.hidden = true;
     prepareWindowsBtn.hidden = true;
     retryBtn.hidden = false;
+    showRecoveryButtons(false, false);
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
@@ -1220,6 +1242,68 @@
     say(VOICE.boot[0]);
     startWhispers();
     await requestStart();
+  });
+
+  /* --------------------------------------------------------- recovery ---
+   * Shown only when the app has something to offer. `recoveryOptions` says
+   * whether there is anything left on this Mac to reset, so a fresh install
+   * that failed for some unrelated reason is not told to erase data it does
+   * not have.
+   *
+   * Both buttons confirm natively, inside the command -- WKWebView's own
+   * `window.confirm()` silently returns false, so a page-level dialog here
+   * would read as "cancelled" every time.
+   */
+  let recoveryOffered = false;
+  async function showRecoveryButtons(offer, dataIsUnreadable) {
+    if (!offer) {
+      resetDataBtn.hidden = true;
+      fullReinstallBtn.hidden = true;
+      recoveryOffered = false;
+      return;
+    }
+    if (recoveryOffered) return;
+    recoveryOffered = true;
+    let options = null;
+    try {
+      options = await window.lemmaDesktop.recoveryOptions();
+    } catch {
+      // Asking failed, so offer the tier that needs least to work.
+      resetDataBtn.hidden = true;
+      fullReinstallBtn.hidden = false;
+      return;
+    }
+    resetDataBtn.hidden = !options.dataResetAvailable;
+    fullReinstallBtn.hidden = !options.fullReinstallAvailable;
+    // Resetting data is the recommended move for data this release cannot
+    // read; starting over is always the last resort and never the primary.
+    resetDataBtn.classList.toggle("dark", dataIsUnreadable);
+  }
+
+  resetDataBtn.addEventListener("click", async () => {
+    resetDataBtn.disabled = true;
+    resetDataBtn.textContent = "Resetting…";
+    try {
+      await window.lemmaDesktop.resetLocalData();
+    } catch (error) {
+      errdetail.textContent = String(error);
+    } finally {
+      resetDataBtn.disabled = false;
+      resetDataBtn.textContent = "Reset local data";
+    }
+  });
+
+  fullReinstallBtn.addEventListener("click", async () => {
+    fullReinstallBtn.disabled = true;
+    fullReinstallBtn.textContent = "Starting over…";
+    try {
+      await window.lemmaDesktop.resetFullReinstall();
+    } catch (error) {
+      errdetail.textContent = String(error);
+    } finally {
+      fullReinstallBtn.disabled = false;
+      fullReinstallBtn.textContent = "Start over";
+    }
   });
   prepareWindowsBtn.addEventListener("click", () => {
     prepareWindowsBtn.disabled = true;

@@ -98,6 +98,18 @@ struct UiState {
     terminal_recovery_pending: bool,
 }
 
+/// What a broken installation can still be offered.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryOptions {
+    data_reset_available: bool,
+    full_reinstall_available: bool,
+    installed_runtime_release: Option<String>,
+    /// Allocated, not apparent. `data.raw` is sparse and always reports 24 GiB,
+    /// so reporting its length would promise every user 24 GiB back.
+    data_disk_allocated_bytes: u64,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeInfo {
@@ -2998,6 +3010,213 @@ async fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?
 }
 
+/// What this Mac still has that a reset could remove.
+///
+/// Read by the splash so it can offer the right tier -- and only offer one at
+/// all when there is something to reset. Reported in allocated bytes rather
+/// than the disk's apparent size: `data.raw` is sparse and always claims 24
+/// GiB, so `len()` would tell every user they were about to recover 24 GiB
+/// regardless of what was on it.
+#[tauri::command(async)]
+fn local_recovery_options(window: Webview) -> Result<RecoveryOptions, String> {
+    require_local_native_window(&window)?;
+    let config = read_config();
+    let installed = configured_runtime(&config, "installedRuntime");
+    let data_disk = locald_root().join("runtime/macos/data.raw");
+    Ok(RecoveryOptions {
+        // Tier 1 needs a daemon to drive it; Tier 2 exists precisely for when
+        // there is not one, so it is offered whenever any state survives.
+        data_reset_available: locald_root().exists(),
+        full_reinstall_available: locald_root().exists() || installed.is_some(),
+        installed_runtime_release: installed.map(|runtime| runtime.release),
+        data_disk_allocated_bytes: allocated_bytes(&data_disk),
+    })
+}
+
+#[cfg(unix)]
+fn allocated_bytes(path: &std::path::Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    path.metadata().map(|meta| meta.blocks() * 512).unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn allocated_bytes(path: &std::path::Path) -> u64 {
+    path.metadata().map(|meta| meta.len()).unwrap_or(0)
+}
+
+/// Destroy everything on this Mac that the user made, then start clean.
+#[tauri::command]
+async fn reset_local_data(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || reset_local_data_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
+    if !confirm_destructive_action_impl(
+        app.clone(),
+        "Reset local data?".into(),
+        "Every pod, table, file, workspace and account on this Mac is deleted. \
+         Your AI provider settings and the downloaded runtime are kept, so Lemma \
+         starts again in seconds.\n\nThis cannot be undone."
+            .into(),
+        "Reset Data".into(),
+    )? {
+        return Ok(());
+    }
+
+    // Before anything is destroyed, and first, because the completion handler
+    // is fire-and-forget and this gets the whole reset to finish in.
+    //
+    // A SuperTokens cookie minted against the database we are about to delete
+    // is presented to the new one and accepted as a session that cannot do
+    // anything -- an app permanently signed in and permanently broken, where
+    // even signing out is an authorized call.
+    clear_local_session_data(&app);
+    // Not fatal: a stale resume target costs one splash-less launch that falls
+    // back to the splash anyway, and refusing the reset over it would be worse.
+    if let Err(error) = write_config(|config| {
+        if let Some(object) = config.as_object_mut() {
+            // Names a generation and an account that will not exist.
+            object.remove("resumeTarget");
+        }
+    }) {
+        append_install_log(&format!("reset: could not clear the resume target: {error}"));
+    }
+
+    ensure_locald(&app)?;
+    send_local_operation(
+        &app,
+        json!({"cmd": "local.reset-data", "confirm": "reset-local-data"}),
+        operation_id("reset-data"),
+    )
+}
+
+/// Return this Mac to the state of one that has never run Lemma.
+#[tauri::command]
+async fn reset_full_reinstall(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || reset_full_reinstall_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
+    if !confirm_destructive_action_impl(
+        app.clone(),
+        "Start over?".into(),
+        "Everything Lemma keeps on this Mac is deleted: your pods and files, \
+         your AI provider settings and stored keys, and the downloaded runtime. \
+         Setting up again downloads about 506 MB.\n\nThis cannot be undone."
+            .into(),
+        "Start Over".into(),
+    )? {
+        return Ok(());
+    }
+
+    clear_local_session_data(&app);
+    // The daemon has to be gone before its own state directory is removed, and
+    // this tolerates there being no daemon at all -- which is the state this
+    // tier exists for.
+    stop_locald_for_runtime_maintenance(&app)?;
+
+    let summary = run_locald_reset()?;
+    append_install_log(&format!("full reinstall: {summary}"));
+
+    // The downloaded runtime, quarantined before it is deleted: a crash midway
+    // through a recursive delete would otherwise leave a partial release that
+    // `is_complete()` might still accept, where a dot-prefixed sibling can
+    // never be mistaken for one.
+    let releases = runtime_install_root().join("releases");
+    if releases.exists() {
+        let aside = releases.with_file_name(format!(
+            ".releases.invalid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or_default()
+        ));
+        std::fs::rename(&releases, &aside)
+            .map_err(|error| format!("could not set the installed runtime aside: {error}"))?;
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+    // Deliberately not `runtime/` wholesale: install.log and launch.log live
+    // there and are the only surviving record of what went wrong.
+
+    // This one is load-bearing and its failure is raised. The runtime is gone
+    // from disk; a config that still names it would have the next launch treat
+    // a deleted release as installed, which is a worse state than the one the
+    // user pressed the button to escape.
+    write_config(|config| {
+        if let Some(object) = config.as_object_mut() {
+            for key in [
+                "installedRuntime",
+                "previousRuntime",
+                "resumeTarget",
+                "connectionMode",
+                "connectionModePromptRevision",
+            ] {
+                object.remove(key);
+            }
+        }
+    })
+    .map_err(|error| format!("local state was removed but the app's config was not: {error}"))?;
+
+    let snapshot = {
+        let shell: State<Shell> = app.state();
+        let mut ui = shell.ui.lock().unwrap();
+        ui.mode = "undecided".into();
+        ui.running = false;
+        ui.ready = false;
+        ui.error = false;
+        ui.status = String::new();
+        ui.error_code = String::new();
+        ui.clone()
+    };
+    let _ = app.emit("lemma:state", snapshot);
+    show_splash(&app);
+    Ok(())
+}
+
+/// Run `lemma-locald reset` and return its JSON summary.
+///
+/// The wipe runs inside the daemon binary rather than here because the OS
+/// credential vault keys each stored item's access control to the code identity
+/// that created it -- `work.lemma.locald`. A delete issued from this process is
+/// a different program as far as the vault is concerned, and would prompt or
+/// silently fail.
+fn run_locald_reset() -> Result<String, String> {
+    let executable = bundled_sibling("lemma-locald")
+        .ok_or("the bundled lemma-locald is missing, so local state cannot be reset")?;
+    let output = Command::new(executable)
+        .arg("reset")
+        .env("LEMMA_LOCALD_ROOT", locald_root())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .no_console_window()
+        .output()
+        .map_err(|error| format!("could not run the local reset: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.lines().last().unwrap_or("no reason given");
+        return Err(format!("the local reset did not finish: {detail}"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// Forget the cookies and storage of the workspace being destroyed.
+///
+/// Best effort and fire-and-forget: the reset is worth doing even if the
+/// webview will not answer, and the alternative to trying is a user who is
+/// signed in to a database that no longer exists.
+fn clear_local_session_data(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.clear_all_browsing_data();
+    }
+}
+
 fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
@@ -5499,7 +5718,10 @@ fn main() {
             sharing_action,
             close_local_settings,
             confirm_destructive_action,
-            open_developer_tools
+            open_developer_tools,
+            local_recovery_options,
+            reset_local_data,
+            reset_full_reinstall
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

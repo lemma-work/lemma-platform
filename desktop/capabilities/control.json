@@ -23,6 +23,9 @@
     "allow-sharing-action",
     "allow-close-local-settings",
     "allow-confirm-destructive-action",
-    "allow-open-developer-tools"
+    "allow-open-developer-tools",
+    "allow-local-recovery-options",
+    "allow-reset-local-data",
+    "allow-reset-full-reinstall"
   ]
 }
