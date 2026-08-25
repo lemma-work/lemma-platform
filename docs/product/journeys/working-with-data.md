@@ -37,7 +37,14 @@ put it there having to think about it on every operation.
 **Contracts:** `table.create`, `table.get`, `table.list`, `table.created`
 
 ### PS-DATA-002 — A table's shape can change without losing what is in it
-**Status:** covered
+**Status:** gap
+
+> **Gap:** removing a column keeps the records, and then makes them unreadable.
+> The next read of that table answers 400 `cached statement plan`, because
+> dropping a column invalidates asyncpg's per-connection prepared-statement
+> cache and nothing catches it. The connection is pooled, so it is not confined
+> to whoever ran the change, and it clears when the connection recycles — the
+> table appears to break and then fix itself. `DEV-DATA-004`.
 
 - When a person adds a column to a table with records in it, the system shall
   keep every existing record and leave the new column empty on them.
