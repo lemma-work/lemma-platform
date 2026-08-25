@@ -1455,7 +1455,7 @@
           "type": "string"
         },
         "message": {
-          "description": "Delivered verbatim. Write it to them, not about them.",
+          "description": "Markdown \u2014 every surface renders it, and on email that includes headings, lists and tables. Delivered verbatim otherwise: write it to them, not about them.",
           "type": "string"
         },
         "background_instruction": {
