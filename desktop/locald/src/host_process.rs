@@ -353,11 +353,23 @@ impl HostProcessManager {
             windows_job,
             log_dir,
         });
-        let monitor = Arc::clone(&manager);
+        // `Weak`, not `Arc`. Holding a strong reference here kept the refcount
+        // above zero for the life of the process, which meant this thread ran
+        // forever *and* no `Drop` on the manager could ever fire. In a test
+        // binary that is 21 threads waking every second -- one per
+        // `manager_in` -- each still calling `reconcile_crashes`, which
+        // *respawns* a service whose test has already panicked past its
+        // `stop_all`. A supervisor nobody owns, re-forking shells.
+        let monitor = Arc::downgrade(&manager);
         thread::spawn(move || {
             let mut next_rotation = Instant::now() + SERVICE_LOG_ROTATE_INTERVAL;
             loop {
                 thread::sleep(Duration::from_secs(1));
+                // The owner is gone, so there is nothing left to supervise and
+                // this thread is what was keeping it alive.
+                let Some(monitor) = monitor.upgrade() else {
+                    return;
+                };
                 monitor.reconcile_crashes();
                 // Separate cadence from the crash check on purpose: this stats
                 // a file per service and nothing here needs it every second.
@@ -2093,9 +2105,29 @@ fn assign_child_to_windows_job(job: usize, child: &mut Child) -> io::Result<()> 
     }
 }
 
-#[cfg(windows)]
+/// Never outlive the services this manager started.
+///
+/// Was `#[cfg(windows)]` and closed only the job handle, so on macOS and Linux
+/// nothing stopped the children at all -- and `stop_all()` on the success path
+/// was the only thing that ever did. A test that panicked past it left its
+/// services running forever: `spawn_command` sets `process_group(0)`, so
+/// closing the terminal sends them no `SIGHUP`, and the ownership ledger that
+/// could reclaim them lives in a `TempDir` that is already gone. Two immortal
+/// `sh` loops per failed run, each forking a `sleep` every second.
+///
+/// This could not have fired before regardless: the monitor thread held an
+/// `Arc` of this type, so the refcount never reached zero. See `Arc::downgrade`
+/// above.
 impl Drop for HostProcessManager {
     fn drop(&mut self) {
+        // Not `stop_all`: this is a backstop, it cannot report anything, and
+        // the ports and readiness state it also maintains are about to be
+        // dropped anyway. Terminating the process groups is the part that
+        // outlives us if it is skipped.
+        for id in self.ordered_ids.clone().iter().rev() {
+            let _ = self.stop_process(id);
+        }
+        #[cfg(windows)]
         if self.windows_job != 0 {
             unsafe {
                 windows_sys::Win32::Foundation::CloseHandle(self.windows_job as _);
@@ -2977,6 +3009,122 @@ mod tests {
         assert_eq!(process_start_time(""), None);
     }
 
+    /// A manager that goes out of scope takes its services with it.
+    ///
+    /// `stop_all()` on the success path used to be the only thing that stopped
+    /// them, so a test that panicked before reaching it -- and these tests
+    /// assert on live process state, which is exactly what flakes under load --
+    /// left two `sh` loops running forever, each forking a `sleep` every
+    /// second. `spawn_command` sets `process_group(0)`, so closing the terminal
+    /// sends them nothing, and the ownership ledger that could reclaim them is
+    /// in a `TempDir` that is already gone. This is how a laptop ends up warm
+    /// for a week.
+    ///
+    /// Two things had to change for this to be assertable at all: the `Drop`
+    /// existed only on Windows, and the monitor thread held an `Arc` of the
+    /// manager, so the refcount never reached zero and no `Drop` could fire.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_manager_stops_the_services_it_started() {
+        let root = tempdir().unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+
+        let pids: Vec<u32> = {
+            let manager = manager_in(&root, value);
+            manager.start_all().unwrap();
+            let pids = manager
+                .status()
+                .iter()
+                .filter_map(|process| process.pid)
+                .collect();
+            // No `stop_all`. This is the unwind path, written as a scope.
+            pids
+        };
+
+        assert_eq!(pids.len(), 2, "both services should have been running");
+        // Asserted on the process *group*, which is what `spawn_command`
+        // creates and what would still hold the `sleep` children.
+        for pid in pids {
+            let group = i32::try_from(pid).expect("a pid fits in i32");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while unsafe { libc::kill(-group, 0) } == 0 && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_ne!(
+                unsafe { libc::kill(-group, 0) },
+                0,
+                "process group {group} outlived the manager that started it",
+            );
+        }
+    }
+
+    /// Every test that drives a real process is gated to the platforms that
+    /// can drive one.
+    ///
+    /// The helpers below -- `long_running_command`, `crash`, `wait_for_running`,
+    /// `wait_for_recorded_exit` -- are `#[cfg(unix)]`, because they signal
+    /// process groups and shell out to `sh`. A test that uses one without the
+    /// same gate does not fail on Windows, it fails to *compile*, and the only
+    /// place that shows up is the Windows CI job -- which is not in the desktop
+    /// filter, so the feedback arrives a push or two later. It has now cost
+    /// three round trips.
+    ///
+    /// A source lint rather than a convention, in the shape `lib.rs` already
+    /// uses for the console-window rule.
+    #[test]
+    fn a_test_that_drives_a_real_process_is_gated_to_unix() {
+        const HELPERS: [&str; 4] = [
+            "long_running_command(",
+            "crash(&",
+            "wait_for_running(&",
+            "wait_for_recorded_exit(&",
+        ];
+        let source = include_str!("host_process.rs");
+        let lines: Vec<&str> = source.lines().collect();
+
+        let mut ungated = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let Some(name) = line.trim().strip_prefix("fn ") else {
+                continue;
+            };
+            // A test function: `#[test]` on one of the few lines above it.
+            let preamble = &lines[index.saturating_sub(4)..index];
+            if !preamble.iter().any(|line| line.trim() == "#[test]") {
+                continue;
+            }
+            let gated = preamble.iter().any(|line| line.trim() == "#[cfg(unix)]");
+            if gated {
+                continue;
+            }
+            // The body, to its closing brace at the same indentation.
+            let body: String = lines[index..]
+                .iter()
+                .take_while(|line| !line.starts_with("    }"))
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let name = name.split('(').next().unwrap_or(name);
+            // This test names the helpers in order to look for them.
+            if name == "a_test_that_drives_a_real_process_is_gated_to_unix" {
+                continue;
+            }
+            if HELPERS.iter().any(|helper| body.contains(helper)) {
+                ungated.push(name.to_owned());
+            }
+        }
+
+        assert!(
+            ungated.is_empty(),
+            "these tests use a unix-only helper and are not #[cfg(unix)], so \
+             the Windows build will not compile: {ungated:?}",
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn process_ledger_reclaims_only_an_exact_owned_process() {
@@ -3424,6 +3572,7 @@ mod tests {
     /// That value decides, on the next launch, whether the workspace recorded
     /// last time is still the one serving. A mixture made that question
     /// answerable by processes from two different runs.
+    #[cfg(unix)]
     #[test]
     fn a_partially_running_stack_reports_the_generation_it_actually_runs() {
         let mut backend = service("backend", &[]);
@@ -3574,6 +3723,7 @@ mod tests {
     /// precisely so an unreachable third-party catalog cannot stop a workspace,
     /// took the whole stack down whenever the network blackholed instead of
     /// refusing.
+    #[cfg(unix)]
     #[test]
     fn an_optional_setup_that_hangs_does_not_stop_the_stack() {
         let root = tempdir().unwrap();
@@ -3596,6 +3746,7 @@ mod tests {
     ///
     /// Without this the test above would pass just as well against a
     /// `run_setups` that had stopped enforcing timeouts at all.
+    #[cfg(unix)]
     #[test]
     fn a_required_setup_that_hangs_still_stops_the_stack() {
         let root = tempdir().unwrap();
