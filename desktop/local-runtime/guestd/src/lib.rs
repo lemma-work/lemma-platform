@@ -28,6 +28,14 @@ const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
 /// entire contract -- locald maps it to `local-data-incompatible` and the
 /// splash renders a reset button for that code.
 const DATA_RESET_MARKER: &str = "local data must be reset";
+
+/// Where the PostgreSQL cluster lives inside its container.
+///
+/// Pinned rather than inherited: see the note on `PGDATA` in `ensure_postgres`.
+/// It is also the path `lemma-postgres-data` is mounted at, and the two must
+/// stay equal -- a cluster written anywhere else is not on the volume the user
+/// is told holds their database.
+const POSTGRES_DATA_DIR: &str = "/var/lib/postgresql/data";
 const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
@@ -629,29 +637,14 @@ impl<E: Engine> GuestService<E> {
     fn ensure_postgres(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-postgres-data")?;
         self.refuse_incompatible_postgres_data(&parameters.images.postgres)?;
-        let postgres_env = BTreeMap::from([
-            ("POSTGRES_USER".into(), "postgres".into()),
-            (
-                "POSTGRES_PASSWORD".into(),
-                parameters.credentials.postgres_password.clone(),
-            ),
-            ("POSTGRES_DB".into(), "lemma".into()),
-        ]);
+        let (postgres_env, postgres_arguments) =
+            postgres_container_spec(&parameters.credentials.postgres_password);
         self.ensure_core_container(
             "lemma-core-postgres",
             &parameters.images.postgres,
             "postgres-v1",
             &postgres_env,
-            &[
-                "--network".into(),
-                "host".into(),
-                "--memory".into(),
-                "512m".into(),
-                "--cpus".into(),
-                "1.5".into(),
-                "--volume".into(),
-                "lemma-postgres-data:/var/lib/postgresql/data".into(),
-            ],
+            &postgres_arguments,
             &[],
         )?;
         if let Err(mut error) = self.wait_engine_command(
@@ -665,6 +658,23 @@ impl<E: Engine> GuestService<E> {
             120,
         ) {
             if let Some(diagnostic) = self.container_log_summary("lemma-core-postgres") {
+                // The container's own account of why it will not start decides
+                // what the user is offered. A cluster PostgreSQL refuses to
+                // open cannot be retried into working -- and "Try again" was
+                // the only button on screen for it, three times over, for a
+                // wait that could never end.
+                if postgres_refused_its_data(&diagnostic) {
+                    return Err(GuestError {
+                        code: "postgres_data_incompatible".into(),
+                        message: format!(
+                            "the workspace database on this computer cannot be opened by this \
+                             release of PostgreSQL; {DATA_RESET_MARKER}. PostgreSQL said: \
+                             {diagnostic}"
+                        ),
+                        retryable: false,
+                        status_code: 409,
+                    });
+                }
                 error.message = format!("{}: {diagnostic}", error.message);
             }
             return Err(error);
@@ -1339,20 +1349,58 @@ impl<E: Engine> GuestService<E> {
         Ok(parsed.as_array().and_then(|items| items.first()).cloned())
     }
 
+    /// Why a core container is not answering, in its own words.
+    ///
+    /// This used to return the single last non-empty line, which is fine for a
+    /// crash that ends in one and useless for the case that matters most.
+    /// PostgreSQL refuses an unusable data directory with a *paragraph*, and
+    /// the last line of the official image's version-mismatch block is
+    ///
+    ///     discussion around this process, and suggestions for how to do so.
+    ///
+    /// which is what a user was shown, appended to a nerdctl error, as the
+    /// whole explanation for an install that would never finish. The sentence
+    /// that says what is wrong is several lines above it.
+    ///
+    /// So: keep the tail, drop the noise, and cap the length. A few lines of
+    /// the container's own output is the difference between "something stopped"
+    /// and "your data was made by a different PostgreSQL".
     fn container_log_summary(&self, name: &str) -> Option<String> {
+        const KEEP_LINES: usize = 6;
+        const MAX_CHARS: usize = 600;
         let output = self
             .engine
-            .run(&["logs".into(), "--tail".into(), "20".into(), name.into()])
+            .run(&["logs".into(), "--tail".into(), "40".into(), name.into()])
             .ok()?;
-        let logs = if output.stderr.is_empty() {
-            String::from_utf8_lossy(&output.stdout)
+        // Both streams: the refusal goes to stderr, but an image that logs
+        // its reason to stdout and exits quietly would otherwise report
+        // nothing at all.
+        let mut logs = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            if !logs.trim().is_empty() {
+                logs.push('\n');
+            }
+            logs.push_str(&stderr);
+        }
+        let lines = logs
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            // Decorative rules are what the image wraps its refusal in, and
+            // they crowd out the sentence underneath at this length.
+            .filter(|line| !line.chars().all(|c| c == '*' || c == '-' || c == '='))
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            return None;
+        }
+        let summary = lines[lines.len().saturating_sub(KEEP_LINES)..].join(" ");
+        Some(if summary.chars().count() > MAX_CHARS {
+            let cut: String = summary.chars().take(MAX_CHARS).collect();
+            format!("{cut}…")
         } else {
-            String::from_utf8_lossy(&output.stderr)
-        };
-        logs.lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .map(redact_engine_error)
+            summary
+        })
     }
 
     fn wait_engine_command(&self, arguments: &[String], timeout: u64) -> Result<(), GuestError> {
@@ -2715,6 +2763,75 @@ fn load_capability() -> Result<Option<String>, GuestError> {
     Ok(Some(value.into()))
 }
 
+/// Is this PostgreSQL saying the data directory itself is the problem?
+///
+/// The `refuse_incompatible_postgres_data` probe runs first and catches the
+/// version case cleanly, in about a second, by reading `PG_VERSION` off the
+/// volume. It cannot catch everything: the probe returns "don't know" whenever
+/// the volume cannot be read, and "don't know" means proceed. When it does
+/// proceed and the server then refuses, this is what turns a 120-second wait
+/// ending in a nerdctl error into the offer of a reset.
+///
+/// Matched on the server's and the image's own words. Deliberately narrow:
+/// anything not recognised keeps the old behaviour, which is retryable, and a
+/// wrong match here would offer to delete a database over a transient fault.
+/// The environment and arguments the PostgreSQL container is created with.
+///
+/// A free function so the one invariant that matters can be asserted without an
+/// engine, a volume or a container: **the cluster path and the volume mount
+/// target are the same path**. They were not, and nothing noticed.
+///
+/// The official image moved `PGDATA` at 18 -- `/var/lib/postgresql/data`
+/// through 17, `/var/lib/postgresql/18/docker` after -- while the mount stayed
+/// where it was. So on the pinned image the database was written into the
+/// image's own anonymous volume and `lemma-postgres-data`, the volume the user
+/// is told holds their data, held nothing. A container recreation would have
+/// taken every table with it.
+///
+/// Pinning `PGDATA` rather than inheriting it also keeps the layout stable
+/// across the next such move, and puts `PG_VERSION` back at the root of this
+/// volume -- which is where `postgres_data_major` looks when it decides whether
+/// the data on disk can be opened at all.
+fn postgres_container_spec(password: &str) -> (BTreeMap<String, String>, Vec<String>) {
+    let environment = BTreeMap::from([
+        ("POSTGRES_USER".to_owned(), "postgres".to_owned()),
+        ("POSTGRES_PASSWORD".to_owned(), password.to_owned()),
+        ("POSTGRES_DB".to_owned(), "lemma".to_owned()),
+        ("PGDATA".to_owned(), POSTGRES_DATA_DIR.to_owned()),
+    ]);
+    let arguments = vec![
+        "--network".to_owned(),
+        "host".to_owned(),
+        "--memory".to_owned(),
+        "512m".to_owned(),
+        "--cpus".to_owned(),
+        "1.5".to_owned(),
+        "--volume".to_owned(),
+        format!("lemma-postgres-data:{POSTGRES_DATA_DIR}"),
+    ];
+    (environment, arguments)
+}
+
+fn postgres_refused_its_data(diagnostic: &str) -> bool {
+    let text = diagnostic.to_ascii_lowercase();
+    [
+        // The server, on a cluster from another major version.
+        "database files are incompatible with server",
+        "was initialized by postgresql version",
+        // The official image, when it finds data where its older releases kept
+        // it. This is the block whose last line is "discussion around this
+        // process, and suggestions for how to do so."
+        "database directory appears to contain a database",
+        "an upgrade is required",
+        "incompatible data directory",
+        // A cluster that is present but unreadable.
+        "could not read file \"global/pg_control\"",
+        "is not a valid data directory",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 fn redact_engine_error(value: &str) -> String {
     let lines = value
         .lines()
@@ -3367,6 +3484,89 @@ mod tests {
         assert_eq!(error.message, "not found");
     }
 
+    /// The cluster is written inside the volume the user is told holds it.
+    ///
+    /// Behavioural, not a source grep. The first version of this test searched
+    /// its own file for the literal it was asserting -- which its own assertion
+    /// satisfied, so it passed with the bug reinstated. Read the two values and
+    /// compare them.
+    #[test]
+    fn the_cluster_path_and_the_volume_mount_are_the_same_path() {
+        let (environment, arguments) = postgres_container_spec("pw");
+
+        let cluster = environment
+            .get("PGDATA")
+            .expect("PGDATA is pinned rather than inherited from the image");
+
+        let volume = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--volume")
+            .map(|pair| pair[1].clone())
+            .expect("the container mounts its data volume");
+        let (name, mounted_at) = volume
+            .split_once(':')
+            .expect("a volume argument is name:path");
+
+        assert_eq!(name, "lemma-postgres-data");
+        assert_eq!(
+            cluster, mounted_at,
+            "the cluster is written to {cluster} but the volume is mounted at \
+             {mounted_at}; anything written outside the volume is not the \
+             user's database, it is the container's scratch space",
+        );
+
+        // The image we pin puts its own PGDATA at /var/lib/postgresql/18/docker
+        // and declares VOLUME /var/lib/postgresql. Inheriting either is what
+        // put the database outside this volume in the first place.
+        assert!(
+            !cluster.contains("/18/"),
+            "a version-numbered cluster path is the image's, and it moves",
+        );
+    }
+
+    /// The message a user actually got, classified the way it should have been.
+    ///
+    /// This is the real tail of the official image's refusal, which reached a
+    /// user as the entire explanation for an install that stopped at 30% --
+    /// appended to a nerdctl "cannot exec in a stopped state", with "Try again"
+    /// as the only button, three times.
+    #[test]
+    fn postgres_refusing_its_data_is_recognised_from_what_it_actually_prints() {
+        for refusal in [
+            "PostgreSQL Database directory appears to contain a database; Skipping initialization",
+            "FATAL:  database files are incompatible with server",
+            "DETAIL:  The data directory was initialized by PostgreSQL version 16, which is not \
+             compatible with this version 18.4.",
+            "An upgrade is required. See https://github.com/docker-library/postgres/issues/37 \
+             for a discussion around this process, and suggestions for how to do so.",
+            "could not read file \"global/pg_control\": No such file or directory",
+        ] {
+            assert!(
+                postgres_refused_its_data(refusal),
+                "this must offer a reset, not a retry: {refusal}",
+            );
+        }
+    }
+
+    /// And a transient failure still retries, because a wrong match here offers
+    /// to delete somebody's database over a blip.
+    #[test]
+    fn a_transient_postgres_failure_is_never_read_as_unusable_data() {
+        for transient in [
+            "psql: error: FATAL: the database system is shutting down",
+            "psql: error: FATAL: the database system is starting up",
+            "could not connect to server: Connection refused",
+            "time=\"2026-08-25T17:49:20Z\" level=fatal msg=\"cannot exec in a stopped state\"",
+            "LOG:  database system was not properly shut down; automatic recovery in progress",
+            "",
+        ] {
+            assert!(
+                !postgres_refused_its_data(transient),
+                "this is retryable and must not offer to erase data: {transient}",
+            );
+        }
+    }
+
     #[test]
     fn database_command_retries_through_postgres_initialization_restart() {
         let root = tempdir().unwrap();
@@ -3639,7 +3839,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_startup_error_includes_the_last_container_diagnostic() {
+    fn sandbox_startup_error_includes_the_containers_own_last_words() {
         let root = tempdir().unwrap();
         let service = GuestService::new(
             FakeEngine::new(vec![
@@ -3669,9 +3869,14 @@ mod tests {
         );
 
         assert_eq!(error.code, "guest_engine_failed");
+        // The container's last few lines, not only its last one. The line that
+        // says what went wrong is frequently not the final one -- PostgreSQL
+        // refuses an unusable data directory with a paragraph, and a user was
+        // shown its closing fragment, "discussion around this process, and
+        // suggestions for how to do so.", as the whole explanation.
         assert_eq!(
             error.message,
-            "sandbox runtime stopped before becoming ready: OCI runtime failed; container exited with code 126; fatal: runtime bootstrap failed"
+            "sandbox runtime stopped before becoming ready: OCI runtime failed; container exited with code 126; starting fatal: runtime bootstrap failed"
         );
         assert_eq!(
             service.engine.commands.lock().unwrap().as_slice(),
@@ -3680,7 +3885,7 @@ mod tests {
                 vec![
                     "logs".to_owned(),
                     "--tail".to_owned(),
-                    "20".to_owned(),
+                    "40".to_owned(),
                     "lemma-sandbox-box-1".to_owned(),
                 ],
             ]
