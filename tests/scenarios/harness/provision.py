@@ -328,6 +328,24 @@ async def _clear_run_debris(
             continue
         ledger.did(f"removed surface {name!r} from {pod.get('name')!r}")
 
+    # Agents, for a reason that only shows up after a few hundred runs and then
+    # stops the suite dead. Listing agents is paginated at 100, and provisioning
+    # decides whether the standing `frontdesk` exists by looking for it in that
+    # list. Once a standing pod holds more than a page of leftovers, the one
+    # agent that has to be there falls off the end, provisioning tries to create
+    # it, and the deployment answers 409 for a name that was there all along.
+    # Dev reached exactly that. `_standing_reach` no longer decides by scanning
+    # a page, and this stops the page filling up in the first place.
+    for agent in await owner.agents_in(pod):
+        name = str(agent.get("name", ""))
+        if not mine(name):
+            continue
+        try:
+            await owner.deletes_agent(name, in_pod=pod)
+        except AssertionError:
+            continue
+        ledger.did(f"removed agent {name!r} from {pod.get('name')!r}")
+
     entries = _tree_entries(await owner.file_tree_of(pod))
     # Deepest first: removing a folder takes what is inside it, so a child that
     # has already gone would otherwise 404 and stop the sweep on its way past.
@@ -527,8 +545,11 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
         pod = pods.get(reach.pod)
         if pod is None:
             continue
-        agents = {str(a.get("name")) for a in await holder.agents_in(pod)}
-        if reach.agent not in agents:
+        # Asked for by name rather than looked for in a list. The list is
+        # paginated at 100 and a standing pod accumulates, so "not in the first
+        # page" was being read as "does not exist" — which turns an idempotent
+        # step into a 409 that stops provisioning, and with it the whole run.
+        if not await holder.has_agent(reach.agent, in_pod=pod):
             await holder.creates_an_agent(
                 in_pod=pod,
                 named=reach.agent,

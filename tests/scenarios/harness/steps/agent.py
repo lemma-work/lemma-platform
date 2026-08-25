@@ -113,6 +113,18 @@ class AgentSteps:
             what=f"{self.label} opening agent {name!r}",
         )
 
+    async def has_agent(self, name: str, *, in_pod: JSON) -> bool:
+        """Is this agent in this pod? Asked by name, and that is the point.
+
+        `agents_in` is the obvious way to answer it and the wrong one: the list
+        endpoint pages at 100, so on a pod holding more than that "not in the
+        list" means "not on the first page" and nothing more. Provisioning read
+        it as "does not exist", tried to create the standing agent, and a real
+        deployment answered 409 for a name that had been there all along.
+        """
+        answered = await self.api.call("GET", f"/pods/{in_pod['id']}/agents/{name}")
+        return answered.status_code == 200
+
     async def agents_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/agents"))
 

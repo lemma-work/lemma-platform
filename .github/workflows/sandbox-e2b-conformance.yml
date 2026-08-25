@@ -36,8 +36,22 @@ jobs:
       - name: Install with the E2B extra
         run: uv sync --extra local --extra e2b --locked
       - name: Verify E2B configuration is present
-        # Fail loudly rather than letting the suite skip itself into a green
-        # tick, which is exactly how this provider went unverified before.
+        id: e2b_config
+        # Loud when somebody asked for this run, quiet when the clock did.
+        #
+        # The original rule was "always fail loudly", to stop the suite
+        # skipping itself into a green tick — which is exactly how this
+        # provider went unverified before, and is still the right instinct.
+        # But on a deployment that has never held E2B credentials the daily
+        # cron then fails every single day, and a job that is always red says
+        # nothing when it goes red for a real reason. It failed 100% of its
+        # runs on an empty `E2B_API_KEY`, and the artifact upload failed after
+        # it with `No files were found`.
+        #
+        # So: a scheduled run with no credentials reports that it was not
+        # configured and stops. A `workflow_dispatch` run still fails — a
+        # person asking for this suite by hand and getting a silent pass is
+        # the failure mode the original comment is about.
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
           E2B_WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE }}
@@ -54,15 +68,24 @@ jobs:
             fi
           done
           if [ -n "$missing" ]; then
-            echo "Missing required E2B configuration:$missing" >&2
-            exit 1
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "Missing required E2B configuration:$missing" >&2
+              exit 1
+            fi
+            echo "::notice::E2B is not configured on this deployment" \
+              "($missing); skipping the conformance suite. Set the secrets to" \
+              "turn this into a real gate, or run it by hand to see it fail."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
       # Named explicitly rather than by directory, so a suite is only run
       # because someone chose to run it against a real, billed account. The
       # cost of that choice is that a new suite is invisible until it is added:
       # `test_e2b_lifecycle_real.py` and `test_e2b_function_liveness_real.py`
       # existed for months, nineteen tests between them, and ran nowhere.
       - name: Real E2B provider contract
+        if: steps.e2b_config.outputs.configured == 'true'
         timeout-minutes: 30
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
@@ -81,7 +104,10 @@ jobs:
           -m ""
           --junitxml=e2b-e2e.xml
       - name: Upload results
-        if: always()
+        # Not `always()`: with no credentials the suite above never ran, so
+        # there is no junit file and `if-no-files-found: error` turned a clean
+        # skip back into a red tick.
+        if: always() && steps.e2b_config.outputs.configured == 'true' 
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-e2b-e2e
