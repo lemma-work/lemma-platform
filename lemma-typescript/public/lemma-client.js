@@ -44,9 +44,9 @@ var LemmaClient = (() => {
   var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
   var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/windowHandler/defaultImplementation.js
+  // node_modules/supertokens-website/lib/build/utils/windowHandler/defaultImplementation.js
   var require_defaultImplementation = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/windowHandler/defaultImplementation.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/windowHandler/defaultImplementation.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -315,9 +315,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/windowHandler/index.js
+  // node_modules/supertokens-website/lib/build/utils/windowHandler/index.js
   var require_windowHandler = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/windowHandler/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/windowHandler/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.WindowHandlerReference = void 0;
@@ -354,9 +354,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/utils/windowHandler/index.js
+  // node_modules/supertokens-website/utils/windowHandler/index.js
   var require_windowHandler2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/utils/windowHandler/index.js"(exports) {
+    "node_modules/supertokens-website/utils/windowHandler/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -366,9 +366,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/windowHandler/index.js
+  // node_modules/supertokens-web-js/lib/build/windowHandler/index.js
   var require_windowHandler3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/windowHandler/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/windowHandler/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.WindowHandlerReference = void 0;
@@ -382,9 +382,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/constants.js
+  // node_modules/supertokens-web-js/lib/build/constants.js
   var require_constants = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/constants.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/constants.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.SSR_ERROR = exports.DEFAULT_API_BASE_PATH = void 0;
@@ -393,9 +393,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/normalisedURLDomain.js
+  // node_modules/supertokens-web-js/lib/build/normalisedURLDomain.js
   var require_normalisedURLDomain = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/normalisedURLDomain.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/normalisedURLDomain.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var NormalisedURLDomain = (
@@ -458,9 +458,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/normalisedURLPath.js
+  // node_modules/supertokens-web-js/lib/build/normalisedURLPath.js
   var require_normalisedURLPath = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/normalisedURLPath.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/normalisedURLPath.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var NormalisedURLPath = (
@@ -530,9 +530,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/types.js
+  // node_modules/supertokens-web-js/lib/build/types.js
   var require_types = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/types.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/types.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.nonPublicConfigProperties = void 0;
@@ -540,9 +540,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/normalisedURLDomain.js
+  // node_modules/supertokens-website/lib/build/normalisedURLDomain.js
   var require_normalisedURLDomain2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/normalisedURLDomain.js"(exports) {
+    "node_modules/supertokens-website/lib/build/normalisedURLDomain.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.isAnIpAddress = void 0;
@@ -607,9 +607,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/normalisedURLPath.js
+  // node_modules/supertokens-website/lib/build/normalisedURLPath.js
   var require_normalisedURLPath2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/normalisedURLPath.js"(exports) {
+    "node_modules/supertokens-website/lib/build/normalisedURLPath.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var NormalisedURLPath = (
@@ -679,9 +679,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/index.js
+  // node_modules/supertokens-website/lib/build/utils/index.js
   var require_utils = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/index.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -953,9 +953,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/processState.js
+  // node_modules/supertokens-website/lib/build/processState.js
   var require_processState = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/processState.js"(exports) {
+    "node_modules/supertokens-website/lib/build/processState.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -1137,9 +1137,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/version.js
+  // node_modules/supertokens-website/lib/build/version.js
   var require_version = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/version.js"(exports) {
+    "node_modules/supertokens-website/lib/build/version.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.supported_fdi = exports.package_version = void 0;
@@ -1148,9 +1148,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/cookieHandler/defaultImplementation.js
+  // node_modules/supertokens-website/lib/build/utils/cookieHandler/defaultImplementation.js
   var require_defaultImplementation2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/cookieHandler/defaultImplementation.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/cookieHandler/defaultImplementation.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -1284,9 +1284,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/cookieHandler/index.js
+  // node_modules/supertokens-website/lib/build/utils/cookieHandler/index.js
   var require_cookieHandler = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/cookieHandler/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/cookieHandler/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.CookieHandlerReference = void 0;
@@ -1323,9 +1323,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/browser-tabs-lock/processLock.js
+  // node_modules/browser-tabs-lock/processLock.js
   var require_processLock = __commonJS({
-    "../../../../lemma-typescript/node_modules/browser-tabs-lock/processLock.js"(exports) {
+    "node_modules/browser-tabs-lock/processLock.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var ProcessLocking = (
@@ -1391,9 +1391,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/browser-tabs-lock/index.js
+  // node_modules/browser-tabs-lock/index.js
   var require_browser_tabs_lock = __commonJS({
-    "../../../../lemma-typescript/node_modules/browser-tabs-lock/index.js"(exports) {
+    "node_modules/browser-tabs-lock/index.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         return new (P || (P = Promise))(function(resolve2, reject) {
@@ -1838,9 +1838,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/lockFactory/index.js
+  // node_modules/supertokens-website/lib/build/utils/lockFactory/index.js
   var require_lockFactory = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/lockFactory/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/lockFactory/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.LockFactoryReference = void 0;
@@ -1878,9 +1878,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/logger.js
+  // node_modules/supertokens-website/lib/build/logger.js
   var require_logger = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/logger.js"(exports) {
+    "node_modules/supertokens-website/lib/build/logger.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.logDebugMessage = exports.disableLogging = exports.enableLogging = void 0;
@@ -1906,9 +1906,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/dateProvider/defaultImplementation.js
+  // node_modules/supertokens-website/lib/build/utils/dateProvider/defaultImplementation.js
   var require_defaultImplementation3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/dateProvider/defaultImplementation.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/dateProvider/defaultImplementation.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.DateProvider = void 0;
@@ -1961,9 +1961,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/dateProvider/index.js
+  // node_modules/supertokens-website/lib/build/utils/dateProvider/index.js
   var require_dateProvider = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/dateProvider/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/dateProvider/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.DateProviderReference = void 0;
@@ -1999,9 +1999,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/fetch.js
+  // node_modules/supertokens-website/lib/build/fetch.js
   var require_fetch = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/fetch.js"(exports) {
+    "node_modules/supertokens-website/lib/build/fetch.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -3305,9 +3305,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/sessionClaimValidatorStore.js
+  // node_modules/supertokens-website/lib/build/utils/sessionClaimValidatorStore.js
   var require_sessionClaimValidatorStore = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/sessionClaimValidatorStore.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/sessionClaimValidatorStore.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.SessionClaimValidatorStore = void 0;
@@ -3331,9 +3331,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/globalClaimValidators.js
+  // node_modules/supertokens-website/lib/build/utils/globalClaimValidators.js
   var require_globalClaimValidators = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/utils/globalClaimValidators.js"(exports) {
+    "node_modules/supertokens-website/lib/build/utils/globalClaimValidators.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.getGlobalClaimValidators = void 0;
@@ -3354,9 +3354,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/utils/globalClaimValidators/index.js
+  // node_modules/supertokens-website/utils/globalClaimValidators/index.js
   var require_globalClaimValidators2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/utils/globalClaimValidators/index.js"(exports) {
+    "node_modules/supertokens-website/utils/globalClaimValidators/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -3366,9 +3366,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/utils.js
+  // node_modules/supertokens-web-js/lib/build/utils.js
   var require_utils2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/utils.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/utils.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -3582,9 +3582,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/recipeModule/index.js
+  // node_modules/supertokens-web-js/lib/build/recipe/recipeModule/index.js
   var require_recipeModule = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/recipeModule/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/recipeModule/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var RecipeModule = (
@@ -3600,9 +3600,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/axiosError.js
+  // node_modules/supertokens-website/lib/build/axiosError.js
   var require_axiosError = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/axiosError.js"(exports) {
+    "node_modules/supertokens-website/lib/build/axiosError.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -3811,9 +3811,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/axios.js
+  // node_modules/supertokens-website/lib/build/axios.js
   var require_axios = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/axios.js"(exports) {
+    "node_modules/supertokens-website/lib/build/axios.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -4520,9 +4520,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/error.js
+  // node_modules/supertokens-website/lib/build/error.js
   var require_error = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/error.js"(exports) {
+    "node_modules/supertokens-website/lib/build/error.js"(exports) {
       "use strict";
       var __extends = exports && exports.__extends || /* @__PURE__ */ (function() {
         var extendStatics = function(d, b) {
@@ -4564,9 +4564,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/xmlhttprequest.js
+  // node_modules/supertokens-website/lib/build/xmlhttprequest.js
   var require_xmlhttprequest = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/xmlhttprequest.js"(exports) {
+    "node_modules/supertokens-website/lib/build/xmlhttprequest.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -5342,9 +5342,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/recipeImplementation.js
+  // node_modules/supertokens-website/lib/build/recipeImplementation.js
   var require_recipeImplementation = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/recipeImplementation.js"(exports) {
+    "node_modules/supertokens-website/lib/build/recipeImplementation.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -5901,9 +5901,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-js-override/lib/build/getProxyObject.js
+  // node_modules/supertokens-js-override/lib/build/getProxyObject.js
   var require_getProxyObject = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-js-override/lib/build/getProxyObject.js"(exports) {
+    "node_modules/supertokens-js-override/lib/build/getProxyObject.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -5944,9 +5944,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-js-override/lib/build/index.js
+  // node_modules/supertokens-js-override/lib/build/index.js
   var require_build = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-js-override/lib/build/index.js"(exports) {
+    "node_modules/supertokens-js-override/lib/build/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.OverrideableBuilder = void 0;
@@ -6020,9 +6020,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/primitiveClaim.js
+  // node_modules/supertokens-website/lib/build/claims/primitiveClaim.js
   var require_primitiveClaim = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/primitiveClaim.js"(exports) {
+    "node_modules/supertokens-website/lib/build/claims/primitiveClaim.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.PrimitiveClaim = void 0;
@@ -6101,9 +6101,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/primitiveArrayClaim.js
+  // node_modules/supertokens-website/lib/build/claims/primitiveArrayClaim.js
   var require_primitiveArrayClaim = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/primitiveArrayClaim.js"(exports) {
+    "node_modules/supertokens-website/lib/build/claims/primitiveArrayClaim.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -6598,9 +6598,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/booleanClaim.js
+  // node_modules/supertokens-website/lib/build/claims/booleanClaim.js
   var require_booleanClaim = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/claims/booleanClaim.js"(exports) {
+    "node_modules/supertokens-website/lib/build/claims/booleanClaim.js"(exports) {
       "use strict";
       var __extends = exports && exports.__extends || /* @__PURE__ */ (function() {
         var extendStatics = function(d, b) {
@@ -6657,9 +6657,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/lib/build/index.js
+  // node_modules/supertokens-website/lib/build/index.js
   var require_build2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/lib/build/index.js"(exports) {
+    "node_modules/supertokens-website/lib/build/index.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -6971,9 +6971,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/index.js
+  // node_modules/supertokens-website/index.js
   var require_supertokens_website = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/index.js"(exports) {
+    "node_modules/supertokens-website/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -6983,9 +6983,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/emailverification/constants.js
+  // node_modules/supertokens-web-js/lib/build/recipe/emailverification/constants.js
   var require_constants2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/emailverification/constants.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/emailverification/constants.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.EMAILVERIFICATION_CLAIM_ID = void 0;
@@ -6993,9 +6993,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/session/recipe.js
+  // node_modules/supertokens-web-js/lib/build/recipe/session/recipe.js
   var require_recipe = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/session/recipe.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/session/recipe.js"(exports) {
       "use strict";
       var __extends = exports && exports.__extends || /* @__PURE__ */ (function() {
         var extendStatics = function(d, b) {
@@ -7310,9 +7310,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/session/index.js
+  // node_modules/supertokens-web-js/lib/build/recipe/session/index.js
   var require_session = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/session/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/session/index.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -7553,9 +7553,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/recipe/session/index.js
+  // node_modules/supertokens-web-js/recipe/session/index.js
   var require_session2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/recipe/session/index.js"(exports) {
+    "node_modules/supertokens-web-js/recipe/session/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -7565,9 +7565,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/utils/cookieHandler/index.js
+  // node_modules/supertokens-website/utils/cookieHandler/index.js
   var require_cookieHandler2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/utils/cookieHandler/index.js"(exports) {
+    "node_modules/supertokens-website/utils/cookieHandler/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -7577,9 +7577,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/cookieHandler/index.js
+  // node_modules/supertokens-web-js/lib/build/cookieHandler/index.js
   var require_cookieHandler3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/cookieHandler/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/cookieHandler/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.CookieHandlerReference = void 0;
@@ -7593,9 +7593,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/postSuperTokensInitCallbacks.js
+  // node_modules/supertokens-web-js/lib/build/postSuperTokensInitCallbacks.js
   var require_postSuperTokensInitCallbacks = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/postSuperTokensInitCallbacks.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/postSuperTokensInitCallbacks.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.PostSuperTokensInitCallbacks = void 0;
@@ -7621,9 +7621,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/recipeModule/utils.js
+  // node_modules/supertokens-web-js/lib/build/recipe/recipeModule/utils.js
   var require_utils3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/recipeModule/utils.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/recipeModule/utils.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -7767,9 +7767,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/authRecipe/utils.js
+  // node_modules/supertokens-web-js/lib/build/recipe/authRecipe/utils.js
   var require_utils4 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/authRecipe/utils.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/authRecipe/utils.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.normaliseAuthRecipe = void 0;
@@ -7781,9 +7781,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/utils.js
+  // node_modules/supertokens-web-js/lib/build/recipe/multitenancy/utils.js
   var require_utils5 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/utils.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/multitenancy/utils.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -7813,9 +7813,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/version.js
+  // node_modules/supertokens-web-js/lib/build/version.js
   var require_version2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/version.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/version.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.supported_fdi = exports.package_version = void 0;
@@ -7824,9 +7824,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/utils/error/index.js
+  // node_modules/supertokens-website/utils/error/index.js
   var require_error2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/utils/error/index.js"(exports) {
+    "node_modules/supertokens-website/utils/error/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -7844,9 +7844,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/error.js
+  // node_modules/supertokens-web-js/lib/build/error.js
   var require_error3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/error.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/error.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       var error_1 = require_error2();
@@ -7854,9 +7854,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/querier.js
+  // node_modules/supertokens-web-js/lib/build/querier.js
   var require_querier = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/querier.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/querier.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -8307,9 +8307,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipeImplementation.js
+  // node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipeImplementation.js
   var require_recipeImplementation2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipeImplementation.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipeImplementation.js"(exports) {
       "use strict";
       var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
         function adopt(value) {
@@ -8504,9 +8504,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/authRecipe/index.js
+  // node_modules/supertokens-web-js/lib/build/recipe/authRecipe/index.js
   var require_authRecipe = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/authRecipe/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/authRecipe/index.js"(exports) {
       "use strict";
       var __extends = exports && exports.__extends || /* @__PURE__ */ (function() {
         var extendStatics = function(d, b) {
@@ -8665,9 +8665,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipe.js
+  // node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipe.js
   var require_recipe2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipe.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/recipe/multitenancy/recipe.js"(exports) {
       "use strict";
       var __extends = exports && exports.__extends || /* @__PURE__ */ (function() {
         var extendStatics = function(d, b) {
@@ -8765,9 +8765,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-website/utils/dateProvider/index.js
+  // node_modules/supertokens-website/utils/dateProvider/index.js
   var require_dateProvider2 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-website/utils/dateProvider/index.js"(exports) {
+    "node_modules/supertokens-website/utils/dateProvider/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
@@ -8777,9 +8777,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/dateProvider/index.js
+  // node_modules/supertokens-web-js/lib/build/dateProvider/index.js
   var require_dateProvider3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/dateProvider/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/dateProvider/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.DateProviderReference = void 0;
@@ -8793,9 +8793,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/versionChecker.js
+  // node_modules/supertokens-web-js/lib/build/versionChecker.js
   var require_versionChecker = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/versionChecker.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/versionChecker.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.isVersionCompatible = void 0;
@@ -8880,9 +8880,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/supertokens.js
+  // node_modules/supertokens-web-js/lib/build/supertokens.js
   var require_supertokens = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/supertokens.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/supertokens.js"(exports) {
       "use strict";
       var __assign = exports && exports.__assign || function() {
         __assign = Object.assign || function(t) {
@@ -9054,9 +9054,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/index.js
+  // node_modules/supertokens-web-js/lib/build/index.js
   var require_build3 = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/lib/build/index.js"(exports) {
+    "node_modules/supertokens-web-js/lib/build/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.init = void 0;
@@ -9077,9 +9077,9 @@ var LemmaClient = (() => {
     }
   });
 
-  // ../../../../lemma-typescript/node_modules/supertokens-web-js/index.js
+  // node_modules/supertokens-web-js/index.js
   var require_supertokens_web_js = __commonJS({
-    "../../../../lemma-typescript/node_modules/supertokens-web-js/index.js"(exports) {
+    "node_modules/supertokens-web-js/index.js"(exports) {
       "use strict";
       function __export2(m) {
         for (var p in m) if (!exports.hasOwnProperty(p)) exports[p] = m[p];
