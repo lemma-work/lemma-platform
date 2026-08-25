@@ -2007,6 +2007,12 @@ fn locald_gone(app: &AppHandle) {
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+    // The tray is driven from `handle_locald_event`, which by definition stops
+    // arriving when the daemon does -- so the menu bar kept reading
+    // "Lemma: running" and "Agent Host: connected" indefinitely after the stack
+    // had gone, which is exactly when someone looks at it.
+    refresh_tray_status(app);
+    refresh_agent_host_tray(app, &json!({"available": false}));
     if current_mode(app) == "local" {
         show_splash(app);
     }
@@ -6686,6 +6692,70 @@ mod tests {
             .find("\nfn ")
             .map_or(source.len(), |offset| start + offset);
         &source[start..end]
+    }
+
+    /// The first screen a user sees is the product's colour, in both themes.
+    ///
+    /// `control.css` rebound its accent to violet and the splash was left
+    /// behind, so the very first impression was a gold-and-cream screen and the
+    /// moment the workspace opened the product was violet. The splash also had
+    /// no dark palette at all, so on a dark-mode Mac -- most of them -- every
+    /// launch, every error and every shutdown flashed a full screen of cream.
+    #[test]
+    fn the_splash_is_the_products_colour_and_follows_the_system_theme() {
+        let splash = include_str!("../ui/index.html");
+
+        for gold in ["#c0801f", "#8a5c16", "0xd89b3d", "216, 155, 61", "192, 128, 31"] {
+            assert!(
+                !splash.contains(gold),
+                "{gold} is the old accent; the product is violet",
+            );
+        }
+        assert!(splash.contains("@media (prefers-color-scheme: dark)"));
+        assert!(
+            splash.contains("color-scheme: light dark"),
+            "form controls and scrollbars follow the theme too",
+        );
+        // The classic half-themed bug: a colour whose only definition sits
+        // inside the dark block is absent in light mode. Every token the dark
+        // block redefines must also exist on the bare `:root`.
+        let dark_block = splash
+            .split("@media (prefers-color-scheme: dark)")
+            .nth(1)
+            .expect("the dark block exists");
+        let dark_block = &dark_block[..dark_block.find("\n  }\n").unwrap_or(dark_block.len())];
+        let root_block = splash
+            .split(":root {")
+            .nth(1)
+            .expect("the light block exists");
+        for line in dark_block.lines() {
+            let Some(name) = line.trim().strip_prefix("--") else {
+                continue;
+            };
+            let Some(name) = name.split(':').next() else {
+                continue;
+            };
+            assert!(
+                root_block.contains(&format!("--{name}:")),
+                "--{name} is defined only in dark mode, so light mode has no value for it",
+            );
+        }
+    }
+
+    /// The one screen where a metered connection decides says the real number.
+    #[test]
+    fn first_run_states_the_download_it_actually_makes() {
+        let splash = include_str!("../ui/index.html");
+        assert!(
+            !splash.contains("several gigabytes"),
+            "the compressed download is ~500 MB; 'several gigabytes' is the \
+             expanded size and overstates the transfer about threefold",
+        );
+        assert!(splash.contains("about 500&nbsp;MB"));
+        assert!(
+            splash.contains("picks up where it left off"),
+            "downloads have always resumed; nothing told the user so",
+        );
     }
 
     /// The channel stamp fails closed, and only stable self-updates.
