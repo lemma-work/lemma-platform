@@ -11,8 +11,13 @@ const RadioGroup = React.forwardRef<
     React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>
 >(({ className, ...props }, ref) => {
     return (
+        // `grid-cols-1`, not a bare `grid`: an implicit track is `auto`-sized and
+        // grows to the widest option's min-content, which for a truncating
+        // (`white-space: nowrap`) label is its whole unwrapped line. That is how a
+        // long option description widened the rows past their container instead of
+        // ellipsising inside it. See the same note on DialogContent.
         <RadioGroupPrimitive.Root
-            className={cn("grid gap-2", className)}
+            className={cn("grid grid-cols-1 gap-2", className)}
             {...props}
             ref={ref}
         />
