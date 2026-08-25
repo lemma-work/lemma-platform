@@ -9,6 +9,7 @@ Gmail/Outlook for the agent, but over native HTTP rather than Composio.
 from __future__ import annotations
 
 import base64
+from email.utils import formataddr
 from typing import Any
 
 import httpx
@@ -36,6 +37,9 @@ from app.modules.agent_surfaces.platforms.email_render import (
     coerce_display_resource_plans,
     render_email_content,
 )
+from app.modules.agent_surfaces.platforms.email_sender_identity import (
+    sender_display_name,
+)
 from app.modules.agent_surfaces.platforms.email_text import reply_subject
 from app.modules.agent_surfaces.platforms.email_models import (
     ResendReplyEmailParams,
@@ -51,6 +55,22 @@ class ResendPlatformService:
         self._from_address = str(credentials.get("from_address") or "")
         self._from_name = str(credentials.get("from_name") or "Lemma")
         self._api_base = str(credentials.get("api_base_url") or _RESEND_API_BASE)
+
+    def _sender_name(self, metadata: dict[str, Any] | None) -> str:
+        """The display name for this send, from whatever the caller knew.
+
+        Read off metadata rather than added to every signature between here and
+        the notification service: ``agent_display_name`` already travels that
+        way for the chat platforms, and both send paths already forward the
+        dict. A caller that knows neither name gets ``self._from_name`` back,
+        which is what the header said before any of this existed.
+        """
+        data = metadata or {}
+        return sender_display_name(
+            agent_name=data.get("agent_display_name"),
+            actor_display_name=data.get("actor_display_name"),
+            product_name=self._from_name,
+        )
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -82,6 +102,7 @@ class ResendPlatformService:
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),
+            from_name=self._sender_name(metadata),
         )
 
     def _raise_unsendable(self, recipient_email: str) -> None:
@@ -228,6 +249,7 @@ class ResendPlatformService:
                 (metadata or {}).get("display_resource_plans")
             ),
             is_reply=False,
+            from_name=self._sender_name(metadata),
         )
         return ColdEmailSendResult(
             external_thread_id=thread_seed_id,
@@ -256,6 +278,7 @@ class ResendPlatformService:
             content_type="markdown",
             attachments=[],
             display_resource_plans=[render_plan],
+            from_name=self._sender_name(metadata),
         )
 
     async def add_processing_indicator(
@@ -300,6 +323,9 @@ class ResendPlatformService:
                 content=content,
                 content_type=request.content_type,
                 attachments=attachments,
+                from_name=self._sender_name(
+                    {"agent_display_name": ctx.deps.agent_display_name}
+                ),
             )
         except Exception as exc:
             return ResendReplyEmailResult(
@@ -326,6 +352,7 @@ class ResendPlatformService:
         attachments: list[tuple[str, bytes, str]],
         display_resource_plans: list[SurfaceDisplayRenderPlan] | None = None,
         is_reply: bool = True,
+        from_name: str | None = None,
     ) -> dict[str, Any]:
         if not recipient_email or not self._api_key or not self._from_address:
             self._raise_unsendable(recipient_email)
@@ -335,11 +362,13 @@ class ResendPlatformService:
             content_type=content_type,  # type: ignore[arg-type]
             display_resource_plans=display_resource_plans,
         )
-        sender = (
-            f"{self._from_name} <{self._from_address}>"
-            if self._from_name
-            else self._from_address
-        )
+        # ``formataddr``, never an f-string. The display name now carries an
+        # agent name, which is 255 characters of unvalidated free text: an agent
+        # called "Priya, Ops" interpolated bare produces a header that parses as
+        # *two* addresses, and one called "x <evil@example.com>" is worse. This
+        # quotes the specials and RFC 2047-encodes anything non-ASCII, so a
+        # hostile name degrades to an inert display name on the right address.
+        sender = formataddr((from_name or self._from_name, self._from_address))
         payload: dict[str, Any] = {
             "from": sender,
             "to": [recipient_email],

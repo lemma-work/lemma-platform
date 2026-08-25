@@ -1021,3 +1021,144 @@ def test_a_non_http_failure_still_reports_something_usable():
     assert failure.failure_type == "OSError"
     assert failure.status_code is None
     assert failure.provider_error is None
+
+
+@pytest.mark.asyncio
+async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
+    """The attribution has to survive an inbox list nobody has opened.
+
+    ``attribute()`` puts "Priya, on behalf of Deepak" in the body, which is the
+    right place for it and invisible until the message is opened. The sender
+    column is what a person scans, and it used to say "Lemma" for every agent in
+    every pod.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "priya.acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata={
+                "agent_display_name": "Priya",
+                "actor_display_name": "Deepak Jha",
+            },
+        )
+
+    # Quoted, and the quotes are load-bearing rather than cosmetic: parentheses
+    # are RFC 5322 *comment* syntax, so the same header unquoted parses as the
+    # display name "Priya via Lemma" with "(Deepak Jha)" split off as a comment
+    # that most clients never render. Which is the second reason this send path
+    # had to move off an f-string, independent of the injection one below.
+    assert (
+        captured["json"]["from"]
+        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.asur.work>'
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_agent_name_cannot_inject_a_second_address_into_from():
+    """An agent name is 255 characters of unvalidated free text.
+
+    This send path built the header with an f-string, which was safe only while
+    the display name was a fixed environment string. Putting an agent name in it
+    makes ``Priya, Ops`` a header that parses as two addresses, so the
+    construction moved to ``formataddr``.
+    """
+    from email.utils import getaddresses
+
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "priya.acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="hello",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata={"agent_display_name": "Ops <evil@example.com>, Priya"},
+        )
+
+    parsed = getaddresses([captured["json"]["from"]])
+    assert len(parsed) == 1
+    assert parsed[0][1] == "priya.acme@ops.asur.work"
+
+
+@pytest.mark.asyncio
+async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
+    """Every non-agent send — and every existing caller — is unchanged."""
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="hello",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata=None,
+        )
+
+    assert captured["json"]["from"] == "Lemma <acme@ops.asur.work>"

@@ -20,7 +20,11 @@ MAX_STATUS_CHECK = 25
 class MessageUserRequest(BaseModel):
     to: str = Field(description="Pod member id, user id, or email address.")
     message: str = Field(
-        description="Delivered verbatim. Write it to them, not about them."
+        description=(
+            "Markdown — every surface renders it, and on email that includes "
+            "headings, lists and tables. Delivered verbatim otherwise: write "
+            "it to them, not about them."
+        )
     )
     background_instruction: str | None = Field(
         default=None,
