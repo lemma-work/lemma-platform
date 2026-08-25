@@ -147,7 +147,10 @@ jobs:
         working-directory: lemma-backend
     services:
       redis:
-        image: redis:7
+        # The same tag `test_utils.py` pins and the e2e workflow caches.
+        # This said `redis:7`, a second, different image (192MB against
+        # 42MB) pulled fresh for this job alone.
+        image: redis:7.4-alpine
         ports:
           - 6379:6379
         options: >-
