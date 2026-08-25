@@ -302,6 +302,45 @@ impl ManagedRuntime {
         })
     }
 
+    /// Discard the guest's data disk entirely, returning the bytes reclaimed.
+    ///
+    /// The blunt half of a local-data reset, for when the guest cannot be asked
+    /// to tidy up after itself: a torn filesystem, a VM that will not boot, a
+    /// disk whose size no longer matches. It takes the pulled container images
+    /// with it, so `core.reset_data` inside the guest is preferred wherever the
+    /// guest still answers.
+    ///
+    /// Stop first, then reclaim. `stop` handles the VM this process owns;
+    /// `reclaim_owned_macos_vm` is the second pass for a helper left behind by
+    /// a daemon that died without stopping it, and it verifies pid, executable
+    /// and start identity before signalling anything. Unlinking a disk another
+    /// process still has attached is the one thing that must not happen here.
+    #[cfg(target_os = "macos")]
+    pub fn discard_data_disk(&self) -> io::Result<u64> {
+        self.stop()?;
+        self.reclaim_owned_macos_vm()?;
+
+        let disk = self.config.local_root.join("runtime/macos/data.raw");
+        // Allocated blocks, not `len()`. The file is sparse and always reports
+        // 24 GiB apparent size, so reporting `len()` would tell every user they
+        // just recovered 24 GiB regardless of what was actually on it.
+        let reclaimed = disk
+            .metadata()
+            .map(|metadata| {
+                use std::os::unix::fs::MetadataExt;
+                metadata.blocks() * 512
+            })
+            .unwrap_or(0);
+
+        // Removed, never truncated. `create_private_sparse_file` refuses a file
+        // whose length is not exactly `DATA_DISK_BYTES`, so a `set_len(0)` here
+        // would leave the installation permanently unable to start with
+        // "managed data disk has an unexpected size".
+        remove_if_present(&disk)?;
+        remove_if_present(&self.control_socket)?;
+        Ok(reclaimed)
+    }
+
     pub fn stop(&self) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -497,8 +536,16 @@ impl ManagedRuntime {
         )
     }
 
+    /// Terminate a VM helper this installation left behind, verified by
+    /// identity rather than by name.
+    ///
+    /// Public so `lemma-locald reset` can reach it. That path runs when the
+    /// daemon that owned the VM is already gone, so the marker on disk is the
+    /// only way to find the helper -- and matching by name (`pkill -x
+    /// lemma-vz`) would kill a developer's separate dev-root VM, or another
+    /// installation's.
     #[cfg(target_os = "macos")]
-    fn reclaim_owned_macos_vm(&self) -> io::Result<()> {
+    pub fn reclaim_owned_macos_vm(&self) -> io::Result<()> {
         let raw = match fs::read(&self.vm_process_marker) {
             Ok(raw) if raw.len() <= 64 * 1024 => raw,
             Ok(_) => return Ok(()),
@@ -1312,6 +1359,40 @@ mod tests {
         validate_macos_release(&release).unwrap();
         fs::remove_file(release.join("disk.raw")).unwrap();
         assert!(validate_macos_release(&release).is_err());
+    }
+
+    /// Discarding the data disk must unlink it, never shrink it.
+    ///
+    /// `create_private_sparse_file` refuses a file whose length is not exactly
+    /// `DATA_DISK_BYTES`, so a reset that truncated instead of removing would
+    /// leave the installation permanently unable to start, with "managed data
+    /// disk has an unexpected size" and no way back. This asserts the property
+    /// directly: after discarding, the next start can create the disk again.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_discarded_data_disk_can_be_created_again() {
+        let root = tempdir().unwrap();
+        let disk = root.path().join("data.raw");
+        create_private_sparse_file(&disk, 1024 * 1024).unwrap();
+        assert!(disk.exists());
+
+        // What `discard_data_disk` does to the file, without booting a VM.
+        remove_if_present(&disk).unwrap();
+
+        assert!(!disk.exists(), "the disk is unlinked, not truncated");
+        create_private_sparse_file(&disk, 1024 * 1024)
+            .expect("a fresh disk of the expected size is creatable after a reset");
+        // A truncate-instead-of-remove reset would land here, and this is the
+        // error the user would be stuck with forever.
+        std::fs::File::options()
+            .write(true)
+            .open(&disk)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+        let error = create_private_sparse_file(&disk, 1024 * 1024).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("unexpected size"), "{error}");
     }
 
     #[cfg(target_os = "macos")]

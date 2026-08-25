@@ -501,6 +501,10 @@ impl Daemon {
                 self.start_runtime_prepare(request, client.clone());
                 return true;
             }
+            "local.reset-data" => {
+                self.start_local_data_reset(request, client.clone());
+                return true;
+            }
             "control.snapshot" => {
                 match self.control_snapshot(id.as_ref()) {
                     Ok(event) => self.send_direct(client, event),
@@ -1594,6 +1598,180 @@ impl Daemon {
                 .host_operation_running
                 .store(false, Ordering::Release);
         });
+    }
+
+    /// Destroy everything on this computer that the user made, then start clean.
+    ///
+    /// A locald verb rather than something the shell does, because only locald
+    /// owns the VM lifecycle -- and because the progress the splash already
+    /// renders comes from here. It takes `host_operation_running`, the same
+    /// guard `start`, `stop`, `restart` and `runtime.prepare` take, so a reset
+    /// can never interleave with a start.
+    ///
+    /// There is no rollback arm. `repair_runtime` can roll back because a
+    /// runtime is replaceable; data is not, and by the time anything here can
+    /// fail it is already gone. A failed restart afterwards therefore reports
+    /// that plainly and leaves the full-reinstall option on screen, rather than
+    /// retrying and pretending.
+    fn start_local_data_reset(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        if request.get("confirm").and_then(Value::as_str) != Some("reset-local-data") {
+            self.send_direct(
+                &client,
+                error_event(
+                    "confirmation-required",
+                    "a local data reset must be confirmed explicitly",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        let Some(manager) = self.host_processes.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "host-pack-unavailable",
+                    "this installation does not manage local services",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "local.reset-data",
+                "id": id.as_ref(),
+            }),
+        );
+
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let outcome = daemon.perform_local_data_reset(&manager, id.as_ref());
+            match outcome {
+                Ok(summary) => {
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "local.data-reset",
+                        "id": id.as_ref(),
+                        "summary": summary,
+                    }));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "local.reset-data",
+                        "id": id.as_ref(),
+                        "ok": true,
+                    }));
+                }
+                Err(error) => {
+                    daemon.broadcast(error_event(
+                        "local-data-reset-incomplete",
+                        error.to_string(),
+                        id.as_ref(),
+                    ));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "local.reset-data",
+                        "id": id.as_ref(),
+                        "ok": false,
+                    }));
+                }
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
+    /// The reset itself. Order is the safety property.
+    fn perform_local_data_reset(
+        self: &Arc<Self>,
+        manager: &Arc<HostProcessManager>,
+        id: Option<&Value>,
+    ) -> io::Result<Value> {
+        // Stop the things holding the data before removing it. The backend
+        // holds Postgres connections and the workspace bind mounts; the Agent
+        // Host runs jobs against the workspace it is about to lose.
+        manager.stop_all()?;
+        // Best effort: an Agent Host that will not stop is not a reason to
+        // leave the user stuck with data they cannot use. It is suspended
+        // rather than disabled, so it comes back with the clean workspace.
+        let _ = self.agent_host.suspend();
+
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "phase",
+            "id": id,
+            "key": "reset-data",
+            "label": "Erasing local data",
+            "detail": "removing databases, files and workspaces on this computer",
+            "progress": 20,
+        }));
+
+        let summary = self.discard_local_data()?;
+
+        // Only once the data is actually gone. A marker cleared before a failed
+        // wipe would let the next start run against data it cannot read, which
+        // is the state this whole path exists to escape.
+        crate::paths::clear_data_reset(&self.paths.root)?;
+
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "phase",
+            "id": id,
+            "key": "reset-data",
+            "label": "Setting up again",
+            "detail": "starting Lemma with a clean workspace",
+            "progress": 45,
+        }));
+        self.start_host_packs(manager, id)?;
+        Ok(summary)
+    }
+
+    /// Ask the guest to tidy up; discard the whole disk if it cannot.
+    ///
+    /// Chosen by a precondition rather than by retrying a failure. The surgical
+    /// path keeps the pulled container images, which for the case this exists
+    /// for -- a Postgres major that moved -- is the difference between seconds
+    /// and re-downloading several hundred megabytes.
+    fn discard_local_data(&self) -> io::Result<Value> {
+        let Some(runtime) = self.managed_runtime.as_ref() else {
+            // No app-owned runtime: there is no guest and no data disk, so
+            // there is nothing of the user's for this daemon to remove.
+            return Ok(json!({"strategy": "none"}));
+        };
+        if runtime.probe().is_ok() {
+            let removed = runtime.reset_guest_data()?;
+            runtime.stop_infrastructure()?;
+            return Ok(json!({"strategy": "guest", "removed": removed}));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let reclaimed = runtime.discard_data_disk()?;
+            Ok(json!({"strategy": "disk", "reclaimed_bytes": reclaimed}))
+        }
+        // Elsewhere the guest is the only way in: a WSL distribution is
+        // unregistered rather than having a disk file to unlink, and that path
+        // is not wired up yet.
+        #[cfg(not(target_os = "macos"))]
+        Err(io::Error::other(
+            "the private runtime is not responding, so local data cannot be reset from here",
+        ))
     }
 
     fn start_host_packs(

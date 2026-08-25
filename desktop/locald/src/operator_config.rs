@@ -847,6 +847,38 @@ fn validate_config(config: &OperatorConfig) -> io::Result<()> {
 /// rather than guessed at.
 const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
 
+/// Remove every secret this installation stored, reporting what would not go.
+///
+/// Used only by `lemma-locald reset`. It runs inside *this* binary rather than
+/// the app because the OS credential vault keys an item's access control to the
+/// code identity that created it -- `work.lemma.locald`, fixed by the
+/// `Info.plist` linked into this executable. A delete issued from the Tauri
+/// shell is a different program as far as the vault is concerned, and would
+/// prompt or fail.
+///
+/// Failures are collected rather than raised: a reset that stopped at the first
+/// stubborn keychain item would leave the rest behind *and* skip removing the
+/// state directory, which is the part the user actually asked for.
+pub fn purge_secrets(install_id: &str) -> Vec<String> {
+    let vault = PlatformVault;
+    let mut failures = Vec::new();
+    for name in SECRET_NAMES {
+        if let Err(error) = vault.delete(install_id, name) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    failures
+}
+
+/// Recover an installation identity from a config file that may be unreadable.
+///
+/// Exposed for `lemma-locald reset`, which must find the id *before* it deletes
+/// the file naming it -- and which runs precisely when that file may be the
+/// thing that is broken.
+pub fn recover_install_id(path: &Path) -> Option<String> {
+    salvage_install_id(&fs::read(path).ok()?)
+}
+
 /// Bring a stored configuration up to the current schema, or refuse it.
 ///
 /// Operates on a `Value` rather than the typed struct on purpose: every nested

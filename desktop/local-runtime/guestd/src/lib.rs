@@ -502,6 +502,7 @@ impl<E: Engine> GuestService<E> {
             }
             "core.status" => self.core_status(),
             "core.stop" => self.stop_core(),
+            "core.reset_data" => self.reset_data(request.parameters),
             "sandbox.ensure" => self.ensure(request.parameters),
             "sandbox.status" => self.status(request.parameters),
             "sandbox.list" => self.list(),
@@ -901,6 +902,122 @@ impl<E: Engine> GuestService<E> {
             }
         }
         Ok(json!({"stopped": true}))
+    }
+
+    /// Destroy everything the user made, and nothing else.
+    ///
+    /// The only global destructive verb in this table -- everything else is
+    /// per-sandbox. That is deliberate and worth knowing: its blast radius
+    /// equals `system.shutdown`'s, it sits behind the same 0600 app-owned
+    /// capability file, and it additionally requires a literal `confirm` so a
+    /// replayed or malformed frame cannot trigger it.
+    ///
+    /// This is the surgical half of a local-data reset. The alternative --
+    /// discarding the whole 24 GiB disk from the host -- also works and needs no
+    /// cooperation from the guest, but it takes the pulled container images with
+    /// it. For the case this was built for, a Postgres major that moved, exactly
+    /// one volume needs replacing and re-pulling several hundred megabytes would
+    /// be a poor trade.
+    ///
+    /// Order is the correctness property:
+    ///
+    /// 1. core containers, so nothing holds the volumes;
+    /// 2. sandbox containers, so nothing holds a workspace directory;
+    /// 3. the volumes;
+    /// 4. the workspace directories.
+    ///
+    /// Removing workspaces before their containers would leave a running
+    /// sandbox bind-mounted onto a path that no longer exists.
+    fn reset_data(&self, parameters: Value) -> Result<Value, GuestError> {
+        if required_string(&parameters, "confirm")? != "reset-local-data" {
+            return Err(GuestError::invalid(
+                "a local data reset must be confirmed explicitly",
+            ));
+        }
+
+        let mut removed_containers = 0;
+        for name in ["supertokens", "redis", "postgres"] {
+            let container = format!("lemma-core-{name}");
+            if self.inspect_raw(&container)?.is_some() {
+                self.run_checked(&["rm".into(), "--force".into(), container])?;
+                removed_containers += 1;
+            }
+        }
+        removed_containers += self.remove_managed_sandbox_containers()?;
+
+        let mut removed_volumes = 0;
+        for volume in ["lemma-postgres-data", "lemma-redis-data"] {
+            let output = self
+                .engine
+                .run(&["volume".into(), "rm".into(), "--force".into(), volume.into()])
+                .map_err(GuestError::engine)?;
+            if output.status.success() {
+                removed_volumes += 1;
+            }
+        }
+
+        let removed_workspaces = self.remove_all_workspaces()?;
+        Ok(json!({
+            "removed_containers": removed_containers,
+            "removed_volumes": removed_volumes,
+            "removed_workspaces": removed_workspaces,
+        }))
+    }
+
+    /// Every sandbox container this guest owns, by label rather than by name.
+    fn remove_managed_sandbox_containers(&self) -> Result<usize, GuestError> {
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--all".into(),
+            "--quiet".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+        ])?;
+        let ids: Vec<String> = output
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                if value.len() > 128 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(GuestError::engine(
+                        "container engine returned an invalid container identifier",
+                    ));
+                }
+                Ok(value.to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut arguments = vec!["rm".into(), "--force".into()];
+        arguments.extend(ids.iter().cloned());
+        self.run_checked(&arguments)?;
+        Ok(ids.len())
+    }
+
+    /// Remove every workspace directory, with `purge_workspace`'s discipline.
+    ///
+    /// Each entry is re-checked against the managed root rather than trusting
+    /// the read: this deletes recursively, and a symlink or a `..` in a name is
+    /// the difference between clearing workspaces and clearing the guest.
+    fn remove_all_workspaces(&self) -> Result<usize, GuestError> {
+        let root = self.state_root.join("workspaces");
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Ok(0);
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.parent() != Some(root.as_path()) {
+                return Err(GuestError::invalid("workspace escaped managed root"));
+            }
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            fs::remove_dir_all(&path).map_err(|error| GuestError::engine(error.to_string()))?;
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     fn shutdown(&self) -> Result<Value, GuestError> {
@@ -2980,6 +3097,104 @@ mod tests {
                 redis_password: "b".repeat(64),
             },
         }
+    }
+
+    /// A data reset without the literal confirmation destroys nothing.
+    ///
+    /// This is the only global destructive verb in the table, so a replayed or
+    /// malformed frame must not be able to reach it.
+    #[test]
+    fn a_data_reset_without_explicit_confirmation_is_refused() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        assert!(service.reset_data(json!({})).is_err());
+        assert!(service.reset_data(json!({"confirm": "yes"})).is_err());
+        assert!(
+            service.engine.commands.lock().unwrap().is_empty(),
+            "a refused reset must not reach the engine at all"
+        );
+    }
+
+    /// Containers go before the volumes and workspaces they hold.
+    ///
+    /// Removing a workspace directory while a sandbox is still bind-mounted
+    /// onto it, or a volume while Postgres still has it open, is the difference
+    /// between a clean reset and a guest in an unexplainable state. The order is
+    /// the correctness property, so it is what this asserts.
+    #[test]
+    fn a_data_reset_removes_holders_before_the_data_they_hold() {
+        let root = tempdir().unwrap();
+        let workspaces = root.path().join("workspaces");
+        fs::create_dir_all(workspaces.join("sandbox-one")).unwrap();
+        fs::create_dir_all(workspaces.join("sandbox-two")).unwrap();
+        fs::write(workspaces.join("sandbox-one/notes.md"), b"user work").unwrap();
+
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                // `inspect` answers with an array; anything else reads as absent.
+                output(true, "[{}]"), // inspect supertokens: present
+                output(true, ""),     // rm supertokens
+                output(true, "[{}]"), // inspect redis: present
+                output(true, ""),     // rm redis
+                output(true, "[{}]"), // inspect postgres: present
+                output(true, ""),     // rm postgres
+                output(true, "abc123\n"), // ps --filter label=...
+                output(true, ""),     // rm the sandbox container
+                output(true, ""),     // volume rm lemma-postgres-data
+                output(true, ""),     // volume rm lemma-redis-data
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let result = service
+            .reset_data(json!({"confirm": "reset-local-data"}))
+            .unwrap();
+
+        assert_eq!(result["removed_containers"], 4);
+        assert_eq!(result["removed_volumes"], 2);
+        assert_eq!(result["removed_workspaces"], 2);
+        assert!(!workspaces.join("sandbox-one").exists());
+        assert!(!workspaces.join("sandbox-two").exists());
+
+        let commands = service.engine.commands.lock().unwrap();
+        let position =
+            |predicate: &dyn Fn(&Vec<String>) -> bool| commands.iter().position(predicate);
+        let core_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"rm".to_owned())
+                && command.iter().any(|part| part == "lemma-core-postgres")
+        })
+        .expect("core containers are removed");
+        let sandbox_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"rm".to_owned())
+                && command.iter().any(|part| part == "abc123")
+        })
+        .expect("sandbox containers are removed");
+        let volume_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"volume".to_owned())
+                && command.get(1) == Some(&"rm".to_owned())
+        })
+        .expect("volumes are removed");
+
+        assert!(
+            core_removed < volume_removed,
+            "Postgres must let go of its volume before the volume is removed"
+        );
+        assert!(
+            sandbox_removed < volume_removed,
+            "sandboxes are removed before the data they mount"
+        );
     }
 
     /// A Postgres major bump is refused before the container is ever run.

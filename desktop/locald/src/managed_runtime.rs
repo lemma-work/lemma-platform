@@ -326,6 +326,29 @@ impl ManagedRuntimeController {
         Ok(())
     }
 
+    /// Ask the guest to destroy every database, volume and workspace it holds.
+    ///
+    /// The surgical half of a local-data reset: the guest tidies itself, so the
+    /// pulled container images survive and coming back up is seconds rather
+    /// than a re-download. Only reached when `probe` has already answered, so a
+    /// guest that cannot be asked falls to `discard_data_disk` instead of
+    /// retrying this.
+    pub fn reset_guest_data(&self) -> io::Result<serde_json::Value> {
+        self.runtime
+            .request("core.reset_data", json!({"confirm": "reset-local-data"}))
+    }
+
+    /// Throw the whole data disk away, returning the bytes reclaimed.
+    ///
+    /// The blunt half, for a guest that will not answer -- a torn filesystem, a
+    /// VM that will not boot. Takes the container images with it.
+    #[cfg(target_os = "macos")]
+    pub fn discard_data_disk(&self) -> io::Result<u64> {
+        self.stop_clock_keeper();
+        self.clear_forwarders();
+        self.runtime.discard_data_disk()
+    }
+
     pub fn stop_infrastructure(&self) -> io::Result<()> {
         self.stop_clock_keeper();
         if self.status().is_none() {

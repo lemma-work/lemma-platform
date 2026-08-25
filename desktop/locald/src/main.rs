@@ -18,6 +18,9 @@ fn run() -> io::Result<()> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref().unwrap_or("serve") {
         "serve" => serve(),
+        // Deliberately never constructs a Daemon: this is what a user reaches
+        // for when the daemon is the thing that will not start.
+        "reset" => lemma_locald::reset::reset_install(LocalPaths::discover()?),
         "status" => client_request(json!({"cmd": "status", "id": "cli-status"})),
         "ping" => client_request(json!({"cmd": "ping", "id": "cli-ping"})),
         "send" => {
@@ -41,7 +44,7 @@ fn run() -> io::Result<()> {
         }
         "--help" | "-h" => {
             println!(
-                "lemma-locald {}\n\nUSAGE:\n  lemma-locald serve\n  lemma-locald status\n  lemma-locald ping\n  lemma-locald send '<json>'",
+                "lemma-locald {}\n\nUSAGE:\n  lemma-locald serve\n  lemma-locald reset    destroy this installation's local state\n  lemma-locald status\n  lemma-locald ping\n  lemma-locald send '<json>'",
                 env!("CARGO_PKG_VERSION")
             );
             Ok(())
@@ -130,6 +133,9 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "agent-host.status" => event == "agent-host.status",
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
+        // The reset broadcasts `local.data-reset` on the way past; the run is
+        // over when the stack has come back up, not when the wipe finished.
+        "local.reset-data" => event == "done",
         _ => event == "done",
     }
 }

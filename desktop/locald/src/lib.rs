@@ -9,6 +9,7 @@ pub mod paths;
 pub mod port_reservation;
 pub mod protocol;
 pub mod provider_probe;
+pub mod reset;
 pub mod sharing;
 pub mod state;
 pub mod telemetry;
