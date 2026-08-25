@@ -64,9 +64,7 @@ UNREADABLE_ON_REAL_TELEGRAM = pytest.mark.xfail(
 @proves("PS-SURF-010", "PS-SURF-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
 async def test_a_message_is_answered(reachable):
-    await reachable.says(
-        "Hello — reply with a short greeting so I know you are there."
-    )
+    await reachable.says("Hello — reply with a short greeting so I know you are there.")
 
     answer = await reachable.waits_for_a_reply()
 
