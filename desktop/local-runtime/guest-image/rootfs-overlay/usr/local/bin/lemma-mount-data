@@ -47,7 +47,12 @@ fi
 
 mkdir -p "$data_root"
 if ! /usr/bin/mountpoint -q "$data_root"; then
-  /usr/bin/mount -t ext4 -o noatime "$device" "$data_root"
+  # `discard` so deleting data inside the guest actually returns the space to
+  # macOS. `data.raw` is a sparse file that only ever grew: pulling and
+  # removing a few hundred megabytes of images freed the space inside ext4 and
+  # left the host file at its high-water mark, so an installation's footprint
+  # was permanently the largest it had ever been.
+  /usr/bin/mount -t ext4 -o noatime,discard "$device" "$data_root"
 fi
 
 metadata_generation_file="$data_root/container-metadata-generation"

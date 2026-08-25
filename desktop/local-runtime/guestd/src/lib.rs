@@ -4309,6 +4309,11 @@ mod tests {
              and must be repaired rather than accumulated",
         );
         assert!(
+            mount_data.contains("noatime,discard"),
+            "without discard the sparse data disk only ever grows: space freed \
+             inside the guest is never returned to macOS",
+        );
+        assert!(
             mount_data.contains("needs-repair:"),
             "an unmountable disk must announce itself on the console, or the \
              host waits out a 120-second timeout and reports nothing useful",

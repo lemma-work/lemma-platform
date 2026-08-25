@@ -5539,11 +5539,16 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::fullscreen(app, None)?,
             &PredefinedMenuItem::separator(app)?,
+            // Enabled only in a development build. Shipping a web inspector in
+            // the top-level View menu, on Cmd-Alt-I, invites a stranger into a
+            // surface that talks to the workspace over IPC -- and there is
+            // nothing there for them. Diagnostics is the supported path, and
+            // Troubleshoot still carries this for anyone who needs it.
             &MenuItem::with_id(
                 app,
                 "devtools",
                 "Developer Tools",
-                true,
+                cfg!(debug_assertions),
                 Some("CmdOrCtrl+Alt+I"),
             )?,
         ],
@@ -5685,7 +5690,13 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?,
-            &MenuItem::with_id(app, "devtools", "Developer Tools", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "devtools",
+                "Developer Tools",
+                cfg!(debug_assertions),
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?,
             &CheckMenuItem::with_id(
@@ -5739,16 +5750,25 @@ fn disconnect_locald(app: &AppHandle) {
 /// a keystroke, and a stack too sick to answer a snapshot is exactly the state
 /// someone quits from — so it must not depend on the daemon replying.
 fn quit_impact(app: &AppHandle) -> Vec<String> {
-    if current_mode(app) != "local" {
-        return Vec::new();
-    }
+    // The mode check used to wrap the whole function, so a hosted user was
+    // never told anything and quit without a prompt at all. But locald is
+    // brought up in hosted mode precisely so the Agent Host can run, and a
+    // full quit stops it -- so somebody with a coding agent mid-run lost it
+    // silently, while a local user got a careful three-line warning.
+    //
+    // Only the *stack* line is local-only. The Agent Host runs in both.
+    let local = current_mode(app) == "local";
     let shell: State<Shell> = app.state();
-    let stack_up = {
+    let stack_up = local && {
         let ui = shell.ui.lock().unwrap();
         ui.ready || ui.running
     };
     let agent_host = shell.agent_host_status.lock().unwrap().clone();
-    let sharing = shell.sharing_mode.lock().unwrap().clone();
+    let sharing = if local {
+        shell.sharing_mode.lock().unwrap().clone()
+    } else {
+        None
+    };
     quit_impact_lines(stack_up, agent_host.as_ref(), sharing.as_deref())
 }
 
@@ -5846,6 +5866,19 @@ fn request_quit(app: &AppHandle) {
 /// `stop_impl` shows the stop on the splash, so a stop that fails fails in
 /// front of the user rather than as an app that declines to quit. The exit
 /// itself is issued by the `stop`/`done` handler once the daemon confirms.
+/// How long a confirmed quit waits for the stop before offering to leave anyway.
+///
+/// A stop that never confirms -- a wedged VM, a Postgres that will not shut
+/// down -- left the app running forever on "Winding down." after the user had
+/// asked it to quit. The escape existed (a second Cmd-Q reaches
+/// `quit_confirmed` and exits) but nothing on screen said so, and the error
+/// screen's button read "Try again", offering to *start* Lemma to somebody who
+/// had asked to leave.
+///
+/// Generous: an ordinary stop is seconds, and the guest is given 20s to power
+/// down before it is signalled.
+const QUIT_STOP_BUDGET: Duration = Duration::from_secs(45);
+
 fn stop_then_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
@@ -5857,7 +5890,39 @@ fn stop_then_quit(app: &AppHandle) {
         // worst version of this. Say why the quit did not happen; the dialog
         // also tells the user that trying again is the next move.
         report_action_failure(app, "Stop Lemma and quit", &error);
+        return;
     }
+    // Nothing else bounds this. `quit_after_stop` is consumed only by a `done`
+    // event that says the stop succeeded, so any other outcome -- including no
+    // outcome -- leaves the app running with the user's quit unanswered.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_STOP_BUDGET);
+        let shell: State<Shell> = handle.state();
+        if !shell.quit_after_stop.swap(false, Ordering::AcqRel) {
+            return; // The stop finished and the app is already gone.
+        }
+        append_install_log(&format!(
+            "quit: the stop did not finish within {}s; offering to quit anyway",
+            QUIT_STOP_BUDGET.as_secs()
+        ));
+        let quit_anyway = confirm_destructive_action_impl(
+            handle.clone(),
+            "Lemma is taking longer than usual to stop.".into(),
+            "Its private runtime has not confirmed shutting down. You can quit \
+             now and Lemma will tidy up the next time it starts, or keep waiting."
+                .into(),
+            "Quit Anyway".into(),
+        )
+        .unwrap_or(false);
+        if quit_anyway {
+            finish_quit(&handle);
+        } else {
+            // They chose to wait, so re-arm: a stop that lands later should
+            // still complete the quit they originally asked for.
+            shell.quit_after_stop.store(true, Ordering::Release);
+        }
+    });
 }
 
 /// Exit without stopping anything, for the cases where there is nothing to stop.
@@ -7813,6 +7878,62 @@ mod tests {
         let idle_host = json!({"running": false, "targets": []});
         assert!(quit_impact_lines(false, Some(&idle_host), Some("this_computer")).is_empty());
         assert!(quit_impact_lines(false, None, None).is_empty());
+    }
+
+    /// A hosted user with a running Agent Host is warned too.
+    ///
+    /// `quit_impact` used to return empty for any non-local mode, so quitting
+    /// asked nothing at all. But locald is started in hosted mode *precisely*
+    /// so the Agent Host can run, and a full quit stops it -- so somebody with
+    /// a coding agent mid-run lost it silently, while a local user got a
+    /// careful three-line warning. Only the stack line is local-only.
+    #[test]
+    fn a_hosted_quit_still_names_a_running_agent_host() {
+        let running = json!({"running": true, "targets": ["workspace-a"]});
+        let hosted = quit_impact_lines(/* stack_up */ false, Some(&running), None);
+        assert_eq!(hosted.len(), 1, "{hosted:?}");
+        assert!(hosted[0].contains("agents on this computer"), "{hosted:?}");
+        assert!(
+            !hosted.iter().any(|line| line.contains("Schedules")),
+            "a hosted workspace has no local stack to stop: {hosted:?}",
+        );
+    }
+
+    /// A confirmed quit is never left waiting forever on a stop.
+    ///
+    /// `quit_after_stop` is consumed only by a `done` event saying the stop
+    /// succeeded, so a wedged VM left the app running on "Winding down." with
+    /// the user's quit unanswered -- and the error screen's button read "Try
+    /// again", offering to *start* Lemma to somebody who had asked to leave.
+    #[test]
+    fn a_confirmed_quit_offers_to_leave_when_the_stop_does_not_finish() {
+        let body = function_body(include_str!("main.rs"), "fn stop_then_quit(");
+        assert!(
+            body.contains("QUIT_STOP_BUDGET"),
+            "the wait must be bounded, or a stop that never lands never quits",
+        );
+        assert!(
+            body.contains("Quit Anyway"),
+            "the way out has to be on screen, not only on a second Cmd-Q",
+        );
+        assert!(
+            body.contains("quit_after_stop.store(true"),
+            "choosing to keep waiting must re-arm, so a late stop still quits",
+        );
+    }
+
+    /// A web inspector does not ship enabled in the top-level menus.
+    #[test]
+    fn developer_tools_are_a_development_build_affordance() {
+        let source = include_str!("main.rs");
+        for block in source.split("\"devtools\",").skip(1) {
+            let head = &block[..block.len().min(200)];
+            assert!(
+                head.contains("cfg!(debug_assertions)"),
+                "a release build must not offer a web inspector into a webview \
+                 that talks to the workspace over IPC: {head}",
+            );
+        }
     }
 
     #[test]
