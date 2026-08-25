@@ -180,16 +180,42 @@ class SurfaceApprovalRenderPlan(BaseModel):
     def to_plain_text(self) -> str:
         """Text fallback used when a platform can't render native buttons.
 
-        Mirrors the historical approval prompt so the typed-reply resume path
-        (``approve`` / ``deny``) still works.
+        Feeds the typed-reply resume path, so the wording and
+        ``_classify_approval_reply`` have to agree: every phrase quoted here is
+        one that path accepts.
         """
         lines = [f"Approval needed: {self.title}"]
         if self.reason:
             lines.append(self.reason)
         if self.action_summary:
             lines.append(f"Action: {self.action_summary}")
-        lines.append('\nReply "approve" to run it or "deny" to cancel.')
+        lines.append(f"\n{self.reply_instruction()}")
         return "\n".join(lines)
+
+    def reply_instruction(self) -> str:
+        """How to answer in text, naming only the choices this card really has.
+
+        Derived from ``buttons`` rather than hardcoded. Approve-for-session
+        exists only when the paused call carries a real permission gate, and a
+        fixed "approve or deny" line silently dropped it everywhere the native
+        render was unavailable — so the agent re-prompted for every repeat of an
+        action the person had already meant to allow.
+        """
+        decisions = {button.decision for button in self.buttons}
+        choices: list[str] = []
+        if APPROVAL_DECISION_APPROVE in decisions:
+            choices.append('"approve" to run it')
+        if APPROVAL_DECISION_SESSION in decisions:
+            choices.append(
+                '"approve session" to allow it for the rest of this conversation'
+            )
+        if APPROVAL_DECISION_DENY in decisions:
+            choices.append('"deny" to cancel')
+        if not choices:
+            return "Reply with your decision."
+        if len(choices) == 1:
+            return f"Reply {choices[0]}."
+        return f"Reply {', '.join(choices[:-1])}, or {choices[-1]}."
 
 
 class ColdEmailSendResult(BaseModel):

@@ -95,29 +95,134 @@ def _parse_ask_user_reply(
     return {q.header: text for q in questions}
 
 
-def _parse_approval_decision(text: str) -> "AgentRunApprovalDecision":
-    """Parse a typed surface reply as an approval decision.
+# A typed approval reply is classified three ways, and the third case is the
+# whole point. "approve" and "deny" are decisions; anything else is *not a
+# decision at all* and has to reach the agent as what the person actually wrote.
+#
+# There used to be no third case: everything outside the approve set became
+# DENY. Since the caller treats a classified reply as consumed, "yeah go ahead"
+# cancelled the action and "wait, why do you need that?" was a denial with the
+# question thrown away — neither reply was ever delivered to anyone.
+#
+# Ambiguity is safe here *because* there is a third case. An unmatched reply
+# falls through to the normal message path, where
+# ``supersede_stale_pending_interactions`` auto-denies the pending call and the
+# agent receives the person's words and can ask again. So these sets stay exact
+# rather than growing prefix matches, which would let "yes, but only if X" read
+# as consent.
+_APPROVE_ONCE_REPLIES = frozenset(
+    {
+        "1",
+        "accept",
+        "allow",
+        "approve",
+        "approved",
+        "confirm",
+        "confirmed",
+        "do it",
+        "do it please",
+        "go",
+        "go ahead",
+        "go for it",
+        "lgtm",
+        "looks good",
+        "please do",
+        "sounds good",
+        "k",
+        "ok",
+        "okay",
+        "proceed",
+        "run",
+        "run it",
+        "sure",
+        "sure go ahead",
+        "y",
+        "yeah",
+        "yep",
+        "yeah go ahead",
+        "yes",
+        "yes do it",
+        "yes go ahead",
+        "yes please",
+        "yup",
+        "👍",
+        "✅",
+    }
+)
+_APPROVE_SESSION_REPLIES = frozenset(
+    {
+        "allow always",
+        "allow for session",
+        "always",
+        "always allow",
+        "approve all",
+        "approve for session",
+        "approve session",
+        "dont ask again",
+        "don't ask again",
+        "don’t ask again",
+        "yes to all",
+    }
+)
+_DENY_REPLIES = frozenset(
+    {
+        "2",
+        "abort",
+        "cancel",
+        "cancelled",
+        "decline",
+        "denied",
+        "deny",
+        "do not",
+        "dont",
+        "don't",
+        "don’t",
+        "n",
+        "never mind",
+        "nevermind",
+        "no",
+        "no thanks",
+        "nope",
+        "reject",
+        "rejected",
+        "stop",
+        "👎",
+        "❌",
+    }
+)
 
-    "approve", "yes", "y", "ok", "confirm", "1", "run", "allow" → APPROVE_ONCE.
-    Anything else → DENY (safe default).
+
+def _normalize_decision_reply(text: str) -> str:
+    """Fold a typed reply to its comparable form.
+
+    Lowercased, whitespace collapsed, and stripped of the trailing punctuation a
+    person types without meaning anything by it — "Yes!" and "yes" are the same
+    decision. Apostrophes are left alone so "don’t ask again" can be matched in
+    both the straight and curly spellings a phone keyboard produces.
+    """
+    collapsed = " ".join(text.strip().lower().split())
+    return collapsed.strip(".!?,;:").strip()
+
+
+def _classify_approval_reply(text: str) -> "AgentRunApprovalDecision | None":
+    """The decision this reply expresses, or ``None`` when it expresses none.
+
+    ``None`` is not a failure. It means the person said something other than
+    yes or no, and the caller must leave the approval pending and deliver the
+    message instead of inventing a decision on their behalf.
     """
     from app.modules.agent.contracts import AgentRunApprovalDecision
 
-    _APPROVE_WORDS = {
-        "approve",
-        "yes",
-        "y",
-        "ok",
-        "okay",
-        "confirm",
-        "1",
-        "run",
-        "allow",
-        "go",
-    }
-    if text.strip().lower() in _APPROVE_WORDS:
+    normalized = _normalize_decision_reply(text)
+    if not normalized:
+        return None
+    if normalized in _APPROVE_SESSION_REPLIES:
+        return AgentRunApprovalDecision.APPROVE_FOR_SESSION
+    if normalized in _APPROVE_ONCE_REPLIES:
         return AgentRunApprovalDecision.APPROVE_ONCE
-    return AgentRunApprovalDecision.DENY
+    if normalized in _DENY_REPLIES:
+        return AgentRunApprovalDecision.DENY
+    return None
 
 
 async def maybe_resume_pending_interaction(
@@ -132,8 +237,14 @@ async def maybe_resume_pending_interaction(
     skips the normal new-message path. Best-effort: any failure returns False.
 
     ask_user: parses the reply as a numbered option (1, 2, …) or an exact
-    label match, falling back to the raw text as a free-form "Other" answer.
-    request_approval: "approve"/"yes"/… → APPROVE_ONCE; anything else → DENY.
+    label match, falling back to the raw text as a free-form "Other" answer —
+    every reply answers the question, because free text is a valid answer to it.
+
+    request_approval: only a reply that actually expresses a decision resolves
+    the approval. "approve"/"yes"/… → APPROVE_ONCE, "approve session"/… →
+    APPROVE_FOR_SESSION, "deny"/"no"/… → DENY. Anything else returns False and
+    is delivered as a message, because an approval has no free-form answer and
+    guessing one on the person's behalf is how a question became a cancellation.
     """
     if context.conversation_id is None:
         return False
@@ -170,7 +281,16 @@ async def maybe_resume_pending_interaction(
             decision = AgentRunApprovalDecision.APPROVE_ONCE
             response: dict[str, Any] = {"answers": answers}
         else:
-            decision = _parse_approval_decision(text)
+            classified = _classify_approval_reply(text)
+            if classified is None:
+                # Not a decision — a question, a correction, a change of plan.
+                # Leave the approval pending and let the caller deliver this as
+                # an ordinary message: starting a turn supersedes the pause with
+                # an explicit denial the agent can see, and the person's actual
+                # words arrive alongside it. Consuming this as a decision is how
+                # both the words and the question used to be lost.
+                return False
+            decision = classified
             response = {}
 
         # Deferred: a webhook deadline is shorter than an approved command.
