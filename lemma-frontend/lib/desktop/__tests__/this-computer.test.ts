@@ -68,11 +68,26 @@ describe('what to call the machine Lemma is installed on', () => {
 });
 
 describe('the copy that reaches the screen', () => {
-    it('names the right machine in the empty state a Windows user actually sees', () => {
-        pretendToBe({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0)' });
-        expect(discoveryHeadline('settled', 0)).toBe('No coding agents found on this PC');
-        expect(discoveryHeadline('scanning', 0)).toBe('Looking for coding agents on this PC');
-        expect(discoveryHeadline('settled', 3)).toBe('Found 3 coding agents on this PC');
+    it('renders whichever machine it is handed, and reads no globals of its own', () => {
+        // The noun is a parameter now. It used to be read inside these
+        // functions, which answered "this computer" on the server and "this
+        // Mac" on the first client render -- a hydration mismatch on every
+        // string here. The component holds `useThisComputer()`, which is the
+        // same answer in both renders.
+        //
+        // Pinned by making `navigator` disagree with the argument: if these
+        // functions still consulted it, these assertions would fail.
+        pretendToBe({ platform: 'MacIntel', userAgent: 'Macintosh; Intel Mac OS X' });
+        expect(discoveryHeadline('settled', 0, 'this PC')).toBe(
+            'No coding agents found on this PC',
+        );
+        expect(discoveryHeadline('scanning', 0, 'this PC')).toBe(
+            'Looking for coding agents on this PC',
+        );
+        expect(discoveryHeadline('settled', 3, 'this PC')).toBe(
+            'Found 3 coding agents on this PC',
+        );
+        expect(discoveryLines('unavailable', 0, 'this PC').join(' ')).toContain('this PC');
     });
 
     it('keeps its line count the same on every platform', () => {
@@ -81,12 +96,9 @@ describe('the copy that reaches the screen', () => {
         // React repairs those by discarding the server subtree rather than by
         // patching the text. The line about file access is phrased to be true
         // everywhere instead of being dropped off macOS.
-        pretendToBe({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0)' });
-        const onWindows = discoveryLines('scanning', 0);
-        pretendToBe({ platform: 'MacIntel', userAgent: 'Macintosh; Intel Mac OS X' });
-        const onMac = discoveryLines('scanning', 0);
-        pretendToBe(undefined);
-        const onTheServer = discoveryLines('scanning', 0);
+        const onWindows = discoveryLines('scanning', 0, 'this PC');
+        const onMac = discoveryLines('scanning', 0, 'this Mac');
+        const onTheServer = discoveryLines('scanning', 0, 'this computer');
 
         expect(onWindows).toHaveLength(onMac.length);
         expect(onTheServer).toHaveLength(onMac.length);
