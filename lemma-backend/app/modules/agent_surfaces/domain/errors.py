@@ -24,6 +24,26 @@ class AgentSurfaceValidationError(AgentSurfaceError):
         )
 
 
+class AgentSurfaceRuntimeUnsupportedError(AgentSurfaceValidationError):
+    """This runtime has no way for the platform to receive.
+
+    Its own code, and that is the entire point. The provisioning log deliberately
+    records ``failure_code`` rather than the exception text -- the pipeline
+    strips any ``error`` field, because exception messages carry keys and
+    personal data -- on the understanding that the code names the branch that
+    refused. ``AGENT_SURFACE_VALIDATION_ERROR`` did not: a dozen branches raise
+    it, so a pod silently getting no mailbox looked identical to a bad name or a
+    mode mismatch, and telling them apart took a database and a code read.
+
+    Still a validation error, so every existing handler and status code is
+    unchanged.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.code = "AGENT_SURFACE_RUNTIME_UNSUPPORTED"
+
+
 class AgentSurfaceCredentialConflictError(AgentSurfaceError):
     """The credential this surface wants is already spoken for in the org.
 

@@ -20,6 +20,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceRuntimeUnsupportedError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
@@ -466,11 +467,12 @@ class AgentSurfaceService(
             # inbound from its received-emails API — neither needs a public
             # callback, so a localhost/desktop runtime can run an email surface.
             return
-        raise AgentSurfaceValidationError(
+        raise AgentSurfaceRuntimeUnsupportedError(
             f"{surface.surface_type.value} surfaces require a public HTTPS API URL "
-            "for webhook delivery in this runtime. Only Telegram polling, Slack "
-            "Socket Mode, and Resend polling are supported without a public "
-            "webhook URL."
+            "for webhook delivery in this runtime. Only Telegram polling "
+            "(ENABLE_TELEGRAM_POLLING_MODE), Slack Socket Mode "
+            "(ENABLE_SLACK_SOCKET_MODE), and Resend polling "
+            "(ENABLE_RESEND_POLLING_MODE) work without a public webhook URL."
         )
 
     async def _ensure_unique_org_credential_binding(
