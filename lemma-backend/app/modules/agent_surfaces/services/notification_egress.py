@@ -65,6 +65,8 @@ class NotificationEgress:
         conversation_id: UUID,
         notification: NotificationEntity,
         message: str,
+        agent_name: str | None = None,
+        actor_display_name: str | None = None,
     ) -> bool:
         """Hand the message to the platform.
 
@@ -74,8 +76,22 @@ class NotificationEgress:
         whose ``can_cold_open`` says so, which is why a chat channel never
         reaches the second branch — it would have had no candidate without a
         link in the first place.
+
+        Both names travel in the metadata because email puts them in the ``From``
+        display name, where an inbox list will actually show them — the body
+        header from ``attribute()`` is not visible until the message is opened.
+        A chat platform ignores them; its bot identity is the surface's, and the
+        body header is the whole attribution it gets.
         """
-        metadata = {"notification_id": str(notification.id)}
+        metadata: dict[str, Any] = {"notification_id": str(notification.id)}
+        # Set only when known. ``_egress_metadata_with_agent_name`` fills
+        # ``agent_display_name`` from the surface with ``setdefault``, and an
+        # explicit None here is a present key — it would win, and every chat
+        # bot would lose the name and icon it replies under.
+        if agent_name:
+            metadata["agent_display_name"] = agent_name
+        if actor_display_name:
+            metadata["actor_display_name"] = actor_display_name
         if channel.link is not None:
             return await self.egress.send_agent_message_for_conversation(
                 conversation_id=conversation_id,

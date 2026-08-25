@@ -170,13 +170,25 @@ class AgentSurfaceService(
         )
         # Resend is a system-credentialed email surface: it needs an inbound
         # address that routing matches on and outbound uses as the From. (Other
-        # email surfaces get this from their connected account.) Callers that
-        # allocate a readable per-agent address pass it in; the pod-level
-        # fallback derives one that cannot collide.
+        # email surfaces get this from their connected account.)
+        #
+        # Required, not defaulted. There used to be a fallback here deriving
+        # `pod-<pod_id.hex>@domain` — unique by construction and unreadable —
+        # so that a caller need not know how addresses are allocated. Two of
+        # the three callers duly did not know, which meant the address a person
+        # saw depended on whether their surface arrived through the API or
+        # through agent creation, and neither of those two paths was screened
+        # against `RESERVED_LOCAL_PARTS`. Allocation lives in
+        # `email_surface_provisioning`; anything reaching here without an
+        # address has gone around it, and that is a bug rather than a default.
         if platform is SurfacePlatform.RESEND and not entity.surface_identity_email:
-            entity.surface_identity_email = (
-                surface_identity_email or self._provision_resend_address(pod_id)
-            )
+            if not surface_identity_email:
+                raise AgentSurfaceValidationError(
+                    "A Resend surface needs an inbound address. Create it "
+                    "through email_surface_provisioning, which allocates a "
+                    "readable one and retries when it is taken."
+                )
+            entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
         await self._ensure_unique_org_credential_binding(entity)
         telegram_credentials: dict[str, Any] | None = None
@@ -196,24 +208,47 @@ class AgentSurfaceService(
         await notify_surface_receiver_config_changed(synced.id)
         return synced
 
-    @staticmethod
-    def _provision_resend_address(pod_id: UUID) -> str:
-        """Derive a unique per-pod inbound/outbound Resend address.
+    async def create_surface_minting_address(
+        self,
+        *,
+        pod_id: UUID,
+        agent: Any | None,
+        platform: SurfacePlatform,
+        name: str | None = None,
+        config: SurfaceConfig | None = None,
+        credential_mode: SurfaceCredentialMode | None = None,
+        account_id: UUID | None = None,
+        ctx: Context | None = None,
+    ) -> AgentSurfaceEntity:
+        """:meth:`create_surface`, minting an address when the platform needs one.
 
-        Uses the pod id for uniqueness under a catch-all inbound domain
-        (``*@<domain>`` → one webhook), so no per-address API registration. The
-        full 32-char hex is used (not a prefix) so two pods can never collide on
-        the same address — ``get_active_by_address`` would otherwise misroute one
-        pod's inbound mail to the other. ``pod-`` + 32 hex = 36 chars, within the
-        64-char local-part limit.
+        For the two callers a person drives — the surfaces API and the bundle
+        applier. They bring their own name, config and credentials, so they
+        cannot use ``provision_email_surface``, and calling ``create_surface``
+        straight through is what used to land them on the ``pod-<hex>@``
+        fallback: unreadable, and never screened for reserved local parts.
+
+        ``agent`` is the resolved agent or None rather than an id, because the
+        readable half of the address is its *name* and both callers already hold
+        the entity.
         """
-        domain = surface_settings.resend_inbound_domain
-        if not domain:
-            raise AgentSurfaceValidationError(
-                "Email is not configured for this deployment: set "
-                "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
-            )
-        return f"pod-{pod_id.hex}@{domain}"
+        from app.modules.agent_surfaces.services.email_surface_provisioning import (
+            create_surface_on_minted_address,
+        )
+
+        return await create_surface_on_minted_address(
+            self,
+            self.surface_repository.uow,
+            pod_id=pod_id,
+            agent_id=getattr(agent, "id", None),
+            agent_name=getattr(agent, "name", None),
+            platform=platform,
+            name=name,
+            config=config or SurfaceConfig(),
+            credential_mode=credential_mode,
+            account_id=account_id,
+            ctx=ctx,
+        )
 
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:
         surface = await self.surface_repository.get(surface_id)

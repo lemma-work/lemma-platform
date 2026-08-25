@@ -370,8 +370,11 @@ Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
   addresses are minted on it (`{agent}.{pod}@{domain}`, and `{pod}@{domain}` for
   the pod's own assistant) and inbound routing matches on it, so a wrong value
   means mail that bounces on the way out and matches no surface on the way back.
-- **The key and the domain together are the switch.** Set both and agents get
-  mailboxes; leave either unset and they do not. There is no separate enable
+  The domain is one catch-all shared by every organization, so role addresses are
+  reserved: a pod named "Postmaster" gets `postmaster-k3p9@`, never
+  `postmaster@`.
+- **The key and the domain together are the switch.** Set both and every pod
+  and agent gets a mailbox as it is created; leave either unset and they do not. There is no separate enable
   flag — there was one, and being read per process it could be on where the
   surfaces catalog runs and off where sends run, which presents as the UI
   offering email while delivery reports that the pod has no surface.
