@@ -259,7 +259,20 @@ pub fn record(root: &Path, event: InstallEvent) {
     let Some(key) = ingestion_key() else {
         return;
     };
-    let host = std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    // Where this goes is not a runtime decision in a shipped build.
+    //
+    // The key used to be read from the environment too, so a build that had one
+    // was a build somebody had deliberately configured. It is baked in now, so
+    // a released app carries the ingestion key -- and an unguarded destination
+    // turns that into an exfiltration primitive: set `LEMMA_TELEMETRY_HOST` in
+    // the app's environment and the key and install id are posted, in the
+    // clear, wherever you like. Redirecting it stays available for development,
+    // which is the only place it was ever for.
+    let host = if cfg!(debug_assertions) {
+        std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.to_string())
+    } else {
+        DEFAULT_HOST.to_string()
+    };
     let payload = serde_json::json!({
         "api_key": key,
         "batch": [{

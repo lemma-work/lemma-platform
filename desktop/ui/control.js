@@ -643,6 +643,7 @@ async function runDesktopAction(button) {
     if (action === "install-app-update") {
       button.disabled = true;
       button.textContent = "Downloading…";
+      let resetData = false;
       // The reset warning is not decoration: taking an incompatible update
       // without discarding data first produces an app that cannot start.
       if (appUpdate?.dataCompatibility === "requires-reset") {
@@ -652,9 +653,15 @@ async function runDesktopAction(button) {
           "Update and Reset",
         );
         if (!proceed) return;
-        await invoke("reset_local_data");
+        resetData = true;
       }
-      await invoke("install_app_update");
+      // The reset is the *command's* job, not this handler's. Doing it here
+      // meant the data was destroyed before the download had even been
+      // attempted, so a network drop or an unverifiable signature took every
+      // pod, file and account with it -- and `reset_local_data` returns as soon
+      // as the request is written, so the install then raced the wipe and
+      // force-terminated the daemon in the middle of it.
+      await invoke("install_app_update", { resetData });
       await loadAppUpdate();
     }
     if (action === "retry-snapshot") {

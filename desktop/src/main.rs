@@ -128,7 +128,32 @@ fn build_commit() -> Option<&'static str> {
 /// to follow -- and the signing key is never given to the nightly workflow, so
 /// a nightly could not produce a valid update even if it tried.
 fn updates_enabled() -> bool {
-    release_channel() == "stable" && !cfg!(debug_assertions)
+    release_channel() == "stable" && !cfg!(debug_assertions) && updater_key_configured()
+}
+
+/// Whether this build carries a public key that can verify an update.
+///
+/// `tauri.conf.json` ships `"pubkey": ""` until the signing keypair exists, and
+/// an empty key is not a permissive setting -- `verify_signature` decodes it and
+/// fails, so *every* install fails. Without this check the app offers an update,
+/// stops the user's daemon to make room for it, and only then discovers it
+/// cannot verify a thing.
+///
+/// Read from the committed config at compile time, so a build either has a key
+/// or does not; there is nothing to get out of sync at runtime.
+fn updater_key_configured() -> bool {
+    static CONFIGURED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CONFIGURED.get_or_init(|| {
+        serde_json::from_str::<Value>(include_str!("../tauri.conf.json"))
+            .ok()
+            .and_then(|config| {
+                config
+                    .pointer("/plugins/updater/pubkey")
+                    .and_then(Value::as_str)
+                    .map(|key| !key.trim().is_empty())
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// What a broken installation can still be offered.
@@ -1595,6 +1620,35 @@ impl NoConsoleWindow for Command {
     }
 }
 
+/// Environment variables the *daemon* honours that redirect what it runs or
+/// loads. Stripped from a release build's child; see `spawn_locald`.
+///
+/// Kept in step with locald by ,
+/// which reads locald's own source rather than trusting this list.
+const DAEMON_REDIRECT_ENV: [&str; 10] = [
+    "LEMMA_AGENT_HOST_BIN",
+    "LEMMA_LOCALD_SUPERVISOR_BIN",
+    "LEMMA_DESKTOP_SUPERVISOR_BIN",
+    "LEMMA_LOCALD_WSL_BIN",
+    "LEMMA_LOCALD_SOURCE_ROOT",
+    "LEMMA_LOCALD_SOURCE_RELEASE_MANIFEST",
+    "LEMMA_LOCALD_HOST_PACK_ROOT",
+    "LEMMA_LOCALD_HOST_PACK_MANIFEST",
+    "LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT",
+    "LEMMA_TELEMETRY_HOST",
+];
+
+/// Variables the app hands the daemon on purpose, so they are not redirects to
+/// strip. Named here so the test below can tell "deliberately passed" from
+/// "nobody thought about it".
+#[cfg(test)]
+const DAEMON_INTENDED_ENV: [&str; 4] = [
+    "LEMMA_LOCALD_ROOT",
+    "LEMMA_DESKTOP_RUNTIME_ROOT",
+    "LEMMA_CONTAINER_RUNTIME",
+    "LEMMA_RUNTIME_WSL_DISTRIBUTION",
+];
+
 fn spawn_locald() -> Result<Child, String> {
     let root = runtime_root();
     let have_checkout = root.join("desktop/locald/Cargo.toml").exists();
@@ -1623,6 +1677,22 @@ fn spawn_locald() -> Result<Child, String> {
     };
     if have_checkout {
         command.current_dir(&root);
+    }
+    // The daemon inherits this process's environment, and the daemon reads
+    // redirect variables of its own. So gating them in the *app* -- which
+    // `dev_override` does -- stops at the process boundary: a signed, notarized
+    // build would refuse to load a host pack from an environment variable and
+    // then hand that same variable to the daemon, which loads it without
+    // asking. Same threat model the gating exists for: anything running as the
+    // user laundering trust through a hardened-runtime process.
+    //
+    // Removed rather than cleared. `env_clear` would take PATH, HOME and the
+    // locale with it, and the ones set below are set explicitly anyway --
+    // removal has to happen first so those still win.
+    if !cfg!(debug_assertions) {
+        for name in DAEMON_REDIRECT_ENV {
+            command.env_remove(name);
+        }
     }
     command
         .env("PATH", enriched_path())
@@ -3312,7 +3382,11 @@ fn installed_postgres_major() -> Option<u64> {
 
 /// Download and install a newer Lemma, then offer to restart.
 #[tauri::command]
-async fn install_app_update(window: Webview, app: AppHandle) -> Result<(), String> {
+async fn install_app_update(
+    window: Webview,
+    app: AppHandle,
+    reset_data: bool,
+) -> Result<(), String> {
     require_control_window(&window)?;
     if !updates_enabled() {
         return Err(
@@ -3327,21 +3401,49 @@ async fn install_app_update(window: Webview, app: AppHandle) -> Result<(), Strin
         .map_err(|error| format!("could not check for updates: {error}"))?
         .ok_or("Lemma is already up to date")?;
 
-    // Before the bundle underneath it is replaced.
+    // Downloaded first, and deliberately not with `download_and_install`.
     //
-    // A DMG install moves the old app to the Trash, so the running daemon's
-    // executable path changes and `locald_is_this_build` notices. An in-place
-    // update writes to the *same* path, so a stale daemon from the previous
-    // version would report an identical path and be adopted by the new app --
-    // supervising the old runtime under a new shell.
+    // `download` is where the signature is verified, and it is the step most
+    // likely to fail: a network that drops, a feed that moved, a key that
+    // cannot decode. Stopping the daemon before it meant every one of those
+    // outcomes took the user's whole stack down and then reported an error --
+    // for an update that never began.
+    let bytes = update
+        .download(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("could not download the update: {error}"))?;
+
+    // The data goes now: after the download has been fetched and its signature
+    // checked, and while the daemon that has to do the wiping is still up.
+    //
+    // Not before the download, which is where the UI used to do it -- a network
+    // drop or an unverifiable key then destroyed every pod, file and account for
+    // an update that never began. And not after the install, because by then
+    // this app's bundle has been replaced and `ensure_locald` would start the
+    // *new* daemon against the old runtime.
+    //
+    // What remains is download-succeeded-then-install-failed, which leaves a
+    // working older app on empty data. Rare, recoverable, and the honest cost of
+    // an incompatible upgrade.
+    if reset_data {
+        let handle = app.clone();
+        tauri::async_runtime::spawn_blocking(move || reset_local_data_and_wait(&handle))
+            .await
+            .map_err(|error| error.to_string())??;
+    }
+
+    // Now, and only now. A DMG install moves the old app to the Trash, so the
+    // running daemon's executable path changes and `locald_is_this_build`
+    // notices. An in-place update writes to the *same* path, so a stale daemon
+    // from the previous version would report an identical path and be adopted
+    // by the new app -- supervising the old runtime under a new shell.
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || stop_locald_for_runtime_maintenance(&handle))
         .await
         .map_err(|error| error.to_string())??;
 
     update
-        .download_and_install(|_, _| {}, || {})
-        .await
+        .install(bytes)
         .map_err(|error| format!("could not install the update: {error}"))?;
 
     let restart = confirm_destructive_action_impl(
@@ -3407,10 +3509,11 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
     if !confirm_destructive_action_impl(
         app.clone(),
         "Reset local data?".into(),
-        "Every pod, table, file, workspace and account on this Mac is deleted. \
-         Your AI provider settings and the downloaded runtime are kept, so Lemma \
-         starts again in seconds.\n\nThis cannot be undone."
-            .into(),
+        format!(
+            "Every pod, table, file, workspace and account on {THIS_COMPUTER} is \
+             deleted. Your AI provider settings and the downloaded runtime are \
+             kept, so Lemma starts again in seconds.\n\nThis cannot be undone."
+        ),
         "Reset Data".into(),
     )? {
         return Ok(());
@@ -3445,6 +3548,36 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
     )
 }
 
+/// The same reset, but not returning until the daemon says it is done.
+///
+/// `reset_local_data_impl` hands the request to `send_local_operation`, which
+/// returns as soon as it is written -- right for a button, where the splash
+/// renders the progress. Wrong for the update flow, which has to know the data
+/// is actually gone before it replaces the app on top of it.
+///
+/// No confirmation of its own: the caller has already asked, in the words of
+/// what it is about to do.
+fn reset_local_data_and_wait(app: &AppHandle) -> Result<(), String> {
+    clear_local_session_data(app);
+    if let Err(error) = write_config(|config| {
+        if let Some(object) = config.as_object_mut() {
+            object.remove("resumeTarget");
+        }
+    }) {
+        append_install_log(&format!(
+            "update: could not clear the resume target: {error}"
+        ));
+    }
+    ensure_locald(app)?;
+    locald_request_blocking(json!({
+        "v": 1,
+        "cmd": "local.reset-data",
+        "confirm": "reset-local-data",
+        "id": operation_id("update-reset-data"),
+    }))
+    .map(|_| ())
+}
+
 /// Return this Mac to the state of one that has never run Lemma.
 #[tauri::command]
 async fn reset_full_reinstall(window: Webview, app: AppHandle) -> Result<(), String> {
@@ -3458,10 +3591,12 @@ fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
     if !confirm_destructive_action_impl(
         app.clone(),
         "Start over?".into(),
-        "Everything Lemma keeps on this Mac is deleted: your pods and files, \
-         your AI provider settings and stored keys, and the downloaded runtime. \
-         Setting up again downloads about 506 MB.\n\nThis cannot be undone."
-            .into(),
+        format!(
+            "Everything Lemma keeps on {THIS_COMPUTER} is deleted: your pods and \
+             files, your AI provider settings and stored keys, and the downloaded \
+             runtime. Setting up again downloads about 506 MB.\n\nThis cannot be \
+             undone."
+        ),
         "Start Over".into(),
     )? {
         return Ok(());
@@ -6629,7 +6764,19 @@ fn main() {
                         eprintln!("[desktop-release-exit] {error}");
                     }
                 }
-                disconnect_locald(app);
+                // Not just `disconnect_locald`. This is the exit every path
+                // ends at, including the ones that never touch `request_quit`:
+                // Dock -> Quit, `osascript quit`, and a system logout or
+                // restart. Those reach `ExitRequested` with an empty impact --
+                // which is every state where the local stack is not up, and
+                // `lemma-locald` is running in all of them -- so they returned
+                // here having stopped nothing, and left a supervisor with no
+                // interface behind. See `leave_nothing_running`.
+                //
+                // Safe to reach twice: the confirmed path calls it and then
+                // `app.exit(0)`, which arrives here. The second call finds no
+                // daemon to connect to and says so in the log.
+                leave_nothing_running(app);
             }
             _ => {}
         });
@@ -7199,6 +7346,70 @@ mod tests {
         assert!(
             config.contains("connect-src 'self' ipc: http://ipc.localhost"),
             "checking from Rust is what keeps the webview's network policy narrow",
+        );
+    }
+
+    /// An update is only offered by a build that could actually install one.
+    ///
+    /// `tauri.conf.json` ships `"pubkey": ""` until the signing keypair exists,
+    /// and an empty key is not a permissive setting: `verify_signature` decodes
+    /// it and errors, so every install fails -- at the last step, after the app
+    /// has stopped the user's daemon to make room. The config test above passed
+    /// throughout, because it never looked at the key.
+    ///
+    /// Two independent guards, because they fail at opposite ends: this one
+    /// stops the *app* offering what it cannot verify, and the release workflow
+    /// refuses to build at all with the key empty.
+    #[test]
+    fn a_build_with_no_verification_key_does_not_offer_updates() {
+        let configured = updater_key_configured();
+        let committed = serde_json::from_str::<Value>(include_str!("../tauri.conf.json"))
+            .expect("the config parses")
+            .pointer("/plugins/updater/pubkey")
+            .and_then(Value::as_str)
+            .map(|key| !key.trim().is_empty())
+            .expect("the config declares an updater pubkey field");
+        assert_eq!(
+            configured, committed,
+            "the runtime gate must read the key the build actually ships",
+        );
+        if !configured {
+            assert!(
+                !updates_enabled(),
+                "a build that cannot verify an update must not offer one",
+            );
+        }
+    }
+
+    /// The daemon is stopped only once the update is in hand.
+    ///
+    /// `download` is where the signature is verified and where a network drop,
+    /// a moved feed or an undecodable key surfaces. Stopping first meant every
+    /// one of those took the user's whole stack down and then reported a
+    /// failure, for an update that never began.
+    #[test]
+    fn an_update_is_downloaded_and_verified_before_the_stack_is_stopped() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("async fn install_app_update(")
+            .expect("install_app_update exists");
+        let body = &source[start..start + 4200];
+
+        let downloaded = body.find(".download(").expect("it downloads");
+        let stopped = body
+            .find("stop_locald_for_runtime_maintenance")
+            .expect("it stops locald");
+        let installed = body.find(".install(bytes)").expect("it installs");
+        assert!(
+            downloaded < stopped && stopped < installed,
+            "order must be download, stop, install -- got download@{downloaded} \
+             stop@{stopped} install@{installed}",
+        );
+        // A call, not the word -- the comment above the download explains why
+        // the combined form is not used, and would otherwise trip this.
+        assert!(
+            !body.contains(".download_and_install("),
+            "the combined call gives no seam to stop the daemon between the two",
         );
     }
 
@@ -7935,6 +8146,85 @@ mod tests {
     ///
     /// A background service is fine. A background service with no interface is
     /// not one anybody agreed to.
+    /// Every redirect the daemon reads is one a release build takes away.
+    ///
+    /// `dev_override` gates the variables the *app* reads, and stops exactly
+    /// there: the daemon inherits this process's environment and reads
+    /// redirects of its own, so a signed build refused to load a host pack from
+    /// an environment variable and then handed that same variable to the
+    /// process that loads it without asking.
+    ///
+    /// Enumerated from locald's own source rather than from a list somebody
+    /// maintains, because a list somebody maintains is how the first three went
+    /// missing. A new variable there is a compile-time-green, review-invisible
+    /// hole until this test names it.
+    #[test]
+    fn every_daemon_redirect_variable_is_stripped_from_a_release_build() {
+        let sources = [
+            include_str!("../locald/src/agent_host.rs"),
+            include_str!("../locald/src/daemon.rs"),
+            include_str!("../locald/src/native_host_pack.rs"),
+            include_str!("../locald/src/managed_runtime.rs"),
+            include_str!("../locald/src/paths.rs"),
+            include_str!("../local-runtime/manager/src/lib.rs"),
+        ];
+
+        let mut read_by_the_daemon = std::collections::BTreeSet::new();
+        for source in sources {
+            let mut rest = source;
+            while let Some(at) = rest.find("LEMMA_") {
+                let tail = &rest[at..];
+                let end = tail
+                    .find(|c: char| !c.is_ascii_uppercase() && c != '_' && !c.is_ascii_digit())
+                    .unwrap_or(tail.len());
+                let name = &tail[..end];
+                // Only where it is actually read from the environment, which is
+                // what makes it a redirect rather than a mention.
+                let context_start = at.saturating_sub(40);
+                if rest[context_start..at].contains("env::var") {
+                    read_by_the_daemon.insert(name.to_owned());
+                }
+                rest = &tail[end..];
+            }
+        }
+        assert!(
+            !read_by_the_daemon.is_empty(),
+            "the scan found nothing, so it is not checking anything",
+        );
+
+        let handled: std::collections::BTreeSet<String> = DAEMON_REDIRECT_ENV
+            .iter()
+            .chain(DAEMON_INTENDED_ENV.iter())
+            .map(|name| (*name).to_owned())
+            .collect();
+        let unconsidered: Vec<&String> = read_by_the_daemon.difference(&handled).collect();
+        assert!(
+            unconsidered.is_empty(),
+            "the daemon reads these and this build neither strips nor \
+             deliberately passes them: {unconsidered:?}. Add each to \
+             DAEMON_REDIRECT_ENV, or to DAEMON_INTENDED_ENV if the app sets it \
+             on purpose.",
+        );
+
+        // And the stripping is actually wired, before the deliberate ones are
+        // set -- `env` after `env_remove` is what makes those still win.
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn spawn_locald()")
+            .expect("spawn_locald exists");
+        let body = &source[start..start + 3000];
+        let removed = body
+            .find("command.env_remove(name)")
+            .expect("a release build strips them");
+        let set = body
+            .find(r#".env("PATH", enriched_path())"#)
+            .expect("it sets PATH");
+        assert!(
+            removed < set,
+            "removal has to happen before the deliberate sets"
+        );
+    }
+
     #[test]
     fn quitting_leaves_nothing_running_that_the_user_cannot_see() {
         let source = include_str!("main.rs");
@@ -7973,6 +8263,27 @@ mod tests {
         assert!(
             body_of("fn finish_quit(").contains("leave_nothing_running(&worker)"),
             "the plain quit path has to stop the daemon",
+        );
+
+        // Including the ones that never reach `request_quit` at all. Dock ->
+        // Quit, `osascript quit` and a system logout land straight on
+        // `RunEvent::Exit`, and `quit_impact` is empty in every state where the
+        // stack is not up -- which is exactly when the daemon is running with
+        // nothing on screen. This assertion is the one the previous version of
+        // this test was missing: it checked `finish_quit` and stopped there, so
+        // it passed while the most common OS-driven quit stopped nothing.
+        let exit = {
+            let start = source
+                .find("tauri::RunEvent::Exit => {")
+                .expect("the exit handler exists");
+            let end = source[start..]
+                .find("\n            _ => {}")
+                .expect("the match has a fallthrough");
+            &source[start..start + end]
+        };
+        assert!(
+            exit.contains("leave_nothing_running(app)"),
+            "an OS-issued exit has to stop the daemon too",
         );
         let after_stop = body_of("fn handle_locald_event(");
         assert!(
@@ -8030,6 +8341,23 @@ mod tests {
         );
         let body = quit_prompt_body(&["Schedules stop.".into()]);
         assert!(body.contains(THIS_COMPUTER), "{body}");
+
+        // The two highest-stakes strings in the app -- what is about to be
+        // deleted -- were the ones this test did not reach. Both shipped in the
+        // Windows build naming hardware that build's users do not have.
+        let source = include_str!("main.rs");
+        for name in ["fn reset_local_data_impl(", "fn reset_full_reinstall_impl("] {
+            let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
+            let body = &source[start..start + 1200];
+            assert!(
+                !body.contains("this Mac"),
+                "{name} hardcodes 'this Mac' in the copy that names what is deleted",
+            );
+            assert!(
+                body.contains("THIS_COMPUTER"),
+                "{name} must name the machine this build actually runs on",
+            );
+        }
         // The other half of the bargain is stated where the decision is made.
         assert!(
             body.contains("To leave Lemma running, close the window instead."),
