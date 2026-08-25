@@ -376,7 +376,7 @@ async def test_delete_pod_marks_deleted_and_updates(
     requester_id = uuid4()
     pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
 
-    pod_repository_mock.get.return_value = pod
+    pod_repository_mock.get_even_if_deleted.return_value = pod
     organization_repository_mock.get_member.return_value = _make_org_member(
         user_id=requester_id,
         organization_id=pod.organization_id,
@@ -396,6 +396,37 @@ async def test_delete_pod_marks_deleted_and_updates(
     assert events[0].event_type == "pod.deleted"
     assert events[0].pod_id == pod.id
     assert events[0].organization_id == pod.organization_id
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_already_deleted_pod_reports_success(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    """PS-POD-050: a retried deletion succeeds instead of failing.
+
+    A client that never saw the first answer sends the request again. The pod
+    row is still there, flagged deleted, so the second call must report the
+    same success -- and must not write, re-emit `pod.deleted`, or rename a pod
+    that already carries a generated deleted- name.
+    """
+    requester_id = uuid4()
+    pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
+    pod.is_deleted = True
+
+    pod_repository_mock.get_even_if_deleted.return_value = pod
+    organization_repository_mock.get_member.return_value = _make_org_member(
+        user_id=requester_id,
+        organization_id=pod.organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+
+    result = await pod_service.delete_pod(pod.id, requester_id)
+
+    assert result is True
+    pod_repository_mock.update.assert_not_called()
+    assert pod.collect_events() == []
 
 
 @pytest.mark.asyncio

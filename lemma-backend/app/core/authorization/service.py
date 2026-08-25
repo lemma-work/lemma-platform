@@ -535,11 +535,18 @@ class AuthorizationDataService:
                 organization_id=organization_id,
                 pod_id=pod_id,
             )
+        pod_is_deleted = False
         if cached is None and pod_id is not None:
             # Miss: the snapshot has to be derived, and that needs the org.
             pod = await self.session.get(Pod, pod_id)
             if pod is not None:
                 organization_id = pod.organization_id
+            # The row is already in hand, so learning whether the pod still
+            # exists costs nothing here — and this is the only place it is
+            # read. A pod that has been deleted, or was never there, is not
+            # one whose contents anybody may enumerate; `get_pod_context`
+            # turns that into the refusal.
+            pod_is_deleted = pod is None or bool(pod.is_deleted)
 
         if cached is not None:
             return Context(
@@ -553,6 +560,7 @@ class AuthorizationDataService:
                 permission_ids=cached.permission_ids,
                 principal_refs=cached.principal_refs,
                 grant_principal_sets=cached.grant_principal_sets,
+                pod_is_deleted=cached.pod_is_deleted,
                 authorizer=authorizer,
                 request_id=request_id,
             )
@@ -604,6 +612,7 @@ class AuthorizationDataService:
             permission_ids=frozenset(permission_ids),
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
+            pod_is_deleted=pod_is_deleted,
         )
         await self._cache_snapshot_without_holding(user_id, snapshot)
         return Context(
@@ -617,6 +626,7 @@ class AuthorizationDataService:
             permission_ids=snapshot.permission_ids,
             principal_refs=snapshot.principal_refs,
             grant_principal_sets=snapshot.grant_principal_sets,
+            pod_is_deleted=snapshot.pod_is_deleted,
             authorizer=authorizer,
             request_id=request_id,
         )

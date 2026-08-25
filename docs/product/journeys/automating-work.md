@@ -199,7 +199,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `workflow.run.cancel`, `workflow.run.get`
 
 ### PS-FLOW-014 — A workflow run carries the authority of whoever started it
-**Status:** covered
+**Status:** planned
 
 - While a run executes, the system shall give each step no more access than the
   person who started the run has.
@@ -209,6 +209,14 @@ always reaches a conclusion a person can see.
 - If a step attempts something the run's authority does not permit, then the
   system shall fail that step with a refusal a person can read, and shall not
   silently skip it.
+
+
+> **No test yet, and nothing is claimed about the code either way.** This read
+> `covered` on the strength of `test_an_outsider_cannot_create_a_workflow`,
+> which proves an outsider cannot *create* a workflow — a pod-role rule
+> (`PS-POD-011`, where that test now lives) and not a statement about what a
+> *run* may do. Proving this one means executing a graph as a restricted actor
+> and watching a step be refused, so it belongs in the sandbox lane.
 
 **Contracts:** `workflow.run.create`, `workflow.run.get`
 

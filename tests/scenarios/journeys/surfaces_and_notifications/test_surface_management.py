@@ -19,9 +19,7 @@ async def connected(world, run, egress):
     alice = await world.person("daniel")
     pod = await alice.creates_a_pod(named=run.name("pod"))
     agent = await alice.creates_an_agent(in_pod=pod)
-    surface = await alice.becomes_reachable_on_telegram(
-        in_pod=pod, agent=agent["name"]
-    )
+    surface = await alice.becomes_reachable_on_telegram(in_pod=pod, agent=agent["name"])
     yield alice, pod, agent, surface, fake
 
 

@@ -261,7 +261,9 @@ def _build_service(
     async def _fake_get(model, item_id):
         del item_id
         if getattr(model, "__name__", "") == "Pod":
-            return SimpleNamespace(organization_id=organization_id)
+            # `is_deleted` is a non-nullable column, so a stand-in without
+            # it is a Pod no database could return.
+            return SimpleNamespace(organization_id=organization_id, is_deleted=False)
         return session_model
 
     uow = SimpleNamespace(

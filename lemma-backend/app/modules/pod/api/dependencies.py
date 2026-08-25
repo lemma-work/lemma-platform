@@ -37,6 +37,7 @@ def get_pod_service(
         authorization_service=create_authorization_service(uow),
         icon_service=create_icon_service(),
         schedule_teardown=create_pod_schedule_teardown(uow),
+        uow=uow,
     )
 
 

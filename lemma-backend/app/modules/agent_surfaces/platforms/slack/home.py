@@ -57,7 +57,8 @@ class SlackHomeSurface:
         if not token or not channel_id or not user_id:
             return False
         try:
-            await build_slack_client(self.credentials).chat_postEphemeral(
+            client = await build_slack_client(self.credentials)
+            await client.chat_postEphemeral(
                 channel=str(channel_id),
                 user=str(user_id),
                 text=(
@@ -105,7 +106,8 @@ class SlackHomeSurface:
         if not token or not trigger_id:
             return False
         try:
-            await build_slack_client(self.credentials).views_open(
+            client = await build_slack_client(self.credentials)
+            await client.views_open(
                 trigger_id=trigger_id,
                 view=channel_setup_modal(
                     channel_id=channel_id,
@@ -133,7 +135,7 @@ class SlackHomeSurface:
         token = slack_access_token(self.credentials)
         if not token or not user_id or not prompt:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             opened = await client.conversations_open(users=str(user_id))
             channel = ((opened.get("channel") or {}).get("id")) or ""
@@ -170,7 +172,8 @@ class SlackHomeSurface:
         if not token or not trigger_id:
             return False
         try:
-            await build_slack_client(self.credentials).views_open(
+            client = await build_slack_client(self.credentials)
+            await client.views_open(
                 trigger_id=trigger_id,
                 view=dm_agent_modal(
                     agent_names=agent_names,
@@ -205,7 +208,8 @@ class SlackHomeSurface:
         if not token or not user_id:
             return False
         try:
-            await build_slack_client(self.credentials).views_publish(
+            client = await build_slack_client(self.credentials)
+            await client.views_publish(
                 user_id=str(user_id),
                 view=app_home_view(
                     pod_name=pod_name,
@@ -233,9 +237,8 @@ class SlackHomeSurface:
         if not token or not channel_id:
             return None
         try:
-            response = await build_slack_client(self.credentials).conversations_info(
-                channel=str(channel_id)
-            )
+            client = await build_slack_client(self.credentials)
+            response = await client.conversations_info(channel=str(channel_id))
             name = ((response.get("channel") or {}).get("name") or "").strip()
             return name or None
         except SlackApiError:
@@ -262,7 +265,8 @@ class SlackHomeSurface:
         if not event.is_dm or "assistant:write" not in slack_scopes(self.credentials):
             return False
         try:
-            await build_slack_client(self.credentials).assistant_threads_setTitle(
+            client = await build_slack_client(self.credentials)
+            await client.assistant_threads_setTitle(
                 channel_id=str(channel),
                 thread_ts=str(thread_ts),
                 title=clean_title,
@@ -314,9 +318,8 @@ class SlackHomeSurface:
         if title:
             kwargs["title"] = _truncate_slack_text(str(title).strip(), 100)
         try:
-            await build_slack_client(
-                self.credentials
-            ).assistant_threads_setSuggestedPrompts(**kwargs)
+            client = await build_slack_client(self.credentials)
+            await client.assistant_threads_setSuggestedPrompts(**kwargs)
             return True
         except SlackApiError:
             logger.debug(

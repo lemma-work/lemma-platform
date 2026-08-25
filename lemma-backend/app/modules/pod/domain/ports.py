@@ -21,6 +21,15 @@ class PodRepositoryPort(Protocol):
 
     async def get(self, id: UUID) -> Optional[PodEntity]: ...
 
+    async def get_even_if_deleted(self, id: UUID) -> Optional[PodEntity]:
+        """The pod row whether or not it has been deleted.
+
+        Only deletion itself wants this. Every other read means the live pod,
+        which is why `get` filters and this is the exception that has to say so
+        in its name.
+        """
+        ...
+
     async def update(self, entity: PodEntity) -> PodEntity: ...
 
     async def delete(self, id: UUID) -> bool: ...

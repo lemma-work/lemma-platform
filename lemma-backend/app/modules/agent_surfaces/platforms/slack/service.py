@@ -73,7 +73,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             return None
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             response = await client.users_info(user=user_id)
             user = response.get("user") or {}
@@ -103,7 +103,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         if not user_id or not token:
             return None
         try:
-            client = build_slack_client(self.credentials)
+            client = await build_slack_client(self.credentials)
             response = await client.users_info(user=user_id)
             user = response.get("user") or {}
             profile = user.get("profile") or {}
@@ -131,7 +131,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         thread_ts = event.reply_target.get("thread_ts")
         identity_kwargs = slack_customized_message_kwargs(
             self.credentials,
@@ -180,7 +180,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             payload: dict[str, Any] = {
                 "channel": channel,
@@ -218,7 +218,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         channel = event.reply_target.get("channel")
         if not token or not channel:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {
             "channel": channel,
             "text": question_plan.title,
@@ -247,7 +247,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         channel = event.reply_target.get("channel")
         if not token or not channel:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {
             "channel": channel,
             "text": f"Approval needed: {approval_plan.title}",
@@ -280,7 +280,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             if (
                 event.is_dm
@@ -363,7 +363,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         file_id = payload_text(attachment, "id").strip()
         if not file_id:
             return "", {}
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         response = await client.files_info(file=file_id)
         file_item = response.get("file") or {}
         return (
@@ -419,7 +419,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         if not token or not channel:
             return False
         thread_ts = event.reply_target.get("thread_ts")
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         upload_ticket = await client.files_getUploadURLExternal(
             filename=file_name, length=len(file_bytes)
         )

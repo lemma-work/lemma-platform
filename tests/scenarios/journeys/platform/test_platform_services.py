@@ -55,14 +55,24 @@ async def test_feedback_can_be_reported(person):
         "/tools/report-feedback",
         json={
             "subject": "Table create rejects a valid column",
-            "category": "BUG",
+            # One of cli|skill|platform|docs|other. It used to say "BUG",
+            # which the API rejects with a 422 — and the assertion below was
+            # `< 500`, so the scenario stayed green while proving only that
+            # the endpoint refuses malformed input.
+            "category": "platform",
             "issue_encountered": "A column named `title` was refused.",
             "expected_behavior": "It should be accepted.",
             "actual_behavior": "A validation error.",
         },
     )
 
-    assert response.status_code < 500, response.text[:300]
+    assert response.status_code == 201, (
+        f"reporting a broken tool answered {response.status_code}, not 201. "
+        f"Asserted exactly, because "
+        f"`< 500` passes for a 400, a 403 and a 404 — every "
+        f"way this can be broken except the one it was checking for: "
+        f"{response.text[:300]}"
+    )
 
 
 @scenario("Web search is refused rather than silently empty when unconfigured")
@@ -134,15 +144,43 @@ async def test_an_unpaired_host_is_refused(world):
 # and nowhere else. A suite whose result depends on what is in the local Docker
 # cache is exactly what the sandbox marker exists to prevent.
 @pytest.mark.sandbox
-@scenario("Browser access is refused without a workspace to open")
+@scenario("Asking for browser access answers, rather than failing open or falling over")
 @proves("PS-FUNC-002")
 @covers("workspace.browser.access")
-async def test_browser_access_needs_a_workspace(person):
+async def test_browser_access_is_granted_or_refused_but_never_crashes(person):
+    """Two ways this goes wrong, and `< 500` alone caught neither.
+
+    It was named "refused without a workspace to open" and asserted only
+    `status_code < 500` — which passes on a 200, so a build that handed out
+    browser access to anyone would have kept it green. And a 5xx is not a
+    refusal either: it is the platform failing to answer, which under
+    `PS-FUNC-002` is the case a function must be able to see and report rather
+    than hang on.
+
+    So both ends are pinned. Granted is a legitimate answer here — the request
+    provisions a workspace when it can — but it has to come with somewhere to
+    go, and a refusal has to read as a refusal.
+    """
     response = await person.api.call(
         "POST", "/workspace/apps/browser/access", json={"ttl_seconds": 60}
     )
 
-    assert response.status_code < 500, response.text[:300]
+    assert response.status_code < 500, (
+        f"asking for browser access answered {response.status_code}. A server "
+        f"error is not a refusal — a function cannot report it usefully, and "
+        f"in this lane it usually means the workspace image is missing "
+        f"(`make scenarios-images`): {response.text[:300]}"
+    )
+    if response.status_code < 400:
+        body = response.json()
+        assert body.get("url") or body.get("access_url"), (
+            f"browser access was granted with nowhere to go: {body}"
+        )
+    else:
+        assert response.status_code in {400, 403, 404, 409}, (
+            f"the refusal answered {response.status_code}, which reads as "
+            f"neither a grant nor a refusal a caller can act on"
+        )
 
 
 @scenario("An embed token is refused for a result that does not exist")

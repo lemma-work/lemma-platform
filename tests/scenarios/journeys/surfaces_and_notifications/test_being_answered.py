@@ -4,29 +4,28 @@ The plainest thing a surface promises, and the one everything else here is
 built on top of: somebody writes to the agent where they already are, and reads
 what it said in the same place.
 
-Worth its own file because it is the scenario where the two lanes disagree, and
-that disagreement is the whole reason for running both. Forged, the answer is
-read out of the call Lemma made to `api.telegram.org` — and `Said.text` unwraps
-`sendRichMessage`'s nested markdown, so the words are plainly there. Live, real
-Telegram accepts the very same call with `ok:true` and then renders a message
-with no readable text in it. `DEV-SURF-002`.
+Worth its own file because the two lanes disagreed about it for a while, and
+the disagreement turned out to be about how each lane *read* the answer rather
+than about the answer. Lemma replies with `sendRichMessage`, which carries its
+words in `rich_message` and leaves the plain `text` field empty. The forged
+lane unwrapped that and saw the words; the live lane read `text` alone and saw
+nothing, which was written up as the product delivering unreadable messages.
+It does not — a rich message renders as an ordinary bubble on a real client.
+Both readers now look in both places.
 
-A stand-in that is kinder than the thing it stands in for will hide exactly
-this class of bug, forever, and no amount of care in the fast lane finds it.
-The mark below is what keeps that honest: strict, so the day the product is
-fixed this fails until somebody deletes it.
+Kept as a note rather than deleted because the failure mode is general: a lane
+that reads a different field than the product writes will report a working
+product as broken, and it will do it with a very convincing transcript.
 """
 
 from __future__ import annotations
 
 import base64
 
-import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.credentials import needs
 from harness.environment import MODEL_IS_REAL
-from harness.telegram_chat import telegram_is_live
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -40,33 +39,11 @@ A_RED_DOT = base64.b64decode(
 )
 
 
-#: Anything that asserts on the *words* of a reply fails against real Telegram,
-#: and for one reason: `sendRichMessage` is accepted with `ok:true` and produces
-#: a message carrying no `text` field, so every real client renders it empty.
-#: Strict, so the day that is fixed these turn green and fail the build until
-#: the mark comes off. Buttons are unaffected — `reply_markup` is ordinary —
-#: which is why the native-controls scenarios pass on the same lane.
-UNREADABLE_ON_REAL_TELEGRAM = pytest.mark.xfail(
-    telegram_is_live(),
-    strict=True,
-    reason=(
-        "DEV-SURF-002 — a plain answer goes out as sendRichMessage, which real "
-        "Telegram accepts with ok:true and then renders as an empty message. "
-        "The fallback to sendMessage only fires on a 400/404, so it never runs. "
-        "The stand-in accepts sendRichMessage and reads the text back out of it, "
-        "which is why the forged lane passes this and a person sees nothing."
-    ),
-)
-
-
-@UNREADABLE_ON_REAL_TELEGRAM
 @scenario("Somebody messages the agent on a surface and is answered there")
 @proves("PS-SURF-010", "PS-SURF-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
 async def test_a_message_is_answered(reachable):
-    await reachable.says(
-        "Hello — reply with a short greeting so I know you are there."
-    )
+    await reachable.says("Hello — reply with a short greeting so I know you are there.")
 
     answer = await reachable.waits_for_a_reply()
 
@@ -76,7 +53,6 @@ async def test_a_message_is_answered(reachable):
     )
 
 
-@UNREADABLE_ON_REAL_TELEGRAM
 @scenario("An image sent to the agent is looked at, not just noticed")
 @proves("PS-SURF-011", "PS-AGENT-030")
 @covers("surface.webhook.handle_platform", "agent.surface.send")

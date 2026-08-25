@@ -192,13 +192,17 @@ put it there having to think about it on every operation.
   never falling back to an unfiltered read.
 
 > **Verified by:** an operator, on a deployment without the datastore query
-> role. Direct querying runs as a dedicated Postgres role
-> (`datastore_query_role`); where that role is absent the facility is
-> unavailable, and that is the only way the state exists. A suite that
-> induced it would have to drop the role from the running database, which
-> breaks it for every other scenario sharing the stack. The fail-closed half
-> is covered by `PS-DATA-020`: a query from outside the pod is refused rather
-> than answered unfiltered.
+> role — and, for the first clause, by nothing yet. Direct querying runs as a
+> dedicated Postgres role (`datastore_query_role`); where that role is absent
+> the facility is unavailable, and that is the only way the state exists. A
+> scenario cannot induce it: dropping the role from the running database
+> breaks it for every other scenario sharing the stack, and the suite forbids
+> mocking. The **module e2e** suite is where an induced dependency failure
+> belongs (see [testing.md](../../testing.md)), and this clause has no test
+> there either — `test_query_role.py` covers provisioning the role, not what a
+> query answers once it is missing. The fail-closed half *is* covered, by
+> `PS-DATA-020`: a query from outside the pod is refused rather than answered
+> unfiltered.
 
 **Contracts:** `query.execute`
 

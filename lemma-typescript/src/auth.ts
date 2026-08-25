@@ -16,7 +16,7 @@
  * 401 → unauthenticated. 200 → authenticated.
  */
 
-import Session from "supertokens-web-js/recipe/session";
+import Session from "supertokens-web-js/recipe/session/index.js";
 import { ensureCookieSessionSupport } from "./supertokens.js";
 
 export interface UserInfo {

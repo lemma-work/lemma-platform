@@ -848,7 +848,17 @@ class Settings(BaseSettings):
             "dev stack sets it. Env: ``API_DOCS_ENABLED``."
         ),
     )
-    debug: bool = Field(default=True, description="Debug mode")
+    debug: bool = Field(
+        default=False,
+        description=(
+            "Debug mode. Off by default, and refused outside local/testing by "
+            "``_refuse_debug_outside_local``. Starlette's ServerErrorMiddleware "
+            "checks this *before* the application's own exception handler, so a "
+            "true value replaces the ``{message, code, details}`` envelope with "
+            "a source-annotated HTML traceback on every unhandled error -- and "
+            "``handle_unexpected_exception`` becomes unreachable. Env: ``DEBUG``."
+        ),
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         description="Application log level",
@@ -1023,6 +1033,28 @@ class Settings(BaseSettings):
         if any(segment in {".", ".."} for segment in segments):
             raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
         return "/" + "/".join(segments) if segments else "/"
+
+    @model_validator(mode="after")
+    def _refuse_debug_outside_local(self) -> "Settings":
+        # `debug` is not a verbosity setting. Starlette installs the
+        # application's `Exception` handler as `ServerErrorMiddleware.handler`
+        # and checks `self.debug` first, so a true value here means every
+        # unhandled error answers with a source-annotated traceback -- file
+        # paths, framework versions, local variable names -- instead of the one
+        # envelope every client parses, and `handle_unexpected_exception` never
+        # runs at all.
+        #
+        # Refused at startup rather than merely defaulted off, because the
+        # failure mode this closes is a deployment that sets it deliberately and
+        # forgets. `docs/configuration.md` lists `DEBUG=false` in its production
+        # block; nothing enforced it.
+        if not self.is_local_mode() and self.debug:
+            raise ValueError(
+                "DEBUG must be false in development/production: it makes every "
+                "unhandled error answer with a stack trace instead of the "
+                "standard error envelope. It is permitted only in local/testing."
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":

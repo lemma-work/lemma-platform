@@ -127,8 +127,16 @@ async def test_the_python_sdk_writes_a_record(world, signed_in):
 
 
 @pytest.mark.xfail(
-    reason="DEV-SDK-001: the built dist cannot be imported from Node",
     strict=True,
+    reason=(
+        "DEV-SDK-001 — the TypeScript SDK cannot authenticate outside a "
+        "browser. `LemmaConfig` has no token field, and both `setTestingToken` "
+        "and `detectInjectedToken` return early when `window` is undefined, so "
+        "a Node caller has no supported way to present a credential and every "
+        "request comes back 401. The package declares itself Node-loadable "
+        "(`main: dist/index.js`, no browser condition) and, since the directory "
+        "import was fixed, it does load — it just cannot be used."
+    ),
 )
 @scenario("The TypeScript SDK reads the pods a person can see")
 @proves("PS-POD-030")

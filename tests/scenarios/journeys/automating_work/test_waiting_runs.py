@@ -179,3 +179,37 @@ async def test_cancelling_a_live_run_stops_it(world):
         timeout=60.0,
     )
     assert str(stopped.get("status")).upper() == "CANCELLED", stopped
+
+
+@scenario("Somebody the run did not ask cannot answer for them")
+@proves("PS-FLOW-012")
+@covers("workflow.run.form.submit", "workflow.run.get")
+async def test_a_person_who_was_not_asked_cannot_answer(world):
+    """A wait names who it is for, and that name has to mean something.
+
+    The run stops precisely because a particular person's decision is needed —
+    an approval, a number, a choice between branches. If anyone with pod access
+    can submit it, the assignment is decoration and the audit trail records a
+    decision the named person never made.
+
+    Distinct from answering a run that is not waiting: here the run *is*
+    waiting, the form *is* valid, and the only thing wrong is who is filling
+    it in.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.works_in("operations")
+    _workflow, run = await _a_waiting_run(alice, pod)
+
+    somebody_else = await world.person("sofia")
+    submitted = await somebody_else.answers_form(
+        run, node="ask", inputs={"approved": True}, in_pod=pod
+    )
+
+    assert submitted.status_code >= 400, (
+        f"a colleague the run never asked answered for the assigned person "
+        f"({submitted.status_code})"
+    )
+    state = await alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}")
+    assert str(state.get("status")).upper() not in {"COMPLETED", "FAILED"}, (
+        f"the refusal did not stop the run being resumed anyway: {state}"
+    )

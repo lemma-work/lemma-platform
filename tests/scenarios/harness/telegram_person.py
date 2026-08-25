@@ -57,6 +57,47 @@ class Reply:
         return any(label.lower() in choice.lower() for choice in self.choices)
 
 
+def _words(message: Any) -> str:
+    """What the person reads, whichever shape the message arrived in.
+
+    `message.text` is the plain `message` field, and a rich message leaves it
+    empty — the words are carried in `rich_message.blocks` instead, which is a
+    different field and not a missing one. Reading only `.text` is how a rich
+    reply gets reported as the agent having said nothing, and it is the reason
+    the live lane disagreed with the forged lane about `PS-SURF-020`: the fast
+    lane's `Said.text` has always unwrapped the nested form, and this had not.
+
+    Walked structurally rather than by attribute name, because the block types
+    are Telegram's page-block vocabulary — paragraphs, headers, lists — and a
+    reply is free to use any of them.
+    """
+    plain = (message.text or "").strip()
+    if plain:
+        return message.text
+    rich = getattr(message, "rich_message", None)
+    if rich is None:
+        return ""
+    return "\n".join(
+        piece for piece in (_block_text(block) for block in (rich.blocks or [])) if piece
+    )
+
+
+def _block_text(node: Any) -> str:
+    """The readable text under one rich block, however deeply it is nested."""
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    for attribute in ("text", "caption"):
+        child = getattr(node, attribute, None)
+        if child is not None:
+            return _block_text(child)
+    items = getattr(node, "items", None) or getattr(node, "blocks", None)
+    if items:
+        return "\n".join(piece for piece in (_block_text(i) for i in items) if piece)
+    return ""
+
+
 class Conversation:
     """One chat with one bot, from the person's side."""
 
@@ -88,7 +129,7 @@ class Conversation:
             if message.out:
                 # Ours, not the bot's.
                 continue
-            found.append(Reply(text=message.text or "", choices=_choices(message)))
+            found.append(Reply(text=_words(message), choices=_choices(message)))
         found.reverse()
         return found
 

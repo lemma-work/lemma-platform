@@ -37,6 +37,8 @@ default. `[frontend.env]` does the same for the frontend.
 # local | development | production | testing. Outside local/testing, some
 # settings stop having safe defaults and are required — APP_BASE_DOMAIN is one.
 ENVIRONMENT=production
+# Off by default, and refused outside local/testing: it replaces the standard
+# error envelope with a source-annotated traceback on every unhandled error.
 DEBUG=false
 LOG_LEVEL=INFO
 # Structured JSON on stdout. Turn it off locally if you read logs by eye.

@@ -86,16 +86,6 @@ async def _sent_to(fake, chat_id):
 @scenario("A deleted pod's standing work stops and stays stopped")
 @proves("PS-OPS-020")
 @covers("pod.delete", "schedule.list", "pod.deleted")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-OPS-007 — a deleted pod still serves its schedules, agents and "
-        "records. Only the routes carrying require_pod_membership refuse; the "
-        "ones resolving the pod through PodContextDep never read the pod at "
-        "all on a warm cache. Strict, so fixing it turns the build red until "
-        "this marker is removed."
-    ),
-)
 async def test_a_deleted_pod_runs_nothing_further(pod_doing_things):
     alice, pod, schedule, _fake, _path, _secret = pod_doing_things
 

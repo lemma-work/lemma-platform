@@ -168,9 +168,21 @@ class TypescriptSdkDriver:
 
     def evaluate(self, body: str) -> Any:
         script = (
-            "const { Lemma } = require('./dist/index.js');\n"
-            f"const lemma = new Lemma({{ baseUrl: {self.base_url!r}, "
-            f"token: {self.token!r} }});\n"
+            # `LemmaClient`, not `Lemma`: that is the name `src/index.ts`
+            # exports and the one the package README tells people to import.
+            # The old spelling exists nowhere in the SDK, so this script failed
+            # on `new Lemma(...)` being undefined long before it reached the
+            # API -- which read as the SDK being unloadable and was filed as
+            # half of `DEV-SDK-001`.
+            "const { LemmaClient, setTestingToken } = require('./dist/index.js');\n"
+            # `apiUrl`, and the token injected rather than passed: `LemmaConfig`
+            # has no `baseUrl` and no `token` field, so the old spelling built a
+            # client pointed nowhere and unauthenticated, and every call came
+            # back 401. `setTestingToken` is the SDK's own documented way to
+            # supply a bearer token outside a browser session.
+            f"setTestingToken({self.token!r});\n"
+            f"const lemma = new LemmaClient({{ apiUrl: {self.base_url!r}, "
+            f"authUrl: {self.base_url!r} }});\n"
             "(async () => {\n"
             f"{body}\n"
             "})().catch((e) => { console.error(e); process.exit(1); });\n"

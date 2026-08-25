@@ -82,6 +82,12 @@ class PodRepository(PodRepositoryPort):
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
+    async def get_even_if_deleted(self, id: UUID) -> Optional[PodEntity]:
+        stmt = select(Pod).where(Pod.id == id)
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return instance.to_entity() if instance else None
+
     async def get_organization_id(self, pod_id: UUID) -> Optional[UUID]:
         """Lean lookup of a pod's organization id (shared read used by services
         that only need the org scope, not the whole pod)."""
