@@ -26,6 +26,20 @@ class FakeDocumentProcessorServer:
         self._docling_polls: Counter[str] = Counter()
         self._runner: web.AppRunner | None = None
 
+    def forget_traffic(self) -> None:
+        """Drop what this server has been asked, keeping it running.
+
+        The server is session-scoped so every test in the module shares it, and
+        several of them assert "this document was extracted exactly once". Those
+        assertions are only about the test that makes them if the counters start
+        empty — otherwise two tests that happen to use the same filename see
+        each other's requests, and the second one fails with `2 == 1` for a
+        product that did nothing wrong.
+        """
+        self.requests.clear()
+        self._docling_tasks.clear()
+        self._docling_polls.clear()
+
     async def start(self) -> None:
         app = web.Application()
         app.router.add_post("/extract", self._kreuzberg_extract)

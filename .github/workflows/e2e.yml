@@ -271,7 +271,19 @@ jobs:
     # once, where a job missing from `needs` kept the check green while it
     # failed.
     timeout-minutes: 10
-    if: always()
+    # `!cancelled()`, not `always()`. `always()` runs this job even when the
+    # *run* was cancelled -- which `cancel-in-progress` above does to every
+    # superseded push -- and it then reported failure for a run that was
+    # simply replaced by a newer one. 13 of 84 observed Backend E2E runs were
+    # cancelled, and every one of them read as a failure. Nothing was ever
+    # blocked, because GitHub judges the newest run; what it cost was the
+    # ability to read the run list and tell whether CI is actually flaky.
+    #
+    # The step below still refuses a cancelled *shard*, which is a different
+    # thing: `fail-fast: false` means the matrix never cancels its own
+    # siblings, so a cancelled shard with a live run means somebody stopped one
+    # job, and a required check must not go green on a run that did not finish.
+    if: ${{ !cancelled() }}
     needs: [changes, backend-e2e]
     runs-on: ubuntu-latest
     steps:
