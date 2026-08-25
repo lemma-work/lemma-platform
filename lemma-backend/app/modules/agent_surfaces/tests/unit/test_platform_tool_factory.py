@@ -134,6 +134,7 @@ async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agen
     assert "whatsapp_get_current_contact" in toolsets[0].tools
     assert "whatsapp_send_file" not in toolsets[0].tools
 
+
 async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypatch):
     """`from_address` belongs to the surface row, not to the platform.
 

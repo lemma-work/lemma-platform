@@ -54,5 +54,3 @@ async def files_held_for_one_reply(
         )
         files.extend(resolved.files)
     return files
-
-

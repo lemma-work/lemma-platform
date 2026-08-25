@@ -396,7 +396,7 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
         wait_for_messages,
     )
     from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
-    script_text,
+        script_text,
         process_ingress_and_run_scripted,
     )
     from app.modules.connectors.domain.connector import AuthProvider

@@ -155,7 +155,9 @@ class SurfaceConversationLinkMixin:
             return True
         if route is not None and link.routed_agent_id != route.agent_id:
             return True
-        shape = thread_shape(link.conversation_kind or (route.conversation_kind if route else None))
+        shape = thread_shape(
+            link.conversation_kind or (route.conversation_kind if route else None)
+        )
         if shape is not ThreadShape.MULTIPLEXED:
             return False
         reset_hours = surface.config.dm_conversation_reset_after_hours

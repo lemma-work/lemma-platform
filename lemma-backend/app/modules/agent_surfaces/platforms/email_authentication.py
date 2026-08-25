@@ -133,8 +133,7 @@ def _verdict_of(value: str, from_domain: str) -> EmailAuthenticationVerdict:
     ):
         return EmailAuthenticationVerdict.PASS
     if methods.get("spf") == "pass" and _aligned(
-        _domain_of(properties.get("smtp.mailfrom"))
-        or properties.get("smtp.helo", ""),
+        _domain_of(properties.get("smtp.mailfrom")) or properties.get("smtp.helo", ""),
         from_domain,
     ):
         return EmailAuthenticationVerdict.PASS

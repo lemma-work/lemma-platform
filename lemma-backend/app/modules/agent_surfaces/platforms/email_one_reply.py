@@ -87,9 +87,7 @@ class EmailOneReplyMixin:
                 platform=self.platform,
             )
             return DeliveryReceipt(
-                parts=dict.fromkeys(
-                    _named_parts(envelope), PartDelivery.UNDELIVERED
-                )
+                parts=dict.fromkeys(_named_parts(envelope), PartDelivery.UNDELIVERED)
             )
 
         parts = {name: PartDelivery.NATIVE for name in _named_parts(envelope)}

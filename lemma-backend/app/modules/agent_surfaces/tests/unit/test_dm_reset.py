@@ -127,6 +127,9 @@ def test_a_different_agent_starts_a_new_conversation_on_every_shape():
         link = _link(updated_at=datetime.now(timezone.utc), conversation_kind=kind)
         link.routed_agent_id = uuid4()
         route = SimpleNamespace(agent_id=uuid4(), conversation_kind=kind)
-        assert service._should_start_a_new_conversation(
-            surface=surface, link=link, route=route
-        ) is True, kind
+        assert (
+            service._should_start_a_new_conversation(
+                surface=surface, link=link, route=route
+            )
+            is True
+        ), kind

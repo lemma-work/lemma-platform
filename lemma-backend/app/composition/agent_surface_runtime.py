@@ -53,8 +53,7 @@ def platform_delivers_one_reply(platform: str | None) -> bool:
 
     capabilities = get_platform_capabilities(platform)
     return bool(
-        capabilities
-        and capabilities.delivery_cardinality is DeliveryCardinality.ONE
+        capabilities and capabilities.delivery_cardinality is DeliveryCardinality.ONE
     )
 
 

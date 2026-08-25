@@ -22,7 +22,16 @@ it is asked, not skipped.
 ## Capability: Connect a pod to a platform
 
 ### PS-SURF-001 — A person connects a pod's agent to a platform
-**Status:** covered
+**Status:** gap
+
+> **Gap:** a pod is never connected to *nothing*. Creating one mints the
+> assistant's mailbox, so `agent.surface.list` returns a `resend` surface
+> immediately and the two scenarios that open by asserting an empty pod fail on
+> that precondition rather than on what they set out to prove. See
+> `DEV-SURF-005`, which is a question for the product rather than a bug: an
+> agent with no other way to reach anyone should have an address, and what is
+> unresolved is whether "a person connects a surface" is the right framing for
+> the *first* one or only for the rest.
 
 - When a person connects a surface for a platform and binds it to an agent, the
   system shall start accepting messages for that pod on that platform.

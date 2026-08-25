@@ -380,13 +380,17 @@ def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
     )
 
     old_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(days=3))
-    assert service._should_start_a_new_conversation(surface=_dm_surface(), link=old_legacy)
+    assert service._should_start_a_new_conversation(
+        surface=_dm_surface(), link=old_legacy
+    )
 
 
 def test_a_live_thread_is_not_reset():
     service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     link = _link(last_inbound_at=datetime.now(timezone.utc) - timedelta(minutes=10))
-    assert not service._should_start_a_new_conversation(surface=_dm_surface(), link=link)
+    assert not service._should_start_a_new_conversation(
+        surface=_dm_surface(), link=link
+    )
 
 
 # --------------------------------------------------------- the surface policy
@@ -476,10 +480,7 @@ def test_every_mail_platform_is_one_email_channel():
     )
 
     assert {
-        channel_for_platform(platform)
-        for platform in (
-            SurfacePlatform.RESEND,
-        )
+        channel_for_platform(platform) for platform in (SurfacePlatform.RESEND,)
     } == {EMAIL_CHANNEL}
     assert channel_for_platform(SurfacePlatform.WHATSAPP) == "whatsapp"
 

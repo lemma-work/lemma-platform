@@ -272,9 +272,7 @@ async def test_a_failed_run_on_email_says_so_instead_of_vanishing() -> None:
         SurfaceAgentRunProgressObserver,
     )
 
-    observer = SurfaceAgentRunProgressObserver.__new__(
-        SurfaceAgentRunProgressObserver
-    )
+    observer = SurfaceAgentRunProgressObserver.__new__(SurfaceAgentRunProgressObserver)
     observer._error_delivered = False
     observer._run_error_text = "I couldn't finish that request."
     sent: list[str] = []

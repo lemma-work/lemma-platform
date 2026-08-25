@@ -46,15 +46,15 @@ class _Adapter(BaseSurfaceAdapter):
 
     def __init__(self, **verbs: Any) -> None:
         self.send_message = verbs.get("send_message", AsyncMock())
-        self._render_choices = verbs.get("_render_choices", AsyncMock(return_value=False))
-        self._render_decision = verbs.get("_render_decision", AsyncMock(return_value=False))
+        self._render_choices = verbs.get(
+            "_render_choices", AsyncMock(return_value=False)
+        )
+        self._render_decision = verbs.get(
+            "_render_decision", AsyncMock(return_value=False)
+        )
         self._render_resource = verbs.get("_render_resource", AsyncMock())
-        self._render_file = verbs.get(
-            "_render_file", AsyncMock(return_value=False)
-        )
-        self._render_voice = verbs.get(
-            "_render_voice", AsyncMock(return_value=False)
-        )
+        self._render_file = verbs.get("_render_file", AsyncMock(return_value=False))
+        self._render_voice = verbs.get("_render_voice", AsyncMock(return_value=False))
 
 
 def _event() -> ParsedInboundSurfaceEvent:
@@ -230,9 +230,7 @@ async def test_a_file_that_cannot_be_attached_degrades_to_its_link_card() -> Non
         ),
     )
     assert receipt.parts["files"] is PartDelivery.DEGRADED
-    assert (
-        adapter._render_resource.await_args.kwargs["render_plan"].title == "q3.pdf"
-    )
+    assert adapter._render_resource.await_args.kwargs["render_plan"].title == "q3.pdf"
 
 
 async def test_a_file_with_no_card_to_fall_back_on_still_says_what_it_was() -> None:

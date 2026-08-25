@@ -203,11 +203,15 @@ async def test_an_unauthenticated_sender_follows_the_deployment_setting(
     monkeypatch.setattr(
         surface_settings, "surface_email_allow_unauthenticated_identity", False
     )
-    assert (await _service(known).resolve(event=_event("UNKNOWN"))).internal_user_id is None
+    assert (
+        await _service(known).resolve(event=_event("UNKNOWN"))
+    ).internal_user_id is None
     monkeypatch.setattr(
         surface_settings, "surface_email_allow_unauthenticated_identity", True
     )
-    assert (await _service(known).resolve(event=_event("UNKNOWN"))).internal_user_id == known
+    assert (
+        await _service(known).resolve(event=_event("UNKNOWN"))
+    ).internal_user_id == known
 
 
 async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:

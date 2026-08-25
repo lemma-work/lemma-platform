@@ -252,6 +252,7 @@ async def test_progress_observer_sends_only_final_answer_not_thinking_or_tools()
     assert [m["message"] for m in service.messages] == ["The final answer is 42."]
     assert service.finished == []
 
+
 async def test_progress_observer_email_sends_buffered_text_when_no_reply_tool():
     # Fallback: if the agent never called the reply tool, the observer emails the
     # buffered final text so the user still gets a response.

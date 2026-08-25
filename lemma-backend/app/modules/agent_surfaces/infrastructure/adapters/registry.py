@@ -17,7 +17,6 @@ class SurfacePlatformAdapterRegistry:
             "TEAMS": TeamsSurfaceAdapter(),
             "WHATSAPP": WhatsAppSurfaceAdapter(),
             "TELEGRAM": TelegramSurfaceAdapter(),
-
             "RESEND": ResendSurfaceAdapter(),
         }
         if extra_adapters:

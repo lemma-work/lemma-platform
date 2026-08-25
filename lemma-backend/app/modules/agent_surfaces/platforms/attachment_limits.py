@@ -68,7 +68,6 @@ SURFACE_ATTACHMENT_BYTE_CAPS: dict[str, int] = {
     "TELEGRAM": 50 * _MB,  # Bot API sendDocument ceiling
     "WHATSAPP": 100 * _MB,  # documents; other kinds are far lower, see below
     "TEAMS": 25 * _MB,
-
     "RESEND": 40 * _MB,  # total-message ceiling
 }
 

@@ -19,6 +19,7 @@ import json
 from uuid import UUID
 
 import pytest
+from sqlalchemy import text
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +59,7 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_slack_text,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    suppress_agent_run_enqueue,
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
     script_request_approval,
@@ -923,3 +925,126 @@ async def test_request_approval_on_resend_completes_in_the_one_reply(
 
     resend_messages = await wait_for_messages(message_store, "RESEND", min_count=1)
     assert "Here is my answer." in json.dumps(resend_messages[-1])
+
+
+async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_thread(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    """The round trip that went wrong in real use, with a real reply body.
+
+    Email can be asked for approval now, and the answer comes back as an
+    ordinary reply — which carries the quoted thread under it. Gmail soft-wraps
+    a long attribution mid-address, so the reply arrived as
+
+        approve\\n\\nOn Wed, Aug 26, 2026 at 12:26 AM butler via Lemma <
+        butler.lemma2@ops.asur.work> wrote:
+
+    "approve" was no longer the message, so it stopped being a decision, fell
+    through to the ordinary message path, and superseded the approval it was
+    answering. Every fixture wrote that attribution on one line, which is why
+    nothing caught it.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="resend",
+        credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
+        email="assistant@resend.test",
+        provider=AuthProvider.LEMMA,
+    )
+    agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "RESEND", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+    await _make_approved_tool_resolvable(
+        db_session, agent_id=agent["id"], organization_id=fixed_test_org["id"]
+    )
+    assistant_address = surface.get("surface_identity_email")
+    if not assistant_address:
+        surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
+        assistant_address = surface_model.surface_identity_email
+    assert assistant_address
+
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_address=assistant_address,
+                message_id="resend-approval-quoted-1",
+                text="Please show me the widget.",
+            ),
+            headers={},
+        ),
+        script=_approval_script("Done — approved and shown."),
+    )
+    conversation_id = str(context.conversation_id)
+    await wait_for_messages(message_store, "RESEND", min_count=1)
+
+    # The reply as a mail client actually sends it: the answer on top, then the
+    # attribution wrapped mid-address, then the quoted body.
+    quoted_reply = (
+        "approve\n\n"
+        f"On Wed, Aug 26, 2026 at 12:26 AM assistant via Lemma <\n"
+        f"{assistant_address}> wrote:\n"
+        "> Approval needed: Show a widget\n"
+        '> Reply "approve" to run it, or "deny" to cancel.\n'
+    )
+    # Deliberately not `process_ingress_and_run_scripted`: resolving an approval
+    # defers reconciliation to a worker, so there is no RUNNING run for the
+    # helper to drive. The decision itself is recorded synchronously, and the
+    # decision is what this test is about.
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    reply_context = await handler.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_address=assistant_address,
+                message_id="resend-approval-quoted-2",
+                text=quoted_reply,
+                subject="Re: Surface Resend E2E",
+                in_reply_to="<resend-approval-quoted-1@resend-e2e.test>",
+                references=["<resend-approval-quoted-1@resend-e2e.test>"],
+            ),
+            headers={},
+        )
+    )
+    assert reply_context is not None
+    await uow.commit()
+    assert str(reply_context.conversation_id) == conversation_id, (
+        "the reply must land in the conversation it answers, not a new one"
+    )
+    with suppress_agent_run_enqueue():
+        await handler.execute_chat(reply_context)
+    await db_session.commit()
+
+    decision = (
+        await db_session.execute(
+            text(
+                "SELECT decision FROM agent_approval_decisions "
+                "WHERE conversation_id = :cid ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"cid": conversation_id},
+        )
+    ).scalar_one_or_none()
+    assert decision is not None, (
+        "the emailed 'approve' recorded no decision at all -- it was read as an "
+        "ordinary message and superseded the approval it was answering"
+    )
+    assert "APPROVE" in str(decision), f"read as {decision!r}, not an approval"

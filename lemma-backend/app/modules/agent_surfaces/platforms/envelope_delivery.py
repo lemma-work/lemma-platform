@@ -397,7 +397,6 @@ class EnvelopeDeliveryMixin:
         )
 
 
-
 def _file_fallback_text(attachment: EnvelopeFile) -> str:
     """What to say when the bytes themselves cannot be delivered.
 

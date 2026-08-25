@@ -152,5 +152,3 @@ def _email_event(platform: str, **reply_target):
         message_text="Need review",
         reply_target=dict(reply_target),
     )
-
-

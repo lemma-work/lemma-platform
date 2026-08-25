@@ -44,7 +44,7 @@ def test_a_settled_decision_always_carries_a_text_fallback() -> None:
 
 
 def test_an_unsettled_note_is_ephemeral_and_leaves_the_card_alone() -> None:
-    """"Reply with your own answer" — nobody else in the channel is waiting."""
+    """ "Reply with your own answer" — nobody else in the channel is waiting."""
     body = slack_acknowledgement_body(
         _CARD, text="Reply with your own answer.", clear_actions=False
     )
@@ -164,21 +164,30 @@ async def _teams_ack(session: _Session, interaction, **kwargs: Any) -> None:
 async def test_teams_edits_the_card_activity_so_the_buttons_retire() -> None:
     """An Adaptive Card's actions stay tappable forever unless the activity is replaced."""
     session = _Session()
-    await _teams_ack(session, _teams_interaction(reply_to_id="act-7"), clear_actions=True)
+    await _teams_ack(
+        session, _teams_interaction(reply_to_id="act-7"), clear_actions=True
+    )
     assert session.calls == [
-        ("PUT", "https://smba.trafficmanager.net/emea/v3/conversations/19%3Aconv/activities/act-7")
+        (
+            "PUT",
+            "https://smba.trafficmanager.net/emea/v3/conversations/19%3Aconv/activities/act-7",
+        )
     ]
 
 
 async def test_teams_posts_a_new_message_when_the_card_cannot_be_edited() -> None:
     session = _Session(put_status=403)
-    await _teams_ack(session, _teams_interaction(reply_to_id="act-7"), clear_actions=True)
+    await _teams_ack(
+        session, _teams_interaction(reply_to_id="act-7"), clear_actions=True
+    )
     assert [method for method, _ in session.calls] == ["PUT", "POST"]
 
 
 async def test_teams_posts_rather_than_edits_when_the_decision_is_still_open() -> None:
     session = _Session()
-    await _teams_ack(session, _teams_interaction(reply_to_id="act-7"), clear_actions=False)
+    await _teams_ack(
+        session, _teams_interaction(reply_to_id="act-7"), clear_actions=False
+    )
     assert [method for method, _ in session.calls] == ["POST"]
 
 

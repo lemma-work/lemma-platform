@@ -748,6 +748,8 @@ def _resend_payload(
     message_id: str,
     text: str,
     subject: str = "Surface Resend E2E",
+    in_reply_to: str | None = None,
+    references: list[str] | None = None,
 ) -> dict:
     """Already-normalized Resend inbound shape (matches what the production
     webhook controller's ``_normalize_resend_inbound`` produces from the raw
@@ -759,8 +761,10 @@ def _resend_payload(
         "subject": subject,
         "text": text,
         "message_id": f"<{message_id}@resend-e2e.test>",
-        "in_reply_to": None,
-        "references": [],
+        # A reply carries these, and the parser derives the thread root from
+        # them. Left unset the message threads as a brand new mail, which is a
+        # different conversation -- so anything testing a *reply* has to pass
+        # them or it silently tests a first contact instead.
+        "in_reply_to": in_reply_to,
+        "references": list(references or []),
     }
-
-

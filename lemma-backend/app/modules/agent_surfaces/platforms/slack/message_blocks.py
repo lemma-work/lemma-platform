@@ -270,9 +270,7 @@ def slack_acknowledgement_body(
         if isinstance(block, dict) and block.get("type") != "actions"
     ]
     if note:
-        kept.append(
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]}
-        )
+        kept.append({"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     body: dict[str, Any] = {
         "replace_original": True,
         # Slack needs a text fallback whenever blocks are sent; it is what a

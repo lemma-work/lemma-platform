@@ -757,5 +757,3 @@ async def test_base_adapter_download_and_send_file_defaults():
         )
         is False
     )
-
-

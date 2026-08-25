@@ -254,4 +254,3 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         """
         del credentials, event, file_name, file_bytes, mime_type, caption
         return False
-

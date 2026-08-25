@@ -197,7 +197,6 @@ class _EmptyExecuteResult:
         return _EmptyScalarResult()
 
 
-
 def _delivering_adapter(platform: str = "SLACK") -> AsyncMock:
     """An adapter mock that runs the real ``deliver`` over stubbed platform verbs.
 
@@ -1981,6 +1980,8 @@ async def test_send_approval_prompt_skips_when_no_pending():
     )
     assert sent is False
     adapter.send_message.assert_not_awaited()
+
+
 async def test_an_email_surface_delivers_the_question_in_its_one_reply():
     """Email is asked, not suppressed. The prompt rides in the reply as text."""
     surface = _resend_surface()
