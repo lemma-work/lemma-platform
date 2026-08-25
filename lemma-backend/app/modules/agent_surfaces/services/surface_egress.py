@@ -115,19 +115,24 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         external_user_repository = getattr(self, "external_user_repository", None)
         if external_user_repository is None:
             return False
-        ext = await external_user_repository.get_by_resolved_user(
-            platform=surface.surface_type.value, resolved_user_id=user_id
+        # Every identity they hold on this platform, not just the most recently
+        # seen one: Slack ids are per workspace and Teams ids per tenant, so
+        # taking one made a pod's second workspace unreachable. The surface's own
+        # tenant narrows the list, permissively where none was ever recorded.
+        identities = await external_user_repository.list_by_resolved_users(
+            platform=surface.surface_type.value, resolved_user_ids=[user_id]
         )
-        if ext is None or not ext.external_user_id:
-            return False
-        link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
-            surface_id=surface.id, external_user_id=ext.external_user_id
-        )
-        if link is None:
-            return False
-        return await self.send_agent_message_for_conversation(
-            conversation_id=link.conversation_id, message=message
-        )
+        for ext in identities:
+            if not ext.external_user_id or not surface.matches_tenant(ext.tenant_id):
+                continue
+            link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
+                surface_id=surface.id, external_user_id=ext.external_user_id
+            )
+            if link is not None:
+                return await self.send_agent_message_for_conversation(
+                    conversation_id=link.conversation_id, message=message
+                )
+        return False
 
     async def open_cold_email_thread(
         self,

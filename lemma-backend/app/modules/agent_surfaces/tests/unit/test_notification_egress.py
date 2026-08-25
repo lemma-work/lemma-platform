@@ -397,7 +397,9 @@ def _notification_service(
     # surface into a deliverable channel and makes "they never messaged the bot"
     # untestable.
     external_users = create_autospec(ExternalSurfaceUserRepository, instance=True)
-    external_users.get_by_resolved_user.return_value = external_user
+    external_users.list_by_resolved_users.return_value = (
+        [external_user] if external_user is not None else []
+    )
 
     return NotificationService(
         uow=AsyncMock(),
@@ -760,7 +762,7 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123"),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -847,7 +849,7 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123"),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -876,3 +878,189 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     assert order.index("commit") < order.index("send"), (
         f"connection held across the send; call order was {order}"
     )
+
+
+# ------------------------------------------- the channel the agent chose
+
+
+def _identity(external_user_id: str, *, user_id=None):
+    """One cached platform identity. ``tenant_id`` is what scopes it."""
+    return SimpleNamespace(
+        external_user_id=external_user_id, tenant_id=None, resolved_user_id=user_id
+    )
+
+
+async def test_a_named_channel_beats_the_ranking_that_would_have_won():
+    """The whole point of the argument: the agent knows something we do not.
+
+    Left alone, chat outranks email and the Telegram thread wins — the right
+    default, because it is where they last spoke to us. An agent told "she is
+    off this week, put it in writing" has a reason that no signal in the
+    database carries, so naming a channel has to beat the ranking outright
+    rather than nudge it.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    service = _notification_service(
+        surfaces=(chat, mailbox), external_user=_identity("U123")
+    )
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        return_value=_link_for(chat)
+    )
+    recipient = uuid4()
+
+    by_default, _ = await service.resolve_channels(
+        pod_id=chat.pod_id, recipient_user_id=recipient, actor_agent_id=agent_id
+    )
+    chosen, reason = await service.resolve_channels(
+        pod_id=chat.pod_id,
+        recipient_user_id=recipient,
+        actor_agent_id=agent_id,
+        channel="email",
+    )
+
+    assert [c.surface.id for c in by_default] == [chat.id, mailbox.id]
+    assert reason == ""
+    assert [c.surface.id for c in chosen] == [mailbox.id]
+
+
+async def test_an_unreachable_named_channel_is_refused_not_rerouted():
+    """Sending it on email anyway would be worse than not sending it.
+
+    The agent asked for Telegram for a reason it does not restate, and it never
+    finds out the message went somewhere else — it reads DELIVERED and carries
+    on. So the send stops, and the refusal names both facts the agent needs:
+    that nothing went out, and what would have worked instead.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    # Nobody has written to the bot, so there is no thread to reply into.
+    service = _notification_service(surfaces=(chat, mailbox))
+
+    channels, reason = await service.resolve_channels(
+        pod_id=chat.pod_id,
+        recipient_user_id=uuid4(),
+        actor_agent_id=agent_id,
+        channel="telegram",
+    )
+
+    assert channels == []
+    assert "have not messaged this agent on Telegram" in reason
+    assert "Nothing was sent elsewhere" in reason
+    assert "email would reach them" in reason
+
+
+async def test_asking_for_a_channel_the_agent_does_not_have_says_so():
+    """A different fix to a different person: connect one, or pick another."""
+    agent_id = uuid4()
+    service = _notification_service(
+        surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),)
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=agent_id,
+        channel="slack",
+    )
+
+    assert channels == []
+    assert "no Slack surface" in reason
+    assert "email would reach them" in reason
+
+
+async def test_asking_for_chat_mints_no_mailbox_but_still_offers_one(monkeypatch):
+    """Two halves of the same judgement about a pod that has no surface yet.
+
+    A mailbox is what "reach them somehow" falls back to. Minting one to answer
+    "reach them on Telegram" hands out an address nobody asked for, and an
+    address handed out is one that has to keep working forever. But the refusal
+    still has to name email, because dropping the argument *would* mint one and
+    the message would go — an agent told nothing can reach them gives up on
+    someone who was one argument away.
+    """
+    _email_configured(monkeypatch)
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    service = _notification_service(provisioner=provisioner, surfaces=())
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=uuid4(),
+        channel="telegram",
+    )
+
+    assert channels == []
+    provisioner.assert_not_awaited()
+    assert "no Telegram surface" in reason
+    assert "email would reach them" in reason
+
+
+async def test_the_workspace_they_actually_use_is_found_among_their_identities():
+    """A pod with two Slack workspaces had one of them permanently unreachable.
+
+    Slack ids are per workspace, so this person is two rows, and delivery used
+    to take whichever was seen most recently and look for a thread under it. On
+    the other surface that id matches nothing — so the surface they are actively
+    chatting on yielded no channel, and the reason handed back said they had
+    never messaged us.
+    """
+    agent_id = uuid4()
+    seen_last = _surface_for(agent_id, SurfacePlatform.SLACK)
+    where_they_talk = _surface_for(agent_id, SurfacePlatform.SLACK)
+    service = _notification_service(surfaces=(seen_last, where_they_talk))
+    service.channels.external_users.list_by_resolved_users = AsyncMock(
+        # Freshest first, which is the order the repository returns.
+        return_value=[_identity("U-OTHER"), _identity("U-THEIRS")]
+    )
+    thread = AgentSurfaceConversationLink(
+        surface_id=where_they_talk.id,
+        conversation_id=uuid4(),
+        platform="SLACK",
+        external_thread_id="C1",
+        external_user_id="U-THEIRS",
+        last_inbound_at=datetime.now(timezone.utc),
+    )
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        side_effect=lambda *, surface_id, external_user_id: (
+            thread
+            if surface_id == where_they_talk.id and external_user_id == "U-THEIRS"
+            else None
+        )
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=seen_last.pod_id, recipient_user_id=uuid4(), actor_agent_id=agent_id
+    )
+
+    assert reason == ""
+    assert [c.surface.id for c in channels] == [where_they_talk.id]
+
+
+async def test_reachability_says_what_the_agent_can_choose_between():
+    """What `list_pod_members` shows, so that choosing is a read not a guess.
+
+    Per person, because reachability is per person: the same agent can hold a
+    Telegram thread with one colleague and nothing but an address for another.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    priya, bob = uuid4(), uuid4()
+    service = _notification_service(surfaces=(chat, mailbox))
+    service.channels.external_users.list_by_resolved_users = AsyncMock(
+        return_value=[_identity("U-PRIYA", user_id=priya)]
+    )
+    service.channels.links.list_latest_by_surface_and_external_users = AsyncMock(
+        return_value={"U-PRIYA": _link_for(chat)}
+    )
+
+    reach = await service.reachable_channels(
+        pod_id=chat.pod_id,
+        recipients={priya: "priya@example.com", bob: None},
+        actor_agent_id=agent_id,
+    )
+
+    assert reach == {priya: ["email", "telegram"], bob: []}

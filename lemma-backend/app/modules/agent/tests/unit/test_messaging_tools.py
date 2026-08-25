@@ -16,8 +16,15 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.models import ListPodMembersRequest
-from app.modules.agent.tools.messaging.pydantic_adapter import list_pod_members
+from app.modules.agent.tools.messaging.models import (
+    ListPodMembersRequest,
+    MessageChannel,
+    MessageUserRequest,
+)
+from app.modules.agent.tools.messaging.pydantic_adapter import (
+    list_pod_members,
+    message_user,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -77,8 +84,13 @@ def _members() -> list[dict]:
 
 
 def _patch(monkeypatch, result):
-    async def _fake(*, pod_id, requester_user_id, search, limit):
-        _fake.seen = {"search": search, "limit": limit, "pod_id": pod_id}
+    async def _fake(*, pod_id, requester_user_id, search, limit, actor_agent_id=None):
+        _fake.seen = {
+            "search": search,
+            "limit": limit,
+            "pod_id": pod_id,
+            "actor_agent_id": actor_agent_id,
+        }
         return result
 
     monkeypatch.setattr(
@@ -237,3 +249,103 @@ async def test_a_real_agent_still_reports_its_own_id(monkeypatch):
 
     assert sent["actor_agent_id"] == agent_id
     assert sent["agent_name"] == "Ops"
+
+
+# ------------------------------------------------- choosing where it goes
+
+
+def _sent(monkeypatch, **result):
+    """Stand in for the whole delivery stack, and record what it was asked for."""
+    payload = {
+        "notification_id": uuid4(),
+        "delivery_status": "DELIVERED",
+        "delivered_via": "TELEGRAM",
+        "undeliverable_reason": None,
+    }
+    payload.update(result)
+
+    async def _resolve(*, pod_id, reference):
+        return PRIYA
+
+    async def _send(**kwargs):
+        _send.seen = kwargs
+        return payload
+
+    monkeypatch.setattr(
+        "app.modules.agent.tools.messaging.pydantic_adapter.resolve_recipient",
+        _resolve,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.tools.messaging.pydantic_adapter.send_notification", _send
+    )
+    return _send
+
+
+async def test_the_channel_the_agent_named_reaches_the_router(monkeypatch):
+    """Passed as the plain channel name, which is the whole vocabulary.
+
+    The tool speaks in channels because that is what an agent can reason about;
+    surface ids and mail providers are not things it can choose between.
+    """
+    send = _sent(monkeypatch, delivered_via="WHATSAPP")
+
+    await message_user(
+        _ctx(),
+        MessageUserRequest(
+            to=str(PRIYA), message="Standup?", channel=MessageChannel.WHATSAPP
+        ),
+    )
+
+    assert send.seen["channel"] == "whatsapp"
+
+
+async def test_leaving_the_channel_out_leaves_the_routing_alone(monkeypatch):
+    """The default has to stay the default: no channel means no filter."""
+    send = _sent(monkeypatch)
+
+    await message_user(_ctx(), MessageUserRequest(to=str(PRIYA), message="Standup?"))
+
+    assert send.seen["channel"] is None
+
+
+async def test_a_refused_channel_does_not_read_as_a_routing_failure(monkeypatch):
+    """ "No chat app could carry this" is true of routing and false of this.
+
+    Something could have carried it. What stopped the send was the agent's own
+    choice, and unless the answer says so the model reads the generic sentence,
+    concludes the person is unreachable, and gives up on someone it could have
+    reached by dropping one argument.
+    """
+    _sent(
+        monkeypatch,
+        delivery_status="UNDELIVERABLE",
+        delivered_via=None,
+        undeliverable_reason=(
+            "They have not messaged this agent on WhatsApp. Nothing was sent "
+            "elsewhere; email would reach them."
+        ),
+    )
+
+    result = await message_user(
+        _ctx(),
+        MessageUserRequest(
+            to=str(PRIYA), message="Standup?", channel=MessageChannel.WHATSAPP
+        ),
+    )
+
+    assert result.success is True
+    assert "you asked for whatsapp" in result.message
+    assert "email would reach them" in result.message
+
+
+async def test_the_lookup_says_which_channels_can_reach_each_person(monkeypatch):
+    """So that naming a channel is reading an answer, not guessing at one."""
+    members = _members()
+    members[0]["reachable_on"] = ["email", "telegram"]
+    members[1]["reachable_on"] = []
+    _patch(monkeypatch, (members, 2, False))
+
+    result = await list_pod_members(_ctx(), ListPodMembersRequest())
+
+    assert result.members[0].reachable_on == ["email", "telegram"]
+    assert result.members[1].reachable_on == []

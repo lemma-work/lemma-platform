@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -36,29 +38,38 @@ class ExternalSurfaceUserRepository:
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
 
-    async def get_by_resolved_user(
+    async def list_by_resolved_users(
         self,
         *,
         platform: str,
-        resolved_user_id,
-    ) -> ExternalSurfaceUserEntity | None:
-        """Reverse lookup: the cached external identity for a Lemma user.
+        resolved_user_ids: Sequence[UUID],
+    ) -> list[ExternalSurfaceUserEntity]:
+        """Reverse lookup: cached external identities for Lemma users.
 
-        Used by ``surface.send`` to reach a pod member on a platform without a
-        prior inbound event in hand. Returns the most recently seen record.
+        Used by ``surface.send`` and notification delivery to reach a pod member
+        on a platform without a prior inbound event in hand.
+
+        Plural in both directions, and that is the point. One person can hold
+        several identities on one platform — Slack ids are per workspace, Teams
+        ids per tenant — and this used to return only the most recently *seen*
+        one. That is not the same as the one that can reach them on the surface
+        in hand: a pod with two Slack workspaces had one of them silently
+        unreachable, reported as "they have never messaged us". The caller holds
+        the surface and does the picking; this only supplies the candidates,
+        freshest first so that picking any of them is a defensible default.
         """
+        if not resolved_user_ids:
+            return []
         stmt = (
             select(AgentSurfaceExternalUser)
             .where(
                 AgentSurfaceExternalUser.platform == platform,
-                AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+                AgentSurfaceExternalUser.resolved_user_id.in_(resolved_user_ids),
             )
             .order_by(AgentSurfaceExternalUser.last_seen_at.desc().nullslast())
-            .limit(1)
         )
         result = await self.session.execute(stmt)
-        instance = result.scalars().first()
-        return instance.to_entity() if instance else None
+        return [instance.to_entity() for instance in result.scalars().all()]
 
     async def upsert(
         self,
