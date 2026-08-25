@@ -26,6 +26,25 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 )
 
 
+class DeliveryCardinality(StrEnum):
+    """How many things a run may put in front of the person.
+
+    The fact ``is_email`` kept being asked to stand for. Email delivers one
+    composed reply, so everything a run wants to say -- narration, a file, a
+    question it cannot pause on -- has to become part of that one reply rather
+    than a message of its own. Chat has no such limit.
+
+    It is a property of the platform, not a second code path: the delivery
+    reads it and either sends each envelope as it comes or accumulates them and
+    flushes once.
+    """
+
+    #: Each envelope is delivered when it is ready (every chat platform).
+    MANY = "MANY"
+    #: Envelopes accumulate into one, flushed at the end of the run (email).
+    ONE = "ONE"
+
+
 class ProgressStyle(StrEnum):
     """How a platform can show that a long run is still going.
 
@@ -112,6 +131,32 @@ class PlatformCapabilities:
     # address off one key *is* the design, so applying the identity rule here
     # let the first mailbox in an organization block every one after it.
     system_credential_is_identity: bool = True
+
+    @property
+    def delivery_cardinality(self) -> DeliveryCardinality:
+        """How many envelopes a run may deliver here.
+
+        Derived from ``is_email`` rather than declared, because the two are the
+        same fact today and a second field would be one more thing to keep in
+        step. It is a property so the call sites read as what they mean -- a
+        delivery asking how many sends it gets, not whether the platform
+        happens to be email.
+        """
+        return DeliveryCardinality.ONE if self.is_email else DeliveryCardinality.MANY
+
+    @property
+    def can_pause_for_a_person(self) -> bool:
+        """Can a run stop here and wait for somebody to answer?
+
+        Not the same question as ``delivery_cardinality``, even though email
+        answers no to both. A surface that could hold a run open but only send
+        once would still be ONE; a surface that could send freely but never
+        block would still be un-pausable. They were one ``is_email`` check and
+        read as one rule, which is how "email cannot pause" turned into "email
+        cannot be asked anything" -- and a destructive action on an email
+        surface either happened unapproved or silently did not happen.
+        """
+        return not self.is_email
 
     @property
     def finishes_stream_with_answer(self) -> bool:
@@ -356,16 +401,17 @@ def platform_agent_guidance(platform: str | None) -> str:
             "in `attachment_paths` — files up to "
             f"{caps.inline_mb_cap} MB attach inline, larger files become "
             "download links automatically. Do not send partial or progress "
-            "messages. `display_resource` does NOT reach the email recipient — "
-            "share files through the reply tool's `attachment_paths`."
+            "messages. A file you showed with `display_resource` is attached to "
+            "that reply automatically — you do not need to list it again."
         )
         lines.append(
-            "## Email is not interactive\n"
-            "This is email, not a chat — the conversation cannot pause for a "
-            "reply. Do NOT call `ask_user`, `request_approval`, `display_resource`, "
-            "or `say`; none of them reach an email recipient. When you would "
-            "otherwise ask, pick the most sensible default and proceed, then "
-            f"deliver everything in the single `{caps.reply_tool}` reply."
+            "## Email cannot wait for an answer\n"
+            "This is email, not a chat — the conversation cannot pause partway "
+            "through. Do NOT call `ask_user`, `request_approval` or `say`; none "
+            "of them can stop and wait here. When you would otherwise ask, pick "
+            "the most sensible default, say plainly in your reply what you "
+            "assumed and what you would have asked, and proceed. `display_resource` "
+            "with `type=FILE` does work: the file is attached to your reply."
         )
     else:
         # Chat surfaces: files always, forms only where native.

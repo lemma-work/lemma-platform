@@ -71,14 +71,28 @@ def test_email_platforms_carry_reply_tool():
     assert get_platform_capabilities("SLACK").reply_tool is None
 
 
-def test_email_guidance_points_to_reply_tool_not_display_resource():
+def test_email_guidance_routes_everything_through_the_one_reply():
+    """Email delivers once, so the prompt has to describe one reply, not a chat."""
     text = platform_agent_guidance("GMAIL")
     assert "gmail_reply_email" in text
     assert "attachment_paths" in text
-    # Email must NOT tell the agent display_resource delivers files to the user.
-    assert "type=FILE" not in text
+    # The chat delivery section belongs to platforms that can send more than once.
     assert "## Delivering things" not in text
-    assert "does NOT reach the email recipient" in text
+
+
+def test_email_guidance_no_longer_calls_display_resource_useless():
+    """It reaches the recipient now, as an attachment on the single reply.
+
+    The prompt said it did not, which was true and is the reason the tool was
+    left returning success while delivering nothing. Both halves are fixed, and
+    a prompt still saying "do NOT call display_resource" would now be the lie.
+    """
+    text = platform_agent_guidance("GMAIL")
+    assert "does NOT reach the email recipient" not in text
+    assert "attached to your reply" in text
+    # What genuinely cannot happen on email is pausing, and that must still be said.
+    assert "`ask_user`" in text
+    assert "`request_approval`" in text
 
 
 def test_whatsapp_guidance_names_the_kinds_capped_below_the_headline():

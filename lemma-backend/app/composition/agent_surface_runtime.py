@@ -53,6 +53,29 @@ def surface_history_limits() -> tuple[int, int]:
     )
 
 
+def platform_delivers_one_reply(platform: str | None) -> bool:
+    """Does a run on this platform get one composed reply rather than messages?"""
+    from app.modules.agent_surfaces.platforms.platform_capabilities import (
+        DeliveryCardinality,
+        get_platform_capabilities,
+    )
+
+    capabilities = get_platform_capabilities(platform)
+    return bool(
+        capabilities
+        and capabilities.delivery_cardinality is DeliveryCardinality.ONE
+    )
+
+
+def hold_display_for_one_reply(conversation_id, path: str) -> bool:
+    """Keep a displayed pod file until this surface's single reply goes out."""
+    from app.modules.agent_surfaces.services.pending_envelope import (
+        remember_display_path,
+    )
+
+    return remember_display_path(conversation_id, path)
+
+
 def platform_supports_chat_delivery(platform: str | None) -> bool:
     from app.modules.agent_surfaces.platforms.platform_capabilities import (
         get_platform_capabilities,

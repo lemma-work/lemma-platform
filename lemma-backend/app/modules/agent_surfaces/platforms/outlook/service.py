@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_
 from app.modules.agent_surfaces.platforms.email_attachments import (
     append_attachment_links,
     resolve_outbound_email_attachment_urls,
+    outbound_paths_for_reply,
     resolve_outbound_email_attachments,
 )
 from app.modules.agent_surfaces.platforms.email_render import (
@@ -223,7 +224,7 @@ class OutlookPlatformService:
         if not self._is_composio:
             inline_files, links = await resolve_outbound_email_attachments(
                 ctx.deps,
-                request.attachment_paths,
+                outbound_paths_for_reply(ctx.deps, request.attachment_paths),
                 inline_cap_bytes=email_inline_cap("OUTLOOK"),
             )
             return (

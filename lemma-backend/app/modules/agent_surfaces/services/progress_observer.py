@@ -33,6 +33,9 @@ from app.modules.agent_surfaces.services.ingress_service import (
 from app.modules.agent_surfaces.services.progress_display import (
     ProgressDisplayMixin,
 )
+from app.modules.agent_surfaces.services.pending_envelope import (
+    discard_display_paths,
+)
 from app.modules.agent_surfaces.services.progress_plan import (
     SurfacePlan,
     plan_from_event,
@@ -330,6 +333,9 @@ class SurfaceAgentRunProgressObserver(
         if not await self._finish_stream_with_answer(conversation):
             await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
+        # Anything display_resource held for a single reply belongs to this run.
+        # Left behind, it would attach itself to whatever reply came next.
+        discard_display_paths(conversation.id)
 
     async def on_run_failed(
         self,
