@@ -1725,6 +1725,11 @@ impl Daemon {
 
         let summary = self.discard_local_data()?;
 
+        // The database these describe no longer exists. Leaving them would have
+        // the next start skip migrations against an empty schema, and the
+        // backend would come up against tables that were never created.
+        manager.forget_setup_stamps()?;
+
         // Only once the data is actually gone. A marker cleared before a failed
         // wipe would let the next start run against data it cannot read, which
         // is the state this whole path exists to escape.

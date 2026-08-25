@@ -519,6 +519,18 @@ fn build(
         backend_env.insert("LEMMA_SKILLS_ROOT", path_text(skills)?);
     }
 
+    // What decides whether the one-time setups need to run again.
+    //
+    // Migrations ship inside the pack, so the release identifies them -- except
+    // in source mode, where one version spans many edits, so the revision files
+    // are fingerprinted too. Adding a Composio key must still pick up its apps
+    // on the next start, which is why that is part of the catalog's stamp
+    // rather than the release alone.
+    let migrations_fingerprint = migrations_fingerprint(&bindings.backend_dir);
+    let backend_env_has_composio_key = backend_env
+        .get("COMPOSIO_API_KEY")
+        .is_some_and(|value| !value.trim().is_empty());
+
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", bindings.node_env.to_owned()),
         ("PORT", frontend_port.to_string()),
@@ -587,6 +599,16 @@ fn build(
                 "timeout_seconds": 300,
                 "max_attempts": 5,
                 "retry_backoff_seconds": 3,
+                // Migrations ship inside the pack, so the pack's identity is
+                // exactly what decides whether there is anything new to apply.
+                // Alembic would work this out for itself in one `SELECT` --
+                // the cost is `env.py` importing the whole ORM graph before it
+                // can, several seconds on every single start.
+                //
+                // The revisions are hashed in as well as the release, because
+                // a source-mode run keeps one version across many edits, and a
+                // developer adding a migration must not have it skipped.
+                "stamp": setup_stamp(&[&release_version, &migrations_fingerprint]),
             },
             // Seeds the connector catalog. Without it a packaged install has no
             // connectors at all: `make dev` seeds one and the shipped app never
@@ -616,6 +638,14 @@ fn build(
                 "max_attempts": 1,
                 "retry_backoff_seconds": 0,
                 "optional": true,
+                // The pack, plus whether a Composio key is present. The second
+                // half preserves the behaviour the comment above describes: a
+                // user who adds a key later gets the Composio apps on the very
+                // next start, because adding one changes this stamp.
+                "stamp": setup_stamp(&[
+                    &release_version,
+                    if backend_env_has_composio_key { "composio" } else { "native-only" },
+                ]),
             },
         ],
         "services": [
@@ -805,6 +835,48 @@ fn read_existing_host_secrets(path: &Path) -> Result<HostSecrets, String> {
     validate_hex_secret("installation secret", &secrets.installation_secret)
         .map_err(|error| error.to_string())?;
     Ok(secrets)
+}
+
+/// One stamp value from the things a setup's result depends on.
+///
+/// Hashed rather than concatenated so the manifest never carries a path or a
+/// key's presence in readable form, and so the value stays a fixed width
+/// whatever goes into it.
+fn setup_stamp(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        // Length-delimited: without this, ("ab", "c") and ("a", "bc") hash the
+        // same, and two different states would share a stamp.
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// A fingerprint of the migration revisions a pack carries.
+///
+/// Names only, not contents: the file set changes when a revision is added or
+/// removed, which is the case that matters, and reading every file on each
+/// start would trade one cost for another. Empty when the directory cannot be
+/// read, which makes the stamp depend on the release alone -- the conservative
+/// direction, since a stamp that cannot be computed should not become a stamp
+/// that matches.
+fn migrations_fingerprint(backend_dir: &Path) -> String {
+    let Ok(entries) = fs::read_dir(backend_dir.join("migrations/versions")) else {
+        return String::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".py"))
+        .collect();
+    names.sort();
+    let mut hasher = Sha256::new();
+    for name in &names {
+        hasher.update(name.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn random_hex(byte_count: usize) -> io::Result<String> {

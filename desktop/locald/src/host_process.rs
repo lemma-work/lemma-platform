@@ -123,6 +123,21 @@ pub struct HostSetupSpec {
     /// using in this session.
     #[serde(default)]
     pub optional: bool,
+    /// What this setup's result depends on. Re-run only when it changes.
+    ///
+    /// Both setups run on *every* start today, and the cost is not the SQL.
+    /// Alembic's no-op is one `SELECT`; the expense is `migrations/env.py`
+    /// importing the whole ORM graph -- several thousand modules -- before it
+    /// can decide there is nothing to do. `connector-catalog` is worse: it
+    /// re-upserts the entire native catalog every time, with a ten-minute
+    /// budget.
+    ///
+    /// The renderer sets this to something that changes exactly when the work
+    /// would produce a different result, so a warm start skips both. Absent, or
+    /// changed, the setup runs -- so a pack that predates this, or a manifest
+    /// that declines to declare one, behaves exactly as before.
+    #[serde(default)]
+    pub stamp: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -675,8 +690,58 @@ fn components_report_failure(components: &[HostProcessStatus]) -> bool {
         Some(io::Error::other(detail))
     }
 
+    /// Where completed setup stamps live, beside the process ledger.
+    ///
+    /// Under the locald root on purpose: a local-data reset removes that whole
+    /// directory, so a wiped database can never be left with a stamp claiming
+    /// its migrations have already run.
+    fn setup_stamp_path(&self) -> PathBuf {
+        self.log_dir
+            .parent()
+            .unwrap_or(&self.log_dir)
+            .join("setup-stamps.json")
+    }
+
+    /// Forget every completed setup, so the next start runs them all again.
+    ///
+    /// A local-data reset destroys the database the migrations stamp describes
+    /// but leaves the locald root standing -- so without this the next start
+    /// would skip migrations against an empty schema and the backend would come
+    /// up against tables that do not exist. The full reinstall removes the root
+    /// entirely and takes the stamps with it.
+    pub fn forget_setup_stamps(&self) -> io::Result<()> {
+        match fs::remove_file(self.setup_stamp_path()) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    fn recorded_setup_stamps(&self) -> HashMap<String, String> {
+        std::fs::read(self.setup_stamp_path())
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    /// Record a setup as done for this stamp. Written only after it succeeded.
+    fn record_setup_stamp(&self, id: &str, stamp: &str) {
+        let mut stamps = self.recorded_setup_stamps();
+        stamps.insert(id.to_owned(), stamp.to_owned());
+        // Best effort: a stamp that cannot be written costs the next start the
+        // work again, which is exactly the behaviour before stamps existed.
+        if let Ok(encoded) = serde_json::to_vec_pretty(&stamps) {
+            let _ = write_private_atomic(&self.setup_stamp_path(), &encoded);
+        }
+    }
+
     fn run_setups(&self) -> io::Result<()> {
+        let recorded = self.recorded_setup_stamps();
         'setups: for setup in &self.manifest.setup {
+            if let Some(stamp) = setup.stamp.as_deref() {
+                if recorded.get(&setup.id).map(String::as_str) == Some(stamp) {
+                    continue 'setups;
+                }
+            }
             let mut environment = setup.env.clone();
             environment.extend(
                 self.backend_environment
@@ -699,6 +764,13 @@ fn components_report_failure(components: &[HostProcessStatus]) -> bool {
                 loop {
                     if let Some(status) = child.try_wait()? {
                         if status.success() {
+                            // Only here. A stamp written anywhere else would
+                            // let a failed or half-finished setup be skipped on
+                            // the next start, which is worse than running it
+                            // again.
+                            if let Some(stamp) = setup.stamp.as_deref() {
+                                self.record_setup_stamp(&setup.id, stamp);
+                            }
                             continue 'setups;
                         }
                         if attempt == setup.max_attempts {
@@ -2325,6 +2397,7 @@ mod tests {
             max_attempts: 3,
             retry_backoff_seconds: 0,
             optional: false,
+            stamp: None,
         }
     }
 
@@ -3269,6 +3342,118 @@ mod tests {
             "the generation announced to the app must be the one the services were given"
         );
         manager.stop_all().unwrap();
+    }
+
+    /// A stamped setup runs once and is skipped while its stamp holds.
+    ///
+    /// Both setups ran on every start. The cost is not the SQL -- alembic's
+    /// no-op is one `SELECT` -- it is `env.py` importing the whole ORM graph
+    /// before it can decide there is nothing to do, on every launch.
+    #[test]
+    fn a_stamped_setup_is_not_repeated_while_its_stamp_holds() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        let manager = manager_in(&root, value);
+
+        manager.run_setups().unwrap();
+        manager.run_setups().unwrap();
+        manager.run_setups().unwrap();
+
+        let runs = std::fs::read_to_string(&marker).unwrap().lines().count();
+        assert_eq!(runs, 1, "a stamped setup runs once, not once per start");
+    }
+
+    /// A changed stamp runs it again; so does an unstamped setup.
+    #[test]
+    fn a_changed_stamp_runs_the_setup_again() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+
+        let mut first = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        first.setup[0].command = command.clone();
+        first.setup[0].stamp = Some("release-0.7.0".into());
+        manager_in(&root, first).run_setups().unwrap();
+
+        // A new release: the migrations it ships are not the ones already run.
+        let mut second = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        second.setup[0].command = command.clone();
+        second.setup[0].stamp = Some("release-0.8.0".into());
+        manager_in(&root, second).run_setups().unwrap();
+
+        // No stamp at all behaves exactly as before stamps existed.
+        let mut third = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        third.setup[0].command = command;
+        third.setup[0].stamp = None;
+        manager_in(&root, third).run_setups().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().lines().count(),
+            3
+        );
+    }
+
+    /// A failed setup is never stamped.
+    ///
+    /// Stamping anything but success would let a half-finished migration be
+    /// skipped on the next start, which is strictly worse than running it
+    /// again.
+    #[test]
+    fn a_failing_setup_is_not_stamped_as_done() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec!["/usr/bin/false".into()];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        value.setup[0].max_attempts = 1;
+        let manager = manager_in(&root, value);
+
+        assert!(manager.run_setups().is_err());
+        assert!(
+            manager.recorded_setup_stamps().is_empty(),
+            "a setup that failed must run again next time"
+        );
+    }
+
+    /// A data reset makes every setup run again.
+    ///
+    /// The database the migrations stamp describes is gone, but a Tier 1 reset
+    /// leaves the locald root standing -- so without forgetting the stamps the
+    /// next start would skip migrations against an empty schema and the backend
+    /// would come up against tables that were never created.
+    #[test]
+    fn forgetting_stamps_makes_a_reset_installation_migrate_again() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        let manager = manager_in(&root, value);
+
+        manager.run_setups().unwrap();
+        manager.forget_setup_stamps().unwrap();
+        manager.run_setups().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().lines().count(),
+            2
+        );
+        // Clearing twice is what a retried reset does; it must not fail.
+        manager.forget_setup_stamps().unwrap();
     }
 
     /// An optional setup that *hangs* is tolerated, exactly like one that fails.
