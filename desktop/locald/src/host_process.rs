@@ -652,22 +652,22 @@ impl HostProcessManager {
     }
 
     /// Whether any component should be reported as having failed.
-///
-/// `circuit_trips`, not just `circuit_open`. The circuit now closes on its own
-/// after a quiet window, so reading only the live flag would let a service that
-/// trips once per window report healthy in every gap -- oscillating the splash
-/// between "error" and "starting" while nothing actually improved.
-///
-/// A free function so this is testable without racing a real supervisor: the
-/// interesting state (circuit closed again, trip remembered, service still
-/// down) exists for a fraction of a second in a live manager.
-fn components_report_failure(components: &[HostProcessStatus]) -> bool {
-    components
-        .iter()
-        .any(|component| component.circuit_open || component.circuit_trips > 0)
-}
+    ///
+    /// `circuit_trips`, not just `circuit_open`. The circuit now closes on its own
+    /// after a quiet window, so reading only the live flag would let a service that
+    /// trips once per window report healthy in every gap -- oscillating the splash
+    /// between "error" and "starting" while nothing actually improved.
+    ///
+    /// A free function so this is testable without racing a real supervisor: the
+    /// interesting state (circuit closed again, trip remembered, service still
+    /// down) exists for a fraction of a second in a live manager.
+    fn components_report_failure(components: &[HostProcessStatus]) -> bool {
+        components
+            .iter()
+            .any(|component| component.circuit_open || component.circuit_trips > 0)
+    }
 
-/// Whether a failed setup should stop the start, or only be recorded.
+    /// Whether a failed setup should stop the start, or only be recorded.
     ///
     /// Hoisted out of `run_setups` because `optional` used to be honoured at
     /// exactly one of the three places a setup can fail. A setup that *exited*
@@ -917,8 +917,8 @@ fn components_report_failure(components: &[HostProcessStatus]) -> bool {
             && !self.startup_in_progress.load(Ordering::Acquire)
             && dependency_ready;
         let desired = self.desired_running();
-        let failed = Self::components_report_failure(&components)
-            || (desired && dependency_error.is_some());
+        let failed =
+            Self::components_report_failure(&components) || (desired && dependency_error.is_some());
         let mut event = json!({
             "v": 1,
             "event": "status",
@@ -3398,10 +3398,7 @@ mod tests {
         third.setup[0].stamp = None;
         manager_in(&root, third).run_setups().unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap().lines().count(),
-            3
-        );
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 3);
     }
 
     /// A failed setup is never stamped.
@@ -3448,10 +3445,7 @@ mod tests {
         manager.forget_setup_stamps().unwrap();
         manager.run_setups().unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap().lines().count(),
-            2
-        );
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
         // Clearing twice is what a retried reset does; it must not fail.
         manager.forget_setup_stamps().unwrap();
     }

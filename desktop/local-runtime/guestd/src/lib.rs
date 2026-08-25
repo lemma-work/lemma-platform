@@ -949,7 +949,12 @@ impl<E: Engine> GuestService<E> {
         for volume in ["lemma-postgres-data", "lemma-redis-data"] {
             let output = self
                 .engine
-                .run(&["volume".into(), "rm".into(), "--force".into(), volume.into()])
+                .run(&[
+                    "volume".into(),
+                    "rm".into(),
+                    "--force".into(),
+                    volume.into(),
+                ])
                 .map_err(GuestError::engine)?;
             if output.status.success() {
                 removed_volumes += 1;
@@ -3140,16 +3145,16 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![
                 // `inspect` answers with an array; anything else reads as absent.
-                output(true, "[{}]"), // inspect supertokens: present
-                output(true, ""),     // rm supertokens
-                output(true, "[{}]"), // inspect redis: present
-                output(true, ""),     // rm redis
-                output(true, "[{}]"), // inspect postgres: present
-                output(true, ""),     // rm postgres
+                output(true, "[{}]"),     // inspect supertokens: present
+                output(true, ""),         // rm supertokens
+                output(true, "[{}]"),     // inspect redis: present
+                output(true, ""),         // rm redis
+                output(true, "[{}]"),     // inspect postgres: present
+                output(true, ""),         // rm postgres
                 output(true, "abc123\n"), // ps --filter label=...
-                output(true, ""),     // rm the sandbox container
-                output(true, ""),     // volume rm lemma-postgres-data
-                output(true, ""),     // volume rm lemma-redis-data
+                output(true, ""),         // rm the sandbox container
+                output(true, ""),         // volume rm lemma-postgres-data
+                output(true, ""),         // volume rm lemma-redis-data
             ]),
             root.path().into(),
             "192.168.64.2".into(),
@@ -3177,8 +3182,7 @@ mod tests {
         })
         .expect("core containers are removed");
         let sandbox_removed = position(&|command: &Vec<String>| {
-            command.first() == Some(&"rm".to_owned())
-                && command.iter().any(|part| part == "abc123")
+            command.first() == Some(&"rm".to_owned()) && command.iter().any(|part| part == "abc123")
         })
         .expect("sandbox containers are removed");
         let volume_removed = position(&|command: &Vec<String>| {
@@ -3215,8 +3219,8 @@ mod tests {
         );
         let service = GuestService::new(
             FakeEngine::new(vec![
-                output(true, ""), // ensure_volume: inspect succeeds, volume exists
-                inspect,          // postgres_data_major: where does it live
+                output(true, ""),     // ensure_volume: inspect succeeds, volume exists
+                inspect,              // postgres_data_major: where does it live
                 output(true, "18\n"), // postgres_image_major: what does the image ship
             ]),
             root.path().into(),
@@ -3242,9 +3246,10 @@ mod tests {
         );
         let commands = service.engine.commands.lock().unwrap();
         assert!(
-            !commands.iter().any(|command| command.first()
-                == Some(&"run".to_owned())
-                && command.iter().any(|part| part == "--name")),
+            !commands
+                .iter()
+                .any(|command| command.first() == Some(&"run".to_owned())
+                    && command.iter().any(|part| part == "--name")),
             "no core container may be started against an unreadable cluster: {commands:?}"
         );
     }

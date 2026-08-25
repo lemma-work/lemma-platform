@@ -186,7 +186,10 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
             .collect();
         assert_eq!(aside.len(), 1);
-        assert_eq!(std::fs::read_to_string(aside[0].path()).unwrap(), "deadbeef");
+        assert_eq!(
+            std::fs::read_to_string(aside[0].path()).unwrap(),
+            "deadbeef"
+        );
     }
 
     #[test]

@@ -1762,12 +1762,25 @@ mod tests {
             .join("runtime.json")
             .is_file());
         // Real progress, in order, not a bar that jumps to done.
-        for stage in ["download", "verify", "host-extract", "guest-extract", "validate"] {
-            assert!(stages.iter().any(|seen| seen == stage), "missing {stage}: {stages:?}");
+        for stage in [
+            "download",
+            "verify",
+            "host-extract",
+            "guest-extract",
+            "validate",
+        ] {
+            assert!(
+                stages.iter().any(|seen| seen == stage),
+                "missing {stage}: {stages:?}"
+            );
         }
         // The archives are cleaned up once they are no longer needed.
         assert!(
-            !install_root.join("downloads").join(release).join("host-pack.zip").exists(),
+            !install_root
+                .join("downloads")
+                .join(release)
+                .join("host-pack.zip")
+                .exists(),
             "a successful install does not leave its downloads behind",
         );
 

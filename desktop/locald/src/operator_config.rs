@@ -326,7 +326,9 @@ impl OperatorConfigStore {
                 Ok(config) => config,
                 Err(reason) => {
                     // Salvage the identity before the file naming it goes away.
-                    let salvaged = fs::read(&path).ok().and_then(|raw| salvage_install_id(&raw));
+                    let salvaged = fs::read(&path)
+                        .ok()
+                        .and_then(|raw| salvage_install_id(&raw));
                     let aside = crate::paths::quarantine_aside(&path)?;
                     let config = match salvaged {
                         Some(install_id) => {
@@ -1696,7 +1698,9 @@ mod tests {
         std::fs::write(&path, format!("{{\"install_id\":\"{install_id}\", oops")).unwrap();
 
         let vault = Arc::new(MemoryVault::default());
-        vault.set(install_id, "ai.api_key", "sk-still-here").unwrap();
+        vault
+            .set(install_id, "ai.api_key", "sk-still-here")
+            .unwrap();
 
         let mut healed = Vec::new();
         let store = OperatorConfigStore::load_with_vault_reporting(
@@ -1753,8 +1757,7 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
             .collect();
         assert_eq!(aside.len(), 1, "the future config is kept, not deleted");
-        let kept: Value =
-            serde_json::from_slice(&std::fs::read(aside[0].path()).unwrap()).unwrap();
+        let kept: Value = serde_json::from_slice(&std::fs::read(aside[0].path()).unwrap()).unwrap();
         assert_eq!(kept["schema_version"], 99);
         assert_eq!(kept["revision"], 7);
     }

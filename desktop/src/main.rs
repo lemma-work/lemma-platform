@@ -25,8 +25,8 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, Webview, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_updater::UpdaterExt as _;
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_updater::UpdaterExt as _;
 
 mod artifact_install;
 
@@ -1424,9 +1424,7 @@ fn actionable_runtime_install_error(error: &str) -> String {
              and install it again."
         );
     }
-    if lowered.contains("http 401")
-        || lowered.contains("http 403")
-        || lowered.contains("http 429")
+    if lowered.contains("http 401") || lowered.contains("http 403") || lowered.contains("http 429")
     {
         return "The download was blocked or rate-limited. A VPN, proxy or firewall \
                 may be intercepting github.com. Try again on a different network."
@@ -3413,7 +3411,9 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
             object.remove("resumeTarget");
         }
     }) {
-        append_install_log(&format!("reset: could not clear the resume target: {error}"));
+        append_install_log(&format!(
+            "reset: could not clear the resume target: {error}"
+        ));
     }
 
     ensure_locald(&app)?;
@@ -6770,7 +6770,13 @@ mod tests {
     fn the_splash_is_the_products_colour_and_follows_the_system_theme() {
         let splash = include_str!("../ui/index.html");
 
-        for gold in ["#c0801f", "#8a5c16", "0xd89b3d", "216, 155, 61", "192, 128, 31"] {
+        for gold in [
+            "#c0801f",
+            "#8a5c16",
+            "0xd89b3d",
+            "216, 155, 61",
+            "192, 128, 31",
+        ] {
             assert!(
                 !splash.contains(gold),
                 "{gold} is the old accent; the product is violet",
@@ -6918,8 +6924,7 @@ mod tests {
                 "a remote origin must not be able to replace the application",
             );
         }
-        assert!(include_str!("../capabilities/control.json")
-            .contains("allow-install-app-update"));
+        assert!(include_str!("../capabilities/control.json").contains("allow-install-app-update"));
     }
 
     /// The updater's transport policy is not weakened, and the artifact flag
@@ -6963,9 +6968,15 @@ mod tests {
     fn install_failures_are_explained_rather_than_dumped() {
         let cases = [
             ("artifact download failed with HTTP 404", "superseded"),
-            ("artifact download failed with HTTP 403", "proxy or firewall"),
+            (
+                "artifact download failed with HTTP 403",
+                "proxy or firewall",
+            ),
             ("artifact download failed with HTTP 429", "rate-limited"),
-            ("could not connect to the artifact host", "internet connection"),
+            (
+                "could not connect to the artifact host",
+                "internet connection",
+            ),
             ("the request timed out", "resumes from where it stopped"),
             (
                 "artifact size or SHA-256 did not match the signed manifest",
@@ -6994,7 +7005,8 @@ mod tests {
         assert!(!shown.contains("PR test DMG"), "{shown:?}");
 
         // A message that is already specific keeps its numbers.
-        let disk = "not enough disk space for Lemma's local runtime: 7 GiB required, 3 GiB available";
+        let disk =
+            "not enough disk space for Lemma's local runtime: 7 GiB required, 3 GiB available";
         assert_eq!(actionable_runtime_install_error(disk), disk);
     }
 

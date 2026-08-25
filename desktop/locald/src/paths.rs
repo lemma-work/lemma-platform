@@ -232,7 +232,9 @@ mod tests {
     fn the_guest_raises_the_same_reset_phrase_this_daemon_maps() {
         let guestd = include_str!("../../local-runtime/guestd/src/lib.rs");
         assert!(
-            guestd.contains(&format!("DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\"")),
+            guestd.contains(&format!(
+                "DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\""
+            )),
             "lemma-guestd must declare the same marker phrase as this crate",
         );
     }
