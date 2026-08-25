@@ -125,8 +125,11 @@ class Recorder:
             self._provider = fake_upstreams.start_fake_provider()
             ctx.log.info(
                 "egress serving the provider fake"
-                + ("; Telegram goes to Telegram" if ctx.options.real_telegram
-                   else " and the Telegram fake")
+                + (
+                    "; Telegram goes to Telegram"
+                    if ctx.options.real_telegram
+                    else " and the Telegram fake"
+                )
             )
 
     async def request(self, flow: http.HTTPFlow) -> None:

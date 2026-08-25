@@ -112,8 +112,7 @@ def telegram_is_live() -> bool:
     if egress_module.wanted_mode() in {"fake", "replay"}:
         return False
     return all(
-        capability.available
-        for capability in (TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON)
+        capability.available for capability in (TELEGRAM, TELEGRAM_APP, TELEGRAM_PERSON)
     )
 
 
