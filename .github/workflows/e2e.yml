@@ -247,6 +247,11 @@ jobs:
         run: |
           python3 ../scripts/e2e_durations.py \
             coverage-backend/junit-e2e-${{ matrix.shard.name }}.xml --check
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend e2e coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -255,6 +260,7 @@ jobs:
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json

@@ -193,6 +193,11 @@ jobs:
           if [ -f coverage-backend/comment.md ]; then
             cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -201,6 +206,7 @@ jobs:
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
