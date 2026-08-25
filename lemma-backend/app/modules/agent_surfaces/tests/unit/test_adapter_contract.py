@@ -153,7 +153,7 @@ def test_a_platform_that_parses_interactions_also_acknowledges_them(platform, ad
 
 
 # Outbound conversation content goes through `deliver` and nowhere else. These
-# two are the port's remaining public sends, and both are deliberate:
+# two are the delivery port's remaining public sends, and both are deliberate:
 #
 #   send_message   — the text primitive `deliver` itself degrades onto, and the
 #                    only way to say something before a conversation exists
@@ -163,43 +163,55 @@ def test_a_platform_that_parses_interactions_also_acknowledges_them(platform, ad
 #                    cannot, and it has no envelope to belong to.
 _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT = {"send_message", "send_cold_email"}
 
-# Setup and platform chrome. Not conversation delivery, and slated to move to
-# their own optional protocol; listed so this test fails when a *new* one
-# appears rather than when the known ones do.
-_CHROME = {
-    "send_starter_prompt",
-    "send_channel_setup_prompt",
-    "publish_home_view",
-    "open_channel_setup_modal",
-    "open_dm_agent_modal",
-    "set_thread_title",
-}
 
-
-def test_the_port_exposes_no_public_verb_for_a_kind_of_content():
+def test_the_delivery_port_exposes_no_public_verb_for_a_kind_of_content():
     """One seam for content, so a new kind cannot add a hole per platform.
 
     Each of `send_questions`, `send_approval`, `send_voice_note`,
     `send_file_attachment` and `send_display_resource` was a public verb every
-    platform had to answer and most answered with a default `return False` —
+    platform had to answer and most answered with a default `return False` --
     indistinguishable from a platform that genuinely declined. They are
-    `_render_*` hooks now, reachable only from `deliver`, so "does this
-    platform support choices" is a branch inside one method that always exists
-    rather than a method that might not.
+    `_render_*` hooks now, reachable only from `deliver`.
+
+    Chrome is not in scope here and does not need excluding: App Home, modals,
+    setup prompts and thread titles live on `SurfaceChromeMixin`, which is why
+    this list no longer carries six Slack-shaped exceptions.
     """
-    public_sends = {
+    delivery_only = {
         name
-        for name, _ in inspect.getmembers(BaseSurfaceAdapter, callable)
+        for cls in (BaseSurfaceAdapter,)
+        for name in dir(cls)
         if name.startswith(("send_", "publish_", "open_", "set_thread"))
+        and not _declared_on_chrome(name)
     }
-    unexpected = sorted(
-        public_sends - _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT - _CHROME
-    )
+    unexpected = sorted(delivery_only - _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT)
     assert not unexpected, (
-        f"{unexpected} are public outbound verbs. A kind of content belongs in "
-        "SurfaceEnvelope with a `_render_*` hook, not in a verb every platform "
-        "has to remember to implement."
+        f"{unexpected} are public outbound verbs on the delivery port. A kind of "
+        "content belongs in SurfaceEnvelope with a `_render_*` hook."
     )
+
+
+def _declared_on_chrome(name: str) -> bool:
+    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
+
+    return name in vars(SurfaceChromeMixin)
+
+
+def test_chrome_is_a_separate_contract_from_delivery():
+    """The split that stopped every non-Slack platform reading as half-done.
+
+    An App Home tab is not a message. Mixing them made a platform contract of
+    eighteen verbs, six of which only one platform has.
+    """
+    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
+    from app.modules.agent_surfaces.platforms.envelope_delivery import (
+        EnvelopeDeliveryMixin,
+    )
+
+    assert "publish_home_view" in vars(SurfaceChromeMixin)
+    assert "publish_home_view" not in vars(EnvelopeDeliveryMixin)
+    assert "deliver" in vars(EnvelopeDeliveryMixin)
+    assert "deliver" not in vars(SurfaceChromeMixin)
 
 
 def test_nothing_outside_the_delivery_mixin_renders_content_itself():

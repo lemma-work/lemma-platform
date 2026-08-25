@@ -294,10 +294,27 @@ resolved says so where it was tapped.
 
 ### Chrome is a separate protocol
 
-Setup, App Home, modals and thread titles move to an optional
-`SurfaceChromePort` that a platform may implement or not. The delivery port
-stops reporting them as gaps. The Telegram manager bot goes behind the same
-port rather than calling the API raw.
+Setup, App Home, modals, thread titles and the channel list move to
+`SurfaceChromeMixin`. They are not delivery: nothing there reaches an agent or
+carries an answer, and a platform that has none of it is not missing a feature.
+Mixing them made a contract of eighteen verbs, six of which only Slack has —
+which is why every other platform read as half-implemented.
+
+The defaults stay no-ops rather than raising. Shared code reaches for these on
+whatever adapter it has — `parse_channel_setup` runs on every inbound webhook —
+and the regression that taught us so was an `AttributeError` in a worker, not a
+missing feature.
+
+**Corrected from the first draft:** this document also said the Telegram manager
+bot should "go behind the same port rather than calling the API raw". It does not
+call anything raw — both sites go through `TelegramClient`, the platform's own
+typed client, and `TelegramManagerRuntime` declares that client as part of its
+protocol. More importantly it is *not a surface*: a different bot with a
+different token, talking to somebody setting up their own bot. There is no
+inbound event, no reply target and no conversation link, so routing it through
+`SurfacePlatformAdapter.send_message(credentials, event, message)` would mean
+fabricating an event — the exact shape of wrong abstraction the rest of this
+document removes. It stays where it is.
 
 ---
 
