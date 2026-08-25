@@ -566,6 +566,8 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
         surfaces = {str(s.get("name")) for s in await holder.surfaces_in(pod)}
         if reach.name in surfaces:
             ledger.already(f"surface {reach.name!r} is on {reach.pod!r}")
+            if reach.platform == "TELEGRAM":
+                await _repair_telegram_reach(holder, pod, reach, ledger)
             continue
         account = await holder.account_for(
             reach.connector, in_organization=holder.organization
@@ -596,6 +598,59 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
             ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
         except Exception as exc:
             ledger.did(f"could not create surface {reach.name!r}: {_one_line(exc)}")
+
+
+async def _repair_telegram_reach(
+    holder: Person, pod: JSON, reach: Any, ledger: Ledger
+) -> None:
+    """Put the webhook back if the platform no longer has one.
+
+    A surface is only reachable while Telegram holds a webhook for its bot, and
+    that registration lives at Telegram rather than here — so anything that
+    calls `deleteWebhook` on that bot silently un-reaches the surface, and Lemma
+    has no way to notice. A run in polling mode against the same bot token does
+    exactly that; so does anyone clearing a webhook by hand.
+
+    What it looks like when it happens is worth writing down, because it reads
+    like a product failure: every scenario that messages the bot waits its full
+    timeout and reports that nothing came back. The messages are not lost, they
+    are queued at Telegram with nobody collecting them — `getWebhookInfo` shows
+    a rising `pending_update_count` and an empty `url`.
+
+    The product cannot repair this on its own: `_telegram_transition` registers
+    only when the surface becomes enabled or its binding changes, so a surface
+    that is already enabled and already has a secret is left alone however long
+    the platform has forgotten it. Off and on again is the smallest thing that
+    satisfies that rule, and it is idempotent — the check below is what stops it
+    happening on a run where nothing is wrong.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            answered = await client.get(
+                f"https://api.telegram.org/bot{token}/getWebhookInfo"
+            )
+        registered = ((answered.json() or {}).get("result") or {}).get("url") or ""
+    except Exception as exc:  # noqa: BLE001 — a check that fails must not stop provisioning
+        ledger.did(f"could not ask Telegram about the webhook: {_one_line(exc)}")
+        return
+    if registered:
+        ledger.already(f"Telegram is delivering {reach.name!r} to {registered}")
+        return
+    try:
+        await holder.changes_surface(reach.name, in_pod=pod, is_enabled=False)
+        await holder.changes_surface(reach.name, in_pod=pod, is_enabled=True)
+    except Exception as exc:  # noqa: BLE001
+        ledger.did(f"could not re-register {reach.name!r}: {_one_line(exc)}")
+        return
+    ledger.did(
+        f"re-registered {reach.name!r} with Telegram — the platform had no "
+        f"webhook for this bot, so nothing was reaching the surface"
+    )
 
 
 async def _connect_telegram_bot(holder: Person, ledger: Ledger) -> JSON | None:
