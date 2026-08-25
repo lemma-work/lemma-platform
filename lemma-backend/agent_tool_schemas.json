@@ -143,7 +143,7 @@
   {
     "tool_name": "check_messages",
     "toolset": "MESSAGING",
-    "description": "Check whether the people you messaged have answered.\n\nCall it after a `snooze`, not in a loop \u2014 each call replays this whole\nconversation. `RESPONDED` is the only status that means somebody answered.\n\nIf some are still OPEN after you have genuinely waited, say who has not\nanswered and finish with what you have.",
+    "description": "Check whether the people you messaged have answered.\n\nCall it when a turn opens saying they have replied \u2014 that is what it is for.\nNot in a loop, and not to check on people who have not answered yet: each\ncall replays this whole conversation, and you are told when there is\nsomething to read. `RESPONDED` is the only status that means somebody\nanswered.\n\nIf some are still OPEN after you have genuinely waited, say who has not\nanswered and finish with what you have.",
     "input_schema": {
       "properties": {
         "notification_ids": {
@@ -905,7 +905,7 @@
   {
     "tool_name": "list_pod_members",
     "toolset": "MESSAGING",
-    "description": "Look up who is in this pod, to find who to `message_user`.\n\n`message_user` needs an id or an exact email address \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through.\n\nSearches names and email addresses; omit `search` to list everyone.",
+    "description": "Look up who is in this pod, to find who to `message_user`.\n\n`message_user` needs an id or an exact email address \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through.\n\nAlso tells you `reachable_on`: the channels that can carry a message to each\nperson right now. Read it before setting `message_user`'s `channel`, and\ndon't ask for one that isn't listed \u2014 the send will be refused rather than\nrerouted.\n\nSearches names and email addresses; omit `search` to list everyone.",
     "input_schema": {
       "properties": {
         "search": {
@@ -968,6 +968,13 @@
               "default": false,
               "description": "True for the person this run belongs to.",
               "type": "boolean"
+            },
+            "reachable_on": {
+              "description": "Channels that can carry a message to them right now \u2014 pass one as message_user's `channel`. Empty means only their Lemma inbox.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [
@@ -1447,8 +1454,22 @@
   {
     "tool_name": "message_user",
     "toolset": "MESSAGING",
-    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. To get an answer: send every message you need, give each a\n`background_instruction`, `snooze` once for as long as a person realistically\ntakes, then `check_messages`.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
+    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. Send every message you need, give each a `background_instruction`,\nthen **finish your turn and stop**. Do not sleep on it and do not poll: you\nget a fresh turn in this conversation as soon as the last person answers,\nand you read what they said with `check_messages` then.\n\nSay what you have done and who you are waiting on before you stop. That is\nthe last thing whoever asked you sees until the answers land.\n\nLeave `channel` unset unless you have a reason to pick one \u2014 the default is\nalready the app they last spoke to you on. When you do name one it is\nhonoured or refused, never swapped, so read `reachable_on` from\n`list_pod_members` before choosing.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
     "input_schema": {
+      "$defs": {
+        "MessageChannel": {
+          "description": "Where a message goes, when the agent has a reason to say.\n\nChannels, not surface ids: you think \"reach her on WhatsApp\", not \"send\nthrough surface 3f2a\u2026\". Every mail provider is one `email`, because which\none carries it is a deployment detail.",
+          "enum": [
+            "email",
+            "slack",
+            "teams",
+            "telegram",
+            "whatsapp"
+          ],
+          "title": "MessageChannel",
+          "type": "string"
+        }
+      },
       "properties": {
         "to": {
           "description": "Pod member id, user id, or email address.",
@@ -1482,6 +1503,18 @@
           ],
           "default": null,
           "description": "Inbox label and email subject. Defaults to the message."
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageChannel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where to send it. Omit unless you have a reason to choose \u2014 the default reaches them where they last spoke to you. Name one and it is that channel or nothing: it is never quietly swapped for another. Check `reachable_on` from list_pod_members first, because a chat app they have never messaged this agent on cannot be used."
         },
         "expects_response": {
           "default": true,
@@ -3162,7 +3195,7 @@
   {
     "tool_name": "snooze",
     "toolset": "SNOOZE",
-    "description": "Suspend this turn and pick it up later, where you left off.\n\nUse it when the work has a real gap \u2014 a build to check back on, something\nthat needs time to settle. You wake in the same conversation with the same\nhistory.\n\nThree things that bite:\n- **Your sandbox does not survive.** `/workspace`, background processes, and\n  your shell cwd are gone on wake. Write anything you need to the pod first.\n- **Waking proves nothing happened.** `TIMER` means your time elapsed and\n  nothing more \u2014 check the thing you were waiting for.\n- **Every wake replays the whole conversation**, so one longer sleep beats a\n  poll loop.\n\nDon't use it to wait on the person you are *talking to* \u2014 ask with\n`ask_user`, or end your turn; their reply starts a fresh run either way.\nWaiting on somebody you reached with `message_user` is the exception, and\nthe one case this is for: nothing resumes you there, so a single sleep sized\nto how long a person actually takes is the only way to be around when they\nanswer.",
+    "description": "Suspend this turn and pick it up later, where you left off.\n\nUse it when the work has a real gap \u2014 a build to check back on, something\nthat needs time to settle. You wake in the same conversation with the same\nhistory.\n\nThree things that bite:\n- **Your sandbox does not survive.** `/workspace`, background processes, and\n  your shell cwd are gone on wake. Write anything you need to the pod first.\n- **Waking proves nothing happened.** `TIMER` means your time elapsed and\n  nothing more \u2014 check the thing you were waiting for.\n- **Every wake replays the whole conversation**, so one longer sleep beats a\n  poll loop.\n\nDon't use it to wait on the person you are *talking to* \u2014 ask with\n`ask_user`, or end your turn; their reply starts a fresh run either way.\n\nSize the sleep from whatever you are actually waiting on. Don't use it to\nwait for a person, including one you reached with `message_user` \u2014 end your\nturn instead, and you get a fresh one when they answer.",
     "input_schema": {
       "properties": {
         "reason": {
@@ -3230,6 +3263,7 @@
             {
               "enum": [
                 "TIMER",
+                "ANSWERED",
                 "CANCELLED"
               ],
               "type": "string"
@@ -3239,7 +3273,7 @@
             }
           ],
           "default": null,
-          "description": "TIMER: your time elapsed \u2014 this says nothing about whether what you were waiting for actually happened, so check. CANCELLED: the wait was ended early."
+          "description": "TIMER: your time elapsed \u2014 this says nothing about whether what you were waiting for actually happened, so check. ANSWERED: everyone you reached with message_user has replied, and you woke early because of it. CANCELLED: the wait was ended early."
         },
         "slept_seconds": {
           "anyOf": [

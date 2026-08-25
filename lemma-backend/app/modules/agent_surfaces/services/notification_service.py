@@ -141,6 +141,9 @@ class NotificationService:
         # The surface this run is answering on, when it is on one. Lets the
         # agent reach out from the same bot the person is already talking to.
         origin_surface_id: UUID | None = None,
+        # A channel the agent chose on purpose. Honoured or refused, never
+        # swapped: see ``notification_channels._resolve_on_channel``.
+        channel: str | None = None,
         actor_user_id: UUID | None = None,
         actor_agent_id: UUID | None = None,
         agent_name: str | None = None,
@@ -214,6 +217,7 @@ class NotificationService:
             agent_name=agent_name,
             actor_display_name=actor_display_name,
             origin_surface_id=origin_surface_id,
+            channel=channel,
         )
 
     # ---------------------------------------------------------------- delivery
@@ -225,6 +229,7 @@ class NotificationService:
         agent_name: str | None = None,
         actor_display_name: str | None = None,
         origin_surface_id: UUID | None = None,
+        channel: str | None = None,
     ) -> NotificationEntity:
         channels, fallback_reason = await self.resolve_channels(
             pod_id=notification.pod_id,
@@ -232,6 +237,7 @@ class NotificationService:
             actor_agent_id=notification.actor_agent_id,
             origin_surface_id=origin_surface_id,
             agent_name=agent_name,
+            channel=channel,
         )
         if not channels:
             notification.mark_undeliverable(fallback_reason)
@@ -338,6 +344,7 @@ class NotificationService:
         actor_agent_id: UUID | None = None,
         origin_surface_id: UUID | None = None,
         agent_name: str | None = None,
+        channel: str | None = None,
     ) -> tuple[list[DeliveryChannel], str]:
         """Every way *this agent* can reach this person, best first.
 
@@ -350,6 +357,19 @@ class NotificationService:
             actor_agent_id=actor_agent_id,
             origin_surface_id=origin_surface_id,
             agent_name=agent_name,
+            channel=channel,
+        )
+
+    async def reachable_channels(
+        self,
+        *,
+        pod_id: UUID,
+        recipients: dict[UUID, str | None],
+        actor_agent_id: UUID | None = None,
+    ) -> dict[UUID, list[str]]:
+        """``{user_id: channels}`` — what an agent can choose between, per person."""
+        return await self.channels.reachable_channels(
+            pod_id=pod_id, recipients=recipients, actor_agent_id=actor_agent_id
         )
 
     # --------------------------------------------------------------- lifecycle
@@ -363,7 +383,13 @@ class NotificationService:
         summary: str,
         data: dict | None = None,
     ) -> NotificationEntity:
-        """Record an answer. The domain decides whether it is legal."""
+        """Record an answer. The domain decides whether it is legal.
+
+        Recording only. Bringing the asking conversation back is the caller's
+        job, through ``composition.agent_notifications`` — this module may not
+        reach into the agent module, and both respond paths (the tool and the
+        app endpoint) already do it. A third one must too.
+        """
         notification = await self._owned_by(
             pod_id=pod_id,
             notification_id=notification_id,
