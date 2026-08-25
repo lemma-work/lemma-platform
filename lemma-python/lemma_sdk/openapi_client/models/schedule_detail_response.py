@@ -50,10 +50,12 @@ class ScheduleDetailResponse:
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
+        instruction (None | str | Unset):
         last_error (None | str | Unset):
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
         last_run_id (None | str | Unset):
+        targets_pod_default (bool | Unset):  Default: False.
         workflow_name (None | str | Unset):
     """
 
@@ -78,10 +80,12 @@ class ScheduleDetailResponse:
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
+    instruction: None | str | Unset = UNSET
     last_error: None | str | Unset = UNSET
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
+    targets_pod_default: bool | Unset = False
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -163,6 +167,12 @@ class ScheduleDetailResponse:
 
         consecutive_failures = self.consecutive_failures
 
+        instruction: None | str | Unset
+        if isinstance(self.instruction, Unset):
+            instruction = UNSET
+        else:
+            instruction = self.instruction
+
         last_error: None | str | Unset
         if isinstance(self.last_error, Unset):
             last_error = UNSET
@@ -190,6 +200,8 @@ class ScheduleDetailResponse:
             last_run_id = UNSET
         else:
             last_run_id = self.last_run_id
+
+        targets_pod_default = self.targets_pod_default
 
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
@@ -227,6 +239,8 @@ class ScheduleDetailResponse:
             field_dict["allowed_actions"] = allowed_actions
         if consecutive_failures is not UNSET:
             field_dict["consecutive_failures"] = consecutive_failures
+        if instruction is not UNSET:
+            field_dict["instruction"] = instruction
         if last_error is not UNSET:
             field_dict["last_error"] = last_error
         if last_fire_status is not UNSET:
@@ -235,6 +249,8 @@ class ScheduleDetailResponse:
             field_dict["last_fired_at"] = last_fired_at
         if last_run_id is not UNSET:
             field_dict["last_run_id"] = last_run_id
+        if targets_pod_default is not UNSET:
+            field_dict["targets_pod_default"] = targets_pod_default
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -388,6 +404,15 @@ class ScheduleDetailResponse:
 
         consecutive_failures = d.pop("consecutive_failures", UNSET)
 
+        def _parse_instruction(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        instruction = _parse_instruction(d.pop("instruction", UNSET))
+
         def _parse_last_error(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -440,6 +465,8 @@ class ScheduleDetailResponse:
 
         last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
 
+        targets_pod_default = d.pop("targets_pod_default", UNSET)
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -471,10 +498,12 @@ class ScheduleDetailResponse:
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
+            instruction=instruction,
             last_error=last_error,
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
+            targets_pod_default=targets_pod_default,
             workflow_name=workflow_name,
         )
 

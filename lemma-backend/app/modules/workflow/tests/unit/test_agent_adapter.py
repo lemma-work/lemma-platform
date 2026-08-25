@@ -31,7 +31,12 @@ async def test_reserved_id_returns_existing_conversation_without_side_effects(
 ):
     adapter = AgentControlAdapter(Mock(session=Mock()))
     pod_id = uuid4()
-    agent = SimpleNamespace(id=uuid4(), pod_id=pod_id, name="triage")
+    # `agent_runtime` is read to hand to the shared start path, before the
+    # reserved-id branch can return. A real `Agent` always carries it; the fake
+    # has to as well, or this asserts against a shape that never occurs.
+    agent = SimpleNamespace(
+        id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
+    )
     adapter.agent_repo = Mock(
         get=AsyncMock(return_value=agent),
         get_by_pod_and_name=AsyncMock(return_value=agent),
@@ -152,3 +157,89 @@ async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
     status = await adapter.get_conversation_status(uuid4())
 
     assert status["error"] == "Agent conversation FAILED"
+
+
+@pytest.mark.anyio
+async def test_pod_default_run_creates_a_conversation_with_no_agent(monkeypatch):
+    """The whole mechanism, in one assertion: `agent_id` is null.
+
+    A conversation with no agent *is* the pod's default assistant -- the runner
+    synthesises Lem from exactly that, the prompt picks its base prompt off
+    `is_pod_assistant`, which is the same null check. So starting Lem headlessly
+    needs no new execution path, only a conversation that names nobody.
+    """
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    pod_id = uuid4()
+    adapter.agent_repo = Mock(get=AsyncMock(), get_by_pod_and_name=AsyncMock())
+    created = SimpleNamespace(id=uuid4())
+    adapter.conversation_repo = Mock(
+        create_conversation=AsyncMock(return_value=created),
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        append_message=AsyncMock(),
+        collect_events=Mock(),
+    )
+    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
+    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+
+    result = await adapter.run_pod_default_agent(
+        input_data={"payload": {}},
+        pod_id=pod_id,
+        user_id=uuid4(),
+        source="SCHEDULE",
+        instructions="Post the overnight summary.",
+    )
+
+    assert result == created.id
+    # No lookup happened, because there is nothing to look up.
+    adapter.agent_repo.get.assert_not_awaited()
+    adapter.agent_repo.get_by_pod_and_name.assert_not_awaited()
+    conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
+    assert conversation.agent_id is None
+    assert conversation.is_pod_assistant
+    # The trigger's words reach the run as conversation instructions, which the
+    # prompt appends after the agent instruction Lem does not have.
+    assert conversation.instructions == "Post the overnight summary."
+    assert (
+        adapter.conversation_repo.create_agent_run.await_args.kwargs["agent_id"] is None
+    )
+
+
+@pytest.mark.anyio
+async def test_named_agent_run_carries_the_schedule_instruction_too(monkeypatch):
+    """The instruction is not a Lem special case.
+
+    A named agent is its own standing instruction, so a schedule's sentence adds
+    to it rather than replacing it -- `build_agent_instructions` layers agent
+    instruction then conversation instructions, in that order.
+    """
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    pod_id = uuid4()
+    agent = SimpleNamespace(
+        id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
+    )
+    adapter.agent_repo = Mock(
+        get=AsyncMock(return_value=agent),
+        get_by_pod_and_name=AsyncMock(return_value=agent),
+    )
+    created = SimpleNamespace(id=uuid4())
+    adapter.conversation_repo = Mock(
+        create_conversation=AsyncMock(return_value=created),
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        append_message=AsyncMock(),
+        collect_events=Mock(),
+    )
+    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
+    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+
+    await adapter.run_agent_by_id(
+        agent_id=agent.id,
+        input_data={"payload": {}},
+        pod_id=pod_id,
+        user_id=uuid4(),
+        source="SCHEDULE",
+        instructions="Only the tickets raised overnight.",
+    )
+
+    conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
+    assert conversation.agent_id == agent.id
+    assert conversation.instructions == "Only the tickets raised overnight."

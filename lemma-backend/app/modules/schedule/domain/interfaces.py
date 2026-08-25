@@ -104,6 +104,7 @@ class ScheduleRepository(ABC):
         user_id: Optional[UUID] = None,
         agent_id: Optional[UUID] = None,
         workflow_id: Optional[UUID] = None,
+        targets_pod_default: bool | None = None,
         name: str | None = None,
         ctx: Context | None = None,
         limit: int = 100,

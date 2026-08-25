@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
@@ -73,6 +74,41 @@ def _accept_inactive_one_time_fire(
     return configured == occurred_at and schedule_event_id == expected_event_id
 
 
+def _targets_pod_default(schedule) -> bool:
+    """Whether this schedule wakes the assistant rather than a named agent.
+
+    Both are agent targets; only one of them has a row. Read off ``agent_id``
+    being null rather than the flag alone, because that is the same question
+    the dispatch below has to answer, and two ways of asking it could disagree.
+    """
+    return schedule.agent_id is None
+
+
+def _agent_target_ref(schedule, *, pod_id: UUID) -> ResourceRef:
+    """What ``agent.execute`` is asked about for this target.
+
+    The default assistant has no agent resource to scope to — no row, so no
+    grant, no visibility and no sharing can be recorded against it. Asking
+    about a made-up id would be a check on a resource that does not exist,
+    which is not a check; the pod is the honest question, and it is the same
+    one every surface already answers before letting the assistant reply.
+    """
+    if _targets_pod_default(schedule):
+        return ResourceRef.pod(pod_id)
+    return ResourceRef(
+        resource_type=ResourceType.AGENT,
+        resource_id=schedule.agent_id,
+        pod_id=pod_id,
+    )
+
+
+def _agent_target_label(schedule) -> str:
+    """How this target names itself in a log line."""
+    if _targets_pod_default(schedule):
+        return DEFAULT_POD_AGENT_NAME
+    return str(schedule.agent_id)
+
+
 class ScheduleStartService:
     """Handles schedule.fired events for workflows."""
 
@@ -85,6 +121,40 @@ class ScheduleStartService:
             user_id=user_id,
             pod_id=pod_id,
         )
+
+    async def _start_agent_for_schedule(
+        self,
+        schedule,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        trigger: TriggerContext,
+        target_run_id: str,
+    ) -> UUID:
+        """Start the conversation this firing hands over to.
+
+        The two arms differ only in how the answering agent is named. The
+        default assistant is named by not naming one: the adapter creates a
+        conversation with a null ``agent_id``, which is what the runner already
+        synthesises it from. ``run_agent_by_id`` cannot serve it, because the
+        row it looks up does not exist.
+
+        The schedule's instruction rides along either way. A named agent's
+        standing instruction says what it is for and this says what *this run*
+        is for; the assistant has only the second.
+        """
+        adapter = self._engine.agent_adapter
+        common = dict(
+            input_data=trigger.to_context_value(),
+            pod_id=pod_id,
+            user_id=user_id,
+            conversation_id=UUID(target_run_id),
+            source="SCHEDULE",
+            instructions=schedule.instruction,
+        )
+        if _targets_pod_default(schedule):
+            return await adapter.run_pod_default_agent(**common)
+        return await adapter.run_agent_by_id(agent_id=schedule.agent_id, **common)
 
     async def handle_schedule_fired(
         self,
@@ -109,9 +179,7 @@ class ScheduleStartService:
         # 2. A schedule targeting a workflow or agent.
         schedule_repo = ScheduleRepository(self._uow)
         schedule = await schedule_repo.get(UUID(schedule_id))
-        if schedule is None or (
-            schedule.workflow_id is None and schedule.agent_id is None
-        ):
+        if schedule is None or not schedule.has_target:
             logger.debug(
                 "workflow.schedule_start_service.no_target_schedule.observed",
                 schedule_id=schedule_id,
@@ -187,7 +255,7 @@ class ScheduleStartService:
                 raise
             return
 
-        if schedule.agent_id is not None:
+        if schedule.agent_id is not None or schedule.targets_pod_default:
             try:
                 pod_id = _schedule_pod_id(schedule)
                 ctx = await self._build_user_context(
@@ -196,21 +264,16 @@ class ScheduleStartService:
                 )
                 await ctx.require(
                     Permissions.AGENT_EXECUTE,
-                    ResourceRef(
-                        resource_type=ResourceType.AGENT,
-                        resource_id=schedule.agent_id,
-                        pod_id=pod_id,
-                    ),
+                    _agent_target_ref(schedule, pod_id=pod_id),
                 )
                 ctx_token = set_current_context(ctx)
                 try:
-                    conversation_id = await self._engine.agent_adapter.run_agent_by_id(
-                        agent_id=schedule.agent_id,
-                        input_data=trigger.to_context_value(),
+                    conversation_id = await self._start_agent_for_schedule(
+                        schedule,
                         pod_id=pod_id,
                         user_id=execution_user_id,
-                        conversation_id=UUID(target_run_id),
-                        source="SCHEDULE",
+                        trigger=trigger,
+                        target_run_id=target_run_id,
                     )
                 finally:
                     reset_current_context(ctx_token)
@@ -224,7 +287,7 @@ class ScheduleStartService:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
                 logger.debug(
                     "workflow.schedule_start_service.start_agent_schedule.propagated",
-                    agent_id=str(schedule.agent_id),
+                    agent_id=_agent_target_label(schedule),
                     schedule_id=schedule_id,
                     exc_info=True,
                 )

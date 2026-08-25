@@ -143,6 +143,7 @@ class BuildingSteps:
         config: JSON | None = None,
         agent: str | None = None,
         workflow: str | None = None,
+        instruction: str | None = None,
     ) -> JSON:
         body: JSON = {
             "name": named or a_name_for("schedule"),
@@ -153,6 +154,8 @@ class BuildingSteps:
             body["agent_name"] = agent
         if workflow:
             body["workflow_name"] = workflow
+        if instruction:
+            body["instruction"] = instruction
         return await self.api.post(
             f"/pods/{in_pod['id']}/schedules",
             what=f"{self.label} creating a {kind} schedule",
@@ -174,16 +177,27 @@ class BuildingSteps:
         )
 
     async def is_refused_creating_a_schedule(
-        self, *, in_pod: JSON, kind: str = "TIME", config: JSON | None = None
+        self,
+        *,
+        in_pod: JSON,
+        kind: str = "TIME",
+        config: JSON | None = None,
+        agent: str | None = None,
+        instruction: str | None = None,
     ) -> int:
+        body: JSON = {
+            "name": f"bad_{uuid4().hex[:8]}",
+            "schedule_type": kind,
+            "config": config if config is not None else {},
+        }
+        if agent:
+            body["agent_name"] = agent
+        if instruction:
+            body["instruction"] = instruction
         response = await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/schedules",
-            json={
-                "name": f"bad_{uuid4().hex[:8]}",
-                "schedule_type": kind,
-                "config": config if config is not None else {},
-            },
+            json=body,
         )
         if response.status_code < 400:
             raise AssertionError(

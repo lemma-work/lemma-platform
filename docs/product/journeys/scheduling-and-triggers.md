@@ -167,6 +167,36 @@ about it when it eventually cannot.
 
 **Contracts:** `schedule.create`, `workflow.run.create`, `agent.conversation.create`, `agent.surface.send`
 
+### PS-SCHED-031 — A schedule says what the work is, not just when it happens
+**Status:** covered
+
+- When a person creates a schedule, the system shall let them say what the
+  target should do when it fires.
+- When a schedule with such an instruction fires at an agent, the system shall
+  give the agent those words alongside whatever triggered it, without replacing
+  what the agent is already for.
+- The system shall keep that instruction with the schedule, so a person reading
+  a schedule back can see what it asks for.
+- Saying what the work is shall be distinct from saying when to skip it: a
+  schedule may carry both, and neither shall stand in for the other.
+
+**Contracts:** `schedule.create`, `schedule.update`, `schedule.get`
+
+### PS-SCHED-032 — The pod's own assistant can be put on a schedule
+**Status:** covered
+
+- The system shall let a schedule target the assistant that answers for the pod
+  by default, the same as any agent a person has made.
+- When such a schedule fires, the system shall start a conversation answered by
+  that assistant, carrying the schedule's instruction.
+- If a person creates such a schedule without saying what the assistant should
+  do, then the system shall refuse it at creation — the assistant has no
+  standing purpose of its own to fall back on.
+- A schedule shall wake exactly one thing: naming the default assistant shall
+  replace any other target, not sit beside it.
+
+**Contracts:** `schedule.create`, `schedule.get`, `agent.conversation.create`
+
 ---
 
 ## Not covered here

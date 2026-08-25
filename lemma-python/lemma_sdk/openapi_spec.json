@@ -4956,6 +4956,7 @@
                 "type": "null"
               }
             ],
+            "description": "Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the pod's default assistant, which has no name of its own.",
             "title": "Agent Name"
           },
           "config": {
@@ -4999,6 +5000,19 @@
             ],
             "description": "Optional schema for the schedule-level filter output. Filters belong to the schedule, not the workflow start.",
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the target should do when this fires, in your own words. Reaches an agent as the run's conversation instructions, layered after the agent's own. Required when targeting the default assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides whether to fire.",
+            "title": "Instruction"
           },
           "name": {
             "anyOf": [
@@ -12047,6 +12061,17 @@
             "title": "Id",
             "type": "string"
           },
+          "instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
+          },
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
@@ -12130,6 +12155,11 @@
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
+          },
+          "targets_pod_default": {
+            "default": false,
+            "title": "Targets Pod Default",
+            "type": "boolean"
           },
           "updated_at": {
             "format": "date-time",
@@ -14773,6 +14803,18 @@
               }
             ],
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
           },
           "is_active": {
             "anyOf": [

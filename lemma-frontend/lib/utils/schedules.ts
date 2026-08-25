@@ -1,3 +1,4 @@
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 import type { Schedule } from '@/lib/types';
 
 export type TimeCadence = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
@@ -103,6 +104,10 @@ export function getScheduleTargetKind(schedule: Schedule): ScheduleTargetKind {
 }
 
 export function getScheduleTargetName(schedule: Schedule): string {
+    // `agent_name` on a default-assistant trigger is the wire selector, which
+    // is not a thing to show anyone. Every other target already carries the
+    // name it is known by.
+    if (schedule.targets_pod_default) return DEFAULT_RESPONDER_NAME;
     return schedule.workflow_name || schedule.agent_name || schedule.workflow_id || schedule.agent_id || 'Unknown target';
 }
 

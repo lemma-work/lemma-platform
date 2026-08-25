@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 155 |
+| `covered` | 157 |
 | `gap` | 2 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **161** |
+| **total** | **163** |
 
-Scenario tests declaring a promise: 368.
+Scenario tests declaring a promise: 375.
 
 ## Contract coverage
 
@@ -182,7 +182,9 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
-| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_deleting_the_target_takes_the_schedule` |
+| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_deleting_the_target_takes_the_schedule`, `test_a_firing_starts_a_conversation_with_the_assistant` |
+| `PS-SCHED-031` A schedule says what the work is, not just when it happens | `covered` | `test_a_schedule_keeps_its_instruction`, `test_the_instruction_and_the_condition_are_both_kept`, `test_the_instruction_can_be_edited` |
+| `PS-SCHED-032` The pod's own assistant can be put on a schedule | `covered` | `test_the_default_assistant_is_a_schedulable_target`, `test_the_assistant_needs_an_instruction`, `test_retargeting_to_the_assistant_replaces_the_agent`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 
 ## [Sharing and permissions](journeys/sharing-and-permissions.md)
 

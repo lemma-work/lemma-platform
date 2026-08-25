@@ -29,6 +29,7 @@ class UpdateScheduleRequest:
         config (None | Unset | UpdateScheduleRequestConfigType0):
         filter_instruction (None | str | Unset):
         filter_output_schema (None | Unset | UpdateScheduleRequestFilterOutputSchemaType0):
+        instruction (None | str | Unset):
         is_active (bool | None | Unset):
         name (None | str | Unset):
         visibility (None | str | Unset):
@@ -41,6 +42,7 @@ class UpdateScheduleRequest:
     filter_output_schema: (
         None | Unset | UpdateScheduleRequestFilterOutputSchemaType0
     ) = UNSET
+    instruction: None | str | Unset = UNSET
     is_active: bool | None | Unset = UNSET
     name: None | str | Unset = UNSET
     visibility: None | str | Unset = UNSET
@@ -85,6 +87,12 @@ class UpdateScheduleRequest:
         else:
             filter_output_schema = self.filter_output_schema
 
+        instruction: None | str | Unset
+        if isinstance(self.instruction, Unset):
+            instruction = UNSET
+        else:
+            instruction = self.instruction
+
         is_active: bool | None | Unset
         if isinstance(self.is_active, Unset):
             is_active = UNSET
@@ -120,6 +128,8 @@ class UpdateScheduleRequest:
             field_dict["filter_instruction"] = filter_instruction
         if filter_output_schema is not UNSET:
             field_dict["filter_output_schema"] = filter_output_schema
+        if instruction is not UNSET:
+            field_dict["instruction"] = instruction
         if is_active is not UNSET:
             field_dict["is_active"] = is_active
         if name is not UNSET:
@@ -206,6 +216,15 @@ class UpdateScheduleRequest:
             d.pop("filter_output_schema", UNSET)
         )
 
+        def _parse_instruction(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        instruction = _parse_instruction(d.pop("instruction", UNSET))
+
         def _parse_is_active(data: object) -> bool | None | Unset:
             if data is None:
                 return data
@@ -247,6 +266,7 @@ class UpdateScheduleRequest:
             config=config,
             filter_instruction=filter_instruction,
             filter_output_schema=filter_output_schema,
+            instruction=instruction,
             is_active=is_active,
             name=name,
             visibility=visibility,

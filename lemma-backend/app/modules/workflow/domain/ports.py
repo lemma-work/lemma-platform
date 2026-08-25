@@ -142,8 +142,34 @@ class AgentPort(ABC):
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: Dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> UUID:
-        """Starts an agent conversation execution and returns the conversation ID."""
+        """Starts an agent conversation execution and returns the conversation ID.
+
+        ``instructions`` is what this particular run is for, as opposed to what
+        the agent is for. It becomes the conversation's instructions, which the
+        prompt layers after the agent's own.
+        """
+        ...
+
+    @abstractmethod
+    async def run_pod_default_agent(
+        self,
+        input_data: Dict[str, Any],
+        pod_id: UUID,
+        user_id: UUID,
+        conversation_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+        source: str = "WORKFLOW_RUN",
+        conversation_metadata: Dict[str, Any] | None = None,
+        instructions: str | None = None,
+    ) -> UUID:
+        """Starts a run answered by the pod's default assistant.
+
+        Separate from ``run_agent`` because the default assistant has no name
+        to look up and no row to find: it is the agent a conversation gets when
+        it names none.
+        """
         ...
 
     @abstractmethod

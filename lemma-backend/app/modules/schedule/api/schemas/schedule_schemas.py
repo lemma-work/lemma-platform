@@ -6,10 +6,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.modules.schedule.config import schedule_settings
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
     ScheduleRunStatus,
     ScheduleFireStatus,
+    INSTRUCTION_REQUIRED,
     ScheduleType,
+    is_pod_default_agent_target,
     normalize_datastore_schedule_config,
 )
 
@@ -24,9 +27,27 @@ class CreateScheduleRequest(BaseModel):
         description="Stable pod-scoped schedule name used for import/export upserts.",
     )
     schedule_type: ScheduleType
-    agent_name: str | None = None
+    agent_name: str | None = Field(
+        default=None,
+        description=(
+            f"Pod agent to wake, by name. Pass '{POD_DEFAULT_AGENT_SELECTOR}' "
+            "(or 'pod_default') to wake the pod's default assistant, which has "
+            "no name of its own."
+        ),
+    )
     workflow_name: str | None = None
     config: dict = Field(default_factory=dict)
+    instruction: str | None = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "What the target should do when this fires, in your own words. "
+            "Reaches an agent as the run's conversation instructions, layered "
+            "after the agent's own. Required when targeting the default "
+            "assistant, which has no standing instruction to fall back on. "
+            "Distinct from filter_instruction, which decides whether to fire."
+        ),
+    )
     account_id: UUID | None = Field(
         default=None,
         description=(
@@ -70,6 +91,16 @@ class CreateScheduleRequest(BaseModel):
             and not self.connector_trigger_id
         ):
             raise ValueError("Agent webhook schedules require connector_trigger_id")
+        # A named agent's identity is its own instruction, so a schedule may add
+        # to it or say nothing. The default assistant's instruction is the empty
+        # string — it is whoever the conversation needs it to be — so a schedule
+        # that does not say what to do is one that fires an assistant at a JSON
+        # payload with no job. Refuse at creation rather than at 9am.
+        if (
+            is_pod_default_agent_target(self.agent_name)
+            and not (self.instruction or "").strip()
+        ):
+            raise ValueError(INSTRUCTION_REQUIRED)
         if self.workflow_name and self.connector_trigger_id:
             raise ValueError(
                 "connector_trigger_id is only valid for agent webhook schedules; "
@@ -87,6 +118,7 @@ class UpdateScheduleRequest(BaseModel):
     config: dict | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
+    instruction: str | None = Field(default=None, max_length=8000)
     filter_instruction: str | None = None
     filter_output_schema: dict | None = None
     is_active: bool | None = None
@@ -96,6 +128,15 @@ class UpdateScheduleRequest(BaseModel):
     def allow_at_most_one_target_name(self) -> "UpdateScheduleRequest":
         if self.agent_name and self.workflow_name:
             raise ValueError("Only one of agent_name or workflow_name can be provided")
+        # Retargeting onto the default assistant has the same requirement as
+        # creating there. Retargeting *away* is unconstrained, and an update
+        # that leaves the target alone is checked by the service, which is the
+        # only side that knows what the schedule already points at.
+        if (
+            is_pod_default_agent_target(self.agent_name)
+            and not (self.instruction or "").strip()
+        ):
+            raise ValueError(INSTRUCTION_REQUIRED)
         # schedule_type is unknown here; the service enforces the DATASTORE
         # rules. Normalize eagerly when the config is recognizably datastore
         # so users get a field-scoped 422 instead of a service-level 400.
@@ -114,9 +155,13 @@ class ScheduleResponse(BaseModel):
     schedule_type: ScheduleType
     agent_id: UUID | None
     workflow_id: UUID | None
+    targets_pod_default: bool = False
+    # `POD_DEFAULT` when the target is the default assistant, which has no row
+    # to read a name off — so a client can render the target uniformly.
     agent_name: str | None = None
     workflow_name: str | None = None
     config: dict
+    instruction: str | None = None
     account_id: UUID | None
     connector_trigger_id: str | None
     filter_instruction: str | None

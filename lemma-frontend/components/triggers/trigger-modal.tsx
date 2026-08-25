@@ -43,7 +43,8 @@ import {
     type MatchCondition,
     type TimeCadence,
 } from '@/lib/utils/schedules';
-import { formatAgentName } from '@/lib/utils/agents';
+import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 import { ScheduleType, type Account, type Column, type CreateScheduleRequest, type Schedule, type Workflow } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { StepLoader } from '@/components/brand/loader';
@@ -155,7 +156,11 @@ export function TriggerModal({
     canDelete?: boolean;
 }) {
     const isEditing = Boolean(schedule);
-    const targetLabel = formatAgentName(target.name);
+    // `POD_DEFAULT` is the wire selector, not a name — humanizing it would put
+    // "Pod Default" in front of a reader who has only ever seen Lem.
+    const targetLabel = target.name === POD_DEFAULT_AGENT_SELECTOR
+        ? DEFAULT_RESPONDER_NAME
+        : formatAgentName(target.name);
 
     const { data: pod } = usePod(podId);
     const { data: tablesData, isLoading: loadingTables } = useTables(open ? podId : undefined);
@@ -181,6 +186,7 @@ export function TriggerModal({
     const [triggerId, setTriggerId] = useState('');
     const [accountId, setAccountId] = useState('');
     const [condition, setCondition] = useState('');
+    const [instruction, setInstruction] = useState('');
     const [conditions, setConditions] = useState<MatchCondition[]>([]);
     // Operators the builder cannot draw (`in`, `written`, `changed: false`) are
     // kept on the trigger and named, so editing one authored in a bundle or on
@@ -215,6 +221,7 @@ export function TriggerModal({
             setTriggerId('');
             setAccountId('');
             setCondition('');
+            setInstruction('');
             setConditions([]);
             setUnsupportedConditions([]);
             setVisibility('POD');
@@ -224,6 +231,7 @@ export function TriggerModal({
         setStep('details');
         setKind(schedule.schedule_type as TriggerKind);
         setCondition(schedule.filter_instruction || '');
+        setInstruction(schedule.instruction || '');
         setVisibility(schedule.visibility || 'POD');
 
         if (schedule.schedule_type === ScheduleType.TIME) {
@@ -331,7 +339,14 @@ export function TriggerModal({
         (entry) => !availableConditionOperators(dataOperations).includes(entry.operator),
     );
 
-    const detailsReady = kind === ScheduleType.TIME
+    // The assistant answers as the pod and carries no standing instruction of
+    // its own, so "what should it do" is the one field it cannot go without —
+    // the API refuses the schedule otherwise. A named agent already is its
+    // instruction, so there this only adds to it.
+    const instructionRequired = target.kind === 'agent'
+        && target.name === POD_DEFAULT_AGENT_SELECTOR;
+
+    const timingReady = kind === ScheduleType.TIME
         ? Boolean(cron.trim())
         : kind === ScheduleType.DATASTORE
             ? Boolean(selectedTable) && dataOperations.length > 0
@@ -341,6 +356,7 @@ export function TriggerModal({
                 : target.kind === 'agent'
                     ? Boolean(connectorId && selectedTriggerId && selectedAccountId)
                     : Boolean(!workflowEventBlocked && selectedAccountId);
+    const detailsReady = timingReady && (!instructionRequired || Boolean(instruction.trim()));
 
     const buildConfig = (): Record<string, unknown> | null => {
         if (kind === ScheduleType.TIME) {
@@ -377,6 +393,7 @@ export function TriggerModal({
                         // Empty string, not null: the API drops nulls, so a null
                         // here would silently leave a removed condition in place.
                         filter_instruction: condition.trim(),
+                        instruction: instruction.trim(),
                         // Only when it actually changed, so a trigger saved with
                         // a visibility this modal does not offer keeps it — and
                         // never for a data trigger, whose choice is not shown
@@ -397,6 +414,7 @@ export function TriggerModal({
                         ? selectedTriggerId
                         : null,
                     config: buildConfig() as Record<string, unknown>,
+                    instruction: instruction.trim() || null,
                     filter_instruction: condition.trim() || null,
                     filter_output_schema: null,
                     // A data trigger is the pod's, always — see `RunsAsField`.
@@ -582,6 +600,34 @@ export function TriggerModal({
                                         workflowEvent={workflowEventStart}
                                         workflowEventBlocked={workflowEventBlocked}
                                     />
+                                ) : null}
+
+                                {/* What the target should do — above the
+                                    condition, because it is the answer to the
+                                    question the modal opened with. A workflow
+                                    is its own set of steps and has nowhere to
+                                    put a sentence, so it is asked only of
+                                    agents. Required for the assistant, which
+                                    has no standing instruction to fall back on;
+                                    optional for a named agent, which is already
+                                    its own. */}
+                                {target.kind === 'agent' ? (
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs">
+                                            What should {targetLabel} do
+                                            {instructionRequired ? null : (
+                                                <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
+                                            )}
+                                        </Label>
+                                        <Textarea
+                                            value={instruction}
+                                            onChange={(event) => setInstruction(event.target.value)}
+                                            placeholder={instructionRequired
+                                                ? 'e.g. summarise yesterday’s open tickets and post the list to #support'
+                                                : `e.g. focus on what changed since ${targetLabel} last ran`}
+                                            className="min-h-16 resize-y"
+                                        />
+                                    </div>
                                 ) : null}
 
                                 {/* A data trigger can answer "only run when" from

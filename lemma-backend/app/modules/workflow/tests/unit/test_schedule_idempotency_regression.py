@@ -20,6 +20,35 @@ from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 
 
+def _schedule(**overrides) -> SimpleNamespace:
+    """A stand-in schedule row, with every field the dispatcher reads.
+
+    One factory rather than six inline namespaces: the dispatcher's view of a
+    schedule grows, and six copies means six places to miss. ``has_target`` is
+    a property on the real entity and a plain attribute here, so it is derived
+    from the same three columns the entity derives it from.
+    """
+    fields = {
+        "id": uuid4(),
+        "pod_id": uuid4(),
+        "user_id": uuid4(),
+        "workflow_id": None,
+        "agent_id": None,
+        "targets_pod_default": False,
+        "instruction": None,
+        "is_active": True,
+        "schedule_type": SimpleNamespace(value="TIME"),
+        "config": {},
+        **overrides,
+    }
+    fields["has_target"] = (
+        fields["agent_id"] is not None
+        or fields["workflow_id"] is not None
+        or fields["targets_pod_default"]
+    )
+    return SimpleNamespace(**fields)
+
+
 def _engine_with_mocks() -> WorkflowEngine:
     uow = Mock()
     uow.commit = AsyncMock()
@@ -128,7 +157,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     engine = _engine_with_mocks()
     engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=uuid4())
 
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -173,7 +202,7 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
 ):
     engine = _engine_with_mocks()
     scheduled_at = datetime(2026, 7, 10, tzinfo=timezone.utc)
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -251,7 +280,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
     engine = _engine_with_mocks()
     conversation_id = uuid4()
     engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=conversation_id)
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -309,7 +338,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
 @pytest.mark.anyio
 async def test_workflow_schedule_run_uses_event_user(monkeypatch):
     engine = _engine_with_mocks()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -366,7 +395,7 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
 ):
     engine = _engine_with_mocks()
     engine.agent_adapter.run_agent_by_id = AsyncMock()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -453,7 +482,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
     monkeypatch,
 ) -> None:
     engine = _engine_with_mocks()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         user_id=uuid4(),
         pod_id=uuid4(),
@@ -559,3 +588,125 @@ async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -
             job_queue,
         )
         assert job_queue.enqueue.await_args.kwargs["user_id"] == expected
+
+
+@pytest.mark.anyio
+async def test_pod_default_schedule_starts_the_assistant_with_its_instruction(
+    monkeypatch,
+):
+    """A Lem-targeted schedule dispatches without an agent row.
+
+    The default assistant has no ``agents`` row, so ``run_agent_by_id`` -- which
+    looks one up -- can only raise for it. The target is a flag on the schedule,
+    and the run it starts is a conversation with a null ``agent_id``: exactly
+    what ``resolve_agent`` already synthesises Lem from.
+
+    The instruction rides along because nothing else on the run says what it is
+    for. A named agent's standing instruction answers that; Lem's is the empty
+    string, so without this the assistant wakes to a JSON payload and no job.
+    """
+    engine = _engine_with_mocks()
+    conversation_id = uuid4()
+    engine.agent_adapter.run_pod_default_agent = AsyncMock(return_value=conversation_id)
+    engine.agent_adapter.run_agent_by_id = AsyncMock()
+    schedule = _schedule(
+        agent_id=None,
+        workflow_id=None,
+        targets_pod_default=True,
+        instruction="Summarise yesterday's open tickets.",
+        schedule_type=SimpleNamespace(value="TIME"),
+    )
+    target_run_id = uuid4()
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=schedule.user_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(target_run_id),
+    )
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_dispatched=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: run_repo,
+    )
+    context = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id="cron:lem-1",
+    )
+
+    engine.agent_adapter.run_agent_by_id.assert_not_awaited()
+    call = engine.agent_adapter.run_pod_default_agent.await_args.kwargs
+    assert call["conversation_id"] == target_run_id
+    assert call["instructions"] == "Summarise yesterday's open tickets."
+    # The ledger still records it as an agent target: Lem is an agent, it just
+    # has no row. A third `target_kind` would make every consumer of the run
+    # ledger learn a distinction that does not exist downstream.
+    assert run_repo.claim.await_args.kwargs["target_kind"] == "AGENT"
+    run_repo.mark_dispatched.assert_awaited_once_with(schedule_run.id)
+
+
+@pytest.mark.anyio
+async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
+    monkeypatch,
+):
+    """There is no agent resource to authorize against, so the pod is the ref.
+
+    Passing a made-up agent id here would ask about a resource that does not
+    exist, and a permission check on a non-existent resource is not a check.
+    """
+    from app.core.authorization.context import ResourceType
+
+    engine = _engine_with_mocks()
+    engine.agent_adapter.run_pod_default_agent = AsyncMock(return_value=uuid4())
+    schedule = _schedule(
+        targets_pod_default=True,
+        instruction="Check the overnight queue.",
+        schedule_type=SimpleNamespace(value="TIME"),
+    )
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=schedule.user_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(uuid4()),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: Mock(
+            claim=AsyncMock(return_value=schedule_run),
+            mark_dispatched=AsyncMock(),
+        ),
+    )
+    context = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id="cron:lem-2",
+    )
+
+    permission, ref = context.require.await_args.args
+    assert permission == "agent.execute"
+    assert ref.resource_type is ResourceType.POD
+    assert ref.resource_id == schedule.pod_id

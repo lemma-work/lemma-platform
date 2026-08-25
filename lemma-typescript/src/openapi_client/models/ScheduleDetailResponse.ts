@@ -19,6 +19,7 @@ export type ScheduleDetailResponse = {
     filter_instruction: (string | null);
     filter_output_schema: (Record<string, any> | null);
     id: string;
+    instruction?: (string | null);
     is_active: boolean;
     is_internal: boolean;
     last_error?: (string | null);
@@ -32,6 +33,7 @@ export type ScheduleDetailResponse = {
     readonly paused_by_failures: boolean;
     pod_id: (string | null);
     schedule_type: ScheduleType;
+    targets_pod_default?: boolean;
     updated_at: string;
     user_id: string;
     visibility: string;
