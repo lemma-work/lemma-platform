@@ -157,6 +157,6 @@ mod tests {
         client.read_to_string(&mut answer).unwrap();
 
         assert_eq!(answer, "served");
-        server.join().unwrap();
+        crate::join_within(server, "the stand-in listener");
     }
 }

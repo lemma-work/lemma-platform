@@ -1801,30 +1801,6 @@ fn terminate_owned_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
 
-    /// Join a test's server thread, or fail rather than hang.
-    ///
-    /// Each of these threads blocks in `accept()` and then `read_exact`s a
-    /// fixed number of bytes. If the client under test connects zero times, or
-    /// once too few, or sends a byte less than expected, the thread never
-    /// returns -- and an unconditional `join()` then hangs the whole test
-    /// binary. `host_process.rs` carries the note about how that "burned 44
-    /// minutes of a CI runner before it was cancelled rather than failing";
-    /// these are its siblings, which were not given the same treatment.
-    ///
-    /// The blocked thread is left where it is: a thread parked in a syscall
-    /// cannot be cancelled in Rust, and it dies with the process at the end of
-    /// the run. What changes is that the run *reaches* the end.
-    fn join_within<T>(handle: thread::JoinHandle<T>, what: &str) -> T {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
-            if handle.is_finished() {
-                return handle.join().expect("the server thread panicked");
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        panic!("{what} never finished; it is still blocked on the socket");
-    }
-
     use super::*;
     use std::io::{Read, Write};
     use std::sync::mpsc;
@@ -2170,7 +2146,7 @@ mod tests {
             observed.extend_from_slice(&buffer[..read]);
         }
         gateway.stop();
-        join_within(server, "the upstream server");
+        crate::join_within(server, "the upstream server");
     }
 
     #[test]
@@ -2225,7 +2201,7 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.bytes().unwrap().as_ref(), payload.as_slice());
         gateway.stop();
-        join_within(server, "the upstream server");
+        crate::join_within(server, "the upstream server");
     }
 
     #[test]
@@ -2273,6 +2249,6 @@ mod tests {
         client.read_exact(&mut echoed).unwrap();
         assert_eq!(&echoed, b"hello");
         gateway.stop();
-        join_within(server, "the upstream server");
+        crate::join_within(server, "the upstream server");
     }
 }
