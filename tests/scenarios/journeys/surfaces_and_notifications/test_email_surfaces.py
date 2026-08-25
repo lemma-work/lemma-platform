@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import time
 from uuid import uuid4
 
@@ -130,6 +131,21 @@ async def test_an_email_surface_has_an_address(mailbox):
     assert address.endswith(inbound_email_domain()), (
         f"the surface's address is not under this deployment's inbound domain, "
         f"so mail to it will never arrive: {address!r}"
+    )
+
+    # Readable, because a person types it. Connecting a surface through the API
+    # used to fall to a `pod-<32 hex>@` form that only the database was happy
+    # with, so which of the two you got depended on whether your surface came
+    # from agent creation or from this endpoint. Asserted by shape rather than
+    # by slug so the scenario does not restate how the address is built: two
+    # halves separated by a dot, and not the hex form.
+    local_part = address.split("@", 1)[0]
+    assert not re.fullmatch(r"pod-[0-9a-f]{32}", local_part), (
+        f"the surface fell back to the unreadable per-pod address: {address!r}"
+    )
+    assert "." in local_part, (
+        f"an agent's address should read as agent-and-pod, not one opaque "
+        f"word: {address!r}"
     )
 
 

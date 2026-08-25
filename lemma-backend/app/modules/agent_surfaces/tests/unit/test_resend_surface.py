@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -114,35 +114,91 @@ async def test_resend_send_email_builds_resend_api_payload():
     assert body["attachments"][0]["filename"] == "note.txt"
 
 
-def test_provision_resend_address_is_unique_per_pod(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
+async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
+    """The `pod-<hex>@` fallback is gone, and its absence is the point.
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
-    pod_id = uuid4()
-    address = AgentSurfaceService._provision_resend_address(pod_id)
-    assert address.endswith("@ops.asur.work")
-    assert pod_id.hex[:12] in address
-    # Different pods get different addresses.
-    assert address != AgentSurfaceService._provision_resend_address(uuid4())
+    It existed so a caller need not know how addresses are allocated, and two of
+    the three callers duly did not: the surfaces API and the bundle applier both
+    landed on it, so whether a person got `ops.acme@` or `pod-9f3c1e…@` came down
+    to which door their surface arrived through. Neither of those paths was
+    screened against `RESERVED_LOCAL_PARTS` either. Refusing is what keeps a
+    fourth caller from re-opening that quietly.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+
+    repo = AsyncMock()
+    repo.get_by_pod_and_name.return_value = None
+    binder = AsyncMock()
+    binder.resolve_binding.return_value = (None, None, None)
+    service = AgentSurfaceService(
+        surface_repository=repo, account_binding_resolver=binder
+    )
+
+    with pytest.raises(AgentSurfaceValidationError, match="needs an inbound address"):
+        await service.create_surface(
+            pod_id=uuid4(),
+            agent_id=None,
+            platform=SurfacePlatform.RESEND,
+            name="resend",
+            config=SurfaceConfig(),
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+        )
+
+    repo.create.assert_not_awaited()
 
 
-def test_provisioning_without_a_domain_says_so_instead_of_inventing_one():
+async def test_minting_without_a_domain_says_so_instead_of_inventing_one(monkeypatch):
     """A default domain is worse than an error.
 
     ``ops.asur.work`` used to be the fallback, so an unconfigured deployment
     silently minted addresses on a domain it does not own: outbound bounced and
     replies matched no surface, with nothing anywhere saying why.
     """
-    from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
 
-    original = surface_settings.resend_inbound_domain
-    surface_settings.resend_inbound_domain = None
-    try:
-        with pytest.raises(AgentSurfaceValidationError, match="RESEND_INBOUND_DOMAIN"):
-            AgentSurfaceService._provision_resend_address(uuid4())
-    finally:
-        surface_settings.resend_inbound_domain = original
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
+
+    with pytest.raises(AgentSurfaceValidationError, match="RESEND_INBOUND_DOMAIN"):
+        await email_surface_provisioning.create_surface_on_minted_address(
+            AsyncMock(),
+            AsyncMock(),
+            pod_id=uuid4(),
+            agent_id=None,
+            agent_name=None,
+            platform=SurfacePlatform.RESEND,
+            name="inbox",
+            config=SurfaceConfig(),
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+        )
+
+
+async def test_a_non_email_surface_passes_straight_through(monkeypatch):
+    """The helper is a substitute for `create_surface`, not a special case.
+
+    Both callers create every platform through it, so Slack and Telegram must
+    not acquire an inbound address or a domain requirement on the way past.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
+    service = AsyncMock()
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        AsyncMock(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.SLACK,
+        name="slack",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert "surface_identity_email" not in service.create_surface.await_args.kwargs
 
 
 def test_normalize_resend_inbound_handles_envelope_and_shapes():
@@ -792,7 +848,7 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     full and the person who wrote it heard nothing back.
     """
     import httpx
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from app.modules.agent_surfaces.platforms.resend.adapter import (
         ResendSurfaceAdapter,
