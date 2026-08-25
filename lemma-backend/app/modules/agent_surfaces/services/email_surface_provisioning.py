@@ -265,7 +265,13 @@ async def create_surface_on_minted_address(
             ctx=ctx,
         )
 
-    if not email_is_configured() or not surface_settings.resend_inbound_domain:
+    # The inbound domain alone, deliberately not ``email_is_configured()``.
+    # Minting an address needs somewhere to mint it; whether *Lemma* holds a
+    # Resend key is a question about credentials, and this caller may be
+    # bringing a connected account that has its own. Gating on both turned a
+    # surface authenticating with its own key into a refusal — something the
+    # domain-only fallback this replaced never did.
+    if not surface_settings.resend_inbound_domain:
         raise AgentSurfaceValidationError(
             "Email is not configured for this deployment: set "
             "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
@@ -278,7 +284,13 @@ async def create_surface_on_minted_address(
         agent_id=agent_id,
         agent_name=agent_name,
         pod_name=await pod_name_for(uow, pod_id),
-        name=name,
+        # `create_surface` would default this to the platform — "resend" — and
+        # the pod's own assistant already holds that name from the moment the
+        # pod was created. So an unnamed second Resend surface, which is what
+        # connecting email for an agent looks like from the UI, would come back
+        # as "already exists". `surface_name_for` is the same name the eager and
+        # lazy paths pick, so all three now agree.
+        name=name or surface_name_for(agent_name),
         config=config,
         credential_mode=credential_mode,
         account_id=account_id,

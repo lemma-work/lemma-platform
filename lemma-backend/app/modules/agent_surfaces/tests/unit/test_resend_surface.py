@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -172,6 +173,81 @@ async def test_minting_without_a_domain_says_so_instead_of_inventing_one(monkeyp
             config=SurfaceConfig(),
             credential_mode=SurfaceCredentialMode.SYSTEM,
         )
+
+
+async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatch):
+    """Minting an address is not a question about whose credentials send it.
+
+    A Resend surface can authenticate with a connected account, and one did:
+    `test_resend_webhook_routes_raw_envelope_to_provisioned_address` sets the
+    inbound domain and no system key. Gating this path on `email_is_configured`
+    — key *and* domain, which is the right test for a SYSTEM mailbox — turned
+    that into a refusal. Somewhere to mint the address is all this needs.
+    """
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(core_settings, "resend_api_key", None)
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    assert not email_surface_provisioning.email_is_configured()
+
+    service = AsyncMock()
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        SimpleNamespace(session=session),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops",
+        platform=SurfacePlatform.RESEND,
+        name="inbox",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.CUSTOM,
+        account_id=uuid4(),
+    )
+
+    address = service.create_surface.await_args.kwargs["surface_identity_email"]
+    assert address == "ops.acme@ops.asur.work"
+
+
+async def test_an_unnamed_second_mailbox_does_not_collide_with_the_pod_s(monkeypatch):
+    """Every pod's assistant holds the surface named "resend" from creation.
+
+    `create_surface` defaults an unnamed surface to its platform, so connecting
+    email for an agent — no name given, which is what the UI sends — would come
+    back "already exists". The agent-derived name is what the eager and lazy
+    provisioning paths already pick.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    service = AsyncMock()
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        SimpleNamespace(session=session),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert service.create_surface.await_args.kwargs["name"] == "resend-ops-assistant"
 
 
 async def test_a_non_email_surface_passes_straight_through(monkeypatch):
