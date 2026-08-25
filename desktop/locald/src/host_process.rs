@@ -1576,7 +1576,13 @@ const IDENTITY_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One `ps` query. `Ok(None)` means the process exists but has not yet reported
 /// a usable executable name, so the caller should look again.
-#[cfg(unix)]
+///
+/// macOS and the BSDs only. `ps -o comm=` prints an absolute path there, which
+/// is what makes this work; on Linux the same flag prints a bare command name
+/// truncated to fifteen characters, so every `canonicalize` below failed and
+/// every process this daemon spawned was reported as unidentifiable. Linux has
+/// its own implementation, and a better one -- see the `/proc` version below.
+#[cfg(all(unix, not(target_os = "linux")))]
 fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
     let executable = Command::new("/bin/ps")
         .args(["-p", pid, "-o", "comm="])
@@ -1621,6 +1627,66 @@ fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
         executable,
         start_identity,
     }))
+}
+
+/// The same question, asked of `/proc` rather than of `ps`.
+///
+/// Linux does not answer `ps -o comm=` with a path, so the BSD implementation
+/// above could never identify anything here: `Path::new("sleep").canonicalize()`
+/// fails, every sample looked like a process that had not settled, and the
+/// ownership ledger -- the thing that guarantees this daemon only ever signals
+/// processes it started -- recorded nothing at all.
+///
+/// `/proc/<pid>/exe` is a better source than `ps` in both directions. It is the
+/// kernel's own answer, already absolute and already resolved through symlinks,
+/// and it is readable only for a process of the same user, which is a check
+/// worth having for free. `starttime` from `/proc/<pid>/stat` is likewise a
+/// stronger identity than `ps lstart`, whose one-second granularity is exactly
+/// the window in which a recycled PID looks like the process it replaced.
+///
+/// One deliberate difference from macOS. `ps` reports `(sh)` for a process that
+/// has forked but not yet finished `exec`, which is the placeholder the settle
+/// loop exists to wait out. `/proc/<pid>/exe` has no such state -- during that
+/// window it simply names the binary the process is still running. So on Linux
+/// `Ok(None)` means only "gone or not ours", and a record written mid-exec
+/// names the pre-exec binary. That record then fails to match later, and a
+/// ledger entry that fails to match is one this daemon declines to signal --
+/// the safe direction, and the same one an unreadable link takes.
+#[cfg(target_os = "linux")]
+fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
+    let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(path) => path,
+        // ESRCH once the process is gone, EACCES for one we do not own, ENOENT
+        // for a kernel thread. None of the three is a process this daemon may
+        // claim, and none becomes one by looking again.
+        Err(error) => return Err(io::Error::new(io::ErrorKind::NotFound, error)),
+    };
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
+    let start_identity = process_start_time(&stat)
+        .ok_or_else(|| io::Error::other("process start identity was empty"))?;
+    Ok(Some(ProcessIdentity {
+        executable: executable.to_string_lossy().into_owned(),
+        start_identity,
+    }))
+}
+
+/// Field 22 of `/proc/<pid>/stat`: when the process started, in clock ticks.
+///
+/// Split from the read so it can be tested on any platform, and because the
+/// parse has one trap in it. Field 2 is the command name in parentheses and may
+/// itself contain spaces *and* parentheses -- a process is free to call itself
+/// `my (weird) name` -- so splitting the line on whitespace mis-numbers every
+/// field after it. Everything before the final `)` has to go first.
+#[cfg(any(target_os = "linux", test))]
+fn process_start_time(stat: &str) -> Option<String> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    // The first field after the comm is `state`, which is number 3.
+    after_comm
+        .split_whitespace()
+        .nth(22 - 3)
+        .filter(|ticks| !ticks.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(unix)]
@@ -2862,6 +2928,53 @@ mod tests {
         manager.stop_all().unwrap();
         assert!(manager.status().iter().all(|process| !process.running));
         assert_eq!(manager.status_event(None)["ready"], false);
+    }
+
+    /// `/proc/<pid>/stat` field 22, past a command name that fights back.
+    ///
+    /// This is the parse the Linux ownership ledger depends on, and it has one
+    /// trap: field 2 is the command name in parentheses and a process may name
+    /// itself anything at all, spaces and parentheses included. Splitting the
+    /// whole line on whitespace mis-numbers every field after it -- which would
+    /// mean recording a nonsense start identity, which would mean an ownership
+    /// record that never matches and a child this daemon can never reclaim.
+    ///
+    /// Run on every platform on purpose: the failure it guards is a string
+    /// parse, and the machine that most needs it is the one that cannot run
+    /// the code around it.
+    #[test]
+    fn a_process_start_time_survives_a_command_name_full_of_parentheses() {
+        let stat = |comm: &str| {
+            let mut fields = vec!["4242".to_string(), format!("({comm})")];
+            // Fields 3..21, then starttime at 22.
+            fields.push("S".into());
+            fields.extend((4..=21).map(|field| field.to_string()));
+            fields.push("987654".into());
+            // And the tail the kernel keeps writing after it.
+            fields.extend((23..=30).map(|field| field.to_string()));
+            fields.join(" ") + "\n"
+        };
+
+        assert_eq!(
+            process_start_time(&stat("sleep")).as_deref(),
+            Some("987654")
+        );
+        assert_eq!(
+            process_start_time(&stat("my (weird) name")).as_deref(),
+            Some("987654"),
+            "the split has to happen after the LAST close paren"
+        );
+        assert_eq!(
+            process_start_time(&stat("node --run start")).as_deref(),
+            Some("987654"),
+            "a name with spaces must not shift the field numbering"
+        );
+        // A truncated read is not a start identity, and must not be treated as
+        // one -- an empty identity matches nothing and would be recorded as if
+        // it did.
+        assert_eq!(process_start_time("4242 (sleep) S 4 5"), None);
+        assert_eq!(process_start_time("nonsense with no paren"), None);
+        assert_eq!(process_start_time(""), None);
     }
 
     #[cfg(unix)]

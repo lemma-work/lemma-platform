@@ -552,8 +552,12 @@ jobs:
       # workflow file was ever run. The other two cover the scripts that build
       # the host pack and stage a bundled runtime -- both of which the desktop
       # installers now depend on.
+      # pyyaml because two of these gates read the workflow files themselves --
+      # the aggregator check and the skipped-job check. Without it their tests
+      # fail to *import*, which pytest reports as a collection error rather
+      # than a failure, and which is easy to skim past.
       - name: Run repo tooling tests
-        run: uv run --with pytest python -m pytest tests/ -q
+        run: uv run --with pytest --with pyyaml python -m pytest tests/ -q
       # The two required checks are aggregator jobs, so their `needs:` lists
       # are the merge gate. This asserts nothing has fallen out of one -- the
       # failure ci.yml's own comment records -- and that every job still

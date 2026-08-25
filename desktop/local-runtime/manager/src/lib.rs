@@ -54,6 +54,13 @@ pub const DEFAULT_WSL_DISTRIBUTION: &str = "LemmaRuntime";
 ///
 /// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` and pinned by a
 /// test there: this crate is a dependency of locald, not the other way round.
+///
+/// macOS-only because the one detector that raises it is: Windows runs the
+/// guest under WSL, where the data disk is a distribution rather than a raw
+/// image and nothing yet reads a console log for a repair verdict. When that
+/// detector is written it raises this same phrase and needs no new transport --
+/// which is the whole point of the phrase being the contract.
+#[cfg(target_os = "macos")]
 const DATA_RESET_MARKER: &str = "local data must be reset";
 #[cfg(target_os = "macos")]
 const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
