@@ -14,6 +14,7 @@ worker, run concurrently, timed out, cancelled, or reaching a connector.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from uuid import uuid4
 
@@ -884,8 +885,6 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
     function in the pod runtime execute one of its discovered tools -- so
     nothing between the function and the server is a stand-in.
     """
-    import asyncio
-    import contextlib
     import socket
     from uuid import UUID
 
