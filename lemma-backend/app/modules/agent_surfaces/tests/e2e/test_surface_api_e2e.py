@@ -852,8 +852,7 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         "TEAMS",
         "WHATSAPP",
         "TELEGRAM",
-        "GMAIL",
-        "OUTLOOK",
+
         "RESEND",
     }
     assert by_platform["TELEGRAM"]["supported_credential_modes"] == [

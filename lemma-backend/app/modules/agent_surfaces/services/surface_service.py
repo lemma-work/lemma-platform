@@ -50,9 +50,6 @@ from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
 from app.modules.agent_surfaces.services.surface_setup_read import (
     SurfaceSetupReadMixin,
 )
-from app.modules.agent_surfaces.services.surface_email_schedule import (
-    SurfaceEmailScheduleMixin,
-)
 from app.modules.agent_surfaces.services.surface_telegram_webhook import (
     SurfaceTelegramWebhookMixin,
     _telegram_transition,
@@ -75,7 +72,6 @@ if TYPE_CHECKING:
 class AgentSurfaceService(
     SurfaceConsentMixin,
     SurfaceTelegramWebhookMixin,
-    SurfaceEmailScheduleMixin,
     SurfaceSetupReadMixin,
     TelegramMiniAppSyncMixin,
 ):
@@ -202,11 +198,8 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(created.id),
                 webhook_secret=created.webhook_secret or "",
             )
-        synced = await self._sync_email_schedule(
-            created, previous_surface=None, ctx=ctx
-        )
-        await notify_surface_receiver_config_changed(synced.id)
-        return synced
+        await notify_surface_receiver_config_changed(created.id)
+        return created
 
     async def create_surface_minting_address(
         self,
@@ -345,13 +338,8 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(updated.id),
                 webhook_secret=updated.webhook_secret or "",
             )
-        synced = await self._sync_email_schedule(
-            updated,
-            previous_surface=previous_surface,
-            ctx=ctx,
-        )
-        await notify_surface_receiver_config_changed(synced.id)
-        return synced
+        await notify_surface_receiver_config_changed(updated.id)
+        return updated
 
     async def _apply_binding_update(
         self,
@@ -413,7 +401,6 @@ class AgentSurfaceService(
         if surface is not None:
             if telegram_requires_webhook_setup(surface):
                 await self._delete_telegram_webhook(surface)
-            await self._delete_email_schedule_if_needed(surface)
         await self.surface_repository.delete(surface_id)
         await notify_surface_receiver_config_changed(surface_id)
 
@@ -456,8 +443,9 @@ class AgentSurfaceService(
         return account
 
     def _validate_runtime_supported(self, surface: AgentSurfaceEntity) -> None:
-        if surface.surface_type in {SurfacePlatform.GMAIL, SurfacePlatform.OUTLOOK}:
-            return
+        # No exemption for email any more: Resend receives over a webhook like
+        # everything else. The polled mailboxes were the only surfaces that
+        # needed no public URL.
         if public_https_api_url_available():
             return
         if (

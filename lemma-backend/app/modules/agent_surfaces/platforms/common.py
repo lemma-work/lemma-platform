@@ -213,16 +213,6 @@ def attachment_tool_hint(platform: str) -> str | None:
             "Use telegram_download_file with the file_name or file_id if you "
             "need the file in the workspace."
         )
-    if normalized == "GMAIL":
-        return (
-            "Use gmail_download_attachment with the attachment_name or attachment_id "
-            "if you need the file in the workspace."
-        )
-    if normalized == "OUTLOOK":
-        return (
-            "Use outlook_download_attachment with the attachment_name or attachment_id "
-            "if you need the file in the workspace."
-        )
     return None
 
 
@@ -252,7 +242,7 @@ def channel_author_label(
     return f"{who} (other participant)"
 
 
-_EMAIL_PLATFORMS = {"GMAIL", "OUTLOOK", "RESEND"}
+_EMAIL_PLATFORMS = {"RESEND"}
 
 
 def email_reply_instruction(platform: str) -> str | None:

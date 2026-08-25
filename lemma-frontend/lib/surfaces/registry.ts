@@ -235,36 +235,6 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
         },
     },
     {
-        platform: 'GMAIL',
-        label: 'Gmail',
-        logoSrc: '/connector-logos/gmail.svg',
-        promise: 'Turn mail in a Gmail mailbox into work for {agent}',
-        connectHint: 'Mail from a mailbox you connect becomes work here.',
-        identityOptions: null,
-        accountLabel: 'Gmail mailbox',
-        capabilities: {
-            channelRoutes: false,
-            senderFilters: true,
-            adminConsent: false,
-            autoWebhook: true,
-        },
-    },
-    {
-        platform: 'OUTLOOK',
-        label: 'Outlook',
-        logoSrc: '/connector-logos/outlook.svg',
-        promise: 'Turn mail in an Outlook mailbox into work for {agent}',
-        connectHint: 'Mail from a mailbox you connect becomes work here.',
-        identityOptions: null,
-        accountLabel: 'Outlook mailbox',
-        capabilities: {
-            channelRoutes: false,
-            senderFilters: true,
-            adminConsent: false,
-            autoWebhook: true,
-        },
-    },
-    {
         platform: 'RESEND',
         label: 'Email',
         // No logo, by design — see `glyph`. Lemma runs this mailbox; there is no

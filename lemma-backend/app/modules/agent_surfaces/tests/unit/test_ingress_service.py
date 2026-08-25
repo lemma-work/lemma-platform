@@ -116,21 +116,6 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
     )
 
 
-def _gmail_surface() -> AgentSurfaceEntity:
-    return AgentSurfaceEntity(
-        id=uuid4(),
-        pod_id=uuid4(),
-        name="gmail",
-        agent_id=uuid4(),
-        surface_type=SurfacePlatform.GMAIL,
-        mode=SurfaceMode.EMAIL,
-        account_id=uuid4(),
-        config=SurfaceConfig(),
-        surface_identity_email="assistant@gmail.test",
-        is_active=True,
-    )
-
-
 def _slack_event() -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="SLACK",
@@ -969,88 +954,6 @@ async def test_prepare_webhook_ignores_duplicate_external_message():
 
     assert context is None
     service.conversation_service.create_conversation.assert_not_called()
-
-
-async def test_prepare_surface_context_ignores_self_sent_gmail_message():
-    surface = _gmail_surface()
-    parsed_event = ParsedInboundSurfaceEvent(
-        platform="GMAIL",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_channel_id="assistant@gmail.test",
-        external_thread_id="gmail-thread-1",
-        external_message_id="gmail-message-1",
-        sender_external_user_id="assistant@gmail.test",
-        sender_email="assistant@gmail.test",
-        sender_display_name="Lemma",
-        message_text="Loopback",
-        is_dm=True,
-        mentioned_agent=True,
-        reply_target={"recipient_email": "assistant@gmail.test"},
-    )
-    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
-
-    context = await service._prepare_surface_context(
-        surface=surface,
-        parsed=parsed_event,
-        adapter=AsyncMock(),
-    )
-
-    assert context is None
-
-
-async def test_prepare_surface_context_ignores_self_sent_outlook_after_enrich():
-    # Outlook triggers deliver a minimal payload with no sender; the sender is
-    # only known after enrichment. The surface must still drop its own outgoing
-    # reply (sender == surface identity) instead of looping on the signup reply.
-    surface = AgentSurfaceEntity(
-        id=uuid4(),
-        pod_id=uuid4(),
-        name="outlook",
-        agent_id=uuid4(),
-        surface_type=SurfacePlatform.OUTLOOK,
-        mode=SurfaceMode.EMAIL,
-        account_id=uuid4(),
-        config=SurfaceConfig(),
-        surface_identity_email="assistant@outlook.test",
-        is_active=True,
-    )
-    minimal_event = ParsedInboundSurfaceEvent(
-        platform="OUTLOOK",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_channel_id="assistant@outlook.test",
-        external_thread_id="outlook-thread-1",
-        external_message_id="outlook-message-1",
-        sender_external_user_id=None,
-        sender_email=None,
-        message_text="",
-        is_dm=True,
-        mentioned_agent=True,
-        reply_target={},
-    )
-    enriched_event = minimal_event.model_copy(
-        update={
-            "sender_external_user_id": "assistant@outlook.test",
-            "sender_email": "assistant@outlook.test",
-            "message_text": "Email subject: Re\n\nLoopback body",
-        }
-    )
-    adapter = AsyncMock()
-    adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: (
-        enriched_event
-    )
-
-    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
-    service.event_dedup_store = AsyncMock(claim_message=AsyncMock(return_value=True))
-    service._resolve_credentials = AsyncMock(return_value={})
-
-    context = await service._prepare_surface_context(
-        surface=surface,
-        parsed=minimal_event,
-        adapter=adapter,
-    )
-
-    assert context is None
-    adapter.enrich_inbound_event.assert_awaited_once()
 
 
 async def test_execute_chat_sends_direct_replies():
@@ -2065,13 +1968,13 @@ async def test_send_approval_prompt_skips_when_no_pending():
 async def test_interactive_prompts_suppressed_on_email_surface():
     """Email is non-interactive: ask_user and request_approval renders are
     suppressed (the run never pauses for a reply that can't come back)."""
-    surface = _gmail_surface()
+    surface = _resend_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = AgentSurfaceConversationLink(
         surface_id=surface.id,
         conversation_id=conversation_id,
-        platform="GMAIL",
+        platform="RESEND",
         external_channel_id=parsed_event.external_channel_id,
         external_thread_id=parsed_event.external_thread_id,
         external_user_id=parsed_event.sender_external_user_id,

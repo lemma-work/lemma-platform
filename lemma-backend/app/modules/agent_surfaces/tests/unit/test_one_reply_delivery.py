@@ -42,7 +42,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_email_gets_one_delivery_and_chat_gets_many() -> None:
-    for platform in ("GMAIL", "OUTLOOK", "RESEND"):
+    for platform in ("RESEND",):
         caps = PLATFORM_CAPABILITIES[platform]
         assert caps.delivery_cardinality is DeliveryCardinality.ONE
     for platform in ("SLACK", "TEAMS", "TELEGRAM", "WHATSAPP"):
@@ -57,7 +57,7 @@ def test_cardinality_and_pausing_are_asked_separately() -> None:
     asked anything", and a destructive action on an email surface either
     happened unapproved or silently did not happen.
     """
-    caps = PLATFORM_CAPABILITIES["GMAIL"]
+    caps = PLATFORM_CAPABILITIES["RESEND"]
     assert caps.delivery_cardinality is DeliveryCardinality.ONE
     assert caps.can_pause_for_a_person is False
     assert PLATFORM_CAPABILITIES["SLACK"].can_pause_for_a_person is True
@@ -141,7 +141,7 @@ async def test_showing_a_table_on_email_reports_failure_rather_than_success() ->
     conversation = uuid4()
     response = await _display(
         DisplayResourceRequest(type=DisplayResourceType.TABLE, name="orders"),
-        platform="GMAIL",
+        platform="RESEND",
         conversation=conversation,
     )
     assert response.success is False

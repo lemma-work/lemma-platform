@@ -100,7 +100,7 @@ def test_unknown_platform_falls_back_to_a_default():
     assert attachment_cap(None) == 16 * _MB
 
 
-@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
+@pytest.mark.parametrize("platform", ["RESEND"])
 def test_email_cap_leaves_room_for_base64(platform):
     """The provider measures the encoded bytes, so the raw cap must be smaller.
 

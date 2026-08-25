@@ -478,8 +478,6 @@ def test_every_mail_platform_is_one_email_channel():
     assert {
         channel_for_platform(platform)
         for platform in (
-            SurfacePlatform.GMAIL,
-            SurfacePlatform.OUTLOOK,
             SurfacePlatform.RESEND,
         )
     } == {EMAIL_CHANNEL}

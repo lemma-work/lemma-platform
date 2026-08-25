@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
@@ -25,12 +24,9 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_TENANT_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _ensure_connector_trigger,
-    _gmail_payload,
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
-    _outlook_payload,
     _resend_payload,
     _seed_external_user,
     _set_user_mobile_number,
@@ -44,14 +40,10 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_display_resource,
-    script_email_reply,
     script_say,
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.composition.schedule_connectors import (
-    ManagersFactory,
-)
 
 pytestmark = pytest.mark.e2e
 
@@ -329,185 +321,6 @@ async def test_multi_tool_turn_whatsapp_two_widgets_then_one_final_answer(
     assert len(final_texts) == 1, "final answer must be delivered exactly once"
 
 
-async def test_multi_tool_turn_gmail_two_widgets_then_one_reply(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_gmail,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Two display_resource(WIDGET) calls each succeed (returning a signed
-    serve URL) without producing separate sends — see
-    ``_maybe_deliver_to_surface``'s explicit ``caps.is_email`` early-return —
-    then the single reply-tool call is the only actual outbound send."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="gmail",
-        credentials={
-            "connection_id": "gmail-multi-e2e-account",
-        },
-        email="assistant@gmail.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="gmail",
-        trigger_id="gmail_new_message_multi_e2e",
-        event_type="GMAIL_NEW_GMAIL_MESSAGE",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "GMAIL", "account_id": str(account.id)},
-        toolsets=["USER_INTERACTION"],
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_gmail_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@gmail.test",
-                thread_id="gmail-thread-multi-e2e",
-                message_id="gmail-message-multi-1",
-                text="Can you help over Gmail?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_email_reply(
-                "gmail_reply_email",
-                "Here is my answer.",
-                tool_call_id="tool-email-reply-1",
-            ),
-        ],
-    )
-
-    messages = await _messages_for_conversation(
-        authenticated_client,
-        pod_id=pod_id,
-        conversation_id=str(context.conversation_id),
-    )
-    display_returns = [
-        m
-        for m in messages
-        if m.get("kind") == "TOOL_RETURN" and m.get("tool_name") == "display_resource"
-    ]
-    assert len(display_returns) == 2
-    assert all(r["tool_result"]["success"] for r in display_returns)
-    assert all(r["tool_result"]["url"] for r in display_returns)
-
-    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
-    assert len(gmail_messages) == 1, "exactly one email must be sent for the turn"
-    assert gmail_messages[0]["operation_name"] == "GMAIL_REPLY_TO_THREAD"
-    assert "Here is my answer." in json.dumps(gmail_messages[0]["payload"])
-
-
-async def test_multi_tool_turn_outlook_two_widgets_then_one_reply(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_outlook,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Same shape as the Gmail case: two no-op-delivery WIDGET calls, then the
-    single reply-tool call is the only actual outbound send."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="outlook",
-        credentials={
-            "connection_id": "outlook-multi-e2e-account",
-        },
-        email="assistant@outlook.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="outlook",
-        trigger_id="outlook_message_multi_e2e",
-        event_type="OUTLOOK_MESSAGE_TRIGGER",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "OUTLOOK", "account_id": str(account.id)},
-        toolsets=["USER_INTERACTION"],
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_outlook_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@outlook.test",
-                thread_id="outlook-thread-multi-e2e",
-                message_id="outlook-message-multi-1",
-                text="Can you help over Outlook?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_email_reply(
-                "outlook_reply_email",
-                "Here is my answer.",
-                tool_call_id="tool-email-reply-1",
-            ),
-        ],
-    )
-
-    messages = await _messages_for_conversation(
-        authenticated_client,
-        pod_id=pod_id,
-        conversation_id=str(context.conversation_id),
-    )
-    display_returns = [
-        m
-        for m in messages
-        if m.get("kind") == "TOOL_RETURN" and m.get("tool_name") == "display_resource"
-    ]
-    assert len(display_returns) == 2
-    assert all(r["tool_result"]["success"] for r in display_returns)
-
-    outlook_messages = await wait_for_messages(
-        message_store, "OUTLOOK_REPLY", min_count=1
-    )
-    assert len(outlook_messages) == 1, "exactly one email must be sent for the turn"
-    assert outlook_messages[0]["operation_name"] == "OUTLOOK_REPLY_EMAIL"
-    assert "Here is my answer." in json.dumps(outlook_messages[0]["payload"])
-
-
 async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -562,9 +375,7 @@ async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
         script=[
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_email_reply(
-                "resend_reply_email",
-                "Here is my answer.",
+            script_text("Here is my answer.",
                 tool_call_id="tool-email-reply-1",
             ),
         ],

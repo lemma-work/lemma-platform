@@ -53,26 +53,6 @@ class EmailOneReplyMixin:
 
     platform: str
 
-    async def _attachment_payload(
-        self,
-        credentials: dict[str, Any],
-        envelope: SurfaceEnvelope,
-    ) -> tuple[list[tuple[str, bytes, str]], dict[str, Any]]:
-        """How this account carries files, and anything extra the body must say.
-
-        Bytes by default. An account connected through Composio cannot take
-        them -- its mail action downloads a signed URL server-side -- so that
-        adapter overrides this and hands back a URL instead. Kept as a seam
-        rather than a branch here because only one platform has the second
-        shape, and burying it in a shared method is how it went missing the
-        first time.
-        """
-        del credentials
-        return (
-            [(item.file_name, item.content, item.mime_type) for item in envelope.files],
-            {},
-        )
-
     async def _render_one(
         self,
         *,
@@ -82,11 +62,10 @@ class EmailOneReplyMixin:
         metadata: dict[str, Any] | None,
     ) -> DeliveryReceipt:
         body = compose_one_reply(envelope)
-        attachments, extra = await self._attachment_payload(credentials, envelope)
-        note = str(extra.pop("body_note", "") or "")
-        if note:
-            body = f"{body}\n\n{note}" if body else note
-        if not body and not attachments and not extra:
+        attachments = [
+            (item.file_name, item.content, item.mime_type) for item in envelope.files
+        ]
+        if not body and not attachments:
             return DeliveryReceipt(parts={})
 
         # `send_message` is the shared transport, reading the same reply_target
@@ -95,7 +74,6 @@ class EmailOneReplyMixin:
         send_metadata = dict(metadata or {})
         if attachments:
             send_metadata["attachments"] = attachments
-        send_metadata.update(extra)
         try:
             await self.send_message(
                 credentials=credentials,

@@ -171,7 +171,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
     assert credentials["from_address"] == "ops.acme@ops.asur.work"
 
 
-@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
+@pytest.mark.parametrize("platform", ["RESEND"])
 async def test_an_email_surface_builds_no_platform_toolset(platform):
     """Their only tool was the reply, and the observer sends that now.
 

@@ -52,12 +52,6 @@ SURFACE_CONNECTOR_BINDINGS: dict[SurfacePlatform, SurfaceConnectorBinding] = {
     SurfacePlatform.TELEGRAM: SurfaceConnectorBinding(
         connector_id="telegram", kind="package", self_managed_credentials=True
     ),
-    SurfacePlatform.GMAIL: SurfaceConnectorBinding(
-        connector_id="gmail", kind="package", self_managed_credentials=False
-    ),
-    SurfacePlatform.OUTLOOK: SurfaceConnectorBinding(
-        connector_id="outlook", kind="package", self_managed_credentials=False
-    ),
     SurfacePlatform.RESEND: SurfaceConnectorBinding(
         connector_id="resend", kind="package", self_managed_credentials=True
     ),

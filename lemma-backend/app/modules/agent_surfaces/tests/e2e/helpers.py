@@ -38,8 +38,6 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceExternalUser,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
-    FakeGmailServer,
-    FakeOutlookServer,
     FakeResendServer,
     FakeSlackServer,
     FakeTeamsServer,
@@ -118,26 +116,6 @@ async def fake_whatsapp(message_store):
 @pytest_asyncio.fixture
 async def fake_telegram(message_store):
     server = FakeTelegramServer(message_store)
-    await server.start()
-    try:
-        yield server
-    finally:
-        await server.stop()
-
-
-@pytest_asyncio.fixture
-async def fake_gmail(message_store):
-    server = FakeGmailServer(message_store)
-    await server.start()
-    try:
-        yield server
-    finally:
-        await server.stop()
-
-
-@pytest_asyncio.fixture
-async def fake_outlook(message_store):
-    server = FakeOutlookServer(message_store)
     await server.start()
     try:
         yield server
@@ -763,39 +741,6 @@ def _telegram_payload(*, text: str, message_id: int, sender_id: int) -> dict:
     }
 
 
-def _gmail_payload(
-    *,
-    sender_email: str,
-    assistant_email: str,
-    thread_id: str,
-    message_id: str,
-    text: str,
-) -> dict:
-    return {
-        "data": {
-            "thread_id": thread_id,
-            "message_id": message_id,
-            "sender": f"Surface Test User <{sender_email}>",
-            "to": assistant_email,
-            "subject": "Surface Gmail E2E",
-            "message_text": text,
-            "preview": {"body": text, "subject": "Surface Gmail E2E"},
-            "payload": {
-                "headers": [
-                    {"name": "From", "value": f"Surface Test User <{sender_email}>"},
-                    {"name": "To", "value": assistant_email},
-                    {"name": "Delivered-To", "value": assistant_email},
-                    {"name": "Subject", "value": "Surface Gmail E2E"},
-                    {
-                        "name": "Message-ID",
-                        "value": f"<{message_id}@gmail-e2e.test>",
-                    },
-                ]
-            },
-        }
-    }
-
-
 def _resend_payload(
     *,
     sender_email: str,
@@ -819,45 +764,3 @@ def _resend_payload(
     }
 
 
-def _outlook_payload(
-    *,
-    sender_email: str,
-    assistant_email: str,
-    thread_id: str,
-    message_id: str,
-    text: str,
-) -> dict:
-    return {
-        "data": {
-            "id": message_id,
-            "conversationId": thread_id,
-            "internetMessageId": f"<{message_id}@outlook-e2e.test>",
-            "from": {
-                "emailAddress": {
-                    "address": sender_email,
-                    "name": "Surface Test User",
-                }
-            },
-            "replyTo": [
-                {
-                    "emailAddress": {
-                        "address": sender_email,
-                        "name": "Surface Test User",
-                    }
-                }
-            ],
-            "toRecipients": [
-                {
-                    "emailAddress": {
-                        "address": assistant_email,
-                        "name": "Lemma",
-                    }
-                }
-            ],
-            "subject": "Surface Outlook E2E",
-            "body": {"contentType": "text", "content": text},
-            "internetMessageHeaders": [
-                {"name": "Message-ID", "value": f"<{message_id}@outlook-e2e.test>"}
-            ],
-        }
-    }

@@ -36,7 +36,7 @@ def test_native_choices_platforms():
 
 def test_email_platforms_flagged():
     email = {p for p, c in PLATFORM_CAPABILITIES.items() if c.is_email}
-    assert email == {"GMAIL", "OUTLOOK", "RESEND"}
+    assert email == {"RESEND"}, "email is Resend; the Composio mailboxes are gone"
 
 
 def test_channel_capable_only_slack_teams():
@@ -74,7 +74,7 @@ def test_no_platform_names_a_reply_tool_any_more():
 
 def test_email_guidance_routes_everything_through_the_one_reply():
     """Email delivers once, so the prompt has to describe one reply, not a chat."""
-    text = platform_agent_guidance("GMAIL")
+    text = platform_agent_guidance("RESEND")
     assert "exactly one" in text
     assert "sent when you finish" in text
     # No tool to call: writing the reply is sending it.
@@ -90,7 +90,7 @@ def test_email_guidance_no_longer_calls_display_resource_useless():
     left returning success while delivering nothing. Both halves are fixed, and
     a prompt still saying "do NOT call display_resource" would now be the lie.
     """
-    text = platform_agent_guidance("GMAIL")
+    text = platform_agent_guidance("RESEND")
     assert "does NOT reach the email recipient" not in text
     assert "attached to your reply" in text
     # What genuinely cannot happen on email is pausing, and that must still be said.
@@ -147,6 +147,6 @@ def test_chat_guidance_does_not_call_the_fallback_a_download_link():
 
 
 def test_email_quotes_the_base64_adjusted_cap_not_the_chat_cap():
-    """A 25 MB provider ceiling is ~17 MB of file once base64 has had its 33%."""
-    assert get_platform_capabilities("GMAIL").inline_mb_cap == 17
-    assert "17 MB" in platform_agent_guidance("GMAIL")
+    """A 40 MB provider ceiling is ~28 MB of file once base64 has had its 33%."""
+    assert get_platform_capabilities("RESEND").inline_mb_cap == 28
+    assert "28 MB" in platform_agent_guidance("RESEND")

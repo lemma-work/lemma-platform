@@ -47,7 +47,7 @@ class OriginKind(str, Enum):
     """A published pod app. Members only, per REACH_RULE."""
 
     SURFACE = "SURFACE"
-    """Slack, Teams, WhatsApp, Telegram, Gmail, Outlook. Members only, per
+    """Slack, Teams, WhatsApp, Telegram, email. Members only, per
     REACH_RULE. The platform rides in ``Origin.platform``."""
 
     # Programmatic.

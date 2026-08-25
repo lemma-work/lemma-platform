@@ -66,7 +66,6 @@ from app.modules.test_support.e2e.scripted_model import (
     ScriptTurn as ScriptTurn,
     script_ask_user as script_ask_user,
     script_display_resource as script_display_resource,
-    script_email_reply as script_email_reply,
     script_progress as script_progress,
     script_request_approval as script_request_approval,
     script_say as script_say,

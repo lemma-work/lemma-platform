@@ -287,22 +287,6 @@ def build_surface_setup_guide(platform: SurfacePlatform) -> SurfacePlatformSetup
                 "Standalone/local workers clear the Telegram webhook and poll automatically for the built-in bot.",
             ],
         )
-    if platform is SurfacePlatform.GMAIL:
-        return _email_account_guide(
-            platform=platform,
-            title="Gmail Surface Setup",
-            docs_path="docs/surfaces/gmail.md",
-            account_label="Connected Gmail account",
-            account_description="Existing Lemma connector account for the Gmail mailbox.",
-        )
-    if platform is SurfacePlatform.OUTLOOK:
-        return _email_account_guide(
-            platform=platform,
-            title="Outlook Surface Setup",
-            docs_path="docs/surfaces/outlook.md",
-            account_label="Connected Outlook account",
-            account_description="Existing Lemma connector account for the Outlook mailbox.",
-        )
     if platform is SurfacePlatform.RESEND:
         return _system_email_guide()
     # Every ``SurfacePlatform`` member is answered above, and
@@ -474,52 +458,6 @@ def _built_in_or_account_guide(
                 ],
                 notes=notes,
             ),
-        ],
-    )
-
-
-def _email_account_guide(
-    *,
-    platform: SurfacePlatform,
-    title: str,
-    docs_path: str,
-    account_label: str,
-    account_description: str,
-) -> SurfacePlatformSetupGuide:
-    return SurfacePlatformSetupGuide(
-        platform=platform,
-        title=title,
-        summary="Email surfaces use EMAIL mode and a connected mailbox account.",
-        docs_path=docs_path,
-        connectors=[
-            SurfaceConnectorSetupGuide(
-                mode=SurfaceSetupMode.CONNECTED_ACCOUNT,
-                title="Connected mailbox",
-                summary="Use an existing connector account and let Lemma create the polling trigger.",
-                docs_path=docs_path,
-                fields=_common_fields(
-                    include_channel=False,
-                    account_label=account_label,
-                    account_description=account_description,
-                ),
-                steps=[
-                    SurfaceSetupStep(
-                        phase=SurfaceSetupPhase.PREPARE,
-                        title="Connect the mailbox",
-                        description="Complete the email connector connection flow and keep the account_id.",
-                    ),
-                    SurfaceSetupStep(
-                        phase=SurfaceSetupPhase.CREATE_SURFACE,
-                        title="Create the email surface",
-                        description="POST the surface with platform, mode=EMAIL, and account_id.",
-                    ),
-                    SurfaceSetupStep(
-                        phase=SurfaceSetupPhase.VERIFY,
-                        title="Verify reply flow",
-                        description="Send an inbound email and confirm Lemma creates or reuses the mapped conversation thread.",
-                    ),
-                ],
-            )
         ],
     )
 

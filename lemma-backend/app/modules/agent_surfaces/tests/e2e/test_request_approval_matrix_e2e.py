@@ -28,7 +28,6 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -44,13 +43,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_THREAD_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _ensure_connector_trigger,
     _ensure_e2e_runtime_profile,
-    _gmail_payload,
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
-    _outlook_payload,
     _resend_payload,
     _seed_external_user,
     _set_user_mobile_number,
@@ -64,14 +60,10 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
-    script_email_reply,
     script_request_approval,
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.composition.schedule_connectors import (
-    ManagersFactory,
-)
 
 pytestmark = pytest.mark.e2e
 
@@ -877,139 +869,7 @@ async def test_request_approval_whatsapp_native_buttons_then_resumes_on_approve(
     assert result["executed"] is True
 
 
-async def test_request_approval_suppressed_on_gmail_reply_completes_via_reply_tool(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_gmail,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Email surfaces never offer request_approval (agent has no
-    USER_INTERACTION toolset) — the agent must complete via its reply tool."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="gmail",
-        credentials={
-            "connection_id": "gmail-approval-e2e-account",
-        },
-        email="assistant@gmail.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="gmail",
-        trigger_id="gmail_new_message_approval_e2e",
-        event_type="GMAIL_NEW_GMAIL_MESSAGE",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "GMAIL", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_gmail_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@gmail.test",
-                thread_id="gmail-thread-approval-e2e",
-                message_id="gmail-message-approval-1",
-                text="Can you help over Gmail?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[script_email_reply("gmail_reply_email", "Here is my answer.")],
-    )
-
-    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
-    reply = gmail_messages[-1]
-    assert reply["operation_name"] == "GMAIL_REPLY_TO_THREAD"
-    assert "Here is my answer." in json.dumps(reply["payload"])
-
-
-async def test_request_approval_suppressed_on_outlook_reply_completes_via_reply_tool(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_outlook,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Email surfaces never offer request_approval (agent has no
-    USER_INTERACTION toolset) — the agent must complete via its reply tool."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="outlook",
-        credentials={
-            "connection_id": "outlook-approval-e2e-account",
-        },
-        email="assistant@outlook.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="outlook",
-        trigger_id="outlook_message_approval_e2e",
-        event_type="OUTLOOK_MESSAGE_TRIGGER",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "OUTLOOK", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_outlook_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@outlook.test",
-                thread_id="outlook-thread-approval-e2e",
-                message_id="outlook-message-approval-1",
-                text="Can you help over Outlook?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[script_email_reply("outlook_reply_email", "Here is my answer.")],
-    )
-
-    outlook_messages = await wait_for_messages(
-        message_store, "OUTLOOK_REPLY", min_count=1
-    )
-    reply = outlook_messages[-1]
-    assert reply["operation_name"] == "OUTLOOK_REPLY_EMAIL"
-    assert "Here is my answer." in json.dumps(reply["payload"])
-
-
-async def test_request_approval_suppressed_on_resend_reply_completes_via_reply_tool(
+async def test_request_approval_on_resend_completes_in_the_one_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -1058,7 +918,7 @@ async def test_request_approval_suppressed_on_resend_reply_completes_via_reply_t
             ),
             headers={},
         ),
-        script=[script_email_reply("resend_reply_email", "Here is my answer.")],
+        script=[script_text("Here is my answer.")],
     )
 
     resend_messages = await wait_for_messages(message_store, "RESEND", min_count=1)
