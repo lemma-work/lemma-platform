@@ -2074,8 +2074,10 @@ async def test_send_to_member_reuses_existing_thread():
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
     service.external_user_repository = AsyncMock(
-        get_by_resolved_user=AsyncMock(
-            return_value=SimpleNamespace(external_user_id=link.external_user_id)
+        list_by_resolved_users=AsyncMock(
+            return_value=[
+                SimpleNamespace(external_user_id=link.external_user_id, tenant_id=None)
+            ]
         )
     )
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (
@@ -2124,8 +2126,8 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
     service.external_user_repository = AsyncMock(
-        get_by_resolved_user=AsyncMock(
-            return_value=SimpleNamespace(external_user_id="777")
+        list_by_resolved_users=AsyncMock(
+            return_value=[SimpleNamespace(external_user_id="777", tenant_id=None)]
         )
     )
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (
@@ -2197,8 +2199,8 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         )
     )
     service.external_user_repository = AsyncMock(
-        get_by_resolved_user=AsyncMock(
-            return_value=SimpleNamespace(external_user_id="777")
+        list_by_resolved_users=AsyncMock(
+            return_value=[SimpleNamespace(external_user_id="777", tenant_id=None)]
         )
     )
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (
@@ -2256,8 +2258,8 @@ async def test_send_to_member_returns_false_without_reachable_thread():
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
     service.external_user_repository = AsyncMock(
-        get_by_resolved_user=AsyncMock(
-            return_value=SimpleNamespace(external_user_id="U-MEMBER")
+        list_by_resolved_users=AsyncMock(
+            return_value=[SimpleNamespace(external_user_id="U-MEMBER", tenant_id=None)]
         )
     )
     service.conversation_link_repository.get_latest_by_surface_and_external_user = (

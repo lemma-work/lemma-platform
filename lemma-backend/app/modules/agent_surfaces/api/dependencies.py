@@ -65,6 +65,7 @@ from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagerService,
 )
 from app.composition.surface_identity import create_surface_user_repository
+from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
 from app.composition.surface_connectors import get_connector_service
 from app.composition.surface_connectors import (
     ConnectorTriggerRepository,
@@ -154,18 +155,10 @@ def _build_system_email_provisioner(uow: UoWDep):
             pod_id=pod_id,
             agent_id=agent_id,
             agent_name=agent_name,
-            pod_name=await _pod_name(uow, pod_id),
+            pod_name=await pod_name_for(uow, pod_id),
         )
 
     return provision
-
-
-async def _pod_name(uow: UoWDep, pod_id: UUID) -> str | None:
-    """The pod's name, for the readable half of the address."""
-    from app.modules.pod.infrastructure.pod_repositories import PodRepository
-
-    pod = await PodRepository(uow).get(pod_id)
-    return getattr(pod, "name", None)
 
 
 def get_surface_webhook_security_service(

@@ -170,13 +170,25 @@ class AgentSurfaceService(
         )
         # Resend is a system-credentialed email surface: it needs an inbound
         # address that routing matches on and outbound uses as the From. (Other
-        # email surfaces get this from their connected account.) Callers that
-        # allocate a readable per-agent address pass it in; the pod-level
-        # fallback derives one that cannot collide.
+        # email surfaces get this from their connected account.)
+        #
+        # Required, not defaulted. There used to be a fallback here deriving
+        # `pod-<pod_id.hex>@domain` — unique by construction and unreadable —
+        # so that a caller need not know how addresses are allocated. Two of
+        # the three callers duly did not know, which meant the address a person
+        # saw depended on whether their surface arrived through the API or
+        # through agent creation, and neither of those two paths was screened
+        # against `RESERVED_LOCAL_PARTS`. Allocation lives in
+        # `email_surface_provisioning`; anything reaching here without an
+        # address has gone around it, and that is a bug rather than a default.
         if platform is SurfacePlatform.RESEND and not entity.surface_identity_email:
-            entity.surface_identity_email = (
-                surface_identity_email or self._provision_resend_address(pod_id)
-            )
+            if not surface_identity_email:
+                raise AgentSurfaceValidationError(
+                    "A Resend surface needs an inbound address. Create it "
+                    "through email_surface_provisioning, which allocates a "
+                    "readable one and retries when it is taken."
+                )
+            entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
         await self._ensure_unique_org_credential_binding(entity)
         telegram_credentials: dict[str, Any] | None = None
@@ -196,24 +208,47 @@ class AgentSurfaceService(
         await notify_surface_receiver_config_changed(synced.id)
         return synced
 
-    @staticmethod
-    def _provision_resend_address(pod_id: UUID) -> str:
-        """Derive a unique per-pod inbound/outbound Resend address.
+    async def create_surface_minting_address(
+        self,
+        *,
+        pod_id: UUID,
+        agent: Any | None,
+        platform: SurfacePlatform,
+        name: str | None = None,
+        config: SurfaceConfig | None = None,
+        credential_mode: SurfaceCredentialMode | None = None,
+        account_id: UUID | None = None,
+        ctx: Context | None = None,
+    ) -> AgentSurfaceEntity:
+        """:meth:`create_surface`, minting an address when the platform needs one.
 
-        Uses the pod id for uniqueness under a catch-all inbound domain
-        (``*@<domain>`` → one webhook), so no per-address API registration. The
-        full 32-char hex is used (not a prefix) so two pods can never collide on
-        the same address — ``get_active_by_address`` would otherwise misroute one
-        pod's inbound mail to the other. ``pod-`` + 32 hex = 36 chars, within the
-        64-char local-part limit.
+        For the two callers a person drives — the surfaces API and the bundle
+        applier. They bring their own name, config and credentials, so they
+        cannot use ``provision_email_surface``, and calling ``create_surface``
+        straight through is what used to land them on the ``pod-<hex>@``
+        fallback: unreadable, and never screened for reserved local parts.
+
+        ``agent`` is the resolved agent or None rather than an id, because the
+        readable half of the address is its *name* and both callers already hold
+        the entity.
         """
-        domain = surface_settings.resend_inbound_domain
-        if not domain:
-            raise AgentSurfaceValidationError(
-                "Email is not configured for this deployment: set "
-                "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
-            )
-        return f"pod-{pod_id.hex}@{domain}"
+        from app.modules.agent_surfaces.services.email_surface_provisioning import (
+            create_surface_on_minted_address,
+        )
+
+        return await create_surface_on_minted_address(
+            self,
+            self.surface_repository.uow,
+            pod_id=pod_id,
+            agent_id=getattr(agent, "id", None),
+            agent_name=getattr(agent, "name", None),
+            platform=platform,
+            name=name,
+            config=config or SurfaceConfig(),
+            credential_mode=credential_mode,
+            account_id=account_id,
+            ctx=ctx,
+        )
 
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:
         surface = await self.surface_repository.get(surface_id)
@@ -244,6 +279,35 @@ class AgentSurfaceService(
         if surface is None:
             raise AgentSurfaceNotFoundError(name)
         return surface
+
+    async def resend_surface_for_agent(
+        self,
+        *,
+        pod_id: UUID,
+        agent_id: UUID | None,
+    ) -> AgentSurfaceEntity | None:
+        """This agent's mailbox, or the pod assistant's for ``agent_id=None``.
+
+        The other identity a surface has. Names answer "which surface is the API
+        talking about"; this answers "does this agent already have a mailbox",
+        which is what decides whether connecting email mints an address or
+        returns the one the agent has held since it was created.
+
+        ``match_agent`` rather than a bare ``agent_id``, because ``None`` here
+        means the pod assistant and has to compile to ``IS NULL`` — the same
+        deliberate absence ``surfaces_for_agent`` reads it as, not "any agent".
+
+        ``None`` rather than raising: the caller is asking whether one exists,
+        and for a pod created before mailboxes were eager the answer is no.
+        """
+        surfaces, _ = await self.list_surfaces_by_pod(
+            pod_id,
+            platform=SurfacePlatform.RESEND.value,
+            agent_id=agent_id,
+            match_agent=True,
+            limit=1,
+        )
+        return surfaces[0] if surfaces else None
 
     async def update_surface(
         self,
@@ -383,17 +447,67 @@ class AgentSurfaceService(
         await notify_surface_receiver_config_changed(surface_id)
 
     async def delete_all_surfaces_for_pod(self, pod_id: UUID) -> int:
-        """Remove every surface in a pod so its accounts become free again.
+        """Remove every surface in a pod so its accounts become free again."""
+        return await self._delete_matching_surfaces(pod_id)
 
-        Best-effort per surface: a failed external teardown is logged and
-        skipped. ``delete_surface`` deletes the row regardless, so the
-        org-unique account binding is always released.
+    async def delete_surfaces_for_agent(self, pod_id: UUID, agent_id: UUID) -> int:
+        """Remove the surfaces belonging to one agent, as it is deleted.
+
+        ``agent_surfaces.agent_id`` is ``ON DELETE SET NULL``, so without this a
+        deleted agent's mailbox does not go away — it becomes an *agentless*
+        surface, which is precisely what the pod assistant's own surface is.
+        `surfaces_for_agent` then finds two of them for the assistant and the pod
+        starts answering from a deleted agent's address. Harmless while most pods
+        had no agentless surface; every pod has one now.
+        """
+        return await self._delete_matching_surfaces(
+            pod_id, agent_id=agent_id, match_agent=True
+        )
+
+    async def delete_email_surfaces_for_pod(self, pod_id: UUID) -> int:
+        """Remove the pod's Resend surfaces, freeing their inbound addresses.
+
+        Called inline as a pod is deleted, because the pod's name is freed in
+        that same request and a pod recreated under it otherwise races the worker
+        for the address. Resend only, which is what keeps it bounded and
+        provider-free: everything else still goes through the pod-deleted event
+        and :meth:`delete_all_surfaces_for_pod`.
+        """
+        return await self._delete_matching_surfaces(
+            pod_id, platform=SurfacePlatform.RESEND.value
+        )
+
+    async def _delete_matching_surfaces(
+        self,
+        pod_id: UUID,
+        *,
+        platform: str | None = None,
+        agent_id: UUID | None = None,
+        match_agent: bool = False,
+    ) -> int:
+        """Delete a pod's surfaces, or the subset the filters name.
+
+        One loop for all three callers — a pod being deleted, an agent being
+        deleted, and a pod releasing its addresses — because the awkward part is
+        identical and worth having in one place: page through, tear each one
+        down, and never let one failure strand the rest.
+
+        Best-effort per surface. ``delete_surface`` runs the external teardown (a
+        Telegram webhook, a Composio polling schedule) and deletes the row even
+        when that fails, so an unreachable provider can neither keep a deleted
+        agent's mailbox alive nor hold an org-unique account binding hostage.
         """
         deleted = 0
         failure_count = 0
         cursor: UUID | None = None
         while True:
-            surfaces, cursor = await self.list_surfaces_by_pod(pod_id, cursor=cursor)
+            surfaces, cursor = await self.list_surfaces_by_pod(
+                pod_id,
+                platform=platform,
+                agent_id=agent_id,
+                match_agent=match_agent,
+                cursor=cursor,
+            )
             for surface in surfaces:
                 try:
                     await self.delete_surface(surface.id)

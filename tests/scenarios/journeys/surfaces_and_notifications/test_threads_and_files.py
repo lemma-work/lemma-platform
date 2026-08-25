@@ -25,21 +25,17 @@ async def test_a_chat_is_one_conversation(reachable):
     await reachable.waits_for_a_reply()
 
     await reachable.says("and a second thing")
-    await reachable.waits_for_a_reply(after=1)
 
-    threads = await reachable.conversations()
-    assert len(threads) == 1, (
-        "a second message in the same chat started a second conversation, so "
-        f"the agent answers it having forgotten the first: {threads}"
-    )
-
-    # And both messages are in it, which is what "the same conversation" has to
-    # mean — a thread that exists but lost the first message is no better.
-    said = await reachable.alice.messages_in(threads[0], in_pod=reachable.pod)
-    spoken = " ".join(str(message.get("text") or "") for message in said)
-    assert "first thing" in spoken and "and a second thing" in spoken, (
-        f"the conversation does not hold both messages: {spoken[:400]}"
-    )
+    # Asked of the pod, not counted off the chat. Whether the agent answered
+    # twice is incidental to this promise — what it is about is that the second
+    # message joins the first rather than starting somewhere new. Waiting on a
+    # second reply made this fail against a real deployment for a reason it was
+    # not testing, and would have gone on saying "the agent never answered"
+    # about a product that had put both messages exactly where they belong.
+    #
+    # `waits_for_a_conversation_holding` asserts the "one" itself: more than one
+    # conversation carrying these messages is the failure this scenario is for.
+    await reachable.waits_for_a_conversation_holding("first thing", "and a second thing")
 
 
 @scenario("A different chat is a different conversation")
@@ -75,9 +71,12 @@ async def test_a_separate_chat_is_a_separate_conversation(reachable):
 @covers("agent.conversation.get")
 async def test_a_surface_conversation_records_its_origin(reachable):
     await reachable.says("hello from outside")
-    await reachable.waits_for_a_reply()
 
-    [thread] = await reachable.conversations()
+    # By content rather than by novelty. A person has one chat with a bot and it
+    # stands between runs, so this message lands in the conversation an earlier
+    # run opened — nothing is created, and asking for "the conversation this
+    # scenario made" got an empty list and failed unpacking it.
+    thread = await reachable.waits_for_a_conversation_holding("hello from outside")
     opened = await reachable.alice.opens_conversation(thread, in_pod=reachable.pod)
 
     # Somebody reading this in the workspace has to be able to tell it arrived

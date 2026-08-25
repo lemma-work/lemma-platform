@@ -370,11 +370,20 @@ Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
   addresses are minted on it (`{agent}.{pod}@{domain}`, and `{pod}@{domain}` for
   the pod's own assistant) and inbound routing matches on it, so a wrong value
   means mail that bounces on the way out and matches no surface on the way back.
-- **The key and the domain together are the switch.** Set both and agents get
-  mailboxes; leave either unset and they do not. There is no separate enable
-  flag — there was one, and being read per process it could be on where the
-  surfaces catalog runs and off where sends run, which presents as the UI
-  offering email while delivery reports that the pod has no surface.
+  The domain is one catch-all shared by every organization, so role addresses
+  are reserved: a pod named "Postmaster" gets `postmaster-k3p9@`, never
+  `postmaster@`. Matching ignores separators, so "Post Master" and "Post-Master"
+  are the same request and get the same answer.
+- **The key and the domain together are the switch.** Set both and every pod and
+  agent gets a mailbox as it is created; leave either unset and they do not.
+  There is no separate enable flag — there was one, and being read per process
+  it could be on where the surfaces catalog runs and off where sends run, which
+  presents as the UI offering email while delivery reports that the pod has no
+  surface.
+- **One mailbox per agent, and connecting email returns it.** The address exists
+  from the moment the agent does, so `POST /pods/{id}/surfaces` with no `name`
+  hands back the surface already carrying it rather than minting a second one.
+  Pass a `name` to create a genuinely separate Resend surface.
 - **`RESEND_WEBHOOK_SECRET` is per *endpoint*.** Svix derives the signature from
   the secret of the endpoint that sent the request, so if bounces are a separate
   Resend endpoint, its secret differs — set `RESEND_BOUNCE_WEBHOOK_SECRET` for

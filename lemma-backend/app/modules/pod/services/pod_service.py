@@ -82,6 +82,26 @@ class PodService:
                 added_by_user_id=creator_user_id,
             )
 
+        # The pod's assistant gets its mailbox here, the way an agent gets one in
+        # `create_agent`. It used to be minted on the assistant's first outbound
+        # notification instead, which reads as thrift and is not: inbound routes
+        # on the address, so until something was sent, mail to the obvious guess
+        # matched no surface and started nothing. A pod that cannot be written to
+        # is not cheaper than one that can.
+        #
+        # Best-effort by design, exactly as for an agent: creating a pod must not
+        # fail because a mail domain is unset. `_uow` is absent only where a
+        # caller built the service without one -- the same guard `delete_pod`
+        # uses for its role-cache hook.
+        if self._uow is not None:
+            from app.composition.agent_email_surface import (
+                provision_pod_assistant_email_surface,
+            )
+
+            await provision_pod_assistant_email_surface(
+                self._uow, pod_id=pod.id, pod_name=pod.name
+            )
+
         return pod
 
     async def get_pod(
@@ -224,6 +244,28 @@ class PodService:
             # inline would put an unbounded number of Composio round trips
             # inside this transaction.
             await self.schedule_teardown.disarm_all_for_pod(pod_id)
+        # The pod's inbound addresses go with it, in this request, for the same
+        # reason its schedules are disarmed here: the pod's *name* is freed
+        # above, the moment `_build_deleted_pod_name` renames it. Recreating a
+        # pod under that name before the pod-deleted event was consumed asked
+        # for an address the deleted pod still held, and got either a suffixed
+        # one — with the readable form orphaned on a row nobody can reach — or,
+        # once the worker caught up, the deleted pod's own address, still being
+        # written to by its correspondents. Which of the two came down to queue
+        # lag. Every pod holds an address now, so this stopped being a corner.
+        #
+        # Only the email surfaces, deliberately. The comment above is right that
+        # an unbounded number of Composio round trips must not go inside this
+        # transaction — but a Resend surface has none: it receives on a
+        # catch-all webhook, so `delete_surface` makes no provider call for it
+        # and `_sync_email_schedule` returns early. Bounded by the number of
+        # agents in the pod, and the rest still waits for the worker.
+        if self._uow is not None:
+            from app.composition.agent_email_surface import (
+                release_pod_inbound_addresses,
+            )
+
+            await release_pod_inbound_addresses(self._uow, pod_id=pod_id)
         # Cached role snapshots outlive the pod otherwise, and they are what
         # authorizes every pod-scoped request. The snapshot carries
         # `pod_is_deleted`, so one written *before* this moment says the pod is

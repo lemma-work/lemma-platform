@@ -172,7 +172,10 @@ jobs:
         working-directory: lemma-backend
     services:
       redis:
-        image: redis:7
+        # The same tag `test_utils.py` pins and the e2e workflow caches.
+        # This said `redis:7`, a second, different image (192MB against
+        # 42MB) pulled fresh for this job alone.
+        image: redis:7.4-alpine
         ports:
           - 6379:6379
         options: >-
@@ -218,6 +221,11 @@ jobs:
           if [ -f coverage-backend/comment.md ]; then
             cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -226,11 +234,19 @@ jobs:
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
-            lemma-backend/coverage-backend/html
+            # `make coverage-backend-unit` has always written this and nothing
+            # has ever collected it, so the unit lane's slow tail is invisible
+            # -- 195 seconds with no way to see whether that is a broad spread
+            # or three slow tests, which is the difference between needing
+            # per-worker database isolation for xdist and needing to split
+            # three tests. The e2e shards upload theirs and get a slowest-tests
+            # summary out of it; this is the same line.
+            lemma-backend/coverage-backend/junit-*.xml
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates

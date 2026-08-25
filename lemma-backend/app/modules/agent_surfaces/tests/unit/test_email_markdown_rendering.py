@@ -151,3 +151,48 @@ class TestEveryEmailPlatformRendersTheSameWay:
         plain, html = render_email_content(content="**not bold**", content_type="text")
         assert plain == "**not bold**"
         assert html is None
+
+
+class TestAListMayInterruptAParagraph:
+    """The shape models actually write, and the one Python-Markdown refuses.
+
+    A label line followed straight by bullets was one paragraph, and HTML does
+    not preserve newlines — so it arrived as a flowed sentence with hyphens
+    loose in it. Reported from a real send: "WHAT YOU CAN DO - Land results in
+    tables and files - Run agents and workflows for multi-step work".
+    """
+
+    def test_bullets_under_a_label_become_a_real_list(self):
+        html = _html("What you can do\n- Land results\n- Run agents")
+        assert html.count("<li") == 2
+        assert "<ul" in html
+
+    def test_numbered_items_under_a_label_too(self):
+        html = _html("Steps\n1. Connect the surface\n2. Send a message")
+        assert html.count("<li") == 2
+        assert "<ol" in html
+
+    def test_a_lazy_continuation_does_not_split_one_list_in_two(self):
+        """An unindented line inside a list belongs to the item above it.
+
+        Inserting a break before the next item would end the list and start a
+        second one, which is a worse outcome than the bug being fixed.
+        """
+        html = _html("- item one\n  continued on the next line\n- item two")
+        assert html.count("<ul") == 1
+        assert html.count("<li") == 2
+
+    def test_a_hyphen_inside_a_fenced_block_stays_code(self):
+        html = _html("Run it\n```\nnpm run build\n- not a bullet\n```")
+        assert "<li" not in html
+        assert "- not a bullet" in html
+
+    def test_a_list_that_was_already_correct_is_unchanged(self):
+        html = _html("What you can do\n\n- Land results\n- Run agents")
+        assert html.count("<li") == 2
+        assert html.count("<ul") == 1
+
+    def test_prose_containing_a_dash_is_not_turned_into_a_list(self):
+        """An em-dash aside and a hyphenated word are not bullets."""
+        html = _html("Lemma is durable — it stays in the pod.\nWell-formed too.")
+        assert "<li" not in html

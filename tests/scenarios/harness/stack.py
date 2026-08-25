@@ -908,9 +908,65 @@ def _migrate(python_bin: str, env: dict[str, str]) -> None:
         )
 
 
+def refuse_to_take_a_deployments_bot() -> None:
+    """Stop a local run from un-reaching a deployment's Telegram surface.
+
+    Polling and webhooks are exclusive at Telegram: a bot that starts polling
+    has its webhook deleted. So a stack booted with `SCENARIOS_TELEGRAM_POLLING`
+    and a bot token that some deployment is *also* using takes that bot away —
+    the deployment's surface stops receiving, silently, and neither side says
+    anything. Its scenarios then wait their full timeout and report that the
+    agent never answered, which reads as a product failure and is not one.
+
+    That is not hypothetical: it happened here, and the mistake that caused it
+    is easy to repeat. The two `.env` files held different bot tokens, so the
+    run looked safe — but the deployment's token had been exported into the
+    shell, and `_configured()` puts the environment *over* the file. Comparing
+    the files proved nothing about what the stack was actually handed.
+
+    So this asks Telegram instead of asking configuration: if the bot already
+    has a webhook, somebody else is being delivered to, and this run does not
+    get to take it.
+    """
+    if os.getenv("SCENARIOS_TELEGRAM_POLLING", "false").lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return
+    token = _configured_or("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        return
+    try:
+        import json as _json
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=15
+        ) as answered:
+            registered = ((_json.loads(answered.read()) or {}).get("result") or {}).get(
+                "url"
+            ) or ""
+    except Exception:  # noqa: BLE001 — an unreachable Telegram is not this check's business
+        return
+    if not registered:
+        return
+    raise StackError(
+        f"refusing to start: TELEGRAM_BOT_TOKEN names a bot that Telegram is "
+        f"already delivering to {registered}, and polling would delete that "
+        f"registration — leaving whichever deployment owns it unable to receive "
+        f"anything, with nothing to say why.\n\n"
+        f"Use a bot of your own for local runs. If the token came from your "
+        f"shell rather than from lemma-backend/.env, that is the usual cause: "
+        f"the environment wins over the file, so a run can be handed a "
+        f"deployment's bot without anyone choosing it."
+    )
+
+
 def start_stack():
     """Start everything and yield a :class:`Stack`. Generator, for a fixture."""
     require_docker()
+    refuse_to_take_a_deployments_bot()
 
     containers: list[str] = []
     processes: list[subprocess.Popen] = []

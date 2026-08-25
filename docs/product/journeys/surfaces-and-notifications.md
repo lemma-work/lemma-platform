@@ -177,7 +177,14 @@ dropped.
 **Contracts:** `agent.surface.create`, `surface.webhook.handle_platform`, `agent.surface.send`
 
 ### PS-SURF-023 — A person reached on several platforms gets one predictable answer
-**Status:** covered
+**Status:** gap
+
+> **Gap:** the default holds for messages a person starts, not for messages the
+> system starts. Agent-initiated contact ranks the *sending agent's* own surfaces
+> and never reads the preference, and the stored preference is per platform —
+> it chooses which pod's surface answers on WhatsApp, not whether to use WhatsApp
+> at all. See `DEV-SURF-004`, which is a question for the product rather than a
+> bug: the second half of this promise may be the part that is wrong.
 
 - Where a person has chosen a default surface, the system shall reach them there
   when it starts the contact, whatever platform any earlier conversation used.

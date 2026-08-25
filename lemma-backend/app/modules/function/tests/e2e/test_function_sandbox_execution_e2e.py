@@ -51,6 +51,24 @@ from app.modules.test_support.e2e.waiters import eventually
 pytestmark = [pytest.mark.e2e, pytest.mark.real_sandbox]
 
 
+#: How long a test here waits for a run to reach a terminal status.
+_TERMINAL_WAIT_SECONDS = 45
+#: What goes in the run row's own `deadline_at`, which the reaper enforces.
+#:
+#: Deliberately far above the wait, and not equal to it. Both were 45s, started
+#: at different moments -- the row's clock begins when the row is created, the
+#: test's when it starts waiting, which is after a second run is created and
+#: committed. So the row's budget always expired first, and on a runner slow
+#: enough to matter (a cold Docker sandbox pull, a shard already at four
+#: workers) the test gave up while the reaper was still deciding. That is a
+#: race between two pieces of scaffolding, and it failed three times on three
+#: unrelated branches; run 32811225427 passed on a bare retry of the same SHA.
+#:
+#: Nothing here tests the deadline. `test_api_function_timeout_marks_run_failed`
+#: does that, on purpose, with a deadline chosen to expire.
+_RUN_DEADLINE_SECONDS = 4 * _TERMINAL_WAIT_SECONDS
+
+
 _CODE = """# input_type_name: Input
 # output_type_name: Output
 # function_name: execute
@@ -121,7 +139,7 @@ async def _create_run(
     await session.flush()
 
     run_id = uuid7()
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=45)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=_RUN_DEADLINE_SECONDS)
     session.add(
         FunctionRunModel(
             id=run_id,
@@ -158,7 +176,7 @@ async def _wait_for_terminal(db_manager, run_id: UUID) -> FunctionRunModel:
                 FunctionRunStatus.CANCELLED,
             }
         ),
-        timeout_seconds=45,
+        timeout_seconds=_TERMINAL_WAIT_SECONDS,
         interval_seconds=0.05,
     )
     assert run is not None

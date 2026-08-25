@@ -303,9 +303,9 @@ async def create_surface(
         agent_service=agent_service,
         ctx=ctx,
     )
-    surface = await service.create_surface(
+    surface = await service.create_surface_minting_address(
         pod_id=pod_id,
-        agent_id=agent.id if agent else None,
+        agent=agent,
         platform=request.platform,
         name=request.name,
         config=config,

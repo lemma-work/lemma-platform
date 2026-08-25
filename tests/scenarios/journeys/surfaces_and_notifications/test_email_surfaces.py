@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import time
 from uuid import uuid4
 
@@ -132,6 +133,21 @@ async def test_an_email_surface_has_an_address(mailbox):
         f"so mail to it will never arrive: {address!r}"
     )
 
+    # Readable, because a person types it. Connecting a surface through the API
+    # used to fall to a `pod-<32 hex>@` form that only the database was happy
+    # with, so which of the two you got depended on whether your surface came
+    # from agent creation or from this endpoint. Asserted by shape rather than
+    # by slug so the scenario does not restate how the address is built: two
+    # halves separated by a dot, and not the hex form.
+    local_part = address.split("@", 1)[0]
+    assert not re.fullmatch(r"pod-[0-9a-f]{32}", local_part), (
+        f"the surface fell back to the unreadable per-pod address: {address!r}"
+    )
+    assert "." in local_part, (
+        f"an agent's address should read as agent-and-pod, not one opaque "
+        f"word: {address!r}"
+    )
+
 
 @scenario("Mail to a surface's address reaches the pod that owns it")
 @proves("PS-SURF-022")
@@ -216,6 +232,92 @@ async def test_an_unsigned_email_is_refused(mailbox):
     assert refused.status_code >= 400, (
         f"an unsigned email was accepted ({refused.status_code}); anyone who "
         f"knows the address could start an agent"
+    )
+
+
+@scenario("Connecting email hands back the address the agent already has")
+@proves("PS-SURF-022")
+@covers("agent.surface.create", "agent.surface.list")
+async def test_connecting_email_does_not_mint_a_second_mailbox(world, run):
+    """An agent has one address, and connecting email is how you turn it on.
+
+    Every agent is given a mailbox as it is created, so by the time anyone
+    presses Connect the address already exists — which is what the button says
+    it does ("the address Lemma already runs for this agent"). Asking for one
+    anyway minted a *second* surface: the readable address was taken, by the
+    agent itself, so allocation fell through to a suffixed form and the person
+    who pressed the button was handed `reporter.acme-p7k3@` for an agent
+    already reachable at `reporter.acme@`.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
+
+    minted = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(minted) == 1, (
+        f"an agent should be created holding exactly one mailbox: {minted}"
+    )
+    original = _address_of(minted[0])
+
+    # No name, which is the plain "connect email" call and what the UI sends.
+    # A *named* request asks for a distinct surface and still mints one.
+    connected = await alice.connects_a_surface(
+        in_pod=pod, platform="RESEND", agent=agent["name"], unnamed=True
+    )
+
+    assert _address_of(connected) == original, (
+        f"connecting email minted a second address, {_address_of(connected)!r}, "
+        f"for an agent already reachable at {original!r}"
+    )
+
+    after = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(after) == 1, (
+        f"the agent ended up with {len(after)} mailboxes: "
+        f"{[_address_of(s) for s in after]}"
+    )
+
+
+@scenario("A pod is reachable by email without connecting anything")
+@proves("PS-SURF-022")
+@covers("agent.surface.list")
+async def test_a_new_pod_already_has_an_address(world, run):
+    """Inbound routes on the address, so it has to exist before the first send.
+
+    The pod assistant's mailbox used to be minted on its first *outbound*
+    notification. Until then mail to the obvious guess matched no surface and
+    started nothing — a pod nobody can write to, which is not cheaper than one
+    they can.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+
+    addressed = [
+        _address_of(surface)
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ]
+
+    assert addressed, (
+        "a pod nobody has connected anything to still has to be writable-to, "
+        "and this one has no address at all"
+    )
+    # The assistant's mailbox is not named for the platform, because that is the
+    # name an unnamed request resolves to and the two collided.
+    assert all(
+        surface["name"] != "resend"
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ), "the pod assistant is back on the name a plain connect request wants"
+    assert all(a.endswith(inbound_email_domain()) for a in addressed), (
+        f"an address outside this deployment's inbound domain never arrives: {addressed}"
     )
 
 

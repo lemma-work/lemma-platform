@@ -47,10 +47,21 @@ class AgentWaitStatus(str, Enum):
 
 
 class AgentWaitWakeReason(str, Enum):
-    """Why the agent woke. Handed back to the model in the tool return."""
+    """Why the agent woke. Handed back to the model in the tool return.
+
+    ANSWERED is deliberately a *reason*, not a second :class:`AgentWaitType`.
+    The wait is still a timer — armed with a ``scheduled_at``, swept by the same
+    reconciliation — and the timer stays the guarantee that the agent comes back
+    at all. An answer landing only resolves that timer sooner. Modelling it as a
+    wait type would mean a wait that resolves on two unrelated conditions, and
+    every sweep and claim path would have to learn about the second one.
+    """
 
     TIMER = "TIMER"
     CANCELLED = "CANCELLED"
+    # Everything this conversation asked a person with `message_user` has been
+    # answered. Unlike TIMER this *does* say something happened.
+    ANSWERED = "ANSWERED"
 
 
 class AgentConversationWaitEntity(AggregateRoot):
