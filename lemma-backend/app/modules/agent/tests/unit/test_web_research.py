@@ -824,20 +824,42 @@ class TestTheToolAlwaysReturns:
         """The whole point of a partial answer: three of four beats nothing."""
         session = _FakeSession()
         _patch_session(monkeypatch, session)
-        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 0.5)
+        # 2s, not the 0.5s this used to run with. The budget has to outlast
+        # acquiring the session and capturing the quick page, and on a loaded
+        # CI runner under `coverage run` line tracing that setup does not
+        # reliably fit in half a second: this test failed with *both* pages
+        # reported "Not attempted", i.e. the deadline fired before the first
+        # fetch was even reached. That is event-loop starvation, not the
+        # behaviour under test, and the margin is the only thing that decided
+        # it. Production allows 240s; the point here is that the budget is
+        # finite, not what it is.
+        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 2.0)
         monkeypatch.setattr(web_fetch_module, "_MAX_CONCURRENT_FETCHES", 1)
 
         from app.modules.agent.tools.web import page_extract
 
+        # Set when the quick page has been fetched, so the slow one cannot
+        # start spending the budget before it. The semaphore above already
+        # serialises them in list order, but that is a scheduling detail --
+        # this makes "quick first" the test's own guarantee rather than
+        # something inherited from `gather`.
+        quick_fetched = asyncio.Event()
+
         async def fetch(url: str):
             if "slow" in url:
-                await asyncio.sleep(30)
-            return page_extract.ExtractedPage(
+                await quick_fetched.wait()
+                # Nothing finishes this but the batch deadline, which is
+                # exactly what the assertions below are about. A fixed sleep
+                # would be a second race against the budget.
+                await asyncio.sleep(3600)
+            page = page_extract.ExtractedPage(
                 url=url,
                 title="A Title",
                 markdown="Body text here. " * 40,
                 content_type="text/html",
             )
+            quick_fetched.set()
+            return page
 
         monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fetch)
 
