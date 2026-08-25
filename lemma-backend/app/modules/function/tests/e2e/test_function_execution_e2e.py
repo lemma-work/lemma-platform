@@ -847,7 +847,17 @@ async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
     finals = await asyncio.gather(
         *(
             wait_for_run_completion(
-                authenticated_client, pod_id, function_name, rid, timeout_seconds=150
+                authenticated_client,
+                pod_id,
+                function_name,
+                rid,
+                # Under the shard's `-o timeout=120`, not over it. At 150 this
+                # wait could never report: pytest-timeout killed the test at
+                # 120 first, so a real stall showed up as a bare SIGKILL with
+                # no mention of which run never finished. The four runs are
+                # concurrent and measure ~11s, so anything near this is a
+                # failure either way -- the only question is whether it says so.
+                timeout_seconds=110,
             )
             for rid in run_ids
         )

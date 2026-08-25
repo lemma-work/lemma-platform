@@ -1031,13 +1031,24 @@ async def test_organization_slug_is_globally_unique(
         signup_user(email=f"slug-b-{uuid4().hex[:8]}@slug-b.example"),
     )
 
+    # The emails were already randomized; the *name* was not, and the slug it
+    # produces is unique across the whole deployment. So this asserted that
+    # nothing anywhere had ever taken "global-slug-collision" -- and when
+    # something had, the first organization was seated at
+    # "global-slug-collision-2" and the test failed for a reason that had
+    # nothing to do with the rule it is about. The rule is that two names which
+    # slugify alike get different handles, and that holds at any starting
+    # handle, so the starting handle is now this run's.
+    token = uuid4().hex[:8]
+    expected_slug = f"global-slug-collision-{token}"
+
     first = await async_client.post(
         "/organizations",
         headers=_auth_headers(first_owner["token"]),
-        json={"name": "Global Slug Collision"},
+        json={"name": f"Global Slug Collision {token}"},
     )
     assert first.status_code == 201, first.text
-    assert first.json()["slug"] == "global-slug-collision"
+    assert first.json()["slug"] == expected_slug
 
     # Neither of these owners typed a handle, and the two display names are not
     # even the same -- they merely slugify alike. Refusing the second would
@@ -1046,10 +1057,10 @@ async def test_organization_slug_is_globally_unique(
     second = await async_client.post(
         "/organizations",
         headers=_auth_headers(second_owner["token"]),
-        json={"name": "Global-Slug Collision"},
+        json={"name": f"Global-Slug Collision {token}"},
     )
     assert second.status_code == 201, second.text
-    assert second.json()["name"] == "Global-Slug Collision"
+    assert second.json()["name"] == f"Global-Slug Collision {token}"
     assert second.json()["slug"] != first.json()["slug"], (
         "two organizations ended up sharing a handle; the handle is the address "
         "people are given, and it has to resolve to one of them"
@@ -1060,7 +1071,7 @@ async def test_organization_slug_is_globally_unique(
     chosen = await async_client.post(
         "/organizations",
         headers=_auth_headers(second_owner["token"]),
-        json={"name": "Something Else", "slug": "global-slug-collision"},
+        json={"name": "Something Else", "slug": expected_slug},
     )
     assert chosen.status_code == 409, chosen.text
     assert "slug" in chosen.json()["message"].lower()
