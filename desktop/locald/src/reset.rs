@@ -45,7 +45,7 @@ pub fn reset_install(paths: LocalPaths) -> io::Result<()> {
 fn perform_reset(paths: LocalPaths) -> io::Result<serde_json::Value> {
     let mut summary = json!({
         "root": paths.root.display().to_string(),
-        "vm_reclaimed": false,
+        "vm_reclaim_attempted": false,
         // Whether the sweep ran, not how many items it found. The vault
         // reports deleting a secret that was never there as success, so a
         // count here would claim 19 removals on an installation that had
@@ -60,9 +60,13 @@ fn perform_reset(paths: LocalPaths) -> io::Result<serde_json::Value> {
     //    VM may be long gone -- that is the ordinary case here -- so the marker
     //    on disk is the only way to find the helper, and it is verified by pid,
     //    executable and start identity before anything is signalled.
-    if reclaim_running_vm(&paths).is_ok() {
-        summary["vm_reclaimed"] = json!(true);
-    }
+    // Reported as attempted-without-error, which is not the same as "a VM was
+    // reclaimed". The macOS path returns `Ok(())` when there was nothing
+    // running, and the Windows stub returns it having done nothing at all. The
+    // neighbouring `secrets_swept` is careful about exactly this distinction,
+    // and this field was not -- a summary that says `true` where it means "no
+    // error" is worse than no field, because somebody reads it as evidence.
+    summary["vm_reclaim_attempted"] = json!(reclaim_running_vm(&paths).is_ok());
 
     // 2. The keychain, BEFORE the file that names it.
     //

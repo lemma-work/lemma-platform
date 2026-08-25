@@ -1002,9 +1002,16 @@ impl<E: Engine> GuestService<E> {
 
     /// Remove every workspace directory, with `purge_workspace`'s discipline.
     ///
-    /// Each entry is re-checked against the managed root rather than trusting
-    /// the read: this deletes recursively, and a symlink or a `..` in a name is
-    /// the difference between clearing workspaces and clearing the guest.
+    /// What actually stops this clearing the guest is the `is_dir()` below,
+    /// which is `entry.file_type()` and so does *not* follow a symlink: a
+    /// symlinked entry is skipped rather than followed into.
+    ///
+    /// The parent re-check is belt to that braces and cannot fire on its own --
+    /// `read_dir` yields `root.join(name)`, so the parent is `root` by
+    /// construction, `..` included. Kept because it costs nothing and because
+    /// the day someone changes how these paths are built is the day it starts
+    /// mattering. The comment used to credit it with the symlink defence, which
+    /// is the wrong line to trust.
     fn remove_all_workspaces(&self) -> Result<usize, GuestError> {
         let root = self.state_root.join("workspaces");
         let Ok(entries) = fs::read_dir(&root) else {

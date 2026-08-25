@@ -3118,19 +3118,38 @@ fn mask_secret_shapes(text: String) -> String {
                 let (head, _) = line.split_at(index + "authorization:".len());
                 return format!("{head} [redacted]");
             }
-            line.split_whitespace()
-                .map(|word| {
-                    let trimmed = word.trim_matches(|c: char| {
-                        c == '"' || c == '\'' || c == ',' || c == ';' || c == ')'
-                    });
-                    if looks_like_a_credential(trimmed) {
-                        word.replace(trimmed, "[redacted]")
-                    } else {
-                        word.to_owned()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
+            // Rebuilt around the words rather than from them.
+            //
+            // This used to be `split_whitespace().join(" ")`, which redacts
+            // correctly and flattens the line on the way past: every indent,
+            // every tab, every aligned column gone. Diagnostics is where
+            // somebody reads a Python traceback, and a traceback with no
+            // indentation is a wall of text. The guard test could not see it --
+            // its fixtures were all single-spaced.
+            let mut masked = String::with_capacity(line.len());
+            let mut rest = line;
+            while !rest.is_empty() {
+                let gap = rest
+                    .find(|c: char| !c.is_whitespace())
+                    .unwrap_or(rest.len());
+                masked.push_str(&rest[..gap]);
+                rest = &rest[gap..];
+                if rest.is_empty() {
+                    break;
+                }
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let word = &rest[..end];
+                let trimmed = word.trim_matches(|c: char| {
+                    c == '"' || c == '\'' || c == ',' || c == ';' || c == ')'
+                });
+                if looks_like_a_credential(trimmed) {
+                    masked.push_str(&word.replace(trimmed, "[redacted]"));
+                } else {
+                    masked.push_str(word);
+                }
+                rest = &rest[end..];
+            }
+            masked
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -7544,6 +7563,45 @@ mod tests {
         assert!(masked.contains("provider rejected key"));
         assert!(masked.contains("responded 200"));
         assert!(masked.contains("expired"));
+    }
+
+    /// Redaction does not reformat the log on the way past.
+    ///
+    /// The masker used to rebuild each line with
+    /// `split_whitespace().join(" ")`, which redacts correctly and flattens
+    /// everything else: indentation, tabs, aligned columns. Diagnostics is
+    /// where somebody reads a Python traceback, and a traceback with no
+    /// indentation is a wall of text.
+    ///
+    /// The neighbouring test could not see this -- every line in its fixture is
+    /// single-spaced, so collapsing runs of whitespace is a no-op on it.
+    #[test]
+    fn redaction_leaves_the_shape_of_a_traceback_alone() {
+        let traceback = concat!(
+            "Traceback (most recent call last):\n",
+            "  File \"/app/main.py\", line 42, in handler\n",
+            "    raise RuntimeError(\"boom\")\n",
+            "\tRuntimeError: boom\n",
+            "  key   sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef\n",
+        );
+
+        let masked = mask_secret_shapes(traceback.to_owned());
+
+        assert!(
+            masked.contains("  File \"/app/main.py\", line 42, in handler"),
+            "two-space indentation is what makes a traceback readable:\n{masked}",
+        );
+        assert!(
+            masked.contains("    raise RuntimeError"),
+            "four-space indentation is gone:\n{masked}",
+        );
+        assert!(masked.contains('\t'), "a tab is whitespace too:\n{masked}");
+        assert!(
+            masked.contains("  key   [redacted]"),
+            "the run of spaces between a label and its value is alignment:\n{masked}",
+        );
+        // And the point of the exercise still holds.
+        assert!(!masked.contains("sk-ABCDEFGHIJ"), "{masked}");
     }
 
     /// Redaction must not eat the things a log is read for.
