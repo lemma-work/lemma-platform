@@ -944,9 +944,9 @@ def refuse_to_take_a_deployments_bot() -> None:
         with urllib.request.urlopen(
             f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=15
         ) as answered:
-            registered = (
-                (_json.loads(answered.read()) or {}).get("result") or {}
-            ).get("url") or ""
+            registered = ((_json.loads(answered.read()) or {}).get("result") or {}).get(
+                "url"
+            ) or ""
     except Exception:  # noqa: BLE001 — an unreachable Telegram is not this check's business
         return
     if not registered:

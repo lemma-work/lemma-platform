@@ -905,7 +905,7 @@
   {
     "tool_name": "list_pod_members",
     "toolset": "MESSAGING",
-    "description": "Look up who is in this pod, to find who to `message_user`.\n\n`message_user` needs an id or an exact email address \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through.\n\nSearches names and email addresses; omit `search` to list everyone.",
+    "description": "Look up who is in this pod, to find who to `message_user`.\n\n`message_user` needs an id or an exact email address \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through.\n\nAlso tells you `reachable_on`: the channels that can carry a message to each\nperson right now. Read it before setting `message_user`'s `channel`, and\ndon't ask for one that isn't listed \u2014 the send will be refused rather than\nrerouted.\n\nSearches names and email addresses; omit `search` to list everyone.",
     "input_schema": {
       "properties": {
         "search": {
@@ -968,6 +968,13 @@
               "default": false,
               "description": "True for the person this run belongs to.",
               "type": "boolean"
+            },
+            "reachable_on": {
+              "description": "Channels that can carry a message to them right now \u2014 pass one as message_user's `channel`. Empty means only their Lemma inbox.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [
@@ -1447,8 +1454,22 @@
   {
     "tool_name": "message_user",
     "toolset": "MESSAGING",
-    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. To get an answer: send every message you need, give each a\n`background_instruction`, `snooze` once for as long as a person realistically\ntakes, then `check_messages`.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
+    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. To get an answer: send every message you need, give each a\n`background_instruction`, `snooze` once for as long as a person realistically\ntakes, then `check_messages`.\n\nLeave `channel` unset unless you have a reason to pick one \u2014 the default is\nalready the app they last spoke to you on. When you do name one it is\nhonoured or refused, never swapped, so read `reachable_on` from\n`list_pod_members` before choosing.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
     "input_schema": {
+      "$defs": {
+        "MessageChannel": {
+          "description": "Where a message goes, when the agent has a reason to say.\n\nChannels, not surface ids: you think \"reach her on WhatsApp\", not \"send\nthrough surface 3f2a\u2026\". Every mail provider is one `email`, because which\none carries it is a deployment detail.",
+          "enum": [
+            "email",
+            "slack",
+            "teams",
+            "telegram",
+            "whatsapp"
+          ],
+          "title": "MessageChannel",
+          "type": "string"
+        }
+      },
       "properties": {
         "to": {
           "description": "Pod member id, user id, or email address.",
@@ -1482,6 +1503,18 @@
           ],
           "default": null,
           "description": "Inbox label and email subject. Defaults to the message."
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageChannel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where to send it. Omit unless you have a reason to choose \u2014 the default reaches them where they last spoke to you. Name one and it is that channel or nothing: it is never quietly swapped for another. Check `reachable_on` from list_pod_members first, because a chat app they have never messaged this agent on cannot be used."
         },
         "expects_response": {
           "default": true,

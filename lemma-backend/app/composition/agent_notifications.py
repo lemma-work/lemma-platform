@@ -16,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 
@@ -51,6 +53,7 @@ async def send_notification(
     expects_response: bool,
     expires_in_seconds: int | None,
     idempotency_key: str | None,
+    channel: str | None = None,
 ) -> dict:
     """Create and deliver, returning the flat shape the tool hands the model."""
     from app.modules.agent_surfaces.domain.notification import (
@@ -72,6 +75,7 @@ async def send_notification(
             origin_id=origin_agent_run_id,
             origin_conversation_id=origin_conversation_id,
             origin_surface_id=origin_surface_id,
+            channel=channel,
             actor_user_id=actor_user_id,
             actor_agent_id=actor_agent_id,
             agent_name=agent_name,
@@ -87,6 +91,33 @@ async def send_notification(
             "delivered_via": notification.delivery_platform,
             "undeliverable_reason": notification.delivery_error,
         }
+
+
+async def reachable_channels(
+    *,
+    pod_id: UUID,
+    recipients: dict[UUID, str | None],
+    actor_agent_id: UUID | None,
+) -> dict[UUID, list[str]]:
+    """``{user_id: channels}`` this agent can reach each person on right now.
+
+    Degrades to "we do not know" rather than failing the lookup it decorates:
+    an agent that cannot see the member list because reachability broke is worse
+    off than one that sees the list without it, and ``message_user`` still
+    routes on its own when no channel is named.
+
+    Infrastructure only, deliberately not bare ``Exception``. This runs in a
+    second unit of work after the member list has already come back, so the
+    failure worth surviving is a transient one; a bug in our own code should
+    still reach the tool result rather than read as "nowhere to reach them".
+    """
+    try:
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            return await _service(uow).reachable_channels(
+                pod_id=pod_id, recipients=recipients, actor_agent_id=actor_agent_id
+            )
+    except SQLAlchemyError, OSError:
+        return {}
 
 
 async def check_notifications(
