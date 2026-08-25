@@ -33,6 +33,13 @@ AGGREGATORS = {
 # aggregator waiting forever.
 EXEMPT = {
     ("e2e.yml", "surface-live-smoke"),
+    # Merge-to-main only, and deliberately not a merge gate: it builds the real
+    # ~700 MB host pack on a macOS runner and executes its interpreters, which
+    # is ~25 minutes and guards release-time breakage rather than review-time
+    # correctness. Requiring it would leave every PR's aggregator waiting for a
+    # job that never starts, since its `if:` includes `github.event_name ==
+    # 'push'`. A red one is "look in the morning".
+    ("ci.yml", "host-pack-macos"),
 }
 
 # Every workflow is checked for timeouts, not just the two with aggregators.

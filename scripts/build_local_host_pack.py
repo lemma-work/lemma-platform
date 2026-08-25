@@ -136,15 +136,32 @@ def install_python(
         bin_dir = output / ".python-bin"
         environment = os.environ.copy()
         environment["UV_PYTHON_BIN_DIR"] = str(bin_dir)
-        run(
-            "uv",
-            "python",
-            "install",
-            version,
-            "--install-dir",
-            staging,
-            env=environment,
-        )
+        try:
+            run(
+                "uv",
+                "python",
+                "install",
+                version,
+                "--install-dir",
+                staging,
+                env=environment,
+            )
+        except subprocess.CalledProcessError as error:
+            # The pinned interpreter is an exact patch version, and `uv` only
+            # knows the builds its own release shipped with. An older `uv` --
+            # which is what a laptop has and what a CI runner never has, since
+            # setup-uv installs the latest -- reports "No download found for
+            # request" and this raised a traceback ending in `subprocess.run`,
+            # naming nothing a person could act on.
+            raise SystemExit(
+                f"uv could not fetch CPython {version}.\n"
+                f"  Command: {' '.join(str(part) for part in error.cmd)}\n"
+                f"  This is almost always an out-of-date uv: an exact patch "
+                f"version only downloads from a uv release that knows about it. "
+                f"Run `uv self update`, or pass --python-root to copy an "
+                f"interpreter you already have (`uv python list --all-versions` "
+                f"shows them)."
+            ) from error
         installed = one_child(
             staging,
             "standalone Python installation",

@@ -131,7 +131,9 @@ def test_the_real_workflow_is_understood_by_this_checker():
     in a shape the evaluator does not handle -- the note is printed, the run is
     green, and the gate quietly covers one job fewer. A genuinely conditional
     job may of course be added; the fix is to teach the evaluator, and this
-    test is where that decision surfaces.
+    test is where that decision surfaces. It already has once: `host-pack-macos`
+    gates on `github.event_name` as well as a filter, and the choice was to
+    teach the evaluator rather than exempt the job.
     """
     import yaml
 
@@ -145,9 +147,53 @@ def test_the_real_workflow_is_understood_by_this_checker():
         name: {"result": "success"} for name in document["jobs"] if name != "changes"
     }
     _, notes = check(
-        document, {"changes": {"outputs": outputs}, **every_job}
+        document, {"changes": {"outputs": outputs}, **every_job}, "push"
     )
     assert notes == [], "\n".join(notes)
+
+
+def test_a_merge_only_job_may_skip_on_a_pull_request():
+    """And must not, on a push where its filter is live.
+
+    `host-pack-macos` builds a 1 GB pack on a macOS runner and is deliberately
+    merge-to-main only. Its skip on a PR is correct; its skip on a push to main
+    with a desktop change is a lane that stopped running.
+    """
+    workflow = {
+        "jobs": {
+            "changes": {"outputs": {"desktop": ""}},
+            "host-pack": {
+                "if": "github.event_name == 'push' && "
+                "needs.changes.outputs.desktop == 'true'"
+            },
+        }
+    }
+    context = needs_context({"desktop": "true"}, **{"host-pack": "skipped"})
+
+    on_a_pull_request, notes = check(workflow, context, "pull_request")
+    assert on_a_pull_request == []
+    assert notes == [], "the expression is understood, not merely tolerated"
+
+    on_a_merge, _ = check(workflow, context, "push")
+    assert len(on_a_merge) == 1
+    assert "host-pack" in on_a_merge[0]
+
+
+def test_without_an_event_name_such_a_job_is_reported_rather_than_assumed():
+    workflow = {
+        "jobs": {
+            "changes": {"outputs": {"desktop": ""}},
+            "host-pack": {
+                "if": "github.event_name == 'push' && "
+                "needs.changes.outputs.desktop == 'true'"
+            },
+        }
+    }
+    failures, notes = check(
+        workflow, needs_context({"desktop": "true"}, **{"host-pack": "skipped"})
+    )
+    assert failures == []
+    assert len(notes) == 1 and "cannot evaluate" in notes[0]
 
 
 def test_the_script_runs_as_a_command_and_reports_by_exit_status():

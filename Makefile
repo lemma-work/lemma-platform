@@ -21,7 +21,8 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
+        desktop-lint desktop-guestd desktop-host-pack desktop-host-pack-check \
+        desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
         version-check \
@@ -326,6 +327,7 @@ help:
 	@echo "    make desktop-dmg        self-contained macOS test DMG (needs runtime-fetch first)"
 	@echo "    make desktop-exe        Windows installer — says how to build it on Windows"
 	@echo "    make desktop-guestd     build and test the Linux guest daemon (Linux only)"
+	@echo "    make desktop-host-pack  build the shipped host pack and run its interpreters"
 	@echo "    make desktop-verify-guest  workspace sandbox + file persistence in the real VM"
 	@echo "    make desktop-clean      remove desktop build output and staged runtime"
 	@echo ""
@@ -963,6 +965,37 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "  ✓ clippy clean"
 	@echo "→ Memory balloon policy…"
 	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
+
+# Build the ~1 GB artifact the app ships, and prove its interpreters run.
+#
+# This is what CI's `host-pack-macos` job does, runnable by hand. It is the only
+# check that catches a relocatable CPython whose baked `sys.prefix` still points
+# at the build machine -- which unpacks perfectly, reports the right version,
+# and fails the instant it is asked to import anything, on a user's machine,
+# four minutes into a first run.
+#
+# ~15 minutes and ~1 GB. PACK_OUT to keep the result; the default is a
+# throwaway. PYTHON_ROOT to copy an interpreter you already have, which is the
+# fix when your `uv` predates the pinned CPython patch version.
+PACK_OUT     ?= out/host-pack
+PYTHON_ROOT  ?=
+
+desktop-host-pack:
+	@echo "→ Building the host pack (this takes a while and ~1 GB)…"
+	@mkdir -p $(PACK_OUT)
+	@python3 -c "import json,pathlib,sys; \
+	  image=lambda n: {'ref': f'ghcr.io/lemma-work/{n}:0.0.0-local', 'digest': 'sha256:'+'0'*64}; \
+	  pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, \
+	    'version': '0.0.0-local', 'min_admin_version': '0.1.0', \
+	    'images': {n: image('lemma-'+n) for n in ('backend','frontend','workspace','function')}, \
+	    'infra': {'postgres': image('postgres'), 'redis': image('redis')}}, indent=2)+chr(10))" \
+	  $(PACK_OUT)/host-release.json
+	@uv run --no-project python scripts/build_local_host_pack.py 		--output $(PACK_OUT)/local-runtime 		--release-manifest $(PACK_OUT)/host-release.json 		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),)
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Just the checks, against a pack you already have.
+desktop-host-pack-check:
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
 
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs

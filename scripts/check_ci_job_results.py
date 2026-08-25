@@ -18,7 +18,9 @@ The rule is the one the workflow already means: if `changes` says an area is
 
 Usage, from the aggregator job:
 
-    CI_NEEDS_JSON='${{ toJSON(needs) }}' python3 scripts/check_ci_job_results.py
+    CI_NEEDS_JSON='${{ toJSON(needs) }}' \
+    CI_EVENT_NAME='${{ github.event_name }}' \
+    python3 scripts/check_ci_job_results.py
 
 The job -> filter mapping is not restated here. It is read back out of the
 workflow's own `if:` expressions, so a job that changes which area it gates on
@@ -37,12 +39,19 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-# A gating expression this check understands: some number of
-# `needs.changes.outputs.<name> == 'true'` comparisons joined by || and &&,
-# optionally parenthesised. Anything else -- a `github.event_name`, a
-# `!cancelled()`, a comparison against something other than 'true' -- is
-# reported as unverifiable rather than guessed at.
-COMPARISON = re.compile(r"needs\.changes\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'true'")
+# The two comparisons this check understands, joined by || and &&, optionally
+# parenthesised. Anything else -- a `!cancelled()`, a comparison against
+# something other than 'true' -- is reported as unverifiable rather than
+# guessed at.
+#
+# `github.event_name` is here because leaving it out would have quietly shrunk
+# the gate. The first job to gate on it, `host-pack-macos`, is merge-to-main
+# only, so its skip on a PR is correct -- but a checker that cannot say so
+# reports it as unverified, and one more job stops being covered. The value is
+# passed in rather than inferred; without it the expression stays unevaluable,
+# which is the honest answer for a run that did not say what it was.
+OUTPUT = re.compile(r"needs\.changes\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'true'")
+EVENT = re.compile(r"github\.event_name\s*==\s*'([a-z_]+)'")
 STRUCTURE = re.compile(r"^[\s()]*(?:\|\||&&|[\s()])*$")
 
 
@@ -50,7 +59,9 @@ class Unevaluable(Exception):
     """The `if:` expression says more than this checker can reason about."""
 
 
-def evaluate(condition: str, outputs: dict[str, str]) -> bool:
+def evaluate(
+    condition: str, outputs: dict[str, str], event: str | None = None
+) -> bool:
     """Decide whether a job's `if:` wanted the job to run on this run.
 
     Substitutes each comparison for a Python literal and evaluates the
@@ -58,11 +69,25 @@ def evaluate(condition: str, outputs: dict[str, str]) -> bool:
     but the operators we allow -- so this never evaluates workflow text as
     arbitrary Python.
     """
-    skeleton = COMPARISON.sub("@", condition)
+    # Substituted in one left-to-right pass so the values line up with the
+    # placeholders. Doing the two patterns separately and zipping them by kind
+    # would silently mis-pair any expression that mixes them.
+    values: list[bool] = []
+
+    combined = re.compile(f"{OUTPUT.pattern}|{EVENT.pattern}")
+
+    def dispatch(match: re.Match[str]) -> str:
+        if match.group(1) is not None:
+            values.append(outputs.get(match.group(1)) == "true")
+        else:
+            if event is None:
+                raise Unevaluable(condition)
+            values.append(event == match.group(2))
+        return "@"
+
+    skeleton = combined.sub(dispatch, condition)
     if not STRUCTURE.fullmatch(skeleton.replace("@", "")):
         raise Unevaluable(condition)
-
-    values = [outputs.get(name) == "true" for name in COMPARISON.findall(condition)]
     if not values:
         raise Unevaluable(condition)
 
@@ -85,7 +110,9 @@ def gating_conditions(document: dict) -> dict[str, str]:
     return conditions
 
 
-def check(document: dict, needs: dict) -> tuple[list[str], list[str]]:
+def check(
+    document: dict, needs: dict, event: str | None = None
+) -> tuple[list[str], list[str]]:
     """Return (failures, notes) for one run's `needs` context."""
     outputs = (needs.get("changes") or {}).get("outputs") or {}
     failures: list[str] = []
@@ -99,7 +126,7 @@ def check(document: dict, needs: dict) -> tuple[list[str], list[str]]:
             # would just make one problem look like two.
             continue
         try:
-            wanted = evaluate(condition, outputs)
+            wanted = evaluate(condition, outputs, event)
         except Unevaluable:
             notes.append(
                 f"job '{name}' gates on an expression this check cannot "
@@ -130,7 +157,9 @@ def main() -> int:
     workflow = Path(os.environ.get("CI_WORKFLOW_FILE") or DEFAULT_WORKFLOW)
     document = yaml.safe_load(workflow.read_text())
 
-    failures, notes = check(document, needs)
+    # `github.event_name`, so a merge-to-main-only job's skip on a PR can be
+    # recognised as correct rather than reported as unverified.
+    failures, notes = check(document, needs, os.environ.get("CI_EVENT_NAME"))
     for note in notes:
         print(f"::notice::{note}")
     for failure in failures:

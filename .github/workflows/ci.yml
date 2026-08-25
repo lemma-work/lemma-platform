@@ -907,6 +907,94 @@ jobs:
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
 
+  # Build the artifact the app actually ships, and prove its interpreters run.
+  #
+  # `desktop-contract` proves the *layout* both sides agree on; nothing proved
+  # the pack can be produced at all. It is built by a release job, from the
+  # backend and the frontend, using a relocatable CPython and a copied Node --
+  # and the ways that breaks are all invisible to every other job here: a
+  # backend dependency with no arm64 wheel, a Next config change that stops
+  # emitting standalone output, an interpreter whose baked prefix points at the
+  # build machine.
+  #
+  # That last one is the reason this cannot just be a build. A relocatable
+  # CPython with a wrong `sys.prefix` unpacks, passes every file-existence
+  # check, has the right version, and fails the moment it is asked to import
+  # anything -- on a user's machine, four minutes into a first run. So the
+  # packed interpreters are executed here, not merely produced.
+  #
+  # Merge-to-main only. It is ~25 minutes on a macOS runner and it guards
+  # release-time breakage rather than review-time correctness, so a red one is
+  # "look in the morning", not a blocked PR. It is deliberately absent from the
+  # `ci` aggregator for the same reason, and exempted in
+  # scripts/check_ci_aggregators.py where that decision is written down.
+  host-pack-macos:
+    name: Host pack builds and runs (macOS)
+    timeout-minutes: 60
+    needs: changes
+    if: >-
+      github.event_name == 'push' &&
+      (needs.changes.outputs.desktop_contract == 'true' ||
+       needs.changes.outputs.desktop == 'true')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Digests nobody resolves. The pack embeds a release manifest, and this
+      # job is about the pack's own layout and interpreters -- not about which
+      # images a release points at. Placeholders keep it off the network and
+      # out of the release workflow's way.
+      - name: Stage a release manifest
+        run: |
+          mkdir -p host-pack-out
+          python3 - <<'PY'
+          import json, pathlib
+          image = lambda name: {
+              "ref": f"ghcr.io/lemma-work/{name}:0.0.0-ci",
+              "digest": "sha256:" + "0" * 64,
+          }
+          pathlib.Path("host-pack-out/host-release.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "version": "0.0.0-ci",
+                      "min_admin_version": "0.1.0",
+                      "images": {
+                          name: image(f"lemma-{name}")
+                          for name in ("backend", "frontend", "workspace", "function")
+                      },
+                      "infra": {
+                          "postgres": image("postgres"),
+                          "redis": image("redis"),
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n"
+          )
+          PY
+
+      # The build smoke-executes the packed Python itself, importing FastMCP,
+      # uvicorn, keyring and the local sandbox provider. That is the check a
+      # wrong `sys.prefix` fails.
+      - name: Build the host pack
+        run: |
+          uv run --no-project python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-pack-out/host-release.json
+
+      # And the same question asked of the frontend half, which the build does
+      # not ask: a copied Node that cannot resolve its own standalone server is
+      # a frontend that never serves.
+      - name: The packed runtimes execute
+        run: uv run --no-project python scripts/check_host_pack.py host-pack-out/local-runtime
+
   # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
   # compiles, so the macOS workspace run says nothing about the code that
   # actually runs inside the guest. Before the workspace, a change under
@@ -1105,5 +1193,8 @@ jobs:
       - name: No gated job skipped while its filter was live
         env:
           CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          # So a merge-to-main-only job's skip on a PR reads as correct rather
+          # than as one more job this gate stopped covering.
+          CI_EVENT_NAME: ${{ github.event_name }}
         run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."
