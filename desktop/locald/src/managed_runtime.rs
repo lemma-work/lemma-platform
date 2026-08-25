@@ -38,7 +38,7 @@ pub struct ManagedRuntimeBootstrap {
 }
 
 impl ManagedRuntimeBootstrap {
-    pub fn discover(paths: &LocalPaths) -> io::Result<Option<Self>> {
+    pub fn discover(paths: &LocalPaths, healed: &mut Vec<String>) -> io::Result<Option<Self>> {
         let Some(artifact_root) = env::var_os("LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -85,7 +85,7 @@ impl ManagedRuntimeBootstrap {
                 vz_executable,
                 #[cfg(windows)]
                 wsl_executable,
-                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"))?,
+                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"), healed)?,
             }))
         }
     }
@@ -911,19 +911,57 @@ fn private_ipv4(value: &str, label: &str) -> io::Result<Ipv4Addr> {
     }
 }
 
-fn load_or_create_secrets(path: &Path) -> io::Result<InfraSecrets> {
+/// Read the infrastructure passwords, replacing them only if unreadable.
+///
+/// An unreadable file used to end the daemon permanently. Healing it needs one
+/// extra step that ordinary self-healing does not: `postgres_password` was
+/// baked into the `lemma-postgres-data` volume at `initdb`, so a new password
+/// does not open the existing database. `ensure_core_container` only replaces a
+/// container when its image or config generation changes, and `ensure_database`
+/// connects over the local socket with no password at all -- so the mismatch
+/// survives the entire guest start and first surfaces deep in the backend's
+/// migrations as an opaque auth error.
+///
+/// So the replacement is recorded as "this installation's data can no longer be
+/// read", which `start_host_packs` refuses on, with a reset the user can press.
+fn load_or_create_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<InfraSecrets> {
     if path.is_file() {
-        ensure_private_file(path)?;
-        let secrets: InfraSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_secret("postgres_password", &secrets.postgres_password)?;
-        validate_secret("redis_password", &secrets.redis_password)?;
-        return Ok(secrets);
+        match read_existing_secrets(path) {
+            Ok(secrets) => return Ok(secrets),
+            Err(reason) => {
+                let aside = crate::paths::quarantine_aside(path)?;
+                if let Some(root) = path.parent() {
+                    crate::paths::require_data_reset(
+                        root,
+                        "the private infrastructure passwords were replaced, and the existing \
+                         workspace database was created with the previous ones",
+                    )?;
+                }
+                healed.push(format!(
+                    "the infrastructure passwords were unreadable ({reason}); kept as {} and \
+                     replaced. The existing local data cannot be opened with the new ones",
+                    aside.display()
+                ));
+            }
+        }
     }
     let secrets = InfraSecrets {
         postgres_password: random_hex()?,
         redis_password: random_hex()?,
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
+    Ok(secrets)
+}
+
+fn read_existing_secrets(path: &Path) -> Result<InfraSecrets, String> {
+    ensure_private_file(path).map_err(|error| error.to_string())?;
+    let raw = fs::read(path).map_err(|error| error.to_string())?;
+    let secrets: InfraSecrets =
+        serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+    validate_secret("postgres_password", &secrets.postgres_password)
+        .map_err(|error| error.to_string())?;
+    validate_secret("redis_password", &secrets.redis_password)
+        .map_err(|error| error.to_string())?;
     Ok(secrets)
 }
 
@@ -1021,8 +1059,8 @@ mod tests {
     fn secrets_are_stable_private_and_not_accepted_when_tampered() {
         let root = tempdir().unwrap();
         let path = root.path().join("infra.secrets.json");
-        let first = load_or_create_secrets(&path).unwrap();
-        let second = load_or_create_secrets(&path).unwrap();
+        let first = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        let second = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
 
         assert_eq!(first.postgres_password, second.postgres_password);
         assert_eq!(first.redis_password, second.redis_password);
@@ -1032,6 +1070,42 @@ mod tests {
             use std::os::unix::fs::MetadataExt;
             assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         }
+    }
+
+    /// Replacing the infrastructure passwords is recorded as stranded data.
+    ///
+    /// This is the one self-heal that deliberately makes the failure *harder*.
+    /// A new `postgres_password` does not open a volume that was `initdb`'d
+    /// with the old one, and nothing downstream notices: `ensure_core_container`
+    /// only replaces on an image or config-generation change, and
+    /// `ensure_database` connects over the local socket with no password. So
+    /// healing quietly would surface hours later as an opaque auth error deep
+    /// in the backend's migrations. The marker is what turns that into a button.
+    #[test]
+    fn replacing_the_infrastructure_passwords_records_that_data_must_be_reset() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("infra.secrets.json");
+        let original = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        fs::write(&path, b"{\"postgres_password\": \"too-short\"").unwrap();
+
+        let mut healed = Vec::new();
+        let replaced = load_or_create_secrets(&path, &mut healed).unwrap();
+
+        assert_ne!(replaced.postgres_password, original.postgres_password);
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].contains("cannot be opened"), "{}", healed[0]);
+        let reason = crate::paths::data_reset_reason(root.path())
+            .expect("a replaced password strands the existing database");
+        assert!(reason.contains("previous ones"), "{reason}");
+        // The unreadable original is kept, not destroyed.
+        assert_eq!(
+            fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
+                .count(),
+            1
+        );
     }
 
     #[test]

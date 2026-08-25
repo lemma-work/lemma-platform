@@ -66,8 +66,11 @@ impl Daemon {
         let mut healed: Vec<String> = Vec::new();
         let token = load_or_create_token(&paths.token, &mut healed)?;
         let mut state = StateSnapshot::load(&paths.state);
-        let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
-        let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
+        let operator_config = OperatorConfigStore::load_reporting(
+            paths.root.join("operator-config.json"),
+            &mut healed,
+        )?;
+        let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths, &mut healed)?;
         let host_pack_root = env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from);
@@ -76,9 +79,12 @@ impl Daemon {
             _ => host_pack_root
                 .as_ref()
                 .map(|pack_root| match managed_bootstrap.as_ref() {
-                    Some(runtime) => {
-                        native_host_pack::prepare(&paths, pack_root, runtime.manifest_material())
-                    }
+                    Some(runtime) => native_host_pack::prepare(
+                        &paths,
+                        pack_root,
+                        runtime.manifest_material(),
+                        &mut healed,
+                    ),
                     None => prepare_compatibility_host_manifest(&paths, pack_root),
                 })
                 .transpose()?,
@@ -1595,6 +1601,17 @@ impl Daemon {
         manager: &HostProcessManager,
         operation_id: Option<&Value>,
     ) -> io::Result<()> {
+        // Refuse before touching the guest. Something has already replaced a
+        // credential this installation's data was written under, so starting
+        // would fail deep inside migrations as an opaque auth error, or come up
+        // unable to decrypt its own rows. Say so here, in words the shell turns
+        // into a reset button.
+        if let Some(reason) = crate::paths::data_reset_reason(&self.paths.root) {
+            return Err(io::Error::other(format!(
+                "{reason}; {}",
+                crate::paths::DATA_RESET_MARKER
+            )));
+        }
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
@@ -2163,6 +2180,11 @@ fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'stat
         "wsl-required"
     } else if message.contains("did not approve or complete WSL 2 setup") {
         "wsl-setup-denied"
+    } else if message.contains(crate::paths::DATA_RESET_MARKER) {
+        // One phrase, one code, however many detectors raise it. Anything the
+        // user cannot fix by retrying but can fix by discarding local data says
+        // the marker phrase and lands here.
+        "local-data-incompatible"
     } else {
         fallback
     }
@@ -2374,6 +2396,8 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 mod tests {
     use std::collections::HashMap;
 
+    use tempfile::tempdir;
+
     use super::{
         compose_backend_environment, error_diagnostic_source, exact_origin_regex,
         runtime_operation_error_code, sharing_environment,
@@ -2442,6 +2466,60 @@ mod tests {
             runtime_operation_error_code("database failed", "host-operation-failed"),
             "host-operation-failed"
         );
+    }
+
+    /// Anything that says the marker phrase gets the code the reset button
+    /// keys on -- however many different detectors end up raising it.
+    #[test]
+    fn stranded_local_data_is_reported_with_the_code_the_reset_button_uses() {
+        assert_eq!(
+            runtime_operation_error_code(
+                "this installation's secret was replaced, and anything encrypted with the \
+                 previous one can no longer be read; local data must be reset",
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+        // The phrase is the whole contract, so a detector nobody has written
+        // yet gets the same treatment for free.
+        assert_eq!(
+            runtime_operation_error_code(
+                &format!(
+                    "the workspace database was created by PostgreSQL 16 and this release \
+                     runs PostgreSQL 18; {}",
+                    crate::paths::DATA_RESET_MARKER
+                ),
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+    }
+
+    /// The marker is checked before the guest is touched.
+    ///
+    /// Reaching `prepare_private_infra` would boot a VM to discover a failure
+    /// already known on disk, and the failure it would then report is an opaque
+    /// auth error rather than an offer to reset.
+    #[test]
+    fn a_recorded_data_reset_requirement_survives_until_it_is_cleared() {
+        let root = tempdir().unwrap();
+        assert!(crate::paths::data_reset_reason(root.path()).is_none());
+
+        crate::paths::require_data_reset(root.path(), "the passwords were replaced").unwrap();
+        let reason = crate::paths::data_reset_reason(root.path()).unwrap();
+        assert_eq!(reason, "the passwords were replaced");
+        assert_eq!(
+            runtime_operation_error_code(
+                &format!("{reason}; {}", crate::paths::DATA_RESET_MARKER),
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+
+        crate::paths::clear_data_reset(root.path()).unwrap();
+        assert!(crate::paths::data_reset_reason(root.path()).is_none());
+        // Clearing twice is how a reset that retries behaves; it must not fail.
+        crate::paths::clear_data_reset(root.path()).unwrap();
     }
 
     #[test]

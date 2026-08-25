@@ -156,6 +156,51 @@ pub fn quarantine_aside(path: &Path) -> io::Result<PathBuf> {
     Ok(aside)
 }
 
+/// The phrase that turns a daemon error into an offer to reset.
+///
+/// Anything a user cannot fix by retrying, but *can* fix by discarding local
+/// data, says this. `runtime_operation_error_code` maps it to a stable code and
+/// the splash renders the reset button for it, so a new detector needs no new
+/// transport -- only this phrase in its message.
+pub const DATA_RESET_MARKER: &str = "local data must be reset";
+
+/// Name of the marker recording that this installation's data can no longer be
+/// read by the credentials it now has.
+const DATA_RESET_MARKER_FILE: &str = "data-reset-required";
+
+/// Record that local data has been stranded, and why.
+///
+/// Written when a secret is replaced. Reminting `infra.secrets.json` does not
+/// change the password baked into the Postgres volume at `initdb`, and
+/// reminting `host.secrets.json` makes every encrypted column undecryptable --
+/// so healing those files, on its own, would turn a loud failure into a silent
+/// one. This is the deliberate exception to "a self-heal should soften the
+/// failure": a hard stop with a button beats an install that quietly cannot
+/// read its own data.
+pub fn require_data_reset(root: &Path, reason: &str) -> io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::write(root.join(DATA_RESET_MARKER_FILE), format!("{reason}\n"))
+}
+
+/// Why this installation needs its data discarded, if it does.
+pub fn data_reset_reason(root: &Path) -> Option<String> {
+    let reason = std::fs::read_to_string(root.join(DATA_RESET_MARKER_FILE)).ok()?;
+    let reason = reason.trim();
+    Some(if reason.is_empty() {
+        "this installation's private credentials were replaced".to_owned()
+    } else {
+        reason.to_owned()
+    })
+}
+
+/// Forget the marker. Only a completed data reset may call this.
+pub fn clear_data_reset(root: &Path) -> io::Result<()> {
+    match std::fs::remove_file(root.join(DATA_RESET_MARKER_FILE)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(unix)]
 fn set_private_dir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
