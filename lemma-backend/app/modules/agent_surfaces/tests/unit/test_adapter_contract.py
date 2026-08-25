@@ -120,3 +120,33 @@ def test_adapter_overrides_accept_every_argument_the_base_declares(platform, ada
         "raises TypeError at runtime — swallowed wherever the call is "
         "best-effort."
     )
+
+
+def _overrides(adapter: object, name: str) -> bool:
+    """Does this adapter supply ``name`` itself, rather than inheriting the base?"""
+    return any(
+        name in vars(cls)
+        for cls in type(adapter).__mro__
+        if cls is not BaseSurfaceAdapter and issubclass(cls, BaseSurfaceAdapter)
+    )
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_a_platform_that_parses_interactions_also_acknowledges_them(platform, adapter):
+    """The two halves of an interaction are one capability, not two.
+
+    `acknowledge_interaction` had a silent no-op default and only Telegram
+    overrode it, so on Slack, Teams and WhatsApp a tapped Approve produced no
+    confirmation, left the buttons live, and — because `handle_interaction`
+    routes every failure through this same call — reported a failed submission
+    to nobody at all while the run stayed WAITING.
+
+    A platform that cannot receive interactions is free to implement neither.
+    Implementing only the inbound half is what is banned.
+    """
+    if not _overrides(adapter, "parse_inbound_interaction"):
+        pytest.skip(f"{platform} receives no interactions")
+    assert _overrides(adapter, "acknowledge_interaction"), (
+        f"{platform} parses interactions but inherits the no-op "
+        "acknowledge_interaction(), so a person tapping a button is told nothing."
+    )

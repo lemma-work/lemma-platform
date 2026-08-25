@@ -87,6 +87,22 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, approval_plan, metadata
         )
 
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await WhatsAppPlatformService(credentials).acknowledge_interaction(
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
+
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceInteraction | None:

@@ -268,6 +268,22 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
     ) -> ParsedSurfaceInteraction | None:
         return self.parser.parse_interaction(payload, headers)
 
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await self._service(credentials).acknowledge_interaction(
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
+
     async def fetch_thread_context(
         self,
         *,

@@ -18,7 +18,10 @@ import aiohttp
 
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -278,6 +281,61 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         except Exception:
             logger.debug(
                 "agent_surfaces.adapter.teams_typing_indicator_best_effort.observed"
+            )
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        """Answer a tapped Adaptive Card action.
+
+        Teams edits an activity with ``PUT .../activities/{id}``, and the
+        submission tells us which activity the card was in (``replyToId``).
+        Replacing it with a plain line is what retires the buttons -- an
+        Adaptive Card's actions stay tappable forever otherwise, and a second
+        tap on a settled decision reached a run that had already moved on.
+
+        Falls back to posting a new message when the card cannot be edited, so
+        the outcome is said either way. Best-effort throughout: the decision is
+        already recorded before this runs.
+        """
+        del credentials, show_alert
+        target = interaction.reply_target or {}
+        conversation_id = target.get("conversation_id")
+        if not conversation_id:
+            return
+        token = await self._get_bot_token(interaction.tenant_id)
+        if not token:
+            return
+
+        activities = (
+            f"{client.bf_service_url(target.get('service_url'))}"
+            f"/v3/conversations/{quote(str(conversation_id))}/activities"
+        )
+        body = {"type": "message", "text": (text or "").strip() or "Done"}
+        activity_id = target.get("reply_to_id") if clear_actions else None
+        try:
+            async with new_aiohttp_session() as session:
+                if activity_id:
+                    async with session.put(
+                        f"{activities}/{quote(str(activity_id))}",
+                        headers=client.auth_headers(token),
+                        json=body,
+                    ) as edited:
+                        if edited.status < 400:
+                            return
+                async with session.post(
+                    activities, headers=client.auth_headers(token), json=body
+                ):
+                    return
+        except aiohttp.ClientError, TimeoutError:
+            logger.debug(
+                "agent_surfaces.adapter.teams_interaction_acknowledgement_best.observed"
             )
 
     async def stream_progress(

@@ -7,7 +7,12 @@ from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+import httpx
+
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -36,6 +41,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     whatsapp_display_resource_text,
     whatsapp_message_bodies,
     whatsapp_text_payload,
+    truncate_whatsapp_text,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     to_plain_text,
@@ -117,6 +123,49 @@ class WhatsAppPlatformService:
                     "type": "text",
                     "text": {"body": body},
                 },
+            )
+
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None,
+        show_alert: bool,
+        clear_actions: bool,
+    ) -> None:
+        """Say something back, when it is worth a whole new message.
+
+        WhatsApp has no edit API and no callback answer, so an acknowledgement
+        can only be another message in the person's chat. Tapping a button
+        already posts their choice there, so confirming a settled decision adds
+        a line that says what the line above it says -- the same reasoning that
+        makes this platform's progress updates rationed rather than live.
+
+        ``show_alert`` marks the outcomes they cannot infer from their own tap:
+        the action expired, the conversation moved on, or it could not be
+        completed. Those are said. A plain "Done" is not.
+        """
+        del clear_actions
+        note = (text or "").strip()
+        if not note or not show_alert:
+            return
+        sender_wa_id = (interaction.reply_target or {}).get("sender_wa_id")
+        phone_number_id = self._phone_number_id
+        if not sender_wa_id or not phone_number_id or not self._access_token:
+            return
+        try:
+            await self._client.send_message_payload(
+                phone_number_id=phone_number_id,
+                payload={
+                    "messaging_product": "whatsapp",
+                    "to": sender_wa_id,
+                    "type": "text",
+                    "text": {"body": truncate_whatsapp_text(note, 1024)},
+                },
+            )
+        except WhatsAppApiError, httpx.HTTPError:
+            logger.debug(
+                "agent_surfaces.service.whatsapp_interaction_acknowledgement_best.observed"
             )
 
     async def stream_progress(

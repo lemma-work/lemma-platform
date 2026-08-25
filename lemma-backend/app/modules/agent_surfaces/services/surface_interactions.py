@@ -3,6 +3,12 @@
 These resume a run that paused on ``ask_user`` or ``request_approval``, which is
 a different lifecycle from an ordinary inbound message: there is already a
 conversation and a waiting run, and the work is matching the submission to it.
+
+Every path out of ``handle_interaction`` that has a delivery target says what
+happened -- accepted, expired, not yours, gone, failed. A tap that produces
+nothing is indistinguishable from a broken button, so the person taps again;
+and the one path that used to produce nothing was the failure path, on the
+three platforms where ``acknowledge_interaction`` was a no-op.
 """
 
 from __future__ import annotations
@@ -155,6 +161,15 @@ class SurfaceInteractionMixin:
                     external_user_id=parsed.external_user_id,
                     conversation_id=conversation_id,
                 )
+                # Say so. Refusing in silence is indistinguishable from the
+                # button being broken, and the person tries again.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="This one is not yours to answer.",
+                        show_alert=True,
+                    )
                 return
 
             conversation = await self.conversation_service.conversation_repository.get_conversation(
@@ -165,6 +180,14 @@ class SurfaceInteractionMixin:
                     "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic",
                     conversation_id=conversation_id,
                 )
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="That conversation is gone. Please ask again.",
+                        show_alert=True,
+                        clear_actions=True,
+                    )
                 return
 
             if parsed.action == "retry":
