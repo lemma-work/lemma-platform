@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -359,6 +360,11 @@ def test_grants_from_payload_accepts_bare_grants_list():
 class FakeAgentService:
     class _Agent:
         id = _AGENT_ID
+        # Named, like the entity this stands in for. An email surface's address
+        # is built from the agent's *name*, so a nameless stub silently minted
+        # the pod-assistant form and any assertion about the address was really
+        # asserting the fake's own gap.
+        name = "Reporter"
 
     async def get_agent_by_name(self, *, pod_id, name, ctx=None):
         return self._Agent()
@@ -574,8 +580,9 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
 
 
 class FakeSurfaceService:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, existing_mailbox=None):
         self._existing = existing
+        self._existing_mailbox = existing_mailbox
         self.created: dict | None = None
         self.updated: dict | None = None
 
@@ -596,6 +603,7 @@ class FakeSurfaceService:
         config,
         credential_mode,
         account_id,
+        surface_identity_email=None,
         ctx=None,
     ):
         from types import SimpleNamespace
@@ -607,20 +615,55 @@ class FakeSurfaceService:
             "agent_id": agent_id,
             "account_id": account_id,
             "credential_mode": credential_mode,
+            "surface_identity_email": surface_identity_email,
         }
         return SimpleNamespace(id=_uuid4(), config=config)
 
     async def create_surface_minting_address(self, *, agent, **kwargs):
-        """What the applier calls. The real one mints an inbound address for an
-        email surface and then delegates here; these bundles are Slack and
-        Teams, so the interesting half is that the agent still arrives."""
-        return await self.create_surface(agent_id=getattr(agent, "id", None), **kwargs)
+        """What the applier calls, routed through the real minting function.
+
+        Delegating straight to `create_surface` was simpler and tested nothing:
+        it skipped the whole email branch, so a bundle importing a Resend
+        surface exercised no more of the code than a Slack one did. The real
+        function decides the name and whether to adopt an existing mailbox,
+        which is exactly the part the applier depends on and the part that
+        broke.
+        """
+        from types import SimpleNamespace
+
+        from app.modules.agent_surfaces.services.email_surface_provisioning import (
+            create_surface_on_minted_address,
+        )
+
+        session = SimpleNamespace(begin_nested=_null_savepoint)
+        return await create_surface_on_minted_address(
+            self,
+            SimpleNamespace(session=session),
+            agent_id=getattr(agent, "id", None),
+            agent_name=getattr(agent, "name", None),
+            **kwargs,
+        )
+
+    async def resend_surface_for_agent(self, *, pod_id, agent_id):
+        """The mailbox this agent already holds — an agent has one from birth."""
+        return self._existing_mailbox
 
     async def update_surface(self, **kwargs):
         from types import SimpleNamespace
 
         self.updated = kwargs
         return SimpleNamespace(id=kwargs.get("surface_id"), config=None)
+
+
+def _null_savepoint():
+    """A savepoint that does nothing, for a fake with no real transaction."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _cm():
+        yield
+
+    return _cm()
 
 
 async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch):
@@ -652,6 +695,91 @@ async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch
     assert surface_fake.created["platform"] == "SLACK"
     assert surface_fake.created["account_id"] == account
     assert surface_fake.updated is None  # created, not updated
+
+
+def _patch_resend_minting(monkeypatch, surface_fake, *, pod_name="Acme"):
+    """Wire a bundle apply at a deployment that has an inbound mail domain."""
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning,
+        "pod_name_for",
+        AsyncMock(return_value=pod_name),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        lambda uow: surface_fake,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+
+
+async def test_a_bundle_s_email_surface_gets_a_readable_address(tmp_path, monkeypatch):
+    """The applier's own email path, which had no test at all.
+
+    Its fake used to answer `create_surface_minting_address` by calling
+    `create_surface` directly, so the entire minting branch — the name, the
+    address, the adoption check — was skipped and a Resend bundle proved
+    nothing a Slack one did not.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "inbox" / "inbox.json",
+        {
+            "name": "inbox",
+            "platform": "RESEND",
+            "default_agent_name": "Reporter",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    _patch_resend_minting(monkeypatch, surface_fake)
+
+    await _applier(root).apply_step(_step(StepKind.SURFACE, "inbox"))
+
+    assert surface_fake.created is not None
+    assert surface_fake.created["platform"] == "RESEND"
+    # Readable, and under the deployment's own domain — not `pod-<32 hex>@`.
+    assert (
+        surface_fake.created["surface_identity_email"] == "reporter.acme@ops.asur.work"
+    )
+
+
+async def test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone(
+    tmp_path, monkeypatch
+):
+    """A bundle names its surfaces, and a name means "a distinct thing".
+
+    Connecting email without a name adopts the mailbox the agent already holds
+    — that is what "connect email" means from the UI. A bundle is not that: its
+    upsert is keyed on the name it carries, so adopting here would quietly
+    rewrite the agent's existing mailbox with the bundle's config and leave the
+    surface the bundle actually declared uncreated.
+    """
+    from types import SimpleNamespace
+
+    existing = SimpleNamespace(
+        id=uuid4(), surface_identity_email="reporter.acme@x.test"
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "inbox" / "inbox.json",
+        {"name": "inbox", "platform": "RESEND", "default_agent_name": "Reporter"},
+    )
+    surface_fake = FakeSurfaceService(existing_mailbox=existing)
+    _patch_resend_minting(monkeypatch, surface_fake)
+
+    await _applier(root).apply_step(_step(StepKind.SURFACE, "inbox"))
+
+    assert surface_fake.created is not None, "the bundle's surface was never created"
+    assert surface_fake.created["name"] == "inbox"
+    assert surface_fake.updated is None, (
+        "the agent's existing mailbox was rewritten instead"
+    )
 
 
 async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):

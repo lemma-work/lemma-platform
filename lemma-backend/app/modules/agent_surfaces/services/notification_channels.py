@@ -269,9 +269,15 @@ class NotificationChannelResolver:
         """``(surface, reason)`` — the reason explains a None.
 
         Asking someone to connect a surface before their first notification can
-        send is a poor trade when we already run a system mailbox. Provisioned
-        on first need rather than at pod creation: most pods never message
-        anyone, and an address handed out is an address to keep working.
+        send is a poor trade when we already run a system mailbox.
+
+        The catch-up path, not the normal one. Pods and agents are given a
+        mailbox as they are created, so what reaches here is a pod that predates
+        that, or one whose surface has since been deleted. Provisioning on first
+        need used to be the whole design — the argument being that most pods
+        never message anyone — and that turned out to have the cost backwards:
+        inbound routes on the address, so a pod that had not yet sent anything
+        matched no surface and mail to the obvious guess started nothing.
 
         A failure here is never fatal. The notification row exists and the inbox
         has it, so this degrades to an explanation rather than an exception —
