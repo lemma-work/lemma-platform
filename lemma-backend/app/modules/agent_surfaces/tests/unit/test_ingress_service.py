@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from types import MethodType
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
@@ -44,6 +45,7 @@ from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     maybe_resume_pending_interaction,
 )
+from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -203,6 +205,27 @@ class _EmptyScalarResult:
 class _EmptyExecuteResult:
     def scalars(self):
         return _EmptyScalarResult()
+
+
+
+def _delivering_adapter() -> AsyncMock:
+    """An adapter mock that runs the real ``deliver`` over stubbed platform verbs.
+
+    Egress hands the platform one envelope now instead of calling a verb per
+    kind of content, so a fully mocked adapter returns a mock from ``deliver``
+    and never reaches ``send_approval`` at all. Binding the real delivery
+    methods keeps these tests asserting what they were written to assert: which
+    verb the ladder tries, and what it falls back to.
+    """
+    adapter = AsyncMock()
+    adapter.platform = "TEST"
+    for cls in BaseSurfaceAdapter.__mro__:
+        for name, function in vars(cls).items():
+            if name == "deliver" or name.startswith(
+                ("_deliver", "_send_text_fallback")
+            ):
+                setattr(adapter, name, MethodType(function, adapter))
+    return adapter
 
 
 def _build_service(
@@ -1643,7 +1666,7 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     adapter.send_questions.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
@@ -1681,7 +1704,7 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     adapter.send_questions.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
@@ -1927,7 +1950,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     adapter.send_approval.return_value = True  # platform rendered native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
@@ -1958,7 +1981,7 @@ async def test_send_approval_prompt_falls_back_to_text():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     adapter.send_approval.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
@@ -1984,7 +2007,7 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     adapter.send_approval.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link

@@ -31,6 +31,8 @@ from app.modules.agent_surfaces.services.display_resource_content import (
     load_pod_file_bytes,
     resolve_table_preview,
 )
+from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
 )
@@ -49,7 +51,6 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_approval_render_plan,
     build_ask_user_render_plan,
     build_display_resource_render_plan,
-    render_questions_as_text,
 )
 from app.core.log.log import get_logger
 
@@ -333,41 +334,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             conversation_id=conversation_id,
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
         )
-        metadata = await self._egress_metadata_with_agent_name(target, None)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            try:
-                if await target.adapter.send_questions(
-                    credentials=target.credentials,
-                    event=target.event,
-                    question_plan=plan,
-                    metadata=metadata,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic",
-                    conversation_id=conversation_id,
-                )
-            # Fallback: a well-formatted text message; the user replies in chat and the
-            # typed-reply path in start_agent_chat resumes the run with their answer.
-            # This is the guaranteed "never swallowed" path — if it ALSO fails, the
-            # question reaches nobody and the run is stuck WAITING, so surface it
-            # loudly and report failure to the caller (the observer logs it too).
-            try:
-                await target.adapter.send_message(
-                    credentials=target.credentials,
-                    event=target.event,
-                    message=render_questions_as_text(plan),
-                    metadata=metadata,
-                )
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic",
-                    conversation_id=conversation_id,
-                )
-                return False
-            return True
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(choices=plan),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
+            conversation_id=conversation_id,
+        )
 
     async def send_approval_prompt_for_conversation(
         self,
@@ -426,41 +398,56 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         metadata: dict[str, Any],
         conversation_id: UUID,
     ) -> bool:
-        """Native buttons, then a text prompt, then admit it reached nobody.
+        """Native buttons, then a text prompt, then admit it reached nobody."""
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(decision=plan),
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
 
-        If both fail the run is stuck waiting on an approval nobody saw, so that
-        is reported rather than swallowed.
+    async def _deliver_envelope(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any],
+        conversation_id: UUID,
+    ) -> bool:
+        """Hand one envelope to the platform and say whether it arrived.
+
+        The ladder -- native, then the part's own text, then nothing -- lives in
+        ``BaseSurfaceAdapter.deliver`` now, and this is what is left once the two
+        hand-written copies of it are gone: resolve a target, release the
+        connection, report.
+
+        Returning ``False`` matters as much as delivering. A prompt that reached
+        nobody leaves the run WAITING on an answer that cannot come, so the
+        caller un-dedupes and a later WAITING event tries again.
         """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
-                if await target.adapter.send_approval(
+                receipt = await target.adapter.deliver(
                     credentials=target.credentials,
                     event=target.event,
-                    approval_plan=plan,
-                    metadata=metadata,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic",
-                    conversation_id=conversation_id,
-                )
-            # Fallback: a text prompt; the user replies "approve"/"deny" and the
-            # typed-reply path resumes the run with their decision.
-            try:
-                await target.adapter.send_message(
-                    credentials=target.credentials,
-                    event=target.event,
-                    message=plan.to_plain_text(),
+                    envelope=envelope,
                     metadata=metadata,
                 )
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic",
-                    conversation_id=conversation_id,
+            except AgentSurfaceError:
+                logger.warning(
+                    "agent_surfaces.egress.envelope_reached_nobody.degraded",
+                    conversation_id=str(conversation_id),
+                    platform=target.surface.surface_type.value,
                 )
                 return False
+            if receipt.degraded:
+                logger.debug(
+                    "agent_surfaces.egress.envelope_degraded.diagnostic",
+                    conversation_id=str(conversation_id),
+                    platform=target.surface.surface_type.value,
+                    parts=receipt.degraded,
+                )
             return True
 
     async def send_voice_note_for_conversation(

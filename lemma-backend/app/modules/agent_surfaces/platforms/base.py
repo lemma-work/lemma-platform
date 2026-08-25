@@ -12,6 +12,9 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.platforms.envelope_delivery import (
+    EnvelopeDeliveryMixin,
+)
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     StreamAppendResult,
@@ -23,7 +26,7 @@ from app.modules.agent_surfaces.domain.models import (
 )
 
 
-class BaseSurfaceAdapter:
+class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
     platform: str
 
     async def enrich_inbound_event(
@@ -380,3 +383,4 @@ class BaseSurfaceAdapter:
         """
         del credentials
         return []
+

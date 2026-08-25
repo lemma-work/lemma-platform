@@ -470,3 +470,61 @@ def text_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value).strip() or None
+
+
+# Exceptions a delivery is willing to degrade on: the platform said no, or the
+# network did. Enumerated rather than caught as `Exception`, and the difference
+# matters — a TypeError from a signature that drifted, or an AttributeError from
+# a method a platform never grew, is a bug in this codebase and must crash
+# loudly. Swallowing exactly that class of thing is how `stream_progress` was
+# silently dead on two platforms for a release (see `test_adapter_contract`).
+#
+# Import errors are tolerated so a deployment without an optional SDK still
+# loads; a platform whose SDK is missing cannot be reached anyway.
+def _platform_transport_errors() -> tuple[type[BaseException], ...]:
+    import httpx
+
+    errors: list[type[BaseException]] = [
+        httpx.HTTPError,
+        httpx.InvalidURL,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    ]
+    try:
+        import aiohttp
+
+        errors.append(aiohttp.ClientError)
+    except ImportError:  # pragma: no cover - aiohttp ships with the backend
+        pass
+    try:
+        from slack_sdk.errors import SlackApiError, SlackClientError
+
+        errors.extend((SlackApiError, SlackClientError))
+    except ImportError:  # pragma: no cover
+        pass
+    try:
+        from app.modules.agent_surfaces.platforms.telegram.client import (
+            TelegramApiError,
+        )
+
+        errors.append(TelegramApiError)
+    except ImportError:  # pragma: no cover
+        pass
+    try:
+        from app.modules.agent_surfaces.platforms.whatsapp.client import (
+            WhatsAppApiError,
+        )
+
+        errors.append(WhatsAppApiError)
+    except ImportError:  # pragma: no cover
+        pass
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+
+    errors.append(AgentSurfaceError)
+    return tuple(errors)
+
+
+PLATFORM_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    _platform_transport_errors()
+)

@@ -143,6 +143,32 @@ class SurfaceQuestionRenderPlan(BaseModel):
     submit_label: str = "Submit"
     allow_other: bool = True
 
+    def to_plain_text(self) -> str:
+        """The reading of these questions for a platform with no native choices.
+
+        Defined here, beside the part, rather than in a renderer a delivery has
+        to remember to reach for -- that is what makes "never dropped for lack
+        of native support" a property of the content instead of a promise each
+        platform keeps separately. Names ``to_plain_text`` to match
+        ``SurfaceApprovalRenderPlan``, so a delivery degrades every part the
+        same way.
+        """
+        blocks: list[str] = []
+        multiple = len(self.questions) > 1
+        for index, question in enumerate(self.questions, start=1):
+            header = f"{index}. {question.question}" if multiple else question.question
+            lines = [header]
+            for opt_index, option in enumerate(question.options, start=1):
+                suffix = " (recommended)" if option.recommended else ""
+                detail = f" — {option.description}" if option.description else ""
+                lines.append(f"  {opt_index}. {option.label}{detail}{suffix}")
+            blocks.append("\n".join(lines))
+        prompt = "Reply with your choice"
+        if any(question.multi_select for question in self.questions):
+            prompt += " (you can pick more than one)"
+        prompt += ", or type your own answer."
+        return "\n\n".join(blocks + [prompt])
+
 
 # Canonical decision values a native approval button carries back. These match
 # ``AgentRunApprovalDecision`` values but are kept as plain strings so the
