@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,7 +15,11 @@ from app.modules.agent.tools.skills.skill_loader import (
     read_workspace_skill_resource,
 )
 from app.modules.agent.tools.skills import pydantic_adapter as skills_adapter
-from app.modules.agent.tools.skills.models import SkillLookupRequest
+from app.modules.agent.tools.skills.models import (
+    SkillLookupRequest,
+    SkillResourceSummary,
+    SkillSummary,
+)
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
 
@@ -117,8 +122,8 @@ async def test_pod_skill_loader_lists_system_and_custom_skills_with_skill_md():
     )
 
     assert [item["name"] for item in skills] == ["browser", "custom-skill"]
-    assert skills[1]["workspace_path"] == "/skills/custom-skill/SKILL.md"
-    assert skills[1]["workspace_dir"] == "/skills/custom-skill"
+    assert skills[1]["pod_path"] == "/skills/custom-skill/SKILL.md"
+    assert skills[1]["pod_dir"] == "/skills/custom-skill"
 
 
 @pytest.mark.asyncio
@@ -159,13 +164,13 @@ async def test_pod_skill_loader_reads_skill_content_and_resources():
     assert resources == [
         {
             "path": "references/example.md",
-            "workspace_path": "/skills/custom-skill/references/example.md",
+            "pod_path": "/skills/custom-skill/references/example.md",
             "kind": "text",
             "executable": "false",
         },
         {
             "path": "scripts/setup.sh",
-            "workspace_path": "/skills/custom-skill/scripts/setup.sh",
+            "pod_path": "/skills/custom-skill/scripts/setup.sh",
             "kind": "script",
             "executable": "true",
         },
@@ -293,3 +298,63 @@ async def test_skill_download_releases_uow_before_storage_read():
 
     assert content == "content"
     assert order == ["resolve", "commit", "read"]
+
+
+_SANDBOX_IMAGES = Path(__file__).resolve().parents[5] / "sandbox-images"
+_WORKSPACE_IMAGE_SOURCES = (
+    _SANDBOX_IMAGES / "Dockerfile.workspace",
+    _SANDBOX_IMAGES / "templates" / "e2b" / "build_templates.py",
+)
+
+
+@pytest.mark.asyncio
+async def test_skill_resources_advertise_a_readable_path_not_a_container_path():
+    """The advertised path must be one the agent can actually read.
+
+    Resources used to carry `workspace_path`, which reads as "a path in the
+    workspace container" — so an agent ran `cat /skills/<skill>/references/<f>.md`
+    (empty), then `ls` (no such directory), then `find /` across the container
+    before finding the real copies under /opt and /workspace. `/skills` is a pod
+    file path; the tool is what resolves it.
+    """
+    name = "lemma-artifact-author"
+
+    resources = await list_workspace_skill_resources(name)
+
+    assert resources
+    for item in resources:
+        assert set(item) == {"path", "pod_path", "kind", "executable"}
+        assert item["pod_path"] == f"/skills/{name}/{item['path']}"
+        # The advertised route reads it; the advertised path is not a filesystem
+        # path and is never presented as one.
+        assert await read_workspace_skill_resource(name, item["path"])
+
+
+def test_skill_output_never_advertises_a_workspace_filesystem_path():
+    fields = {**SkillSummary.model_fields, **SkillResourceSummary.model_fields}
+
+    assert "workspace_path" not in fields
+    assert "workspace_dir" not in fields
+
+    for field_name in ("pod_path", "pod_dir"):
+        description = fields[field_name].description or ""
+        assert "not a path on the workspace filesystem" in description
+        assert "load_skill" in description
+
+
+@pytest.mark.parametrize("source", _WORKSPACE_IMAGE_SOURCES, ids=lambda p: p.name)
+def test_workspace_image_creates_no_skills_directory(source: Path):
+    """The claim the field descriptions make, checked against the images.
+
+    Both workspace builds put the shipped skills under `/sdk/lemma-skills` and
+    inside the installed `lemma_cli` package; neither creates `/skills`. If one
+    ever mounts or symlinks it, this fails — and `pod_path` should go back to
+    advertising a real container path.
+    """
+    offenders = [
+        line
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if "/skills" in line.replace("lemma-skills", "").replace("lemma_cli/skills", "")
+    ]
+
+    assert offenders == []
