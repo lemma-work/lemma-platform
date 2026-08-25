@@ -23,8 +23,32 @@ def _json_serial(obj):
 
 
 def _build_datastore_connect_args() -> dict:
-    """Build asyncpg connect_args with server-side session settings."""
-    connect_args: dict = {}
+    """Build asyncpg connect_args with server-side session settings.
+
+    ``statement_cache_size=0`` is the one that is not about timeouts, and it is
+    here rather than on the primary engine because only this one runs SQL
+    against tables a person can change.
+
+    asyncpg caches prepared statements per connection, keyed on the SQL text.
+    A record read is ``SELECT * FROM "<schema>"."<table>"`` — the same text
+    before and after a column is added or removed — so the cached plan is
+    reused with a result descriptor that no longer matches the table, and
+    asyncpg raises ``InvalidCachedStatementError``. Nothing caught it, so it
+    left as a 400: a person removed a column and their table stopped being
+    readable.
+
+    Worse than one bad request, because the connection is pooled. Any request
+    landing on it saw the same 400, and it cleared itself only when the
+    connection recycled — a table that broke and then healed with nothing done
+    in between. Which of add or remove hit it was never about the operation but
+    about which connection served the next read; ``pool_use_lifo`` makes that
+    reliably unpredictable.
+
+    The cost is a parse per statement. That is the right trade for a schema
+    that belongs to users rather than to migrations: the primary engine keeps
+    its cache, because its tables change only at deploy time.
+    """
+    connect_args: dict = {"statement_cache_size": 0}
     server_settings: dict[str, str] = {}
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
@@ -42,7 +66,13 @@ def get_datastore_engine():
     if _engine is None:
         url = settings.datastore_database_url or settings.database_url
         engine_kwargs = {}
-        connect_args = {}
+        # In both branches, because it is a property of what this engine runs
+        # rather than of where it runs. Testing pools with NullPool, so a stale
+        # cached plan cannot survive to be reused there — which is exactly why
+        # this bug was invisible to the whole scenario suite locally and showed
+        # up only against a deployment with a real pool. Setting it in one
+        # branch would have preserved that difference.
+        connect_args: dict = {"statement_cache_size": 0}
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool
         else:

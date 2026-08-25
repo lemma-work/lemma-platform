@@ -81,6 +81,51 @@ class Reachable:
         found = await self.alice.conversations_in(self.pod)
         return [thread for thread in found if str(_thread_id(thread)) not in self._before]
 
+    async def conversations_holding(self, *said: str) -> list[Any]:
+        """Every conversation in the pod carrying all of `said`.
+
+        Asked by content rather than by novelty, and that is the fix for a real
+        hole. `conversations()` answers "what did this scenario create", which
+        is the right question only where the chat is new too. A person has one
+        chat with a bot and it stands between runs, so the second run's messages
+        land in the conversation the first run's opened — nothing is created,
+        and a scenario counting new conversations sees none and reports that the
+        product lost the message.
+
+        Content is what the promise is actually about: a message that arrived
+        should be findable, in one place, with the others from its chat.
+        """
+        held = []
+        for thread in await self.alice.conversations_in(self.pod):
+            messages = await self.alice.messages_in(thread, in_pod=self.pod)
+            spoken = " ".join(str(m.get("text") or "") for m in messages)
+            if all(text in spoken for text in said):
+                held.append(thread)
+        return held
+
+    async def waits_for_a_conversation_holding(self, *said: str) -> Any:
+        """The one conversation carrying all of `said`, once it is there.
+
+        Waits on the pod rather than on the chat, deliberately. Whether the
+        agent answered twice is incidental to "two messages in one chat continue
+        one conversation" — what that promise is about is where the messages
+        went, and asking directly removes a dependence on reply timing that made
+        the scenario fail for a reason it was not about.
+        """
+        from harness.waiting import eventually
+
+        held = await eventually(
+            lambda: self.conversations_holding(*said),
+            bool,
+            describe=f"a conversation holding {' and '.join(repr(t) for t in said)}",
+            timeout=180.0,
+        )
+        assert len(held) == 1, (
+            f"{len(held)} conversations hold these messages; they belong in one, "
+            f"or a second message arrives with no memory of the first: {held}"
+        )
+        return held[0]
+
     def only_forged(self, why: str) -> None:
         """Skip unless this lane can deliver what Telegram never sent."""
         if not self.chat.can_forge:

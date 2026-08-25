@@ -180,7 +180,13 @@ async def egress(stack: Stack) -> AsyncIterator[Egress]:
     and flakes on a bad one.
     """
     live = stack.egress
-    if live is None:
+    # `is None` alone is not the question. A run with SCENARIOS_EGRESS=off
+    # against a stack it booted still has an Egress — in mode `off`, serving
+    # nothing — so scenarios needing a stand-in sailed past this skip and
+    # failed later against a proxy that was never going to answer. Asking
+    # whether anything is actually standing in covers both, and makes a local
+    # `off` run a faithful rehearsal of a deployment rather than a worse one.
+    if live is None or getattr(live, "mode", "off") not in {"fake", "replay"}:
         # A deployment run owns no proxy, so nothing stands in for Telegram or
         # the connector provider — and a scenario that needs one has nothing to
         # talk to. A skip, not an error: `LOOPBACK_REACHABLE` used to say this
