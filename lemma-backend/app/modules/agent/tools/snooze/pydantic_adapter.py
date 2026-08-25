@@ -5,6 +5,17 @@ cleanly, the conversation goes WAITING, and resolving the pending tool call
 starts a fresh run that replays the synthesized return from history. The only
 new thing here is *who resolves it*: a scheduler timer rather than a person.
 
+That timer is the whole primitive. This tool is a durable sleep, and nothing
+here knows or cares what the agent is sleeping on. In particular it is not how
+an agent waits for a person: ``message_user`` ends its turn and is given a new
+one when the answers arrive, so nothing has to stay asleep for a human.
+
+One thing can still end a sleep early. If a conversation happens to be asleep
+when the last of its ``message_user`` asks is answered,
+``services/message_reply_service`` resolves that pause rather than posting a
+message past it — a message would supersede the pause while leaving its wait row
+armed to fire a second time later.
+
 Ending the run is the one step that is not the same everywhere. The in-process
 harness suspends from the inside, by catching ``AgentInputRequired``. A remote
 harness owns its own session, so nothing raised inside an MCP tool call reaches
@@ -61,10 +72,10 @@ async def snooze(
 
     Don't use it to wait on the person you are *talking to* — ask with
     `ask_user`, or end your turn; their reply starts a fresh run either way.
-    Waiting on somebody you reached with `message_user` is the exception, and
-    the one case this is for: nothing resumes you there, so a single sleep sized
-    to how long a person actually takes is the only way to be around when they
-    answer.
+
+    Size the sleep from whatever you are actually waiting on. Don't use it to
+    wait for a person, including one you reached with `message_user` — end your
+    turn instead, and you get a fresh one when they answer.
     """
     deps = ctx.deps
 
@@ -151,9 +162,10 @@ async def snooze(
         success=True,
         note_to_self=request.note_to_self,
         message=(
-            f"Asleep for {seconds}s. Your turn ends here — stop now, and do not "
-            "call another tool. You wake in this same conversation with a fresh "
-            "prompt telling you the time elapsed."
+            f"Asleep for up to {seconds}s. Your turn ends here — stop now, and "
+            "do not call another tool. You wake in this same conversation with a "
+            "fresh prompt saying why — the time elapsing, or everyone you "
+            "messaged having answered, whichever comes first."
         ),
     )
 

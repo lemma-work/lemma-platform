@@ -45,12 +45,13 @@ class SnoozeRequest(BaseModel):
 class SnoozeResponse(BaseToolResponse):
     """What the agent sees when it wakes."""
 
-    woke_because: Literal["TIMER", "CANCELLED"] | None = Field(
+    woke_because: Literal["TIMER", "ANSWERED", "CANCELLED"] | None = Field(
         default=None,
         description=(
             "TIMER: your time elapsed — this says nothing about whether what you "
-            "were waiting for actually happened, so check. CANCELLED: the wait "
-            "was ended early."
+            "were waiting for actually happened, so check. ANSWERED: everyone "
+            "you reached with message_user has replied, and you woke early "
+            "because of it. CANCELLED: the wait was ended early."
         ),
     )
     slept_seconds: int | None = Field(default=None, description="Actual time asleep.")
@@ -59,13 +60,20 @@ class SnoozeResponse(BaseToolResponse):
     )
 
 
-# The two messages the model can wake to. TIMER leans on what it does *not* say:
-# the failure this exists to prevent is an agent reading "I woke up" as "the
-# thing I was waiting for happened".
+# The three messages the model can wake to. TIMER leans on what it does *not*
+# say: the failure this exists to prevent is an agent reading "I woke up" as
+# "the thing I was waiting for happened". ANSWERED is the one wake that may say
+# it, and it is scoped tightly to what is actually known — people replied, which
+# is not the same as anything else you were waiting on having finished.
 _WAKE_MESSAGES = {
     "TIMER": (
         "Your time elapsed. That is all this means — check whatever you "
         "were waiting for before acting as though it happened."
+    ),
+    "ANSWERED": (
+        "Everyone you reached with message_user has now replied, which is why "
+        "you woke before your time was up. Read them with check_messages. "
+        "Nothing else you were waiting on is known to have happened."
     ),
     "CANCELLED": (
         "This wait was cancelled and your turn was stopped. You did not sleep "

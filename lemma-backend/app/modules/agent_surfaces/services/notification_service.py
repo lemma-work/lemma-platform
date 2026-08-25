@@ -358,7 +358,13 @@ class NotificationService:
         summary: str,
         data: dict | None = None,
     ) -> NotificationEntity:
-        """Record an answer. The domain decides whether it is legal."""
+        """Record an answer. The domain decides whether it is legal.
+
+        Recording only. Bringing the asking conversation back is the caller's
+        job, through ``composition.agent_notifications`` — this module may not
+        reach into the agent module, and both respond paths (the tool and the
+        app endpoint) already do it. A third one must too.
+        """
         notification = await self._owned_by(
             pod_id=pod_id,
             notification_id=notification_id,

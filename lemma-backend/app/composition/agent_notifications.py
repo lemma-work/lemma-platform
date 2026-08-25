@@ -9,15 +9,27 @@ Each function opens its own unit of work. An agent tool runs inside a live run's
 session, and a notification send is not part of that run's transaction: if the
 run later fails and rolls back, the message has already left for somebody's
 phone and pretending otherwise would leave the pod with no record of it.
+
+``deliver_replies_if_settled`` is the one function here that reaches the *other*
+way, into the agent module, to bring an asking conversation back. It lives here
+for the same reason everything else does: neither module may import the other,
+and this is the layer that is allowed to know about both.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.domain.notification import NotificationEntity
+
+logger = get_logger(__name__)
 
 
 def _service(uow):
@@ -171,7 +183,7 @@ async def record_notification_response(
     data: dict | None = None,
 ) -> None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await _service(uow).respond(
+        notification = await _service(uow).respond(
             pod_id=pod_id,
             notification_id=notification_id,
             responder_user_id=responder_user_id,
@@ -179,3 +191,59 @@ async def record_notification_response(
             data=data,
         )
         await uow.commit()
+    # Outside the block, not inside it: the delivery opens its own session,
+    # and a second session taken while the first is still held costs two
+    # connections for one unit of work and self-deadlocks a saturated pool.
+    await deliver_replies_if_settled(notification)
+
+
+async def deliver_replies_if_settled(notification: "NotificationEntity") -> bool:
+    """Bring the asking conversation back, once nothing it asked is outstanding.
+
+    ``message_user`` does not pause the asker — it sends and the turn ends — so
+    without this an answer sits on its row and nothing ever reads it. The
+    conversation is not waiting in any technical sense; it is simply over, and
+    this starts the next turn.
+
+    Deliberately waits for the *last* answer rather than the first. An agent that
+    messaged four people and was brought back by each reply would replay the
+    whole conversation four times to learn "three still pending" three times
+    over.
+
+    Nothing here raises into the caller. The answer is already committed and the
+    person who gave it is owed a receipt, not a traceback, if the asker's side
+    cannot be started — that failure belongs in the log.
+    """
+    from app.modules.agent_surfaces.domain.notification import (
+        NotificationOriginKind,
+    )
+
+    conversation_id = notification.origin_conversation_id
+    if conversation_id is None:
+        return False
+    if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
+        return False
+
+    from app.modules.agent.services.message_reply_service import MessageReplyService
+
+    try:
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            outstanding = await _service(
+                uow
+            ).notifications.count_open_from_origin_conversation(conversation_id)
+            if outstanding:
+                return False
+            delivered = await MessageReplyService(uow).deliver(
+                conversation_id=conversation_id,
+                pod_id=notification.pod_id,
+            )
+            await uow.commit()
+            return delivered
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agent_notifications.deliver_replies_if_settled.degraded",
+            conversation_id=str(conversation_id),
+            notification_id=str(notification.id),
+            exc_info=True,
+        )
+        return False
