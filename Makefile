@@ -1361,9 +1361,16 @@ coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-front
 
 coverage-backend: coverage-backend-unit coverage-backend-e2e
 
+# `local_guest` is excluded explicitly rather than left to skip.
+#
+# Those seventeen tests need Lemma Desktop installed with its VM booted, and
+# they are marked `integration`, not `e2e` -- so `-m "not e2e"` collected them
+# on every backend CI run and they reported green skips. A suite that always
+# skips is indistinguishable from one that has quietly stopped existing.
+# Deselecting says so in the summary instead.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" \
+	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e and not local_guest" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:

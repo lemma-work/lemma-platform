@@ -27,6 +27,7 @@ jobs:
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
+      desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -109,6 +110,24 @@ jobs:
               - 'desktop/runtime/lemma-local.json'
               # See the note in the `desktop` filter above: ci.yml is left out
               # on purpose.
+            # What can change the *desktop* meaning of a backend or frontend
+            # edit. `desktop` deliberately does not list these -- it starts two
+            # 90-minute jobs -- but `build_local_host_pack.py` packs the backend
+            # and the frontend into the host pack the app ships and supervises,
+            # and no CI job ran that script at all. A backend dependency without
+            # an arm64 wheel, or a Next config change that breaks the standalone
+            # output, merged green and was discovered in a release run.
+            #
+            # This one is cheap enough to list ci.yml, so a change to the
+            # desktop CI steps finally runs something desktop-shaped.
+            desktop_contract:
+              - 'lemma-backend/**'
+              - 'lemma-frontend/**'
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/build_local_guest_runtime.sh'
+              - 'desktop/locald/src/native_host_pack.rs'
+              - 'desktop/local-runtime/guest-image/**'
+              - '.github/workflows/ci.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -608,6 +627,46 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  # The cheap desktop lane: contract checks only, no app compiler and no VM.
+  #
+  # This exists because the expensive `desktop` job is deliberately not
+  # triggered by backend or frontend changes -- it costs 476s on macOS and 940s
+  # on Windows -- while `build_local_host_pack.py` packs both of them into the
+  # host pack the app ships. Nothing connected the two, so a backend change
+  # that broke the desktop stack merged with CI fully green.
+  #
+  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  desktop-contract:
+    timeout-minutes: 20
+    name: Desktop contracts
+    needs: changes
+    if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-contract
+
+      # The host-pack layout locald hard-codes, and the guest protocol the
+      # backend's stub stands in for. Both are pure assertions over committed
+      # files, so they need neither the app crate nor a runtime.
+      - name: Host pack and guest contracts
+        working-directory: desktop
+        run: cargo test -p lemma-locald -p lemma-guestd --locked
+
+      # `make desktop-lint` has always run this; CI never did, and it guards a
+      # guest-kernel Oops during first setup.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
   # most of managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build
@@ -714,6 +773,11 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
+      # One second, and it guards a guest-kernel Oops during first setup.
+      # `make desktop-lint` has always run it; CI never did.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -792,6 +856,28 @@ jobs:
           else
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
+
+      # The build-check DMG is meant to refuse to install, by name rather than
+      # by failing a DNS lookup -- `artifact_install.rs` recognises
+      # `artifact_source: ci-build-check` and says so specifically. There is a
+      # unit test for the recognition; nothing checked that the *shipped
+      # artifact* still carries the marker. A packaging change that dropped it
+      # would leave whoever tried it debugging a network error for an hour.
+      - name: The build-check app refuses to install, and says why
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="desktop/target/release/bundle/macos/Lemma.app/Contents/Resources/lemma-local.json"
+          test -f "${manifest}"
+          python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          if data.get("artifact_source") != "ci-build-check":
+              raise SystemExit(
+                  "the build-check app lost its refusal marker, so it now fails "
+                  "with a generic network error instead of naming itself"
+              )
+          ' "${manifest}"
 
       - name: Upload macOS build-check DMG
         uses: actions/upload-artifact@v4
@@ -981,6 +1067,7 @@ jobs:
       - dev-workflow
       - windows-cli
       - desktop
+      - desktop-contract
       - desktop-guestd
       - desktop-windows
     runs-on: ubuntu-latest

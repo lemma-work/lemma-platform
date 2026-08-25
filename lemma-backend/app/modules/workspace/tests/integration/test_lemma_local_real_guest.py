@@ -178,7 +178,20 @@ def _spec(sandbox_id, *, name: str, volume_name: str) -> ProviderCreateSpec:
 async def guest_provider():
     missing = _requirements()
     if missing:
-        pytest.skip("real guest unavailable — " + "; ".join(missing))
+        # Asking for the real guest and not getting it is a failure, not a skip.
+        #
+        # These seventeen tests are the only automated proof that the shipped
+        # guest actually runs a workspace and keeps its files. They are marked
+        # `integration`, not `e2e`, so `pytest -m "not e2e"` collects them on
+        # every backend CI run and they skip green — and anything driving them
+        # deliberately could mis-wire one of the four requirements below and
+        # still see a passing suite that proved nothing.
+        #
+        # So: skip when nobody asked, fail loudly when somebody did.
+        reason = "real guest unavailable — " + "; ".join(missing)
+        if os.environ.get("LEMMA_LOCAL_REAL_GUEST") == "1":
+            pytest.fail(reason)
+        pytest.skip(reason)
 
     provider = LemmaLocalSandboxProvider(
         LemmaLocalProviderConfig(executable=str(_bridge_binary())),
