@@ -258,9 +258,25 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 # A PDF's page image and the document itself are one envelope,
                 # so they arrive in that order rather than as two sends racing
                 # to be first.
+                #
+                # The card goes with them as each file's fallback. A platform
+                # that cannot attach at all -- Teams has no outbound file upload
+                # -- would otherwise degrade to a line naming the file, which
+                # tells the recipient less than the link card it replaced.
                 return await self._deliver_envelope(
                     target,
-                    envelope=SurfaceEnvelope(files=resolved.files),
+                    envelope=SurfaceEnvelope(
+                        files=[
+                            item.model_copy(
+                                update={
+                                    "fallback": apply_file_facts(
+                                        render_plan, resolved.facts
+                                    )
+                                }
+                            )
+                            for item in resolved.files
+                        ]
+                    ),
                     metadata=message_metadata,
                     conversation_id=conversation_id,
                 )

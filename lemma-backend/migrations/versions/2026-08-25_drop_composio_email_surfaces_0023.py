@@ -26,7 +26,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0023_drop_composio_email_surfaces"
+revision = "0023_drop_composio_email"
 down_revision = "0022_org_names_not_unique"
 branch_labels = None
 depends_on = None

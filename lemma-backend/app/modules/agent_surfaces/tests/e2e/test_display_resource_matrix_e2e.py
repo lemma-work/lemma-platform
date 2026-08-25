@@ -741,7 +741,7 @@ async def test_display_resource_whatsapp_small_file_attaches_natively(
     assert documents[-1]["document"]["filename"] == "small.pdf"
 
 
-async def test_display_resource_resend_attachment_paths_delivers_real_attachment(
+async def test_a_file_shown_on_email_is_attached_to_the_one_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -797,11 +797,11 @@ async def test_display_resource_resend_attachment_paths_delivers_real_attachment
             ),
             headers={},
         ),
+        # No reply tool any more: the agent shows the file and writes its
+        # answer, and the one reply carries both.
         script=[
-            script_text("Here is the report.",
-                attachment_paths=[path],
-                tool_call_id=_TOOL_CALL_ID,
-            )
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
+            script_text("Here is the report."),
         ],
     )
 

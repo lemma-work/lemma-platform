@@ -321,7 +321,7 @@ async def test_multi_tool_turn_whatsapp_two_widgets_then_one_final_answer(
     assert len(final_texts) == 1, "final answer must be delivered exactly once"
 
 
-async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
+async def test_two_widgets_on_email_are_refused_and_the_turn_still_replies(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -375,9 +375,7 @@ async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
         script=[
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_text("Here is my answer.",
-                tool_call_id="tool-email-reply-1",
-            ),
+            script_text("Here is my answer."),
         ],
     )
 
@@ -392,7 +390,15 @@ async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
         if m.get("kind") == "TOOL_RETURN" and m.get("tool_name") == "display_resource"
     ]
     assert len(display_returns) == 2
-    assert all(r["tool_result"]["success"] for r in display_returns)
+    # A widget is a link into Lemma, and there is nothing on an email to link
+    # from. Both calls say so instead of reporting a success that delivered
+    # nothing -- which is what they used to do, leaving the model believing it
+    # had shown the person something.
+    assert not any(r["tool_result"]["success"] for r in display_returns)
+    assert all(
+        "email conversation" in (r["tool_result"].get("error") or "")
+        for r in display_returns
+    )
 
     resend_messages = await wait_for_messages(message_store, "RESEND", min_count=1)
     assert len(resend_messages) == 1, "exactly one email must be sent for the turn"

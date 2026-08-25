@@ -402,7 +402,9 @@ def test_attachment_tool_hint_covers_every_platform_and_unknown():
     assert "teams_download_file" in attachment_tool_hint("TEAMS")
     assert "whatsapp_download_file" in attachment_tool_hint("WHATSAPP")
     assert "telegram_download_file" in attachment_tool_hint("TELEGRAM")
-    assert "gmail_download_attachment" in attachment_tool_hint("GMAIL")
+    # Email has no download tool: an inbound attachment is already ingested into
+    # pod files by the time the agent sees the message.
+    assert attachment_tool_hint("RESEND") is None
     assert attachment_tool_hint("SOME_UNKNOWN_PLATFORM") is None
 
 
