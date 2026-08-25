@@ -110,7 +110,16 @@ struct UiState {
 ///
 /// Fails closed: anything unrecognised is `dev`, and only `stable` updates.
 fn release_channel() -> &'static str {
-    match option_env!("LEMMA_RELEASE_CHANNEL") {
+    channel_of(option_env!("LEMMA_RELEASE_CHANNEL"))
+}
+
+/// The channel a build stamp names, or `dev`.
+///
+/// Split out so the mapping can be asserted. Testing `release_channel()`
+/// directly proves nothing: it reads a compile-time stamp that a test build
+/// never has, so every assertion about it holds by construction.
+fn channel_of(stamp: Option<&str>) -> &'static str {
+    match stamp {
         Some("stable") => "stable",
         Some("nightly") => "nightly",
         _ => "dev",
@@ -128,7 +137,20 @@ fn build_commit() -> Option<&'static str> {
 /// to follow -- and the signing key is never given to the nightly workflow, so
 /// a nightly could not produce a valid update even if it tried.
 fn updates_enabled() -> bool {
-    release_channel() == "stable" && !cfg!(debug_assertions) && updater_key_configured()
+    updates_allowed(
+        release_channel(),
+        cfg!(debug_assertions),
+        updater_key_configured(),
+    )
+}
+
+/// Whether a build with these three properties may update itself.
+///
+/// A conjunction, and each term is load-bearing: a nightly has no durable feed
+/// and is never given the signing key, a debug build is not a release, and a
+/// build with no public key cannot verify what it downloads.
+fn updates_allowed(channel: &str, debug: bool, key_configured: bool) -> bool {
+    channel == "stable" && !debug && key_configured
 }
 
 /// Whether this build carries a public key that can verify an update.
@@ -7226,16 +7248,37 @@ mod tests {
     /// must say so rather than appearing configured.
     #[test]
     fn only_a_stable_build_updates_itself() {
-        // The stamp this binary was compiled with. Tests are a debug build, so
-        // updates are off here whatever the channel says.
+        // Both halves of this used to be true by construction: tests are a
+        // debug build so `updates_enabled()` is false whatever the channel is,
+        // and `matches!` against the same closed set the `match` produces
+        // cannot fail. It passed with the feature deleted.
+        //
+        // Asserted on the mapping instead, which is the decision worth pinning:
+        // an unrecognised stamp is `dev`, not "assume the best".
+        assert_eq!(channel_of(Some("stable")), "stable");
+        assert_eq!(channel_of(Some("nightly")), "nightly");
+        assert_eq!(channel_of(None), "dev", "an unstamped build is not stable");
+        for unknown in ["Stable", "STABLE", "beta", "", "stable "] {
+            assert_eq!(
+                channel_of(Some(unknown)),
+                "dev",
+                "{unknown:?} must not be read as a release channel",
+            );
+        }
+
+        // And the gate is a conjunction, so nightly cannot update itself even
+        // in a release build.
+        assert!(!updates_allowed("nightly", false, true));
+        assert!(!updates_allowed("dev", false, true));
         assert!(
-            !updates_enabled(),
-            "a development build must never self-update"
+            !updates_allowed("stable", true, true),
+            "a debug build never does"
         );
         assert!(
-            matches!(release_channel(), "stable" | "nightly" | "dev"),
-            "the channel is a closed set, so an unknown value cannot leak through"
+            !updates_allowed("stable", false, false),
+            "and neither does one with no key to verify with",
         );
+        assert!(updates_allowed("stable", false, true));
     }
 
     /// The feed's compatibility block decides before anything is downloaded.

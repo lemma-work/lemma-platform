@@ -1928,8 +1928,12 @@ mod scoped_mcp_approval_tests {
             "mcp__lemma-corp__delete_everything",
             "lemma-corp.delete_everything",
         ] {
+            // `toolName`, not `title`. This used to feed the title, which this
+            // path stopped reading -- so every assertion below passed for the
+            // trivial reason and the test would have survived deleting the
+            // namespace anchoring outright.
             assert!(
-                !names_scoped_mcp_tool(&json!({"toolCall": {"title": name}})),
+                !names_scoped_mcp_tool(&json!({"toolCall": {"toolName": name}})),
                 "{name} is not ours to approve",
             );
         }

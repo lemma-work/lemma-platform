@@ -131,14 +131,29 @@ def check_node(pack: Path) -> None:
 
 
 def check_derived(pack: Path) -> None:
-    missing = [
-        f"{entry['what']} ({entry['path']})"
-        for entry in CONTRACT["derived"]
-        if not (pack / entry["path"]).exists()
-    ]
-    if missing:
-        raise SystemExit("the pack is missing: " + "; ".join(missing))
-    print(f"  assets   {len(CONTRACT['derived'])} derived paths present")
+    """Present, and not empty where emptiness means broken.
+
+    An existence check passes on a zero-byte `lemma-client.js`, an empty
+    `migrations/` and a truncated `alembic.ini` -- each of which produces an
+    install that gets further before it fails, which is worse than one that
+    fails here.
+    """
+    problems = []
+    for entry in CONTRACT["derived"]:
+        path = pack / entry["path"]
+        if not path.exists():
+            problems.append(f"{entry['what']} is missing ({entry['path']})")
+            continue
+        if not entry.get("must_not_be_empty"):
+            continue
+        empty = (
+            not any(path.iterdir()) if path.is_dir() else path.stat().st_size == 0
+        )
+        if empty:
+            problems.append(f"{entry['what']} is empty ({entry['path']})")
+    if problems:
+        raise SystemExit("the pack is not usable: " + "; ".join(problems))
+    print(f"  assets   {len(CONTRACT['derived'])} derived paths present and non-empty")
 
 
 def main() -> int:

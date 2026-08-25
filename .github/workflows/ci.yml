@@ -156,6 +156,13 @@ jobs:
               - 'scripts/check_ci_aggregators.py'
               - 'scripts/check_ci_job_results.py'
               - 'scripts/check_pytest_census.py'
+              - 'scripts/check_test_run.py'
+              # The recorded floors and ceilings themselves. Without these a PR
+              # that edits only a baseline runs nothing at all.
+              - '.github/pytest-census.json'
+              - '.github/test-run-baseline.json'
+              - 'scripts/_pytest_census_plugin.py'
+              - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
@@ -215,6 +222,16 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
+      # Collection-time checks cannot see a test that starts and then skips
+      # itself from a fixture. 72 of this lane's tests do exactly that when
+      # Postgres is unreachable, and this job's own comment records what the
+      # same suite silently skipping 57 tests once cost.
+      - name: No suite skipped itself at runtime
+        if: always()
+        run: >-
+          python3 ../scripts/check_test_run.py --lane unit
+          coverage-backend/junit-unit.xml
+
       - name: Add backend coverage to job summary
         if: always()
         run: |

@@ -32,7 +32,19 @@
     "`producer_writes` is the literal the *producer* must contain for that",
     "entry, which is not always the path -- the script assembles some of these",
     "from pieces. Where it is null the producer is checked by running it",
-    "instead, which is stronger. Both lists use it."
+    "instead, which is stronger. Both lists use it.",
+    "",
+    "`must_not_be_empty` exists because presence is the one thing that is never",
+    "the problem. A zero-byte `lemma-client.js`, an empty `migrations/` or a",
+    "truncated `alembic.ini` all pass an existence check and all produce an",
+    "install that gets further before it fails. Directories are checked for",
+    "having an entry; files for having a byte.",
+    "",
+    "`named_by_consumer` is false for a path the consumer needs but never",
+    "spells: `lemma_apps_config.json` is read by `import_connector_catalog.py`,",
+    "which locald runs. It still has to be in the pack -- without it the",
+    "connector setup fails -- but the Rust half cannot look for it in a file",
+    "that does not mention it."
   ],
   "required": [
     {
@@ -73,32 +85,65 @@
     {
       "what": "browser SDK bundle",
       "path": "backend/assets/browser-sdk/lemma-client.js",
-      "producer_writes": null
+      "producer_writes": null,
+      "must_not_be_empty": true,
+      "named_by_consumer": true
     },
     {
       "what": "browser UI bundle",
       "path": "backend/assets/browser-sdk/lemma-ui.js",
-      "producer_writes": null
+      "producer_writes": null,
+      "must_not_be_empty": true,
+      "named_by_consumer": true
     },
     {
       "what": "agent skills",
       "path": "backend/assets/lemma-skills",
-      "producer_writes": "assets/lemma-skills"
+      "producer_writes": "assets/lemma-skills",
+      "must_not_be_empty": false,
+      "named_by_consumer": true
     },
     {
       "what": "alembic migrations",
       "path": "backend/migrations",
-      "producer_writes": "\"migrations\""
+      "producer_writes": "\"migrations\"",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
     },
     {
       "what": "alembic configuration",
       "path": "backend/alembic.ini",
-      "producer_writes": "alembic.ini"
+      "producer_writes": "alembic.ini",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
     },
     {
       "what": "the pack marker",
       "path": "pack.json",
-      "producer_writes": "pack.json"
+      "producer_writes": "pack.json",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
+    },
+    {
+      "what": "the connector catalog importer",
+      "path": "backend/scripts/import_connector_catalog.py",
+      "producer_writes": "import_connector_catalog",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
+    },
+    {
+      "what": "the connector catalog it imports",
+      "path": "backend/scripts/lemma_apps_config.json",
+      "producer_writes": "lemma_apps_config",
+      "must_not_be_empty": true,
+      "named_by_consumer": false
+    },
+    {
+      "what": "the release manifest",
+      "path": "release.json",
+      "producer_writes": "release.json",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
     }
   ]
 }

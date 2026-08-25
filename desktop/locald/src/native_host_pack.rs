@@ -1029,12 +1029,20 @@ mod tests {
         }
 
         // The derived paths are joins rather than probes, so they are checked
-        // as substrings of the same function's siblings.
+        // as substrings -- but of the shipping half of the file only. Searching
+        // the whole thing let a path be "found" in this module's own fixtures,
+        // which is a test satisfying itself.
+        let shipping = &source[..source
+            .find("#[cfg(test)]")
+            .expect("this file has a test module")];
         for entry in contract["derived"].as_array().unwrap() {
+            if !entry["named_by_consumer"].as_bool().unwrap_or(true) {
+                continue;
+            }
             let path = entry["path"].as_str().unwrap();
             let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
             assert!(
-                source.contains(leaf),
+                shipping.contains(leaf),
                 "the contract names {path}, which nothing in this file joins ({parent})",
             );
         }
