@@ -1754,7 +1754,7 @@ fn request_locald_replacement(connection: &mut LocaldConnection) -> Result<(), S
         .map_err(|error| format!("could not request daemon replacement: {error}"))
 }
 
-fn wait_for_locald_exit(attempts: usize) -> Result<(), String> {
+fn wait_for_locald_exit(attempts: usize, reason: &str) -> Result<(), String> {
     let root = locald_root();
     let name = locald_socket_name(&root)?;
     for _ in 0..attempts {
@@ -1763,16 +1763,34 @@ fn wait_for_locald_exit(attempts: usize) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err("the previous local service manager did not stop for the app update".into())
+    Err(format!(
+        "the local service manager did not stop for {reason}"
+    ))
 }
 
-fn replace_locald(mut connection: LocaldConnection) -> Result<(), String> {
+fn replace_locald(connection: LocaldConnection) -> Result<(), String> {
+    // An update has all the time it needs: the alternative is a new app beside
+    // an old daemon, which is worse than a slow update.
+    stop_locald(connection, "the app update", 450)
+}
+
+/// Stop the daemon, gracefully if it will and by verified identity if it will
+/// not.
+///
+/// `reason` only names the occasion in the error text. The two occasions are an
+/// app update, which replaces the daemon, and quitting, which must not leave
+/// one behind -- see [`leave_nothing_running`].
+fn stop_locald(
+    mut connection: LocaldConnection,
+    reason: &str,
+    graceful_attempts: usize,
+) -> Result<(), String> {
     let original_pid = connection.hello["pid"]
         .as_u64()
         .ok_or("the previous local service manager did not report its process identity")?;
     request_locald_replacement(&mut connection)?;
     drop(connection);
-    if wait_for_locald_exit(450).is_ok() {
+    if wait_for_locald_exit(graceful_attempts, reason).is_ok() {
         return Ok(());
     }
 
@@ -1788,12 +1806,12 @@ fn replace_locald(mut connection: LocaldConnection) -> Result<(), String> {
         )
     })?;
     if current.hello["pid"].as_u64() != Some(original_pid) {
-        return Err(
-            "the local service manager changed during the app update; reopen Lemma to retry".into(),
-        );
+        return Err(format!(
+            "the local service manager changed during {reason}; reopen Lemma to retry"
+        ));
     }
     force_terminate_packaged_locald(original_pid)?;
-    wait_for_locald_exit(150)
+    wait_for_locald_exit(150, reason)
 }
 
 #[cfg(target_os = "macos")]
@@ -2387,7 +2405,10 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         && event["ok"].as_bool() == Some(true)
         && shell.quit_after_stop.swap(false, Ordering::AcqRel);
     if quit_after_stop {
-        disconnect_locald(app);
+        // The services are down; the supervisor is not. Reaching the same exit
+        // as every other quit is what keeps that true -- see
+        // `leave_nothing_running`.
+        leave_nothing_running(app);
         app.exit(0);
         return;
     }
@@ -4389,6 +4410,142 @@ fn placement_of(window: &tauri::WebviewWindow) -> Option<WindowPlacement> {
     })
 }
 
+/// The smallest window the app is willing to restore to.
+///
+/// Matches `min_inner_size` below. A saved size under it means the record is
+/// from a build with different minimums, or was written mid-animation; either
+/// way the OS would clamp it and the window would come back a shape the user
+/// never chose.
+const MIN_RESTORED: (u32, u32) = (980, 680);
+
+/// How tall the draggable strip at the top of a window is, near enough.
+///
+/// Not read from the OS: this is only ever used to ask whether *some* of the
+/// title bar is on a display, and being a few points out changes no answer.
+const TITLE_BAR_HEIGHT: i32 = 28;
+
+/// Where the window was when the app last closed.
+///
+/// Everything about a window's placement is a decision the user made with a
+/// mouse, and the app threw all of it away on every quit -- so somebody who
+/// works on a 34" display had Lemma come back at 1280x860 in the middle of it,
+/// every single morning.
+///
+/// Read defensively. This is the one piece of state the app restores from disk
+/// *before* it can show anything, so a bad value here is an app that opens
+/// somewhere the user cannot reach it.
+fn remembered_placement(handle: &AppHandle) -> Option<WindowPlacement> {
+    let placement = saved_placement(&read_config())?;
+    let monitors = match handle.available_monitors() {
+        // Nothing to check against is not evidence of a problem. Restoring is
+        // the behaviour the user asked for by moving the window in the first
+        // place, and the OS still clamps a wildly wrong value.
+        Err(_) => return Some(placement),
+        Ok(monitors) => monitors,
+    };
+    let screens: Vec<_> = monitors
+        .iter()
+        .map(|monitor| (*monitor.position(), *monitor.size()))
+        .collect();
+    placement_is_reachable(&placement, &screens).then_some(placement)
+}
+
+/// Parse a recorded placement, refusing anything that would restore wrong.
+///
+/// Split from the monitor check so both halves can be tested: this one is
+/// about a file that may have been written by another build, hand-edited, or
+/// truncated mid-write.
+fn saved_placement(config: &Value) -> Option<WindowPlacement> {
+    let saved = config.get("window")?;
+    let number = |key: &str| saved.get(key)?.as_i64();
+    let width = u32::try_from(number("width")?).ok()?;
+    let height = u32::try_from(number("height")?).ok()?;
+    if width < MIN_RESTORED.0 || height < MIN_RESTORED.1 {
+        return None;
+    }
+    Some(WindowPlacement {
+        position: tauri::PhysicalPosition::new(
+            i32::try_from(number("x")?).ok()?,
+            i32::try_from(number("y")?).ok()?,
+        ),
+        size: tauri::PhysicalSize::new(width, height),
+    })
+}
+
+/// Whether a saved placement still lands on a display that exists.
+///
+/// The failure this prevents is the classic one: quit with the window on a
+/// second monitor, unplug it, launch, and the app restores to coordinates that
+/// are now nowhere. The window is real, focused, and invisible, and the only
+/// way back is deleting a config file the user does not know about.
+///
+/// Judged by the window's *title bar* rather than its whole frame, and by a
+/// generous strip of it: a window may legitimately hang off the side of a
+/// display, but if you cannot grab the top of it you cannot move it back.
+fn placement_is_reachable(
+    placement: &WindowPlacement,
+    screens: &[(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)],
+) -> bool {
+    if screens.is_empty() {
+        return true;
+    }
+    // How much of the title bar has to be on a display to be worth calling
+    // reachable. Any overlap at all is not enough -- three pixels of chrome
+    // poking over the bottom edge is not something a person can grab, and
+    // treating it as fine is how the window ends up effectively lost anyway.
+    const GRABBABLE_HEIGHT: i32 = 24;
+    const GRABBABLE_WIDTH: i32 = 80;
+
+    let bar_top = placement.position.y;
+    let bar_bottom = bar_top.saturating_add(TITLE_BAR_HEIGHT);
+    let left = placement.position.x;
+    let right = left.saturating_add(i32::try_from(placement.size.width).unwrap_or(i32::MAX));
+    // Summed across displays, not tested one at a time: a window straddling two
+    // monitors has a perfectly grabbable title bar even when neither display
+    // holds enough of it on its own.
+    screens.iter().any(|(origin, size)| {
+        let monitor_right = origin
+            .x
+            .saturating_add(i32::try_from(size.width).unwrap_or(i32::MAX));
+        let monitor_bottom = origin
+            .y
+            .saturating_add(i32::try_from(size.height).unwrap_or(i32::MAX));
+        let visible_width = right.min(monitor_right) - left.max(origin.x);
+        let visible_height = bar_bottom.min(monitor_bottom) - bar_top.max(origin.y);
+        visible_width >= GRABBABLE_WIDTH && visible_height >= GRABBABLE_HEIGHT
+    })
+}
+
+/// Record where the window is, so the next launch opens it there.
+///
+/// Written on move and resize rather than only on quit, because the app is not
+/// always quit: it is force-killed, it is replaced by an update, the machine
+/// restarts. A geometry that only survives a graceful exit is one that is
+/// usually lost. `write_config` is a read-modify-write of a small file and
+/// these events arrive at most a few times a second while a drag is in
+/// progress, which is well inside what this can absorb.
+fn remember_placement(window: &tauri::WebviewWindow) {
+    // A minimised or fullscreen window reports a placement that is about the
+    // OS's temporary arrangement, not the one the user chose to come back to.
+    if window.is_minimized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let Some(placement) = placement_of(window) else {
+        return;
+    };
+    if placement.size.width < MIN_RESTORED.0 || placement.size.height < MIN_RESTORED.1 {
+        return;
+    }
+    let _ = write_config(|config| {
+        config["window"] = json!({
+            "x": placement.position.x,
+            "y": placement.position.y,
+            "width": placement.size.width,
+            "height": placement.size.height,
+        });
+    });
+}
+
 fn build_main_window(
     handle: &AppHandle,
     mode: &str,
@@ -4510,6 +4667,11 @@ fn build_main_window_at(
     } else {
         main_builder
     };
+    // A rebuild is told exactly where to sit. A cold start has only what the
+    // last session left behind -- and `None` from either is not a reason to
+    // guess: an unplaced window lands where the OS puts it, which is right for
+    // a first-ever launch and safe for everything else.
+    let placement = placement.or_else(|| remembered_placement(handle));
     let main_builder = match placement {
         Some(placement) => main_builder
             .position(
@@ -4534,10 +4696,18 @@ fn build_main_window_at(
     }
     main.on_window_event({
         let window = main.clone();
-        move |event| {
-            if let tauri::WindowEvent::ThemeChanged(theme) = event {
+        move |event| match event {
+            tauri::WindowEvent::ThemeChanged(theme) => {
                 let _ = window.set_background_color(Some(canvas_color(*theme)));
             }
+            // Where the user put the window, kept as they put it. Recorded here
+            // rather than on quit alone: an app that is force-killed or
+            // replaced by an update never sees a close event, and those are
+            // the launches where coming back wrong is most annoying.
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                remember_placement(&window);
+            }
+            _ => {}
         }
     });
 
@@ -5153,16 +5323,15 @@ fn connection_switch_prompt(current: &str, running: bool) -> (String, String, St
         (
             "Use the hosted workspace?".into(),
             if running {
-                "Lemma keeps running on this Mac and your local pods stay where they are — this window just stops pointing at them. Use this menu item again to come back."
+                format!("Lemma keeps running on {THIS_COMPUTER} and your local pods stay where they are — this window just stops pointing at them. Use this menu item again to come back.")
             } else {
-                "This window will point at the hosted workspace instead of this Mac. Your local pods stay where they are. Use this menu item again to come back."
-            }
-            .into(),
+                format!("This window will point at the hosted workspace instead of {THIS_COMPUTER}. Your local pods stay where they are. Use this menu item again to come back.")
+            },
             "Use Hosted".into(),
         )
     } else {
         (
-            "Run Lemma on this Mac?".into(),
+            format!("Run Lemma on {THIS_COMPUTER}?"),
             "Starting the local stack boots a private Linux runtime and waits for its database, cache, and auth service. On a cold machine that takes a few minutes, and the window will show the splash until it is ready."
                 .into(),
             "Start Local".into(),
@@ -5731,8 +5900,10 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn disconnect_locald(app: &AppHandle) {
-    // Disconnect only this desktop client. The daemon and desired service
-    // state survive shell exit, upgrades, and crashes.
+    // Disconnect only this desktop client. The daemon and desired service state
+    // survive a crash, an upgrade, and a closed window -- which is the point of
+    // closing to the tray. They do *not* survive a quit any more; see
+    // `leave_nothing_running`.
     let _ = send_to_locald(app, json!({"cmd": "disconnect", "id": "shell-exit"}));
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock().unwrap() = None;
@@ -5804,8 +5975,21 @@ fn quit_impact_lines(
     impact
 }
 
+/// What to call the machine, in native dialog copy.
+///
+/// The web surfaces decide this at runtime because one bundle serves both
+/// platforms; a Rust binary is built for exactly one, so a `cfg!` is the whole
+/// answer here. Same words either way -- see `desktop/ui/index.html`.
+const THIS_COMPUTER: &str = if cfg!(target_os = "windows") {
+    "this PC"
+} else if cfg!(target_os = "macos") {
+    "this Mac"
+} else {
+    "this computer"
+};
+
 fn quit_prompt_body(impact: &[String]) -> String {
-    let mut body = String::from("Quitting stops Lemma's local server on this Mac.\n\n");
+    let mut body = format!("Quitting stops Lemma's local server on {THIS_COMPUTER}.\n\n");
     for line in impact {
         body.push_str("•  ");
         body.push_str(line);
@@ -5814,10 +5998,10 @@ fn quit_prompt_body(impact: &[String]) -> String {
     // Both halves matter. The first is why this is safe to say yes to; the
     // second is the answer for someone who pressed ⌘Q meaning "get out of my
     // way", which closing the window already does without stopping anything.
-    body.push_str(
-        "\nPods, files, and data stay on this Mac and come back when you reopen Lemma.\n\
-         To leave Lemma running, close the window instead.",
-    );
+    body.push_str(&format!(
+        "\nPods, files, and data stay on {THIS_COMPUTER} and come back when you reopen \
+             Lemma.\nTo leave Lemma running, close the window instead."
+    ));
     body
 }
 
@@ -5929,8 +6113,67 @@ fn stop_then_quit(app: &AppHandle) {
 fn finish_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
+    // Off the main thread, and backstopped. Menu and tray handlers run on the
+    // main thread, so waiting for the daemon here would freeze the window --
+    // including the one showing "Winding down." -- for as long as the wait.
+    let worker = app.clone();
+    std::thread::spawn(move || {
+        leave_nothing_running(&worker);
+        worker.exit(0);
+    });
+    let backstop = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_DAEMON_BUDGET);
+        // Idempotent, and the loser of this race changes nothing: whichever
+        // arrives first is the one that ends the process.
+        backstop.exit(0);
+    });
+}
+
+/// How long a quit waits for the daemon before leaving without it.
+///
+/// Short on purpose. By the time this runs the services are already stopped --
+/// the long wait is `QUIT_STOP_BUDGET`, above -- so what is left is a
+/// supervisor with nothing to supervise, and that exits in well under a second
+/// unless it is wedged. Waiting longer for a wedged one only makes quitting
+/// feel broken as well.
+const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
+
+/// Quit has to mean quit.
+///
+/// Closing the window hides Lemma to the tray and everything keeps running --
+/// that is deliberate, and it is how a person leaves Lemma working while they
+/// do something else. Quitting is the other half of that bargain, and it was
+/// not being honoured: the app exited and `lemma-locald` stayed up, supervising
+/// Postgres, Redis, the backend, the Agent Host and a virtual machine, with no
+/// window, no tray icon and nothing in the Dock. The only way to see it was
+/// `ps`, and the only way to stop it was `kill`.
+///
+/// A background service is a fine thing to have. A background service with no
+/// user interface is not one the user agreed to.
+///
+/// So this stops the daemon on the way out, using the same graceful-then-forced
+/// path an app update uses -- the forced arm re-authenticates and matches the
+/// packaged executable before it signals anything, so it can never reach a
+/// daemon this app does not own.
+fn leave_nothing_running(app: &AppHandle) {
+    // Drop this client first. The daemon broadcasts to connected clients while
+    // it shuts down, and a writer belonging to a window that is going away is
+    // one more thing that can block the exit.
     disconnect_locald(app);
-    app.exit(0);
+    // Half the budget for the graceful ask, so a daemon that ignores it still
+    // leaves room for the forced arm to verify identity and signal.
+    let outcome = connect_locald().and_then(|connection| stop_locald(connection, "quitting", 30));
+    match outcome {
+        Ok(()) => append_install_log("[quit] the local service manager stopped"),
+        // Not fatal, and deliberately not a dialog. The user has asked to
+        // leave; trapping them behind a modal about a daemon is worse than the
+        // daemon. But it goes in the log, because "Lemma is still running after
+        // I quit" is otherwise unexplainable.
+        Err(error) => append_install_log(&format!(
+            "[quit] the local service manager could not be stopped: {error}"
+        )),
+    }
 }
 
 // An exit that did not stop the stack must still close any LAN or public
@@ -7323,7 +7566,7 @@ mod tests {
     #[test]
     fn switching_connection_says_what_it_is_about_to_do() {
         let (title, body, confirm) = connection_switch_prompt("hosted", false);
-        assert_eq!(title, "Run Lemma on this Mac?");
+        assert_eq!(title, format!("Run Lemma on {THIS_COMPUTER}?"));
         assert_eq!(confirm, "Start Local");
         // The ninety-second health gate is the whole reason this prompt exists:
         // the press used to be followed by silence for minutes.
@@ -7332,7 +7575,10 @@ mod tests {
         let (title, body, confirm) = connection_switch_prompt("local", true);
         assert_eq!(title, "Use the hosted workspace?");
         assert_eq!(confirm, "Use Hosted");
-        assert!(body.contains("keeps running on this Mac"), "{body}");
+        assert!(
+            body.contains(&format!("keeps running on {THIS_COMPUTER}")),
+            "{body}"
+        );
         // Leaving must never read as destroying: the pods stay.
         assert!(body.contains("stay where they are"), "{body}");
     }
@@ -7671,6 +7917,246 @@ mod tests {
         );
     }
 
+    /// A saved window position must not be able to hide the app.
+    ///
+    /// The failure is the classic one and it is unrecoverable without a
+    /// terminal: quit with the window on a second display, unplug it, launch.
+    /// The window is real, focused, and nowhere on screen, and the only way
+    /// back is deleting a config file the user does not know exists.
+    /// Closing the window keeps Lemma running; quitting stops it completely.
+    ///
+    /// This is the bargain the product makes, and only half of it was true.
+    /// Closing hid to the tray and left everything up, which is right and is
+    /// what the tray icon is for. Quitting exited the app and left
+    /// `lemma-locald` running -- supervising Postgres, Redis, the backend, the
+    /// Agent Host and a virtual machine -- with no window, no tray icon and
+    /// nothing in the Dock. The only way to see it was `ps` and the only way to
+    /// stop it was `kill`.
+    ///
+    /// A background service is fine. A background service with no interface is
+    /// not one anybody agreed to.
+    #[test]
+    fn quitting_leaves_nothing_running_that_the_user_cannot_see() {
+        let source = include_str!("main.rs");
+        let body_of = |name: &str| {
+            let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
+            let end = source[start..]
+                .find("\nfn ")
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+
+        // Closing hides. It must not stop anything, and it must not quit.
+        // Sliced to the end of the closure rather than the next `fn`: this
+        // handler lives inside the builder chain, so "the next fn" is hundreds
+        // of lines of unrelated code that trivially satisfies any assertion.
+        let close = {
+            let start = source
+                .find("if let tauri::WindowEvent::CloseRequested { api, .. } = event {")
+                .expect("the close handler exists");
+            let end = source[start..]
+                .find("\n        })")
+                .expect("the close handler is a closure");
+            &source[start..start + end]
+        };
+        assert!(
+            close.contains("api.prevent_close()"),
+            "closing must not exit"
+        );
+        assert!(close.contains("window.hide()"), "closing hides to the tray");
+        assert!(
+            !close.contains("leave_nothing_running") && !close.contains("stop_impl"),
+            "closing the window must leave the services running",
+        );
+
+        // Every exit does the opposite.
+        assert!(
+            body_of("fn finish_quit(").contains("leave_nothing_running(&worker)"),
+            "the plain quit path has to stop the daemon",
+        );
+        let after_stop = body_of("fn handle_locald_event(");
+        assert!(
+            after_stop.contains("leave_nothing_running(app);\n        app.exit(0);"),
+            "the stop-then-quit path reaches the same exit",
+        );
+
+        // And it uses the identity-verified path, not a signal at a PID.
+        let leave = body_of("fn leave_nothing_running(");
+        assert!(leave.contains(r#"stop_locald(connection, "quitting""#));
+        assert!(
+            !leave.contains("pkill") && !leave.contains("killall"),
+            "a daemon is only ever stopped after being verified as ours",
+        );
+    }
+
+    /// A quit cannot be held open by a daemon that will not go.
+    ///
+    /// Two properties, and the first is the one that would have shipped a
+    /// regression: menu and tray handlers run on the main thread, so waiting
+    /// for the daemon there freezes the window -- including the one showing
+    /// "Winding down." to the person who just asked to leave.
+    #[test]
+    fn a_wedged_daemon_cannot_stop_the_app_from_quitting() {
+        let source = include_str!("main.rs");
+        let start = source.find("fn finish_quit(").expect("finish_quit exists");
+        let body = &source[start..start + 1400];
+
+        assert!(
+            body.contains("std::thread::spawn"),
+            "the daemon shutdown must not run on the main thread",
+        );
+        assert!(
+            body.contains("QUIT_DAEMON_BUDGET"),
+            "and something has to end the wait",
+        );
+        assert!(
+            QUIT_DAEMON_BUDGET < QUIT_STOP_BUDGET,
+            "the services are already down by this point; only the supervisor is left",
+        );
+    }
+
+    /// The dialogs name the machine this build actually runs on.
+    #[test]
+    fn native_copy_does_not_name_the_wrong_hardware() {
+        assert_eq!(
+            THIS_COMPUTER,
+            if cfg!(target_os = "windows") {
+                "this PC"
+            } else if cfg!(target_os = "macos") {
+                "this Mac"
+            } else {
+                "this computer"
+            }
+        );
+        let body = quit_prompt_body(&["Schedules stop.".into()]);
+        assert!(body.contains(THIS_COMPUTER), "{body}");
+        // The other half of the bargain is stated where the decision is made.
+        assert!(
+            body.contains("To leave Lemma running, close the window instead."),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_window_is_only_restored_where_a_hand_can_reach_it() {
+        let screen = |x, y, w, h| {
+            (
+                tauri::PhysicalPosition::new(x, y),
+                tauri::PhysicalSize::new(w, h),
+            )
+        };
+        let at = |x, y| WindowPlacement {
+            position: tauri::PhysicalPosition::new(x, y),
+            size: tauri::PhysicalSize::new(1280, 860),
+        };
+        let laptop = [screen(0, 0, 1728, 1117)];
+        // The same desk, with the external display to the left -- which is
+        // where negative coordinates come from and why this cannot just clamp
+        // to zero.
+        let two_displays = [screen(0, 0, 1728, 1117), screen(-3440, -200, 3440, 1440)];
+
+        assert!(placement_is_reachable(&at(100, 100), &laptop));
+        assert!(placement_is_reachable(&at(-3000, 0), &two_displays));
+        assert!(
+            !placement_is_reachable(&at(-3000, 0), &laptop),
+            "the second display is gone; this window would be invisible"
+        );
+
+        // A window may legitimately hang off an edge. What must stay on screen
+        // is enough of the title bar to grab -- and "some overlap" is not that.
+        assert!(
+            placement_is_reachable(&at(1600, 20), &laptop),
+            "mostly off the right edge, but 128px of title bar is draggable"
+        );
+        assert!(
+            !placement_is_reachable(&at(1700, 20), &laptop),
+            "28px of chrome poking over the edge is not something a hand catches"
+        );
+        assert!(
+            !placement_is_reachable(&at(200, 1100), &laptop),
+            "the title bar is below the display, so there is nothing to drag"
+        );
+        assert!(
+            !placement_is_reachable(&at(200, -90), &laptop),
+            "the title bar is above the display"
+        );
+
+        // Asking the OS can fail, and a machine mid-display-change reports no
+        // monitors at all. Neither is evidence the saved value is wrong, and
+        // refusing to restore there would look like the bug this fixes.
+        assert!(placement_is_reachable(&at(100, 100), &[]));
+    }
+
+    #[test]
+    fn a_placement_this_build_would_not_have_written_is_ignored() {
+        let saved = |value: serde_json::Value| saved_placement(&json!({ "window": value }));
+
+        assert_eq!(
+            saved(json!({"x": 12, "y": 34, "width": 1280, "height": 860})),
+            Some(WindowPlacement {
+                position: tauri::PhysicalPosition::new(12, 34),
+                size: tauri::PhysicalSize::new(1280, 860),
+            })
+        );
+        // Below `min_inner_size`: written by a build with different minimums,
+        // or captured mid-animation. The OS would clamp it and the window would
+        // come back a shape nobody chose.
+        assert_eq!(
+            saved(json!({"x": 0, "y": 0, "width": 400, "height": 300})),
+            None
+        );
+        // A truncated or hand-edited file must not stop the app opening.
+        assert_eq!(saved(json!({"x": 0, "y": 0, "width": 1280})), None);
+        assert_eq!(
+            saved(json!({"x": "left", "y": 0, "width": 1280, "height": 860})),
+            None
+        );
+        assert_eq!(saved(json!(null)), None);
+        assert_eq!(saved_placement(&json!({})), None, "a first-ever launch");
+        // Negative sizes and values past a u32 are refused rather than wrapped.
+        assert_eq!(
+            saved(json!({"x": 0, "y": 0, "width": -1280, "height": 860})),
+            None
+        );
+    }
+
+    /// A rebuild's own placement always wins over the remembered one.
+    ///
+    /// The two are different questions: a rebuild is "put it back exactly where
+    /// the user is looking", and a cold start is "open it where they left it
+    /// last time". Reading the remembered value first would move a window
+    /// during a server switch, which is the bug `WindowPlacement` was
+    /// introduced to fix.
+    #[test]
+    fn a_rebuild_keeps_the_window_where_it_is_rather_than_where_it_once_was() {
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("let placement = placement.or_else(|| remembered_placement(handle));"),
+            "the caller's placement has to take precedence",
+        );
+    }
+
+    /// Geometry is recorded as it changes, not only when the app is quit.
+    ///
+    /// An app that is force-killed, replaced by an updater, or caught in a
+    /// machine restart never sees a close event -- and those are exactly the
+    /// launches where coming back at the wrong size is most irritating.
+    #[test]
+    fn window_geometry_survives_a_launch_that_was_never_a_clean_quit() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn build_main_window_at(")
+            .expect("build_main_window_at exists");
+        let body = &source[start..];
+        let moved = body
+            .find("tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)")
+            .expect("placement is recorded on move and resize");
+        assert!(
+            body[moved..moved + 200].contains("remember_placement(&window)"),
+            "both events have to write the placement"
+        );
+    }
+
     #[test]
     fn a_replacement_window_is_never_left_invisible() {
         // Hidden-until-painted is only safe because something shows it anyway.
@@ -7958,7 +8444,7 @@ mod tests {
         assert!(body.contains("Schedules and background work stop running."));
         assert!(body.contains("close the window"));
         // And it has to say what is not lost, or "stop" reads as "delete".
-        assert!(body.contains("stay on this Mac"));
+        assert!(body.contains(&format!("stay on {THIS_COMPUTER}")));
     }
 
     #[test]
