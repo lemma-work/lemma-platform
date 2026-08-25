@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { thisComputer } from "@/lib/desktop/this-computer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -179,8 +180,8 @@ type Preset = {
 // Local runners first: someone running Lemma on their own Mac most likely has
 // one of these serving already, and neither needs a key or an account.
 const PRESETS: Preset[] = [
-    { id: "ollama", title: "Ollama", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
-    { id: "lmstudio", title: "LM Studio", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
+    { id: "ollama", title: "Ollama", hint: `Runs on ${thisComputer()}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
+    { id: "lmstudio", title: "LM Studio", hint: `Runs on ${thisComputer()}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
     { id: "openai", title: "OpenAI", hint: "API key", protocol: "openai_compat", baseUrl: "https://api.openai.com/v1", needsKey: true },
     { id: "anthropic", title: "Anthropic", hint: "API key", protocol: "anthropic_compat", baseUrl: "https://api.anthropic.com", needsKey: true },
     { id: "openrouter", title: "OpenRouter", hint: "API key", protocol: "openai_compat", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
@@ -288,7 +289,7 @@ export function LocalIntelligenceStep({
         setRechecking(true);
         void agentHostBridge.refresh().then(
             () => {
-                toast.success("Rechecking the agents on this Mac");
+                toast.success(`Rechecking the agents on ${thisComputer()}`);
                 // Long enough to cover the control-file beat and a probe, so the
                 // button stays busy until there is something new to look at
                 // rather than for a guessed 1.2s that expired before the host
@@ -369,7 +370,7 @@ export function LocalIntelligenceStep({
     return (
         <SetupSplitPanel
             title="What should answer in your chats?"
-            subtitle="A coding agent already on this Mac, an API provider, or both. Nothing here has AI until one of them is set."
+            subtitle={`A coding agent already on ${thisComputer()}, an API provider, or both. Nothing here has AI until one of them is set.`}
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
@@ -606,7 +607,7 @@ export function LocalIntelligenceStep({
                 <p className="text-xs text-[var(--text-tertiary)]">
                     A provider is this installation&apos;s single default — one profile, not one per
                     person. If you later open Lemma to your network or the web, that key answers for
-                    everyone. A coding agent stays on this Mac and uses its own credentials.
+                    everyone. A coding agent stays on {thisComputer()} and uses its own credentials.
                 </p>
 
                 {/*

@@ -8401,6 +8401,64 @@ mod tests {
         assert!(!html.contains("Nothing leaves your machine"));
     }
 
+    /// A Windows user is never told about hardware they do not have.
+    ///
+    /// Both bundled pages ship in the Windows build. Every sentence about the
+    /// machine said "this Mac" -- including the recovery panel that names what
+    /// is about to be deleted, which is the worst possible place to describe
+    /// somebody else's computer.
+    ///
+    /// The three static splash strings used to be rewritten one element id at a
+    /// time, so the lines written from JS -- the boot subtitle, the ready
+    /// subtitle, the question the local-install screen asks -- were simply
+    /// missed. What is asserted here is the mechanism, not a list of strings:
+    /// a whole-document pass plus the two places text is produced after it.
+    /// A new "this Mac" anywhere is then covered without anyone remembering to
+    /// extend anything.
+    #[test]
+    fn every_page_that_ships_on_windows_renames_the_machine() {
+        let splash = include_str!("../ui/index.html");
+        let control = include_str!("../ui/control.js");
+
+        for (page, source) in [("index.html", splash), ("control.js", control)] {
+            assert!(
+                source.contains(r#"replace(/\bthis Mac\b/g, "this PC")"#),
+                "{page} has no device rewrite, so its copy is Mac-only",
+            );
+            assert!(
+                source.contains("NodeFilter.SHOW_TEXT"),
+                "{page} must rewrite the whole document, not a list of ids",
+            );
+            // Both pages carry inline or loaded script; rewriting a SCRIPT text
+            // node changes nothing anyone reads and leaves a DOM that no longer
+            // matches the file on disk.
+            assert!(
+                source.contains("SCRIPT|STYLE"),
+                "{page} rewrites script text as well as copy",
+            );
+        }
+
+        // The splash produces text after the document pass has run. Both
+        // producers have to go through the rewrite or the pass covers only the
+        // half of the copy that happens to be static.
+        assert!(
+            splash.contains("VOICE[key] = VOICE[key].map(forThisDevice)"),
+            "the phase table is written after the walk and needs its own pass",
+        );
+        assert!(
+            splash.contains("const text = forThisDevice(rawText);"),
+            "say() is the only writer of the serif line and must rewrite too",
+        );
+        // The settings window routes every error through one formatter.
+        assert!(
+            control.contains("return forThisDevice(match ? match[1]"),
+            "friendlyError is where the recovery copy is written",
+        );
+        // And the one sentence that is about the operating system rather than
+        // the box it runs on is named per platform, not rewritten.
+        assert!(control.contains(r#"IS_WINDOWS ? "Windows" : "macOS""#));
+    }
+
     /// Both choices invite you in the same words.
     ///
     /// Cloud keeps the recommendation -- that is a product decision, and the

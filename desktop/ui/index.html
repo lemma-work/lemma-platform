@@ -830,6 +830,11 @@
   // ---- the script: poetic line + honest mono subtitle per real phase ----
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
   const DEVICE = IS_WINDOWS ? "PC" : "Mac";
+  /** Any sentence about the machine, said the way this machine's owner would. */
+  function forThisDevice(text) {
+    if (!IS_WINDOWS) return text;
+    return text.replace(/\bthis Mac\b/g, "this PC").replace(/\bthis mac\b/g, "this PC");
+  }
   const VOICE = {
     boot:       [`A new kind of workspace is arriving on this ${DEVICE}.`, "starting"],
     download:   ["Bringing the runtime here.", "downloading runtime"],
@@ -864,18 +869,39 @@
   const operationDetail = document.getElementById("operation-detail");
   const operationMeta = document.getElementById("operation-meta");
 
-  if (IS_WINDOWS) {
-    document.getElementById("choose-local").textContent = "run Lemma on this PC";
-    document.getElementById("local-confirm-intro").textContent =
-      "Lemma will install and run services on this PC.";
-    document.getElementById("local-data-copy").textContent =
-      "Workspace data is stored on this PC.";
+  // Three of these used to be rewritten one id at a time, which meant the ones
+  // written from JS -- the boot subtitle and the local-install question --
+  // stayed "Mac" on a PC. "this Mac" is never right on Windows anywhere, so
+  // this rewrites text nodes wholesale rather than keeping a list nobody
+  // remembers to extend. Attributes and element structure are untouched.
+  function speakTheRightDevice(root) {
+    if (!IS_WINDOWS) return;
+    // SCRIPT and STYLE hold text nodes too, and this page's script is inline.
+    // Rewriting it after it has run changes nothing anyone sees, but it does
+    // leave a DOM whose source no longer matches the file -- which is a nasty
+    // half hour for whoever next reads it in a devtools window.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.parentNode && /^(SCRIPT|STYLE)$/.test(node.parentNode.nodeName)
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const spoken = forThisDevice(node.nodeValue);
+      if (spoken !== node.nodeValue) node.nodeValue = spoken;
+    }
   }
+  speakTheRightDevice(document.body);
+  // The lines written from JS never passed through that walk, so the phase
+  // subtitles kept saying "mac" on a PC. Rewritten once here rather than at
+  // every `say()`, so the table stays readable as prose.
+  for (const key of Object.keys(VOICE)) VOICE[key] = VOICE[key].map(forThisDevice);
 
   let shownLine = "";
   let queuedLine = null;
   let saying = false;
-  function say(text) {
+  function say(rawText) {
+    const text = forThisDevice(rawText);
     if (saying) { queuedLine = text; return; }
     if (text === shownLine) return;
     saying = true;

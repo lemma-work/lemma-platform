@@ -4,6 +4,18 @@ const listen = (event, handler) => tauri.event.listen(event, ({ payload }) => ha
 const $ = (id) => document.getElementById(id);
 const csv = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
 
+// This window ships in the Windows build too, and every sentence about the
+// machine said "Mac" -- including the recovery panel that names what is about
+// to be deleted, which is the worst place to describe hardware the reader does
+// not own. `forThisDevice` covers the strings written from JS; the walk at the
+// bottom of this file covers the ones written in control.html.
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+const forThisDevice = (text) =>
+  IS_WINDOWS ? String(text).replace(/\bthis Mac\b/g, "this PC") : String(text);
+// Named per platform because the sentence is about the operating system
+// refusing access, not about the box it runs on.
+const OS_NAME = IS_WINDOWS ? "Windows" : "macOS";
+
 const titles = {
   overview: ["Overview", "Health, attention, and exposure at a glance."],
   ai: ["AI provider", "Choose and validate the system model profile used by local agents."],
@@ -636,7 +648,7 @@ async function runDesktopAction(button) {
       if (appUpdate?.dataCompatibility === "requires-reset") {
         const proceed = await confirmAction(
           "Update and reset local data?",
-          `Lemma ${appUpdate.availableVersion} upgrades the local database. Your pods, files and accounts on this Mac cannot be carried across and will be deleted.`,
+          forThisDevice(`Lemma ${appUpdate.availableVersion} upgrades the local database. Your pods, files and accounts on this Mac cannot be carried across and will be deleted.`),
           "Update and Reset",
         );
         if (!proceed) return;
@@ -1109,13 +1121,16 @@ const FRIENDLY_ERRORS = [
   [/broken pipe|connection reset/i,
    "The background service stopped mid-request. Try again."],
   [/permission denied/i,
-   "macOS refused Lemma access to its own files. Check that Lemma is in Applications and try again."],
+   `${OS_NAME} refused Lemma access to its own files. ` +
+   (IS_WINDOWS
+     ? "Check that Lemma is installed for this user and try again."
+     : "Check that Lemma is in Applications and try again.")],
 ];
 
 function friendlyError(reason) {
   const text = String(reason ?? "");
   const match = FRIENDLY_ERRORS.find(([pattern]) => pattern.test(text));
-  return match ? match[1] : text.replace(/^Error:\s*/, "");
+  return forThisDevice(match ? match[1] : text.replace(/^Error:\s*/, ""));
 }
 
 function showSnapshotUnavailable(reason) {
@@ -1219,6 +1234,21 @@ listen("lemma:control-page", (page) => {
   if (typeof page === "string") setPage(page);
 });
 listen("lemma:locald-event", handleLocaldEvent);
+// Static copy in control.html, rewritten wholesale rather than kept as a list
+// of ids someone has to remember to extend. Text nodes only -- attributes and
+// element structure are untouched.
+if (IS_WINDOWS) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentNode && /^(SCRIPT|STYLE)$/.test(node.parentNode.nodeName)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const spoken = forThisDevice(node.nodeValue);
+    if (spoken !== node.nodeValue) node.nodeValue = spoken;
+  }
+}
 setPage(titles[window.__LEMMA_CONTROL_PAGE__] ? window.__LEMMA_CONTROL_PAGE__ : "overview");
 requestSnapshot();
 loadRuntimeInfo();

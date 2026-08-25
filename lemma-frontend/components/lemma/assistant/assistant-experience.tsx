@@ -29,6 +29,7 @@ import {
 // artifacts, interaction cards) the transcript renders.
 import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
+import { thisComputer } from "@/lib/desktop/this-computer";
 import { cn } from "@/lib/utils";
 import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
 import { LEM_SEED } from "@/lib/identity/seeded-identity";
@@ -536,7 +537,7 @@ export function AssistantExperienceView({
   // it -- the harness list and the composer both re-read it on their own.
   const recheckLocalAgents = useCallback(() => {
     void agentHostBridge.refresh().then(
-      () => toast.success("Rechecking the coding agents on this Mac"),
+      () => toast.success(`Rechecking the coding agents on ${thisComputer()}`),
       (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
     );
   }, []);

@@ -5,6 +5,7 @@ import { useOrganization } from "@/components/dashboard/org-context";
 import { isLocalDeployment } from "@/lib/config";
 import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
 import { openLocalSettings, useLocalAiStatus } from "@/lib/desktop/local-capabilities";
+import { thisComputer } from "@/lib/desktop/this-computer";
 import { useManagedAgentRuntimes } from "@/lib/hooks/use-agent-runtime";
 import { RuntimeProfileKind } from "lemma-sdk";
 
@@ -47,7 +48,7 @@ export function LocalAiSetupBanner() {
         <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
             <span>
                 <strong>No model is set up yet.</strong>{" "}
-                Connect a coding agent on this Mac or an API provider, and agents start working.
+                Connect a coding agent on {thisComputer()} or an API provider, and agents start working.
             </span>
             <Button
                 variant="secondary"
