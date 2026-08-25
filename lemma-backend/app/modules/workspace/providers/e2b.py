@@ -50,6 +50,7 @@ from app.modules.workspace.providers.base import (
     ProviderStorageKind,
 )
 from app.modules.workspace.providers.e2b_common import (
+    budget_until,
     ensure_serving,
     meta_epoch,
     meta_profile_digest,
@@ -370,6 +371,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             instance.provider_id,
             kind=kind,
             runtime_port=profile_for(kind).runtime_port,
+            budget_seconds=budget_until(deadline_at),
         )
 
     async def release(
