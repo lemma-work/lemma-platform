@@ -17,6 +17,8 @@
 //!   different program as far as the vault is concerned.
 
 use std::io::{self, Write};
+// Only the macOS reclaim names a path; Windows unregisters a WSL distribution.
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 use serde_json::json;

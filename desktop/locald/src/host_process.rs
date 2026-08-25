@@ -3319,6 +3319,9 @@ mod tests {
     /// budget silently resets, which is a green test proving nothing. Four
     /// seconds is comfortably longer than a spawn plus two observed exits, and
     /// short enough that waiting it out does not dominate the suite.
+    // Unix-only for the same reason as its sibling above: `crash` signals a
+    // process group and `long_running_command` is a shell one-liner.
+    #[cfg(unix)]
     #[test]
     fn a_tripped_restart_circuit_reopens_after_a_quiet_window() {
         let mut backend = service("backend", &[]);

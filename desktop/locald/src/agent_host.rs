@@ -629,6 +629,33 @@ fn terminate_process_tree(child: &mut Child) -> io::Result<Option<i32>> {
     Ok(child.wait()?.code())
 }
 
+/// Never outlive the process this supervisor started.
+///
+/// Every ordinary path calls `stop()` or `suspend()`, so this fires almost
+/// never in production -- and the one place it fired constantly was the test
+/// suite, where a supervisor going out of scope left a `lemma-agent-host serve`
+/// running forever. One `make desktop-test` leaked two of them, they inherited
+/// no terminal and no parent that would ever reap them, and the only sign was a
+/// laptop that would not go idle.
+///
+/// `discover_executable` is why: its last fallback is
+/// `CARGO_MANIFEST_DIR/../target/debug/lemma-agent-host`, which exists on any
+/// machine that has built the workspace. A test written on the assumption that
+/// "no sidecar exists in a test tree" spawned a real one instead.
+///
+/// A backstop, not a policy. It cannot report an error and does not try; the
+/// paths that care about the exit code take it through `halt`.
+impl Drop for AgentHostSupervisor {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if let Some(mut child) = state.child.take() {
+            let _ = terminate_process_tree(&mut child);
+        }
+    }
+}
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -668,8 +695,12 @@ mod tests {
             state.next_restart = Instant::now();
         }
 
-        // No executable is discovered in a test tree, so `reconcile` returns
-        // early -- drive the decision itself instead.
+        // The decision is driven directly rather than through `reconcile`,
+        // which would spawn: `discover_executable` finds
+        // `../target/debug/lemma-agent-host` on any machine that has built the
+        // workspace, so "no executable exists in a test tree" -- what this
+        // comment used to say -- is false, and believing it is what leaked two
+        // sidecars per `make desktop-test`.
         let mut state = supervisor
             .state
             .lock()
@@ -699,7 +730,7 @@ mod tests {
     #[test]
     fn starting_the_agent_host_deliberately_clears_a_tripped_circuit() {
         let home = tempdir().unwrap();
-        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        let mut supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
         {
             let mut state = supervisor
                 .state
@@ -708,9 +739,13 @@ mod tests {
             state.circuit_open = true;
             state.window_restarts = RESTART_BUDGET;
         }
-        // No sidecar exists in a test tree, so this reports a missing
-        // executable -- the state reset happens before that, which is the part
-        // under test.
+        // Pinned to something that does not exist, so `start()` fails at the
+        // spawn. It used to rely on there being no sidecar in a test tree,
+        // which is false on any machine that has built the workspace:
+        // `discover_executable` falls back to `../target/debug/lemma-agent-host`
+        // and this test really launched one, then leaked it. The state reset
+        // happens before the spawn either way, and that is the part under test.
+        supervisor.executable = Some(home.path().join("no-such-agent-host"));
         let _ = supervisor.start();
         let state = supervisor
             .state
@@ -816,6 +851,56 @@ mod tests {
 
         assert_eq!(std::fs::metadata(&supervisor.log_path).unwrap().len(), 0);
         assert!(supervisor.log_path.with_extension("log.previous").is_file());
+    }
+
+    /// A supervisor that goes out of scope takes its sidecar with it.
+    ///
+    /// The failure this guards is not subtle once seen: one `make desktop-test`
+    /// left two `lemma-agent-host serve` processes running forever, with no
+    /// terminal, no parent that would reap them, and nothing on screen. They
+    /// accumulate one pair per run until somebody notices the machine is warm.
+    ///
+    /// The stand-in is spawned exactly the way `spawn_locked` spawns the real
+    /// sidecar -- `process_group(0)`, so it leads its own group. That is not
+    /// incidental: `terminate_process_tree` signals the *negative* pid, so a
+    /// child that is not a group leader is not the thing being signalled. The
+    /// first version of this test got that wrong, and `child.wait()` then sat
+    /// out the full ten minutes of a `sleep 600` before the assertion passed
+    /// for entirely the wrong reason.
+    ///
+    /// Unix-only because it signals a real process and reads its liveness.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_supervisor_kills_the_process_it_started() {
+        use std::os::unix::process::CommandExt;
+
+        let home = tempdir().unwrap();
+        // Long enough that surviving is unambiguous, short enough that a bug
+        // here costs seconds rather than the suite.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        command.process_group(0);
+        let child = command.spawn().expect("sh is available");
+        let pid = i32::try_from(child.id()).expect("a pid fits in i32");
+
+        {
+            let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+            supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned")
+                .child = Some(child);
+        }
+
+        // `terminate_process_tree` signals, waits, and reaps, so by the time
+        // the drop returns the process is gone rather than merely doomed.
+        // Asserted on the group, which is what was signalled and what would
+        // still hold an adapter the host had spawned.
+        let group_alive = unsafe { libc::kill(-pid, 0) } == 0;
+        assert!(
+            !group_alive,
+            "the sidecar's process group outlived the supervisor (pgid {pid})"
+        );
     }
 
     #[test]
