@@ -50,20 +50,17 @@ def test_email_gets_one_delivery_and_chat_gets_many() -> None:
         assert caps.delivery_cardinality is DeliveryCardinality.MANY
 
 
-def test_cardinality_and_pausing_are_asked_separately() -> None:
-    """They agree on every platform today and are still different questions.
+def test_pausing_is_not_a_capability_because_every_surface_can() -> None:
+    """`can_pause_for_a_person` was added, then removed two commits later.
 
-    Reading them as one rule is how "email cannot pause" became "email cannot be
-    asked anything", and a destructive action on an email surface either
-    happened unapproved or silently did not happen.
+    It was meant to separate "delivers once" from "cannot hold a run open", and
+    the second turned out not to exist: a pause ends the run and resumes on the
+    answer, which email does as well as chat. A field with one answer is not a
+    capability, it is a constant.
     """
     caps = PLATFORM_CAPABILITIES["RESEND"]
+    assert not hasattr(caps, "can_pause_for_a_person")
     assert caps.delivery_cardinality is DeliveryCardinality.ONE
-    assert caps.can_pause_for_a_person is False
-    assert PLATFORM_CAPABILITIES["SLACK"].can_pause_for_a_person is True
-
-
-# --- holding, and letting go ---------------------------------------------
 
 
 def test_a_file_shown_twice_is_attached_once() -> None:
@@ -165,3 +162,128 @@ async def test_a_chat_surface_is_untouched_by_any_of_this() -> None:
     assert response.success is True
     delivered.assert_awaited_once()
     assert take_display_paths(conversation) == [], "chat delivers now, it does not hold"
+
+
+# --- the run stopping is the run stopping, whatever stopped it -------------
+
+
+def _email_envelope(**parts):
+    from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+
+    return SurfaceEnvelope(**parts)
+
+
+async def _render_one(envelope):
+    """What a Resend adapter puts on the wire for one envelope."""
+    from unittest.mock import AsyncMock
+
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    adapter = ResendSurfaceAdapter()
+    adapter.send_message = AsyncMock()  # type: ignore[method-assign]
+    await adapter.deliver(
+        credentials={},
+        event=ParsedInboundSurfaceEvent(
+            platform="RESEND",
+            conversation_type=ConversationType.EXTERNAL_DM,
+            external_thread_id="thread-1",
+            message_text="hi",
+        ),
+        envelope=envelope,
+    )
+    return adapter.send_message.await_args
+
+
+async def test_a_question_and_its_lead_in_are_one_email_not_two() -> None:
+    """Two sends would be two emails, and email only gets one."""
+    from app.modules.agent_surfaces.domain.models import (
+        SurfaceQuestion,
+        SurfaceQuestionOption,
+        SurfaceQuestionRenderPlan,
+    )
+
+    call = await _render_one(
+        _email_envelope(
+            text="I found two candidates.",
+            choices=SurfaceQuestionRenderPlan(
+                title="Pick",
+                callback_id="conv|tool",
+                questions=[
+                    SurfaceQuestion(
+                        header="which",
+                        question="Which one?",
+                        options=[SurfaceQuestionOption(label="Red")],
+                    )
+                ],
+            ),
+        )
+    )
+    body = call.kwargs["message"]
+    assert body.index("I found two candidates.") < body.index("Which one?"), (
+        "the lead-in has to arrive above the question, not after it"
+    )
+
+
+async def test_an_approval_is_asked_in_the_reply_rather_than_suppressed() -> None:
+    """Previously the tool refused on email, so the action ran unapproved or not
+    at all. The prompt is text here, and a typed reply resolves it."""
+    from app.modules.agent_surfaces.domain.models import (
+        APPROVAL_DECISION_APPROVE,
+        APPROVAL_DECISION_DENY,
+        SurfaceApprovalButton,
+        SurfaceApprovalRenderPlan,
+    )
+
+    call = await _render_one(
+        _email_envelope(
+            decision=SurfaceApprovalRenderPlan(
+                title="Delete order 42",
+                callback_id="conv|tool",
+                buttons=[
+                    SurfaceApprovalButton(
+                        label="Approve", decision=APPROVAL_DECISION_APPROVE
+                    ),
+                    SurfaceApprovalButton(
+                        label="Deny", decision=APPROVAL_DECISION_DENY
+                    ),
+                ],
+            )
+        )
+    )
+    body = call.kwargs["message"]
+    assert "Delete order 42" in body
+    assert '"approve"' in body and '"deny"' in body
+
+
+async def test_a_failed_run_on_email_says_so_instead_of_vanishing() -> None:
+    """It used to return early here, so the person's message simply disappeared
+    and nothing distinguished that from never having been read."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from app.modules.agent_surfaces.services.progress_observer import (
+        SurfaceAgentRunProgressObserver,
+    )
+
+    observer = SurfaceAgentRunProgressObserver.__new__(
+        SurfaceAgentRunProgressObserver
+    )
+    observer._error_delivered = False
+    observer._run_error_text = "I couldn't finish that request."
+    sent: list[str] = []
+    observer._send_agent_message = AsyncMock(  # type: ignore[method-assign]
+        side_effect=lambda **kwargs: sent.append(kwargs["message"])
+    )
+
+    await observer._deliver_run_error(
+        SimpleNamespace(id=uuid4(), metadata={"surface_platform": "RESEND"})
+    )
+
+    assert sent == ["I couldn't finish that request."]

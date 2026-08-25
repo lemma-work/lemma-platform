@@ -142,20 +142,6 @@ class PlatformCapabilities:
         return DeliveryCardinality.ONE if self.is_email else DeliveryCardinality.MANY
 
     @property
-    def can_pause_for_a_person(self) -> bool:
-        """Can a run stop here and wait for somebody to answer?
-
-        Not the same question as ``delivery_cardinality``, even though email
-        answers no to both. A surface that could hold a run open but only send
-        once would still be ONE; a surface that could send freely but never
-        block would still be un-pausable. They were one ``is_email`` check and
-        read as one rule, which is how "email cannot pause" turned into "email
-        cannot be asked anything" -- and a destructive action on an email
-        surface either happened unapproved or silently did not happen.
-        """
-        return not self.is_email
-
-    @property
     def finishes_stream_with_answer(self) -> bool:
         """Can a live stream be closed *with* the answer, as one message?
 
@@ -374,13 +360,16 @@ def platform_agent_guidance(platform: str | None) -> str:
             "progress; nothing you write before the end is sent separately."
         )
         lines.append(
-            "## Email cannot wait for an answer\n"
-            "This is email, not a chat — the conversation cannot pause partway "
-            "through. Do NOT call `ask_user`, `request_approval` or `say`; none "
-            "of them can stop and wait here. When you would otherwise ask, pick "
-            "the most sensible default, say plainly in your reply what you "
-            "assumed and what you would have asked, and proceed. `display_resource` "
-            "with `type=FILE` does work: the file is attached to your reply."
+            "## Asking on email\n"
+            "You can ask. `ask_user` and `request_approval` work here: the "
+            "question goes out as part of your reply, the person answers by "
+            "replying to it, and you pick up where you left off. What email "
+            "cannot do is ask twice in one turn -- each question is a whole "
+            "round trip through somebody's inbox.\n\n"
+            "So ask when the answer changes what you do, or when the action "
+            "needs their authority. For anything you could reasonably decide "
+            "yourself, decide it, and say in your reply what you assumed. Do "
+            "not call `say`; there is no voice note on email."
         )
     else:
         # Chat surfaces: files always, forms only where native.

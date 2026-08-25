@@ -48,6 +48,9 @@ from app.modules.agent_surfaces.services.pending_interaction_resume import (
     maybe_resume_pending_interaction,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.email_one_reply import (
+    EmailOneReplyMixin,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -195,7 +198,7 @@ class _EmptyExecuteResult:
 
 
 
-def _delivering_adapter() -> AsyncMock:
+def _delivering_adapter(platform: str = "SLACK") -> AsyncMock:
     """An adapter mock that runs the real ``deliver`` over stubbed platform verbs.
 
     Egress hands the platform one envelope now instead of calling a verb per
@@ -205,14 +208,29 @@ def _delivering_adapter() -> AsyncMock:
     verb the ladder tries, and what it falls back to.
     """
     adapter = AsyncMock()
-    adapter.platform = "TEST"
+    adapter.platform = platform
     for cls in BaseSurfaceAdapter.__mro__:
         for name, function in vars(cls).items():
             if name == "deliver" or name.startswith(
                 ("_deliver", "_send_text_fallback")
             ):
                 setattr(adapter, name, MethodType(function, adapter))
+    if _delivers_one_reply(platform):
+        # A one-reply platform folds the whole envelope into a single send, so
+        # the mock borrows that too -- otherwise `deliver` stops at a mocked
+        # `_render_one` and the transport is never reached.
+        adapter._render_one = MethodType(EmailOneReplyMixin._render_one, adapter)
     return adapter
+
+
+def _delivers_one_reply(platform: str) -> bool:
+    from app.modules.agent_surfaces.platforms.platform_capabilities import (
+        DeliveryCardinality,
+        get_platform_capabilities,
+    )
+
+    caps = get_platform_capabilities(platform)
+    return bool(caps and caps.delivery_cardinality is DeliveryCardinality.ONE)
 
 
 def _build_service(
@@ -1963,11 +1981,8 @@ async def test_send_approval_prompt_skips_when_no_pending():
     )
     assert sent is False
     adapter.send_message.assert_not_awaited()
-
-
-async def test_interactive_prompts_suppressed_on_email_surface():
-    """Email is non-interactive: ask_user and request_approval renders are
-    suppressed (the run never pauses for a reply that can't come back)."""
+async def test_an_email_surface_delivers_the_question_in_its_one_reply():
+    """Email is asked, not suppressed. The prompt rides in the reply as text."""
     surface = _resend_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
@@ -1980,24 +1995,21 @@ async def test_interactive_prompts_suppressed_on_email_surface():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter("RESEND")
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_ask_user.return_value = {
+        "tool_call_id": "tool-1",
+        "tool_args": _ASK_USER_TOOL_ARGS,
+        "agent_run_id": uuid4(),
+    }
 
-    questions_sent = await service.send_questions_for_conversation(
-        conversation_id=conversation_id
+    sent = await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
     )
-    assert questions_sent is False
-    adapter._render_choices.assert_not_awaited()
 
-    approval_sent = await service.send_approval_prompt_for_conversation(
-        conversation_id=conversation_id
-    )
-    assert approval_sent is False
-    adapter.send_message.assert_not_awaited()
-    # The email surface never even reads pending interaction state.
-    service.conversation_service.get_pending_ask_user.assert_not_awaited()
-    service.conversation_service.get_pending_user_interaction.assert_not_awaited()
+    assert sent is True
+    assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
 
 
 async def test_send_to_member_reuses_existing_thread():

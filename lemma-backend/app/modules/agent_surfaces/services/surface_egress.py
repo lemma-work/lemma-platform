@@ -288,6 +288,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         *,
         conversation_id: UUID,
         tool_call_id: str | None = None,
+        narration: str | None = None,
     ) -> bool:
         """Render the conversation's pending ``ask_user`` questions on its surface.
 
@@ -301,13 +302,6 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         if target is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        if target.surface.surface_type.is_email:
-            # Email is non-interactive: never pause for a tappable/typed answer.
-            logger.debug(
-                "agent_surfaces.ingress_service.ask_user_suppressed_email_surface.observed",
                 conversation_id=conversation_id,
             )
             return False
@@ -349,7 +343,19 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         )
         return await self._deliver_envelope(
             target,
-            envelope=SurfaceEnvelope(choices=plan),
+            # The lead-in and the question are one thing the person receives.
+            # Sent as two, they arrive as two on a chat surface and as two
+            # emails on a surface that only gets one.
+            envelope=SurfaceEnvelope(
+                text=narration,
+                choices=plan,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                ),
+            ),
             metadata=await self._egress_metadata_with_agent_name(target, None),
             conversation_id=conversation_id,
         )
@@ -359,6 +365,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         *,
         conversation_id: UUID,
         tool_call_id: str | None = None,
+        narration: str | None = None,
     ) -> bool:
         """Render a pending ``request_approval`` on the surface.
 
@@ -373,15 +380,6 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         if target is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        if target.surface.surface_type.is_email:
-            # Email is non-interactive: never pause for an approve/deny reply.
-            # (The tool now fails fast on email before pausing; this stays as a
-            # defense-in-depth guard.)
-            logger.debug(
-                "agent_surfaces.ingress_service.request_approval_suppressed_email_surface.observed",
                 conversation_id=conversation_id,
             )
             return False
@@ -401,6 +399,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             plan=_approval_plan(pending, conversation_id, tool_call_id),
             metadata=await self._egress_metadata_with_agent_name(target, None),
             conversation_id=conversation_id,
+            narration=narration,
         )
 
     async def _deliver_approval(
@@ -410,11 +409,21 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         plan: Any,
         metadata: dict[str, Any],
         conversation_id: UUID,
+        narration: str | None = None,
     ) -> bool:
         """Native buttons, then a text prompt, then admit it reached nobody."""
         return await self._deliver_envelope(
             target,
-            envelope=SurfaceEnvelope(decision=plan),
+            envelope=SurfaceEnvelope(
+                text=narration,
+                decision=plan,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                ),
+            ),
             metadata=metadata,
             conversation_id=conversation_id,
         )

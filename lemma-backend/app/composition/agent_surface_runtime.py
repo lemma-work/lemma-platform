@@ -31,15 +31,6 @@ def platform_is_known(platform: str | None) -> bool:
     return get_platform_capabilities(platform) is not None
 
 
-def platform_is_email(platform: str | None) -> bool:
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        get_platform_capabilities,
-    )
-
-    capabilities = get_platform_capabilities(platform)
-    return bool(capabilities and capabilities.is_email)
-
-
 def surface_history_limits() -> tuple[int, int]:
     """Runtime history bounds for surface conversations: ``(max_messages,
     window_hours)`` from ``SurfaceSettings``. ``window_hours <= 0`` disables the

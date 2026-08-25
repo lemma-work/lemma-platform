@@ -541,6 +541,8 @@ async def test_progress_observer_renders_waiting_tool_call_once():
             "questions": {
                 "conversation_id": conversation.id,
                 "tool_call_id": "ask-1",
+                # The lead-in travels with the question, not ahead of it.
+                "narration": None,
             }
         }
     ]
@@ -583,6 +585,7 @@ class TestAgentHostPermissionPrompt:
                 "approval": {
                     "conversation_id": conversation.id,
                     "tool_call_id": "agent-host-permission:call-9",
+                    "narration": None,
                 }
             }
         ]

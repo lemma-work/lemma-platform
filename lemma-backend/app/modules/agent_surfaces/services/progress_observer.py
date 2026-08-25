@@ -397,10 +397,15 @@ class SurfaceAgentRunProgressObserver(
             )
 
     async def _deliver_run_error(self, conversation: Conversation) -> None:
+        """Say that the run failed, on every surface including email.
+
+        Email used to be skipped here, so a failed run on an email surface said
+        nothing at all -- the person's message simply vanished, and nothing
+        distinguished that from never having been read. Now the run stopping is
+        the run stopping, whatever stopped it, and the one reply carries the
+        failure.
+        """
         if self._error_delivered:
-            return
-        if _surface_platform(conversation) in _EMAIL_PLATFORMS:
-            self._error_delivered = True
             return
         try:
             await self._send_agent_message(

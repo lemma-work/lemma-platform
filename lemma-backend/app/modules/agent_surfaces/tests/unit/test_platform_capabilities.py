@@ -92,10 +92,10 @@ def test_email_guidance_no_longer_calls_display_resource_useless():
     """
     text = platform_agent_guidance("RESEND")
     assert "does NOT reach the email recipient" not in text
-    assert "attached to your reply" in text
-    # What genuinely cannot happen on email is pausing, and that must still be said.
-    assert "`ask_user`" in text
-    assert "`request_approval`" in text
+    assert "attached to that reply" in text
+    # And no longer forbids asking: what email cannot do is ask twice in a turn.
+    assert "You can ask." in text
+    assert "round trip" in text
 
 
 def test_whatsapp_guidance_names_the_kinds_capped_below_the_headline():

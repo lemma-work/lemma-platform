@@ -39,9 +39,16 @@ def _email_ctx(platform: str) -> SimpleNamespace:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["RESEND"])
-async def test_ask_user_fails_fast_on_email_surface(platform):
-    """ask_user must never pause (raise AgentInputRequired) on an email surface —
-    it returns a recoverable interaction_fallback instead so the run completes."""
+async def test_ask_user_pauses_on_an_email_surface_too(platform):
+    """Email can ask. It just cannot ask twice in one turn.
+
+    This used to fail fast, on the reasoning that email "cannot pause". But the
+    pause was never synchronous: the run ends, the question goes out inside the
+    one reply, the person replies, and maybe_resume_pending_interaction resolves
+    it exactly as a tapped Slack button does. The real constraint was only ever
+    delivery cardinality -- the question has to ride in the reply -- and an
+    agent facing a destructive action can now ask instead of guessing.
+    """
     from app.modules.agent.tools.tool_errors import AgentInputRequired
     from app.modules.agent.tools.user_interaction.models import AskUserRequest
     from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
@@ -57,34 +64,30 @@ async def test_ask_user_fails_fast_on_email_surface(platform):
             ]
         }
     )
-    try:
-        response = await ask_user(_email_ctx(platform), request)
-    except AgentInputRequired:  # pragma: no cover - the bug this guards against
-        pytest.fail("ask_user paused the run on an email surface")
-    assert response.success is False
-    assert response.interaction_fallback is True
+    with pytest.raises(AgentInputRequired):
+        await ask_user(_email_ctx(platform), request)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["RESEND"])
-async def test_request_approval_fails_fast_on_email_surface(platform):
-    """request_approval must never pause on an email surface."""
+async def test_request_approval_pauses_on_an_email_surface_too(platform):
+    """The case that matters most: a destructive action on an email surface.
+
+    It previously either happened unapproved or silently did not happen, because
+    the agent was told to pick a default and proceed.
+    """
     from app.modules.agent.tools.tool_errors import AgentInputRequired
     from app.modules.agent.tools.user_interaction.pydantic_adapter import (
         request_approval,
     )
 
-    try:
-        response = await request_approval(
+    with pytest.raises(AgentInputRequired):
+        await request_approval(
             _email_ctx(platform),
-            tool_name="pod_write_record",
-            args={"table_id": "t", "data": {}},
-            title="Write a record",
+            tool_name="exec_command",
+            args={"cmd": "lemma records delete orders --id 42"},
+            title="Delete order 42",
         )
-    except AgentInputRequired:  # pragma: no cover - the bug this guards against
-        pytest.fail("request_approval paused the run on an email surface")
-    assert response.success is False
-    assert response.interaction_fallback is True
 
 
 @pytest.mark.asyncio

@@ -202,23 +202,6 @@ def _hold_for_the_one_reply(
     )
 
 
-def surface_can_pause_for_a_person(deps: BaseAgentContext) -> bool:
-    """Whether this conversation can hold a run open while somebody answers.
-
-    Email cannot. There is no card to tap and no thread to wait on, so pausing
-    strands the run in WAITING with nothing delivered — the person never learns
-    they were asked. Every pausing tool has to fail fast instead and say what to
-    do in the reply, which is why this is a shared predicate rather than a check
-    each tool remembers to copy. It was copied twice already.
-
-    The *message* stays with each tool: what to do instead of pausing depends on
-    what was being asked.
-    """
-    from app.composition.agent_surface_runtime import platform_is_email
-
-    return not platform_is_email(getattr(deps, "surface_platform", None))
-
-
 async def request_approval(
     ctx: RunContext[BaseAgentContext],
     tool_name: str,
@@ -283,18 +266,6 @@ async def request_approval(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
             message=f"Waiting for the user's decision on {tool_name}.",
-        )
-    if not surface_can_pause_for_a_person(deps):
-        return RequestApprovalResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This is an email conversation — it can't pause for an approval. "
-                f"Explain in your reply what you want to do ({tool_name}) and why "
-                "it needs their authority, ask them to confirm by replying, and "
-                "deliver everything through the email reply tool. Do not call "
-                "request_approval here."
-            ),
         )
     if not ctx.tool_call_id:
         return RequestApprovalResponse(
@@ -468,17 +439,6 @@ async def ask_user(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
             message="Waiting for the user's answer.",
-        )
-    if not surface_can_pause_for_a_person(deps):
-        return AskUserResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This is an email conversation — it can't pause for a "
-                "multiple-choice answer. Ask your question(s) directly in your "
-                "reply (or pick the most sensible default and proceed), then "
-                "deliver everything through the email reply tool."
-            ),
         )
     if not ctx.tool_call_id:
         return AskUserResponse(
