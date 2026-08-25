@@ -50,6 +50,11 @@ impl NoConsoleWindow for Command {
 /// overwriting the other's, one install's stop terminating the other's runtime,
 /// and the second install's pods running against the first install's data disk.
 pub const DEFAULT_WSL_DISTRIBUTION: &str = "LemmaRuntime";
+/// The phrase that turns a runtime failure into an offer to reset local data.
+///
+/// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` and pinned by a
+/// test there: this crate is a dependency of locald, not the other way round.
+const DATA_RESET_MARKER: &str = "local data must be reset";
 #[cfg(target_os = "macos")]
 const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -105,6 +110,14 @@ pub struct ManagedRuntime {
     host_epoch_file: PathBuf,
     #[cfg(target_os = "macos")]
     vm_process_marker: PathBuf,
+    /// Tells the guest whether the data disk it is about to mount was created
+    /// by this very boot.
+    ///
+    /// Only the host can know that -- the guest sees a block device either way
+    /// -- and without it the boot script has to guess whether an unrecognised
+    /// filesystem is a new disk to format or user data it must not touch.
+    #[cfg(target_os = "macos")]
+    data_disk_fresh_marker: PathBuf,
     #[cfg(target_os = "macos")]
     vm: Mutex<Option<Child>>,
 }
@@ -120,6 +133,8 @@ impl ManagedRuntime {
             host_epoch_file: run_root.join("host.epoch"),
             #[cfg(target_os = "macos")]
             vm_process_marker: run_root.join("vz-process.json"),
+            #[cfg(target_os = "macos")]
+            data_disk_fresh_marker: run_root.join("data-disk-fresh"),
             control_socket: config.local_root.join("run/guest.sock"),
             config,
             #[cfg(target_os = "macos")]
@@ -416,6 +431,23 @@ impl ManagedRuntime {
         write_private_atomic(&self.capability_file, value.as_bytes())
     }
 
+    /// Whether the guest reported its data disk as unmountable, and why.
+    ///
+    /// Read from the serial console, which the guest writes to before anything
+    /// it could report over is running -- `lemma-guestd` requires the mount
+    /// that just failed. That makes the console the only channel available for
+    /// this class of failure, and it is already a Diagnostics source.
+    #[cfg(target_os = "macos")]
+    fn guest_needs_data_repair(&self) -> Option<String> {
+        const MARKER: &str = "lemma-data: needs-repair:";
+        let console = self.config.local_root.join("runtime/macos/console.log");
+        let text = fs::read_to_string(console).ok()?;
+        text.lines()
+            .rev()
+            .find_map(|line| line.split_once(MARKER))
+            .map(|(_, reason)| reason.trim().to_owned())
+    }
+
     fn wait_ready(&self) -> io::Result<ManagedRuntimeStatus> {
         let deadline = Instant::now() + Duration::from_secs(120);
         let mut last_error = None;
@@ -423,6 +455,16 @@ impl ManagedRuntime {
             #[cfg(target_os = "macos")]
             if let Some(error) = self.macos_exit_error()? {
                 return Err(error);
+            }
+            // A guest that has decided its data disk needs repair will never
+            // answer: `lemma-data.service` failed, and `lemma-guestd.service`
+            // requires it. Waiting out the remaining budget would turn a known,
+            // named problem into "did not become ready".
+            #[cfg(target_os = "macos")]
+            if let Some(reason) = self.guest_needs_data_repair() {
+                return Err(io::Error::other(format!(
+                    "Lemma's private data disk needs repair: {reason}; {DATA_RESET_MARKER}"
+                )));
             }
             match self.health() {
                 Ok(status) => return Ok(status),
@@ -484,7 +526,15 @@ impl ManagedRuntime {
             remove_if_present(&self.vm_process_marker)?;
         }
         self.reclaim_owned_macos_vm()?;
-        create_private_sparse_file(&state.join("data.raw"), DATA_DISK_BYTES)?;
+        // Rewritten every boot, so the marker always describes *this* start
+        // rather than some earlier one. A stale "fresh" marker is the one thing
+        // that would let the guest format a disk holding user data.
+        let disk_is_fresh = create_private_sparse_file(&state.join("data.raw"), DATA_DISK_BYTES)?;
+        if disk_is_fresh {
+            write_private_atomic(&self.data_disk_fresh_marker, b"1\n")?;
+        } else {
+            remove_if_present(&self.data_disk_fresh_marker)?;
+        }
         let _ = fs::remove_file(&self.control_socket);
         let log_path = self.config.local_root.join("logs/vz.log");
         rotate_log(&log_path, 5 * 1024 * 1024)?;
@@ -1067,7 +1117,13 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
+/// Returns whether the disk was created by *this* call.
+///
+/// Only the host knows that. The guest sees a block device either way, and it
+/// has to decide whether an unrecognised one is a brand-new disk to format or
+/// user data it must not touch -- so the answer is written into the control
+/// share for the boot script to read.
+fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<bool> {
     if path.exists() {
         if path.metadata()?.len() != size {
             return Err(io::Error::new(
@@ -1078,7 +1134,8 @@ fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
                 ),
             ));
         }
-        return ensure_private_file(path);
+        ensure_private_file(path)?;
+        return Ok(false);
     }
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -1087,7 +1144,8 @@ fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
     let file = options.open(path)?;
     file.set_len(size)?;
     file.sync_all()?;
-    ensure_private_file(path)
+    ensure_private_file(path)?;
+    Ok(true)
 }
 
 fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {

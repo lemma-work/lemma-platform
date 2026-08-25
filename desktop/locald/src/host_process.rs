@@ -476,33 +476,52 @@ impl HostProcessManager {
 
     pub fn prepare_runtime_generation(&self) -> io::Result<String> {
         self.inspect_exits();
-        let has_children = !self
-            .state
-            .lock()
-            .expect("host process lock poisoned")
-            .children
-            .is_empty();
+        // The same question `start_all_inner` asks, asked the same way. These
+        // two used to disagree on a *partially* running stack: this one saw
+        // "some children" and kept the old generation, while `start_all_inner`
+        // saw "not all children" and minted a new one. Every phase, state and
+        // ready event then carried the old value while the manager ran the new
+        // one -- and the generation is not cosmetic. It is injected into each
+        // service at spawn and checked on the next launch to decide whether the
+        // recorded workspace is still the one serving, so a mixture of old and
+        // new made that check answerable by processes from two different runs.
+        let fully_up = self.stack_is_fully_up();
         let mut generation = self
             .runtime_generation
             .lock()
             .expect("runtime generation lock poisoned");
-        if !has_children {
+        if !fully_up {
             *generation = random_generation()?;
             self.generation_prepared.store(true, Ordering::Release);
         }
         Ok(generation.clone())
     }
 
-    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
-        self.inspect_exits();
-        if self
-            .state
+    /// Whether nothing at all is running.
+    fn state_is_empty(&self) -> bool {
+        self.state
+            .lock()
+            .expect("host process lock poisoned")
+            .children
+            .is_empty()
+    }
+
+    /// Whether every managed service is currently running.
+    ///
+    /// Callers must have just called `inspect_exits`, so the child map reflects
+    /// processes that have already died.
+    fn stack_is_fully_up(&self) -> bool {
+        self.state
             .lock()
             .expect("host process lock poisoned")
             .children
             .len()
             == self.ordered_ids.len()
-        {
+    }
+
+    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
+        self.inspect_exits();
+        if self.stack_is_fully_up() {
             self.desired_running.store(true, Ordering::Release);
             // Everything is already up, so this is a reconcile, not a start.
             // `verify_all_health_now` runs the same probes with the same retry
@@ -517,6 +536,18 @@ impl HostProcessManager {
         }
         self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
+        // Survivors of a partial stack are stopped before a new generation is
+        // minted. Otherwise `spawn_if_missing` leaves them alone -- they are
+        // already running -- while the health gate rewrites its expected body
+        // to the new generation, so the live service is rejected as "a
+        // different runtime instance" and retried for its whole timeout before
+        // the start fails. That is the ordinary recovery path after a backend
+        // crash loop: press Start, wait two minutes, get an error that reads
+        // like a security failure. Pressing Start again then works, because by
+        // then everything is down.
+        if !self.state_is_empty() {
+            self.stop_all()?;
+        }
         if !self.generation_prepared.swap(false, Ordering::AcqRel) {
             *self
                 .runtime_generation
@@ -3191,6 +3222,53 @@ mod tests {
             "a closed circuit with a remembered trip is still a failure, or a \
              service that flaps once a window would read healthy in every gap"
         );
+    }
+
+    /// The generation a start reports is the generation it runs.
+    ///
+    /// `prepare_runtime_generation` and `start_all_inner` used to disagree on a
+    /// partially-running stack -- one saw "some children" and kept the old
+    /// value, the other saw "not all children" and minted a new one. Every
+    /// phase, state and ready event then carried the old generation while the
+    /// services ran the new one.
+    ///
+    /// That value decides, on the next launch, whether the workspace recorded
+    /// last time is still the one serving. A mixture made that question
+    /// answerable by processes from two different runs.
+    #[test]
+    fn a_partially_running_stack_reports_the_generation_it_actually_runs() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &[]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+        wait_for_running(&manager, "frontend");
+
+        // Kill one service, leaving the stack partially up -- the state a user
+        // is in when they press Start after a crash loop.
+        crash(&manager, "frontend");
+        wait_for_recorded_exit(&manager, "frontend");
+
+        let announced = manager.prepare_runtime_generation().unwrap();
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+        wait_for_running(&manager, "frontend");
+
+        let running = manager.status_event(None)["runtime_generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            announced, running,
+            "the generation announced to the app must be the one the services were given"
+        );
+        manager.stop_all().unwrap();
     }
 
     /// An optional setup that *hangs* is tolerated, exactly like one that fails.

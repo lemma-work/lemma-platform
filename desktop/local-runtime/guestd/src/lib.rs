@@ -4276,4 +4276,42 @@ mod tests {
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
     }
+
+    /// The guest must never force a filesystem onto a disk that has one.
+    ///
+    /// `mkfs.ext4 -F` on `/dev/vdb` destroys every database, volume and
+    /// workspace on the machine, and the branch that reached it treated a
+    /// *corrupt* superblock exactly like an empty disk -- so the one situation
+    /// where the data most needed preserving was the situation that destroyed
+    /// it, silently, after which the app reported a healthy first run.
+    ///
+    /// A shell script cannot be unit-tested here, so this pins its text. The
+    /// negative assertion is the one that matters: anything reintroducing `-F`
+    /// fails this, and the failure names why.
+    #[test]
+    fn the_guest_never_force_formats_a_disk_that_already_holds_a_filesystem() {
+        let mount_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+
+        assert!(
+            !mount_data.contains("mkfs.ext4 -F"),
+            "forcing a filesystem over an unrecognised disk destroys user data; \
+             format only an unsigned disk the host says it just created",
+        );
+        assert!(
+            mount_data.contains("/mnt/lemma-control/data-disk-fresh"),
+            "only the host knows whether this disk was just created, so the \
+             guest must consult its marker before formatting",
+        );
+        assert!(
+            mount_data.contains("e2fsck -p"),
+            "the stop path ends in SIGKILL, so dirty filesystems are guaranteed \
+             and must be repaired rather than accumulated",
+        );
+        assert!(
+            mount_data.contains("needs-repair:"),
+            "an unmountable disk must announce itself on the console, or the \
+             host waits out a 120-second timeout and reports nothing useful",
+        );
+    }
 }

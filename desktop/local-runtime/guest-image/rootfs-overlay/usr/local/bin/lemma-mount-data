@@ -8,8 +8,41 @@ data_root=/var/lib/lemma-data
 # nerdctl volumes and Lemma workspaces are user data and remain intact.
 container_metadata_generation=2
 
-if ! /usr/sbin/blkid -p -s TYPE -o value "$device" | grep -qx ext4; then
-  /usr/sbin/mkfs.ext4 -F -L lemma-data "$device"
+# Never format a disk that has anything on it.
+#
+# This used to be one `blkid | grep` away from a forced mkfs, which is three
+# problems at once. The pipe masks blkid's exit status, so `set -eu` never
+# fires. A *corrupt* ext4 superblock reads exactly like "no filesystem" and the
+# force flag went straight past it -- 24 GiB of databases, volumes and
+# workspaces destroyed silently, after which the app reported a healthy first
+# run. And nothing ever ran a repair, though the stop path ends in SIGKILL and
+# so guarantees dirty filesystems.
+#
+# Now: format only when the device has no signature at all AND the host says it
+# created this disk on this boot. Only the host can know that; the guest sees a
+# block device either way.
+signature="$(/usr/sbin/blkid -p -s TYPE -o value "$device" 2>/dev/null || true)"
+if [ -z "$signature" ]; then
+  if [ -e /mnt/lemma-control/data-disk-fresh ]; then
+    # No -F: there is nothing to force past, and needing it would mean this
+    # branch was wrong.
+    /usr/sbin/mkfs.ext4 -L lemma-data "$device"
+  else
+    printf 'lemma-data: needs-repair: no filesystem signature on %s\n' "$device"
+    exit 1
+  fi
+elif [ "$signature" != ext4 ]; then
+  printf 'lemma-data: needs-repair: %s holds a %s filesystem\n' "$device" "$signature"
+  exit 1
+else
+  # 0 clean, 1 errors corrected, 2 corrected and a reboot is advised. 4 and
+  # above means uncorrected damage, which mounting would only compound.
+  status=0
+  /usr/sbin/e2fsck -p "$device" || status=$?
+  if [ "$status" -ge 4 ]; then
+    printf 'lemma-data: needs-repair: e2fsck exited %s\n' "$status"
+    exit 1
+  fi
 fi
 
 mkdir -p "$data_root"
