@@ -190,6 +190,24 @@ impl Default for RestartSpec {
     }
 }
 
+/// Whether a stamped setup has already been done, for this exact stamp.
+///
+/// A free function so it can be asserted on every platform. The tests that
+/// exercise it end to end have to spawn `/bin/sh`, so they are `#[cfg(unix)]` --
+/// and gating them left Windows covering none of this, which is the wrong trade
+/// for a decision that is pure and is the whole point of the feature.
+///
+/// No stamp means always run: that is how a setup opts out, and it is what
+/// everything did before stamps existed. A stamp that differs from the recorded
+/// one means the work is not the work that was done -- a new pack release, or
+/// migrations that changed within one.
+fn setup_is_already_done(stamp: Option<&str>, recorded: Option<&String>) -> bool {
+    match stamp {
+        None => false,
+        Some(stamp) => recorded.map(String::as_str) == Some(stamp),
+    }
+}
+
 fn default_health_timeout() -> u64 {
     180
 }
@@ -749,10 +767,8 @@ impl HostProcessManager {
     fn run_setups(&self) -> io::Result<()> {
         let recorded = self.recorded_setup_stamps();
         'setups: for setup in &self.manifest.setup {
-            if let Some(stamp) = setup.stamp.as_deref() {
-                if recorded.get(&setup.id).map(String::as_str) == Some(stamp) {
-                    continue 'setups;
-                }
+            if setup_is_already_done(setup.stamp.as_deref(), recorded.get(&setup.id)) {
+                continue 'setups;
             }
             let mut environment = setup.env.clone();
             environment.extend(
@@ -3063,6 +3079,51 @@ mod tests {
         }
     }
 
+    /// The stamp decision itself, on every platform.
+    ///
+    /// The four tests that prove this end to end spawn `/bin/sh`, so they are
+    /// `#[cfg(unix)]` -- three failed on Windows for exactly that reason, and
+    /// the fourth passed there without proving anything. This is the half that
+    /// needs no process, and it is the half that decides whether a migration
+    /// runs.
+    #[test]
+    fn a_setup_reruns_unless_its_exact_stamp_was_recorded() {
+        let recorded = |value: &str| Some(value.to_owned());
+
+        // No stamp is how a setup opts out of this entirely.
+        assert!(!setup_is_already_done(None, None));
+        assert!(!setup_is_already_done(
+            None,
+            recorded("release-0.7.0").as_ref()
+        ));
+
+        // Never run before.
+        assert!(!setup_is_already_done(Some("release-0.7.0"), None));
+
+        // Run before, same work.
+        assert!(setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("release-0.7.0").as_ref()
+        ));
+
+        // Run before, different work: a new pack, or migrations that changed
+        // inside one. Skipping here is a backend starting against tables that
+        // were never created.
+        assert!(!setup_is_already_done(
+            Some("release-0.8.0"),
+            recorded("release-0.7.0").as_ref()
+        ));
+        // And no accidental prefix or case matching.
+        assert!(!setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("release-0.7.0-rc1").as_ref()
+        ));
+        assert!(!setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("RELEASE-0.7.0").as_ref()
+        ));
+    }
+
     /// Every test that drives a real process is gated to the platforms that
     /// can drive one.
     ///
@@ -3084,44 +3145,82 @@ mod tests {
             "wait_for_running(&",
             "wait_for_recorded_exit(&",
         ];
-        let source = include_str!("host_process.rs").replace("\r\n", "\n");
-        let lines: Vec<&str> = source.lines().collect();
+        // A POSIX binary is the other way a test needs a unix host, and it is
+        // the one that cost the third round: four stamp tests ran `/bin/sh` and
+        // `/usr/bin/false`. Three failed on Windows with "The system cannot
+        // find the path specified"; the fourth *passed*, because it asserts the
+        // setup fails and a missing binary fails too -- proving nothing, in
+        // green.
+        const POSIX_BINARIES: [&str; 3] = ["\"/bin/", "\"/usr/bin/", "\"/sbin/"];
+        // Every source file in this crate, not just this one. Both rounds of
+        // Windows failures were in here, but the next one need not be -- and a
+        // lint that only reads its own file is a lint that moves the problem.
+        let sources: [(&str, String); 6] = [
+            (
+                "host_process.rs",
+                include_str!("host_process.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "agent_host.rs",
+                include_str!("agent_host.rs").replace("\r\n", "\n"),
+            ),
+            ("daemon.rs", include_str!("daemon.rs").replace("\r\n", "\n")),
+            (
+                "sharing.rs",
+                include_str!("sharing.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "network.rs",
+                include_str!("network.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "managed_runtime.rs",
+                include_str!("managed_runtime.rs").replace("\r\n", "\n"),
+            ),
+        ];
 
         let mut ungated = Vec::new();
-        for (index, line) in lines.iter().enumerate() {
-            let Some(name) = line.trim().strip_prefix("fn ") else {
-                continue;
-            };
-            // A test function: `#[test]` on one of the few lines above it.
-            let preamble = &lines[index.saturating_sub(4)..index];
-            if !preamble.iter().any(|line| line.trim() == "#[test]") {
-                continue;
-            }
-            let gated = preamble.iter().any(|line| line.trim() == "#[cfg(unix)]");
-            if gated {
-                continue;
-            }
-            // The body, to its closing brace at the same indentation.
-            let body: String = lines[index..]
-                .iter()
-                .take_while(|line| !line.starts_with("    }"))
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-            let name = name.split('(').next().unwrap_or(name);
-            // This test names the helpers in order to look for them.
-            if name == "a_test_that_drives_a_real_process_is_gated_to_unix" {
-                continue;
-            }
-            if HELPERS.iter().any(|helper| body.contains(helper)) {
-                ungated.push(name.to_owned());
+        for (file, source) in &sources {
+            let lines: Vec<&str> = source.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                let Some(name) = line.trim().strip_prefix("fn ") else {
+                    continue;
+                };
+                // A test function: `#[test]` on one of the few lines above it.
+                let preamble = &lines[index.saturating_sub(4)..index];
+                if !preamble.iter().any(|line| line.trim() == "#[test]") {
+                    continue;
+                }
+                let gated = preamble.iter().any(|line| line.trim() == "#[cfg(unix)]");
+                if gated {
+                    continue;
+                }
+                // The body, to its closing brace at the same indentation.
+                let body: String = lines[index..]
+                    .iter()
+                    .take_while(|line| !line.starts_with("    }"))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let name = name.split('(').next().unwrap_or(name);
+                // This test names the helpers in order to look for them.
+                if name == "a_test_that_drives_a_real_process_is_gated_to_unix" {
+                    continue;
+                }
+                let needs_unix = HELPERS.iter().any(|helper| body.contains(helper))
+                    || POSIX_BINARIES.iter().any(|path| body.contains(path));
+                if needs_unix {
+                    ungated.push(format!("{file}::{name}"));
+                }
             }
         }
 
         assert!(
             ungated.is_empty(),
-            "these tests use a unix-only helper and are not #[cfg(unix)], so \
-             the Windows build will not compile: {ungated:?}",
+            "these tests need a unix host -- a helper that signals a process \
+             group, or a POSIX binary to run -- and are not #[cfg(unix)]. On \
+             Windows they either fail to compile or fail to find the binary: \
+             {ungated:?}",
         );
     }
 
@@ -3614,6 +3713,7 @@ mod tests {
     /// Both setups ran on every start. The cost is not the SQL -- alembic's
     /// no-op is one `SELECT` -- it is `env.py` importing the whole ORM graph
     /// before it can decide there is nothing to do, on every launch.
+    #[cfg(unix)]
     #[test]
     fn a_stamped_setup_is_not_repeated_while_its_stamp_holds() {
         let root = tempdir().unwrap();
@@ -3636,6 +3736,7 @@ mod tests {
     }
 
     /// A changed stamp runs it again; so does an unstamped setup.
+    #[cfg(unix)]
     #[test]
     fn a_changed_stamp_runs_the_setup_again() {
         let root = tempdir().unwrap();
@@ -3671,6 +3772,7 @@ mod tests {
     /// Stamping anything but success would let a half-finished migration be
     /// skipped on the next start, which is strictly worse than running it
     /// again.
+    #[cfg(unix)]
     #[test]
     fn a_failing_setup_is_not_stamped_as_done() {
         let root = tempdir().unwrap();
@@ -3693,6 +3795,7 @@ mod tests {
     /// leaves the locald root standing -- so without forgetting the stamps the
     /// next start would skip migrations against an empty schema and the backend
     /// would come up against tables that were never created.
+    #[cfg(unix)]
     #[test]
     fn forgetting_stamps_makes_a_reset_installation_migrate_again() {
         let root = tempdir().unwrap();
