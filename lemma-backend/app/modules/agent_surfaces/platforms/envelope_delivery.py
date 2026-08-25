@@ -171,7 +171,7 @@ class EnvelopeDeliveryMixin:
         plan = envelope.choices
         assert plan is not None
         try:
-            if await self.send_questions(
+            if await self._render_choices(
                 credentials=credentials,
                 event=event,
                 question_plan=plan,
@@ -202,7 +202,7 @@ class EnvelopeDeliveryMixin:
         plan = envelope.decision
         assert plan is not None
         try:
-            if await self.send_approval(
+            if await self._render_decision(
                 credentials=credentials,
                 event=event,
                 approval_plan=plan,
@@ -231,7 +231,7 @@ class EnvelopeDeliveryMixin:
         metadata: dict[str, Any] | None,
     ) -> PartDelivery:
         try:
-            await self.send_display_resource(
+            await self._render_resource(
                 credentials=credentials,
                 event=event,
                 render_plan=render_plan,
@@ -256,7 +256,7 @@ class EnvelopeDeliveryMixin:
         metadata: dict[str, Any] | None,
     ) -> PartDelivery:
         try:
-            if await self.send_file_attachment(
+            if await self._render_file(
                 credentials=credentials,
                 event=event,
                 file_name=attachment.file_name,
@@ -269,6 +269,21 @@ class EnvelopeDeliveryMixin:
             logger.debug(
                 "agent_surfaces.delivery.native_attachment_unavailable.diagnostic",
                 platform=self.platform,
+            )
+        if attachment.fallback is not None:
+            # The link card is the real second rung, not a consolation line:
+            # it is the same render the resource part produces, and it degrades
+            # once more to text on a platform with no cards.
+            outcome = await self._deliver_resource(
+                credentials=credentials,
+                event=event,
+                render_plan=attachment.fallback,
+                metadata=metadata,
+            )
+            return (
+                PartDelivery.DEGRADED
+                if outcome is not PartDelivery.UNDELIVERED
+                else outcome
             )
         return await self._send_text_fallback(
             credentials=credentials,
@@ -287,7 +302,7 @@ class EnvelopeDeliveryMixin:
         metadata: dict[str, Any] | None,
     ) -> PartDelivery:
         try:
-            if await self.send_voice_note(
+            if await self._render_voice(
                 credentials=credentials,
                 event=event,
                 file_name=voice.file_name,
@@ -312,6 +327,7 @@ class EnvelopeDeliveryMixin:
                 content=voice.content,
                 mime_type=voice.mime_type,
                 caption=voice.caption,
+                fallback=voice.fallback,
             ),
             metadata=metadata,
         )
@@ -326,6 +342,4 @@ def _file_fallback_text(attachment: EnvelopeFile) -> str:
     be the only thing the person can actually read.
     """
     lines = [line for line in (attachment.caption, attachment.file_name) if line]
-    if attachment.fallback_link:
-        lines.append(attachment.fallback_link)
     return "\n".join(lines) or attachment.file_name

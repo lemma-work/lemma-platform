@@ -32,8 +32,10 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
 from app.modules.agent_surfaces.services import surface_egress
+from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
+    PodFileParts,
 )
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
@@ -213,7 +215,7 @@ def _delivering_adapter() -> AsyncMock:
 
     Egress hands the platform one envelope now instead of calling a verb per
     kind of content, so a fully mocked adapter returns a mock from ``deliver``
-    and never reaches ``send_approval`` at all. Binding the real delivery
+    and never reaches ``_render_decision`` at all. Binding the real delivery
     methods keeps these tests asserting what they were written to assert: which
     verb the ladder tries, and what it falls back to.
     """
@@ -1574,7 +1576,7 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -1590,8 +1592,8 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     )
 
     assert sent is True
-    adapter.send_display_resource.assert_awaited_once()
-    render_plan = adapter.send_display_resource.await_args.kwargs["render_plan"]
+    adapter._render_resource.assert_awaited_once()
+    render_plan = adapter._render_resource.await_args.kwargs["render_plan"]
     assert isinstance(render_plan, SurfaceDisplayRenderPlan)
     assert render_plan.title == "Table: deals"
     assert render_plan.primary_action is not None
@@ -1619,12 +1621,23 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    service = _build_service(
-        adapter=AsyncMock(), surfaces=[surface], existing_link=link
-    )
+    adapter = _delivering_adapter()
+    adapter._render_file.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    delivered = AsyncMock(return_value=PodFileDelivery(delivered=True))
-    monkeypatch.setattr(surface_egress, "deliver_pod_file", delivered)
+    resolve = AsyncMock(
+        return_value=PodFileParts(
+            files=[
+                EnvelopeFile(
+                    file_name="shiplog.pdf",
+                    content=b"%PDF",
+                    mime_type="application/pdf",
+                )
+            ],
+            facts=PodFileDelivery(delivered=True),
+        )
+    )
+    monkeypatch.setattr(surface_egress, "resolve_pod_file_parts", resolve)
 
     sent = await service.send_display_resource_for_conversation(
         conversation_id=conversation_id,
@@ -1633,7 +1646,7 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
     )
 
     assert sent is True
-    assert delivered.await_args.kwargs["caption"] is None
+    assert resolve.await_args.kwargs["caption"] is None
 
 
 async def _ask_user_link(surface, conversation_id, parsed_event):
@@ -1667,7 +1680,7 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    adapter.send_questions.return_value = True
+    adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_ask_user.return_value = {
@@ -1680,14 +1693,14 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
     assert sent is True
-    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert isinstance(plan, SurfaceQuestionRenderPlan)
     assert [q.header for q in plan.questions] == ["color"]
     assert plan.callback_id == f"{conversation_id}|tool-1"
     adapter.send_message.assert_not_awaited()
 
     # When native render returns False, it falls back to a formatted text message.
-    adapter.send_questions.return_value = False
+    adapter._render_choices.return_value = False
     sent = await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
@@ -1705,7 +1718,7 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    adapter.send_questions.return_value = True
+    adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_ask_user.return_value = {
@@ -1718,11 +1731,11 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
     assert sent is True
-    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert [q.header for q in plan.questions] == ["color"]
 
     # Native False → guaranteed text fallback still fires with the flat shape.
-    adapter.send_questions.return_value = False
+    adapter._render_choices.return_value = False
     await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
@@ -1951,7 +1964,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    adapter.send_approval.return_value = True  # platform rendered native buttons
+    adapter._render_decision.return_value = True  # platform rendered native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = {
@@ -1966,7 +1979,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     )
     assert sent is True
     # Native render is attempted; the plan carries Approve + Deny and the callback.
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    plan = adapter._render_decision.await_args.kwargs["approval_plan"]
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
     assert plan.callback_id == f"{conversation_id}|tool-2"
     assert plan.title == "Write a record"
@@ -1982,7 +1995,7 @@ async def test_send_approval_prompt_falls_back_to_text():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    adapter.send_approval.return_value = False  # platform has no native buttons
+    adapter._render_decision.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = {
@@ -2008,7 +2021,7 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    adapter.send_approval.return_value = True
+    adapter._render_decision.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = {
@@ -2024,7 +2037,7 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
     )
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    plan = adapter._render_decision.await_args.kwargs["approval_plan"]
     assert [b.decision for b in plan.buttons] == [
         "APPROVE_ONCE",
         "DENY",
@@ -2072,7 +2085,7 @@ async def test_interactive_prompts_suppressed_on_email_surface():
         conversation_id=conversation_id
     )
     assert questions_sent is False
-    adapter.send_questions.assert_not_awaited()
+    adapter._render_choices.assert_not_awaited()
 
     approval_sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id

@@ -226,6 +226,20 @@ the change that matters most: "does this platform support choices" becomes a
 render-time degradation inside one method with one guaranteed fallback, instead
 of an unimplemented method whose default answer is `False`.
 
+They survive as `_render_*` hooks a platform overrides and only `deliver` calls
+— Python cannot express "protected", so two tests do: one asserts the port
+exposes no public verb for a kind of content, the other statically scans the
+module for a direct call to a hook. `send_message` and `send_cold_email` stay
+public deliberately. The first is the text primitive every degradation lands on
+and the only way to speak before a conversation exists; the second opens a
+thread rather than landing in one, so it has no envelope to belong to.
+
+Callers stop *attempting* delivery to learn what happened. Resolving a pod file
+returns the envelope parts it becomes plus the facts a card needs, so an
+oversize file is a card from the start rather than a failed attachment patched
+after the fact — and a PDF's page image leads the same envelope instead of
+racing the document as its own send.
+
 An envelope is delivered or it raises. There is no third outcome, and no caller
 has to remember to check a boolean.
 

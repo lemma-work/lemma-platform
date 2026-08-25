@@ -208,7 +208,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         display_name="Microsoft Teams",
         supports_native_choices=True,
         # False, and not an oversight: `TeamsSurfaceAdapter` never overrides
-        # `send_file_attachment`, so the base adapter's stub refuses and every
+        # `_render_file`, so the base adapter's stub refuses and every
         # Teams file — any size — is delivered as a link. Claiming True here told
         # the agent its files would arrive as attachments, which they never do.
         # Flip this back the day an outbound Teams file upload exists.

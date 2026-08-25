@@ -28,7 +28,6 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
-from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.composition.surface_datastore import (
     build_file_service,
@@ -36,6 +35,7 @@ from app.composition.surface_datastore import (
     build_table_service,
 )
 from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
 from app.modules.agent_surfaces.services.display_resource_preview import (
@@ -123,7 +123,22 @@ def apply_table_rows(
     return plan.model_copy(update=update)
 
 
-async def deliver_pod_file(
+@dataclass(frozen=True)
+class PodFileParts:
+    """What a pod file becomes in an envelope, plus what a card needs to know.
+
+    Resolution, not delivery. The caller has to learn whether the bytes clear
+    the platform's cap *before* it can decide what the envelope holds -- an
+    oversize file is a card, not an attachment -- and knowing that after the
+    fact is what forced the old two-step: attempt the send, then patch the card
+    with what the failure taught you.
+    """
+
+    files: list[EnvelopeFile]
+    facts: PodFileDelivery
+
+
+async def resolve_pod_file_parts(
     *,
     uow: Any,
     conversation_service: Any,
@@ -132,17 +147,18 @@ async def deliver_pod_file(
     path: str,
     caption: str | None,
     page_preview: bool = False,
-) -> PodFileDelivery:
-    """Attach a pod file's bytes natively when it fits the platform cap.
+) -> PodFileParts:
+    """The envelope parts this pod file resolves to.
 
-    ``delivered`` is True only when the file itself reached the chat. On an
-    oversize file the entity's name and size still come back, so the caller's
-    fallback card can say what it could not send rather than leaving the person
-    to find that out by following a link.
+    ``files`` is empty when the bytes did not clear the cap; ``facts`` still
+    carries the entity's name and size so the caller's card can say what it
+    could not send rather than leaving the person to find out by following a
+    link they may not be able to open.
 
-    With ``page_preview``, a PDF is preceded by its first page as a photo. That
-    is the whole reason the renderer is reached from here: a document arriving
-    as a file name and a grey icon tells nobody whether it is the right one.
+    With ``page_preview``, a PDF's first page leads the same envelope rather
+    than being sent ahead of it as its own message. That is the whole reason
+    the renderer is reached from here: a document arriving as a file name and a
+    grey icon tells nobody whether it is the right one.
     """
     resolved = await _load_pod_file(
         uow=uow,
@@ -153,43 +169,50 @@ async def deliver_pod_file(
         require_inline_fit=True,
     )
     if resolved is None:
-        return PodFileDelivery(delivered=False)
+        return PodFileParts(files=[], facts=PodFileDelivery(delivered=False))
     entity, content, ctx = resolved
     if content is None:
-        return PodFileDelivery(
-            delivered=False,
-            name=entity.name,
-            size_bytes=entity.size_bytes,
-            mime_type=entity.mime_type,
-            fits=False,
+        return PodFileParts(
+            files=[],
+            facts=PodFileDelivery(
+                delivered=False,
+                name=entity.name,
+                size_bytes=entity.size_bytes,
+                mime_type=entity.mime_type,
+                fits=False,
+            ),
         )
+
+    files: list[EnvelopeFile] = []
     if page_preview and _is_pdf(entity):
-        shown = await _best_effort(
-            lambda: _send_page_preview(
+        preview = await _best_effort(
+            lambda: _page_preview_part(
                 uow=uow, target=target, ctx=ctx, path=path, caption=caption
             ),
             step="page_preview",
             path=path,
         )
-        if shown:
-            # The page image carried the caption; repeating it on the document
+        if preview is not None:
+            files.append(preview)
+            # The page image carries the caption; repeating it on the document
             # below would print the same line twice in a row.
             caption = None
-    # No connection held for the platform call; see `connection_released`.
-    async with connection_released(getattr(uow, "session", None)):
-        sent = await target.adapter.send_file_attachment(
-            credentials=target.credentials,
-            event=target.event,
+    files.append(
+        EnvelopeFile(
             file_name=entity.name,
-            file_bytes=content,
+            content=content,
             mime_type=entity.mime_type or "application/octet-stream",
             caption=caption,
         )
-    return PodFileDelivery(
-        delivered=bool(sent),
-        name=entity.name,
-        size_bytes=entity.size_bytes,
-        mime_type=entity.mime_type,
+    )
+    return PodFileParts(
+        files=files,
+        facts=PodFileDelivery(
+            delivered=True,
+            name=entity.name,
+            size_bytes=entity.size_bytes,
+            mime_type=entity.mime_type,
+        ),
     )
 
 
@@ -408,15 +431,15 @@ async def _pod_context(
     )
 
 
-async def _send_page_preview(
+async def _page_preview_part(
     *,
     uow: Any,
     target: SurfaceEgressTarget,
     ctx: Context,
     path: str,
     caption: str | None,
-) -> bool:
-    """Send a document's first page as a photo, ahead of the document itself."""
+) -> EnvelopeFile | None:
+    """A document's first page as an image part, or None if there is none."""
     token = set_current_context(ctx)
     try:
         file_service = build_file_service(uow)
@@ -429,24 +452,18 @@ async def _send_page_preview(
     finally:
         reset_current_context(token)
     if not pages:
-        return False
+        return None
     image = pages[0].jpeg_bytes
     if not fits_inline(
         target.surface.surface_type.value, len(image), mime_type="image/jpeg"
     ):
-        return False
-    # No connection held for the platform call; see `connection_released`.
-    async with connection_released(getattr(uow, "session", None)):
-        return bool(
-            await target.adapter.send_file_attachment(
-                credentials=target.credentials,
-                event=target.event,
-                file_name=f"{entity.name}-page-{_PREVIEW_PAGE}.jpg",
-                file_bytes=image,
-                mime_type="image/jpeg",
-                caption=caption,
-            )
-        )
+        return None
+    return EnvelopeFile(
+        file_name=f"{entity.name}-page-{_PREVIEW_PAGE}.jpg",
+        content=image,
+        mime_type="image/jpeg",
+        caption=caption,
+    )
 
 
 async def _best_effort(

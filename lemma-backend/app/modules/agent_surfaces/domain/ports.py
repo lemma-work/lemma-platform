@@ -206,7 +206,7 @@ class SurfacePlatformAdapterPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -215,7 +215,7 @@ class SurfacePlatformAdapterPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -224,7 +224,7 @@ class SurfacePlatformAdapterPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> bool: ...
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -237,7 +237,7 @@ class SurfacePlatformAdapterPort(Protocol):
     # blocks / Teams card / Telegram or WhatsApp buttons). True → rendered
     # natively; False → caller falls back to a formatted text prompt.
 
-    async def send_voice_note(
+    async def _render_voice(
         self,
         *,
         credentials: dict[str, Any],
@@ -330,7 +330,7 @@ class SurfacePlatformAdapterPort(Protocol):
     # None when it cannot be downloaded. Used by inbound auto-ingest; not an
     # agent tool.
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

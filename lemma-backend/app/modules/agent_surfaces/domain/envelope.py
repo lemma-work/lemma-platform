@@ -1,12 +1,12 @@
 """One thing a person receives, and what became of each part of it.
 
-The adapter port grew a verb per kind of content -- ``send_questions``,
-``send_approval``, ``send_voice_note``, ``send_file_attachment``,
-``send_display_resource`` -- each answered by every platform, most of them with
+The adapter port grew a verb per kind of content -- ``_render_choices``,
+``_render_decision``, ``_render_voice``, ``_render_file``,
+``_render_resource`` -- each answered by every platform, most of them with
 a default that returns ``False``. Eighteen verbs across seven platforms is 126
 cells, and a cell that was never written looks exactly like a platform that
 declined: that is how ``acknowledge_interaction`` came to be implemented once,
-and how three email adapters ended up with a working ``send_display_resource``
+and how three email adapters ended up with a working ``_render_resource``
 nothing calls.
 
 An envelope inverts it. Content is *data* with a text degradation defined once,
@@ -55,27 +55,36 @@ class PartDelivery(StrEnum):
 
 
 class EnvelopeFile(BaseModel):
-    """A file already resolved to bytes, plus where to send someone instead.
+    """A file already resolved to bytes, plus what to show if it cannot land.
 
-    Loading it stays with the caller that has the pod: an adapter renders, it
-    does not go looking for content. ``fallback_link`` is what a platform shows
-    when the bytes are over its cap or it cannot attach at all.
+    Loading stays with the caller that has the pod: an adapter renders, it does
+    not go looking for content. ``fallback`` is the link card shown when the
+    bytes are over the platform's cap or it cannot attach at all -- a plan
+    rather than a bare URL, so the degradation is the same card the resource
+    part would render, and it degrades once more to text on a platform with no
+    cards. Without one the file degrades to its caption and name, which is worth
+    more than silence but not much.
     """
 
     file_name: str
     content: bytes
     mime_type: str
     caption: str | None = None
-    fallback_link: str | None = None
+    fallback: SurfaceDisplayRenderPlan | None = None
 
 
 class EnvelopeVoice(BaseModel):
-    """Audio meant to arrive as a voice note where the platform has them."""
+    """Audio meant to arrive as a voice note where the platform has them.
+
+    Degrades to the same bytes as an ordinary attachment -- a platform without
+    voice notes still has an audio player -- and only then to ``fallback``.
+    """
 
     file_name: str
     content: bytes
     mime_type: str
     caption: str | None = None
+    fallback: SurfaceDisplayRenderPlan | None = None
 
 
 class SurfaceEnvelope(BaseModel):

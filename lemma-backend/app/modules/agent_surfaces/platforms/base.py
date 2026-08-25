@@ -52,7 +52,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         del event
         return None
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -67,7 +67,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
             metadata=metadata,
         )
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -80,7 +80,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         del credentials, event, question_plan, metadata
         return False
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -93,7 +93,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         del credentials, event, approval_plan, metadata
         return False
 
-    async def send_voice_note(
+    async def _render_voice(
         self,
         *,
         credentials: dict[str, Any],
@@ -354,7 +354,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         del credentials, event, attachment
         return None
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

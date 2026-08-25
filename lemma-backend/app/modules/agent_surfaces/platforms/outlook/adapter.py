@@ -40,7 +40,7 @@ class ComposioOutlookSurfaceAdapter(BaseSurfaceAdapter):
     ) -> None:
         await OutlookPlatformService(credentials).send_message(event, message, metadata)
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, object],
@@ -48,7 +48,7 @@ class ComposioOutlookSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        await OutlookPlatformService(credentials).send_display_resource(
+        await OutlookPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,

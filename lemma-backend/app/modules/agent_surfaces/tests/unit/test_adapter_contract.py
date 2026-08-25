@@ -150,3 +150,91 @@ def test_a_platform_that_parses_interactions_also_acknowledges_them(platform, ad
         f"{platform} parses interactions but inherits the no-op "
         "acknowledge_interaction(), so a person tapping a button is told nothing."
     )
+
+
+# Outbound conversation content goes through `deliver` and nowhere else. These
+# two are the port's remaining public sends, and both are deliberate:
+#
+#   send_message   — the text primitive `deliver` itself degrades onto, and the
+#                    only way to say something before a conversation exists
+#                    (the signup and setup replies in fallback_reply_service).
+#   send_cold_email — not a reply at all. It opens a thread rather than landing
+#                    in one, which is the one thing email can do that chat
+#                    cannot, and it has no envelope to belong to.
+_PUBLIC_SENDS_THAT_ARE_NOT_CONTENT = {"send_message", "send_cold_email"}
+
+# Setup and platform chrome. Not conversation delivery, and slated to move to
+# their own optional protocol; listed so this test fails when a *new* one
+# appears rather than when the known ones do.
+_CHROME = {
+    "send_starter_prompt",
+    "send_channel_setup_prompt",
+    "publish_home_view",
+    "open_channel_setup_modal",
+    "open_dm_agent_modal",
+    "set_thread_title",
+}
+
+
+def test_the_port_exposes_no_public_verb_for_a_kind_of_content():
+    """One seam for content, so a new kind cannot add a hole per platform.
+
+    Each of `send_questions`, `send_approval`, `send_voice_note`,
+    `send_file_attachment` and `send_display_resource` was a public verb every
+    platform had to answer and most answered with a default `return False` —
+    indistinguishable from a platform that genuinely declined. They are
+    `_render_*` hooks now, reachable only from `deliver`, so "does this
+    platform support choices" is a branch inside one method that always exists
+    rather than a method that might not.
+    """
+    public_sends = {
+        name
+        for name, _ in inspect.getmembers(BaseSurfaceAdapter, callable)
+        if name.startswith(("send_", "publish_", "open_", "set_thread"))
+    }
+    unexpected = sorted(
+        public_sends - _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT - _CHROME
+    )
+    assert not unexpected, (
+        f"{unexpected} are public outbound verbs. A kind of content belongs in "
+        "SurfaceEnvelope with a `_render_*` hook, not in a verb every platform "
+        "has to remember to implement."
+    )
+
+
+def test_nothing_outside_the_delivery_mixin_renders_content_itself():
+    """The seam is only a seam while everything goes through it.
+
+    A static check rather than a typed one, because Python cannot express
+    "protected" — and the failure this prevents is precisely someone reaching
+    past `deliver` for one platform's native render and quietly reintroducing
+    the ladder that used to be copied at every call site.
+    """
+    from pathlib import Path
+
+    module_root = Path(__file__).resolve().parents[2]
+    assert module_root.name == "agent_surfaces", module_root
+    allowed = {"envelope_delivery.py", "base.py"}
+    scanned = 0
+    offenders: list[str] = []
+    for path in module_root.rglob("*.py"):
+        if path.name in allowed or "/tests/" in path.as_posix():
+            continue
+        source = path.read_text()
+        scanned += 1
+        for hook in (
+            "_render_choices",
+            "_render_decision",
+            "_render_file",
+            "_render_voice",
+            "_render_resource",
+        ):
+            # A definition is a platform implementing its half. A call is the
+            # thing being banned.
+            if f".{hook}(" in source and f"def {hook}(" not in source:
+                offenders.append(f"{path.name}:{hook}")
+    assert scanned > 50, f"the scan found only {scanned} files; it is not looking"
+    assert not offenders, (
+        f"{offenders} call a render hook directly. Build a SurfaceEnvelope and "
+        "call deliver() so the part degrades the same way it does everywhere else."
+    )

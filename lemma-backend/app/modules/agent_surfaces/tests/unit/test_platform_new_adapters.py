@@ -236,7 +236,7 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
             "access_token": "wa-token",
             "api_base_url": "https://graph.example.test",
         }
-    ).send_display_resource(
+    )._render_resource(
         event,
         SurfaceDisplayRenderPlan(
             resource_type="FILE",
@@ -487,7 +487,7 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
         posted["json"] = json
         return _Response()
 
-    # send_display_resource routes through TelegramClient.call, which uses
+    # _render_resource routes through TelegramClient.call, which uses
     # httpx.AsyncClient from the client module — patch the class method so the
     # call is intercepted regardless of import site.
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -505,7 +505,7 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
 
     await telegram_service_module.TelegramPlatformService(
         {"bot_token": "telegram-token", "api_base_url": "https://telegram.example/bot"}
-    ).send_display_resource(
+    )._render_resource(
         event,
         SurfaceDisplayRenderPlan(
             resource_type="TABLE",
@@ -754,7 +754,7 @@ async def test_base_adapter_download_and_send_file_defaults():
         is None
     )
     assert (
-        await adapter.send_file_attachment(
+        await adapter._render_file(
             credentials={},
             event=event,
             file_name="a.txt",

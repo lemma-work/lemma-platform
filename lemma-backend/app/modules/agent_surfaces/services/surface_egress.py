@@ -27,11 +27,14 @@ from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
     apply_table_rows,
-    deliver_pod_file,
+    resolve_pod_file_parts,
     load_pod_file_bytes,
     resolve_table_preview,
 )
-from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.agent_surfaces.domain.envelope import (
+    EnvelopeVoice,
+    SurfaceEnvelope,
+)
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -226,6 +229,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             tool_call_id=tool_call_id,
             tool_output=tool_output,
         )
+        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
         # A FILE resource is delivered as a native attachment when it fits the
         # platform's cap; otherwise we fall through to the card render plan, whose
         # action is a Lemma app deep link — openable only by a recipient with pod
@@ -233,7 +237,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         # why that card carries the file's kind and size: it is the part a
         # recipient who cannot follow the link can still act on.
         if display_request.type is DisplayResourceType.FILE and display_request.path:
-            delivery = await deliver_pod_file(
+            resolved = await resolve_pod_file_parts(
                 uow=self.uow,
                 conversation_service=self.conversation_service,
                 target=target,
@@ -245,9 +249,17 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 caption=None,
                 page_preview=True,
             )
-            if delivery.delivered:
-                return True
-            render_plan = apply_file_facts(render_plan, delivery)
+            if resolved.files:
+                # A PDF's page image and the document itself are one envelope,
+                # so they arrive in that order rather than as two sends racing
+                # to be first.
+                return await self._deliver_envelope(
+                    target,
+                    envelope=SurfaceEnvelope(files=resolved.files),
+                    metadata=message_metadata,
+                    conversation_id=conversation_id,
+                )
+            render_plan = apply_file_facts(render_plan, resolved.facts)
         elif display_request.type is DisplayResourceType.TABLE:
             render_plan = apply_table_rows(
                 render_plan,
@@ -259,16 +271,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     request=display_request,
                 ),
             )
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await target.adapter.send_display_resource(
-                credentials=target.credentials,
-                event=target.event,
-                render_plan=render_plan,
-                metadata=message_metadata,
-            )
-            return True
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(resources=[render_plan]),
+            metadata=message_metadata,
+            conversation_id=conversation_id,
+        )
 
     async def send_questions_for_conversation(
         self,
@@ -483,41 +491,29 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         entity, content = loaded
 
-        mime = entity.mime_type or "audio/ogg"
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            try:
-                if await target.adapter.send_voice_note(
-                    credentials=target.credentials,
-                    event=target.event,
+        # Voice note, then the same bytes as an attachment (an audio player on
+        # most platforms), then the link card. Three rungs that used to be
+        # written out here; the envelope walks them.
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(
+                voice=EnvelopeVoice(
                     file_name=entity.name,
-                    audio_bytes=content,
-                    mime=mime,
+                    content=content,
+                    mime_type=entity.mime_type or "audio/ogg",
                     caption=caption,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic",
-                    conversation_id=conversation_id,
+                    fallback=build_display_resource_render_plan(
+                        pod_id=target.surface.pod_id,
+                        request=DisplayResourceRequest(
+                            type=DisplayResourceType.FILE, path=path
+                        ),
+                        conversation_id=conversation_id,
+                    ),
                 )
-            # Fallback: native file attachment (audio player), then a link card.
-            attached = await deliver_pod_file(
-                uow=self.uow,
-                conversation_service=self.conversation_service,
-                target=target,
-                conversation_id=conversation_id,
-                path=path,
-                caption=caption,
-            )
-            if attached.delivered:
-                return True
-            return await self.send_display_resource_for_conversation(
-                conversation_id=conversation_id,
-                request=DisplayResourceRequest(
-                    type=DisplayResourceType.FILE, path=path
-                ),
-            )
+            ),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
+            conversation_id=conversation_id,
+        )
 
     async def send_processing_indicator_for_conversation(
         self,

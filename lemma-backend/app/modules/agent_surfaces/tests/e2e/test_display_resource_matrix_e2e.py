@@ -13,7 +13,7 @@ file past the real 20 MB cap — see ``_oversize_bytes``.
 
 N/A cells:
 - **Teams has no native file-send implementation at all**
-  (``TeamsSurfaceAdapter`` doesn't override ``send_file_attachment``, so the
+  (``TeamsSurfaceAdapter`` doesn't override ``_render_file``, so the
   base adapter's stub always returns ``False``) — every Teams file, regardless
   of size, falls back to a link card. Only one Teams case is needed since
   there is no size-threshold behavior to prove.

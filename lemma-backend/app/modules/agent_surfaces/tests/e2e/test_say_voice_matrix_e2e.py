@@ -10,8 +10,8 @@ deterministic TTS fake — only synthesis is faked, delivery runs for real).
 
 N/A cells:
 - **Only Telegram has a native voice-note send** (``sendVoice`` — see
-  ``TelegramPlatformService.send_voice_note``); Slack/Teams/WhatsApp/base all
-  return ``False`` from ``send_voice_note``, so ``say`` falls through to
+  ``TelegramPlatformService._render_voice``); Slack/Teams/WhatsApp/base all
+  return ``False`` from ``_render_voice``, so ``say`` falls through to
   ``_try_send_file_attachment`` (a normal inline audio file, per
   ``send_voice_note_for_conversation``'s documented fallback chain) — Slack
   and WhatsApp support that (native files, per the display_resource matrix);

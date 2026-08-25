@@ -141,7 +141,7 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
             metadata=metadata,
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -149,7 +149,7 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await ResendPlatformService(credentials).send_display_resource(
+        await ResendPlatformService(credentials)._render_resource(
             event, render_plan, metadata
         )
 

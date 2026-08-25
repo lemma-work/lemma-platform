@@ -52,7 +52,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             metadata=metadata,
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -60,7 +60,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await self._service(credentials).send_display_resource(
+        await self._service(credentials)._render_resource(
             event=event,
             render_plan=render_plan,
             metadata=metadata,
@@ -126,7 +126,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             event, progress_handle, message, metadata
         )
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -134,11 +134,11 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await self._service(credentials).send_questions(
+        return await self._service(credentials)._render_choices(
             event=event, question_plan=question_plan, metadata=metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -146,7 +146,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await self._service(credentials).send_approval(
+        return await self._service(credentials)._render_decision(
             event=event, approval_plan=approval_plan, metadata=metadata
         )
 
@@ -306,7 +306,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             event, attachment
         )
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

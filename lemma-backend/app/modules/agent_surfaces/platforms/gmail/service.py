@@ -95,7 +95,7 @@ class GmailPlatformService:
             attachments=[],
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,

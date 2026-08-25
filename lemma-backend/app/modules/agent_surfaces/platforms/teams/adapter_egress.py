@@ -94,7 +94,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             ) as response:
                 response.raise_for_status()
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -147,7 +147,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             ) as response:
                 response.raise_for_status()
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -192,7 +192,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                 response.raise_for_status()
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],

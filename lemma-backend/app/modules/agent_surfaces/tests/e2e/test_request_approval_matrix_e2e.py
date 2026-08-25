@@ -6,7 +6,7 @@ must complete via its single reply-tool call instead of ever pausing.
 
 ``request_approval`` renders as native tappable Approve/Deny buttons on every
 chat platform (``send_approval_prompt_for_conversation`` →
-``adapter.send_approval`` in ``ingress_service.py``). A tapped button routes
+``adapter._render_decision`` in ``ingress_service.py``). A tapped button routes
 back through ``handler.try_handle_interaction`` → ``handle_interaction``, which
 resolves the paused run with the button's decision (APPROVE_ONCE / DENY). A
 typed "approve"/"deny" reply still works as the text fallback path, but these

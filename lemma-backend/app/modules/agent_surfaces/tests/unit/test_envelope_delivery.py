@@ -46,14 +46,14 @@ class _Adapter(BaseSurfaceAdapter):
 
     def __init__(self, **verbs: Any) -> None:
         self.send_message = verbs.get("send_message", AsyncMock())
-        self.send_questions = verbs.get("send_questions", AsyncMock(return_value=False))
-        self.send_approval = verbs.get("send_approval", AsyncMock(return_value=False))
-        self.send_display_resource = verbs.get("send_display_resource", AsyncMock())
-        self.send_file_attachment = verbs.get(
-            "send_file_attachment", AsyncMock(return_value=False)
+        self._render_choices = verbs.get("_render_choices", AsyncMock(return_value=False))
+        self._render_decision = verbs.get("_render_decision", AsyncMock(return_value=False))
+        self._render_resource = verbs.get("_render_resource", AsyncMock())
+        self._render_file = verbs.get(
+            "_render_file", AsyncMock(return_value=False)
         )
-        self.send_voice_note = verbs.get(
-            "send_voice_note", AsyncMock(return_value=False)
+        self._render_voice = verbs.get(
+            "_render_voice", AsyncMock(return_value=False)
         )
 
 
@@ -99,7 +99,7 @@ def _decision() -> SurfaceApprovalRenderPlan:
 
 
 async def test_a_native_platform_renders_natively_and_says_nothing_extra() -> None:
-    adapter = _Adapter(send_questions=AsyncMock(return_value=True))
+    adapter = _Adapter(_render_choices=AsyncMock(return_value=True))
     receipt = await _deliver(adapter, SurfaceEnvelope(choices=_questions()))
     assert receipt.parts["choices"] is PartDelivery.NATIVE
     adapter.send_message.assert_not_awaited()
@@ -115,7 +115,7 @@ async def test_a_platform_without_native_choices_still_asks_the_question() -> No
 
 async def test_a_native_render_that_raises_falls_back_rather_than_propagating() -> None:
     adapter = _Adapter(
-        send_approval=AsyncMock(side_effect=httpx.ConnectError("no route"))
+        _render_decision=AsyncMock(side_effect=httpx.ConnectError("no route"))
     )
     receipt = await _deliver(adapter, SurfaceEnvelope(decision=_decision()))
     assert receipt.parts["decision"] is PartDelivery.DEGRADED
@@ -133,7 +133,7 @@ async def test_a_part_that_reaches_nobody_is_recorded_as_such() -> None:
 async def test_an_envelope_where_something_landed_does_not_raise() -> None:
     """Partial delivery is a receipt, not an exception; only total failure raises."""
     adapter = _Adapter(
-        send_file_attachment=AsyncMock(return_value=False),
+        _render_file=AsyncMock(return_value=False),
         send_message=AsyncMock(),
     )
     receipt = await _deliver(
@@ -163,7 +163,7 @@ async def test_a_bug_in_our_own_code_crashes_instead_of_degrading() -> None:
     which is how stream_progress was dead on two platforms for a release.
     """
     adapter = _Adapter(
-        send_questions=AsyncMock(side_effect=TypeError("unexpected keyword"))
+        _render_choices=AsyncMock(side_effect=TypeError("unexpected keyword"))
     )
     with pytest.raises(TypeError):
         await _deliver(adapter, SurfaceEnvelope(choices=_questions()))
@@ -182,7 +182,7 @@ async def test_the_lead_in_is_delivered_before_the_thing_it_leads_into() -> None
     calls: list[str] = []
     adapter = _Adapter(
         send_message=AsyncMock(side_effect=lambda **_: calls.append("text")),
-        send_questions=AsyncMock(
+        _render_choices=AsyncMock(
             side_effect=lambda **_: calls.append("choices") or True
         ),
     )
@@ -195,8 +195,8 @@ async def test_the_lead_in_is_delivered_before_the_thing_it_leads_into() -> None
 async def test_voice_degrades_to_the_same_bytes_as_a_file_not_to_a_mention() -> None:
     """A platform with no voice notes still has an audio player."""
     adapter = _Adapter(
-        send_voice_note=AsyncMock(return_value=False),
-        send_file_attachment=AsyncMock(return_value=True),
+        _render_voice=AsyncMock(return_value=False),
+        _render_file=AsyncMock(return_value=True),
     )
     receipt = await _deliver(
         adapter,
@@ -207,11 +207,35 @@ async def test_voice_degrades_to_the_same_bytes_as_a_file_not_to_a_mention() -> 
         ),
     )
     assert receipt.parts["voice"] is PartDelivery.NATIVE
-    assert adapter.send_file_attachment.await_args.kwargs["file_bytes"] == b"OggS"
+    assert adapter._render_file.await_args.kwargs["file_bytes"] == b"OggS"
 
 
-async def test_a_file_that_cannot_be_attached_carries_its_caption_and_link() -> None:
-    """The link only opens for somebody who can sign in, so the caption goes too."""
+async def test_a_file_that_cannot_be_attached_degrades_to_its_link_card() -> None:
+    """The second rung is the same card the resource part renders, not a line of text."""
+    adapter = _Adapter(_render_resource=AsyncMock())
+    receipt = await _deliver(
+        adapter,
+        SurfaceEnvelope(
+            files=[
+                EnvelopeFile(
+                    file_name="q3.pdf",
+                    content=b"%PDF",
+                    mime_type="application/pdf",
+                    caption="Q3 revenue, down 4%.",
+                    fallback=SurfaceDisplayRenderPlan(
+                        resource_type="FILE", title="q3.pdf"
+                    ),
+                )
+            ]
+        ),
+    )
+    assert receipt.parts["files"] is PartDelivery.DEGRADED
+    assert (
+        adapter._render_resource.await_args.kwargs["render_plan"].title == "q3.pdf"
+    )
+
+
+async def test_a_file_with_no_card_to_fall_back_on_still_says_what_it_was() -> None:
     adapter = _Adapter()
     await _deliver(
         adapter,
@@ -222,19 +246,16 @@ async def test_a_file_that_cannot_be_attached_carries_its_caption_and_link() -> 
                     content=b"%PDF",
                     mime_type="application/pdf",
                     caption="Q3 revenue, down 4%.",
-                    fallback_link="https://lemma.test/f/1",
                 )
             ]
         ),
     )
-    message = adapter.send_message.await_args.kwargs["message"]
-    assert "Q3 revenue, down 4%." in message
-    assert "https://lemma.test/f/1" in message
+    assert "Q3 revenue, down 4%." in adapter.send_message.await_args.kwargs["message"]
 
 
 async def test_a_resource_degrades_to_its_own_text() -> None:
     adapter = _Adapter(
-        send_display_resource=AsyncMock(side_effect=httpx.ConnectError("no route"))
+        _render_resource=AsyncMock(side_effect=httpx.ConnectError("no route"))
     )
     receipt = await _deliver(
         adapter,

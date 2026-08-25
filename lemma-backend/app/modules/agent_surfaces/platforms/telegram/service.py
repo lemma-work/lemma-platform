@@ -184,7 +184,7 @@ class TelegramPlatformService:
                 payload["reply_markup"] = reply_markup
             await self._send_chunk(payload, raw_chunk)
 
-    async def send_questions(
+    async def _render_choices(
         self,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
@@ -234,7 +234,7 @@ class TelegramPlatformService:
             )
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
@@ -312,7 +312,7 @@ class TelegramPlatformService:
         except TypeError, ValueError:
             return None
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,

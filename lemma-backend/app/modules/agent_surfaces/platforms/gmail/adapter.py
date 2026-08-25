@@ -37,7 +37,7 @@ class ComposioGmailSurfaceAdapter(BaseSurfaceAdapter):
     ) -> None:
         await GmailPlatformService(credentials).send_message(event, message, metadata)
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, object],
@@ -45,7 +45,7 @@ class ComposioGmailSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        await GmailPlatformService(credentials).send_display_resource(
+        await GmailPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,

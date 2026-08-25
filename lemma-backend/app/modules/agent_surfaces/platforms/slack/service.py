@@ -210,7 +210,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 "agent_surfaces.service.slack_interaction_acknowledgement_best.observed"
             )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -251,7 +251,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             raise
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -280,7 +280,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         await client.chat_postMessage(**payload)
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         event: ParsedInboundSurfaceEvent,

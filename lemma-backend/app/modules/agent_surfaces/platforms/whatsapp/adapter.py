@@ -49,7 +49,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, message, metadata
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
@@ -57,13 +57,13 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await WhatsAppPlatformService(credentials).send_display_resource(
+        await WhatsAppPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -71,11 +71,11 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await WhatsAppPlatformService(credentials).send_questions(
+        return await WhatsAppPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -83,7 +83,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await WhatsAppPlatformService(credentials).send_approval(
+        return await WhatsAppPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
         )
 
@@ -150,7 +150,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, attachment
         )
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

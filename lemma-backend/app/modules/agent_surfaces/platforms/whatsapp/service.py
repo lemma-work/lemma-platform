@@ -200,7 +200,7 @@ class WhatsAppPlatformService:
             ),
         )
 
-    async def send_questions(
+    async def _render_choices(
         self,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
@@ -246,7 +246,7 @@ class WhatsAppPlatformService:
             )
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
@@ -275,7 +275,7 @@ class WhatsAppPlatformService:
         )
         return True
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
