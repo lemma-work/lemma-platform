@@ -137,7 +137,15 @@ export interface UseAssistantSessionResult {
   resume: (conversationId?: string | null | ResumeAssistantOptions) => Promise<void>;
   resumeIfRunning: (
     conversationId?: string | null,
-    options?: { knownConversation?: Conversation | null },
+    options?: {
+      knownConversation?: Conversation | null;
+      /**
+       * The caller just did something that starts a run. Keeps asking for a
+       * few seconds rather than concluding from one read that nothing is
+       * running — a resume handed to a worker has not started yet.
+       */
+      expectRun?: boolean;
+    },
   ) => Promise<boolean>;
   stop: (conversationId?: string | null) => Promise<void>;
   cancel: () => void;
@@ -191,6 +199,37 @@ function isConversationRunningStatus(status: unknown): boolean {
   const normalized = normalizeConversationStatus(status);
   if (!normalized) return false;
   return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING";
+}
+
+/** Did a re-read of the conversation actually bring anything back?
+ *
+ * The record is small, flat and server-shaped, so its serialization is stable
+ * enough to compare whole — and comparing whole is what keeps this honest as
+ * fields are added. Naming the handful the UI reads today would quietly stop
+ * noticing the next one.
+ */
+function sameConversationRecord(left: Conversation, right: Conversation): boolean {
+  if (left.id !== right.id) return false;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How long to keep asking whether the run somebody just triggered has started.
+ *
+ * Answering an `ask_user` card resolves inline, but an approved
+ * `request_approval` hands its reconciliation to a worker and returns
+ * `"queued"` — so the conversation is still WAITING for the moment it takes
+ * that job to be picked up. One read landed inside that window, concluded
+ * nothing was running, and left the transcript still until a reload.
+ */
+const RESUME_RACE_DELAYS_MS = [400, 900, 2000];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForStreamReconnect(attempt: number, signal: AbortSignal): Promise<boolean> {
@@ -346,7 +385,16 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
   // The only way the conversation record is written, so the ref above can never
   // drift from the state it shadows.
+  //
+  // A re-read that comes back identical keeps the identity already on screen.
+  // Everything downstream of the record — the header, the retry affordance, the
+  // composer's disabled state — re-renders on its identity, and now that a
+  // record is re-read whenever a turn's ending is in doubt, most of those reads
+  // return exactly what was already held.
   const rememberConversation = useCallback((next: Conversation | null) => {
+    const previous = conversationRecordRef.current;
+    if (previous === next) return;
+    if (previous && next && sameConversationRecord(previous, next)) return;
     conversationRecordRef.current = next;
     setConversation(next);
   }, []);
@@ -699,6 +747,8 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     // live on the conversation record, and they are what decides whether the
     // transcript offers a Retry.
     let sawFailedStatus = false;
+    // Set where the buffer is cleared, read where the turn is reconciled.
+    let unclaimedAnswer = false;
     let streamFailure: unknown = null;
 
     try {
@@ -711,6 +761,13 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         onEventRef.current?.(event, payload);
 
         const parsed = parseAssistantStreamEvent(payload);
+        if (parsed.interrupted) {
+          // The transport died, not the run. Deliberately no error state and
+          // no terminal flag: falling out of this loop with `sawTerminalStatus`
+          // still false is what puts us on the catch-up-and-reconnect path
+          // below, which is what the server asked for by sending this.
+          continue;
+        }
         if (parsed.error) {
           const streamError = new Error(parsed.error);
           setError(streamError);
@@ -764,6 +821,11 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
             if (parsed.status === "FAILED") sawFailedStatus = true;
+            // Read before the clear on the next line, which is the only place
+            // this fact survives to: an answer still sitting in the token
+            // buffer when the run ends is one whose durable message never
+            // arrived.
+            unclaimedAnswer = streamingTextRef.current.trim().length > 0;
             clearStreamingText();
             clearStreamingThinking();
             clearStreamingTool();
@@ -828,13 +890,24 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           // discarded the answer anyway, because it dedups on the last message
           // id and that id had not moved. Only an explicit opt-in re-lists now.
           const shouldReloadMessages = syncAfterStream ?? syncOnTurnEnd;
+          // ...with one exception, and it is not an opt-in. Text streamed as
+          // tokens that no durable message ever claimed is an answer that
+          // exists only in a buffer this function is about to clear: every
+          // assistant or tool message clears the buffer as it lands, so
+          // anything left in it at the end is a frame that never arrived.
+          // Publishing is best-effort by design — it swallows its own failures
+          // and the fan-out drops a subscriber that falls behind — so "the
+          // stream said everything" is a description of the happy path, not a
+          // guarantee. One list, only when we can see something is missing.
+          const answerWentMissing = !sawFailedStatus
+            && (unclaimedAnswer || streamingTextRef.current.trim().length > 0);
           // The record is still worth re-reading after a failure: the retry
           // affordance is driven by `last_run_retryable`, which only the
           // conversation carries.
           if (shouldReloadMessages || sawFailedStatus || streamFailure) {
             await refreshConversation(syncConversationId);
           }
-          if (shouldReloadMessages) {
+          if (shouldReloadMessages || answerWentMissing) {
             await loadMessages({ conversationId: syncConversationId, limit: 100 });
           }
         }
@@ -1047,7 +1120,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
   const resumeIfRunning = useCallback(async (
     explicitConversationId?: string | null,
-    options?: { knownConversation?: Conversation | null },
+    options?: { knownConversation?: Conversation | null; expectRun?: boolean },
   ): Promise<boolean> => {
     const id = explicitConversationId ?? conversationId;
     if (!id) return false;
@@ -1071,10 +1144,32 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       rememberConversation(knownConversation);
       setConversationStatus(statusKey);
     } else if (!isConversationRunningStatus(statusRef.current)) {
-      const latestConversation = await refreshConversation(id);
-      if (!latestConversation || !isConversationRunningStatus(latestConversation.status)) {
-        return false;
+      // `expectRun` is a caller saying it just did the thing that starts a run.
+      // The read then has to survive the gap between "the server accepted it"
+      // and "the run exists": an approved `request_approval` commits its
+      // decision and hands the resume to a worker, so the record still reads
+      // WAITING for as long as that job waits to be picked up. Without the
+      // ladder the single read landed in that gap, answered "nothing is
+      // running", and nothing ever asked again — the follow-on run then wrote a
+      // whole answer into a conversation with no listener.
+      //
+      // Only for a caller that expects one. Everywhere else this stays one
+      // read, because everywhere else a not-running conversation is just a
+      // conversation that is not running.
+      const attempts = options?.expectRun ? RESUME_RACE_DELAYS_MS.length + 1 : 1;
+      let started = false;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt > 0) await delay(RESUME_RACE_DELAYS_MS[attempt - 1]);
+        // Someone else got there first (a send, or a stream that attached while
+        // this was waiting). The ref, not the state: this is inside an await.
+        if (abortRef.current !== null) return false;
+        const latestConversation = await refreshConversation(id);
+        if (latestConversation && isConversationRunningStatus(latestConversation.status)) {
+          started = true;
+          break;
+        }
       }
+      if (!started) return false;
     }
 
     const previousResumeKey = autoResumedKeyRef.current;

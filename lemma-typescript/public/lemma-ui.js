@@ -235,7 +235,7 @@ var LemmaUI = (() => {
     return void 0;
   }
   function parseAssistantStreamEvent(value) {
-    var _a, _b;
+    var _a, _b, _c;
     const directMessage = toConversationMessage(value);
     if (directMessage) {
       return { message: directMessage };
@@ -265,10 +265,16 @@ var LemmaUI = (() => {
     if (eventType === "stopped") {
       return { status: "STOPPED" };
     }
-    if (eventType === "error" || eventType === "stream_error") {
+    if (eventType === "stream_error") {
+      return {
+        interrupted: true,
+        error: (_b = extractErrorMessage(payload)) != null ? _b : "Realtime stream interrupted."
+      };
+    }
+    if (eventType === "error") {
       return {
         status: "FAILED",
-        error: (_b = extractErrorMessage(payload)) != null ? _b : "Agent run failed."
+        error: (_c = extractErrorMessage(payload)) != null ? _c : "Agent run failed."
       };
     }
     return {};
@@ -636,6 +642,7 @@ var LemmaUI = (() => {
         this.clearStreamingText();
         this.clearStreamingThinking();
         let sawTerminalStatus = false;
+        let unclaimedAnswer = false;
         let streamFailure = null;
         try {
           for await (const event of readSSE(stream)) {
@@ -643,6 +650,9 @@ var LemmaUI = (() => {
             const payload = parseSSEJson(event);
             (_b = (_a = this.options).onEvent) == null ? void 0 : _b.call(_a, event, payload);
             const parsed = parseAssistantStreamEvent(payload);
+            if (parsed.interrupted) {
+              continue;
+            }
             if (parsed.error) {
               const streamError = new Error(parsed.error);
               this.patch({ error: streamError });
@@ -690,6 +700,7 @@ var LemmaUI = (() => {
               this.setConversationStatus(parsed.status);
               if (!isConversationRunningStatus(parsed.status)) {
                 sawTerminalStatus = true;
+                unclaimedAnswer = this.streamingBuffer.trim().length > 0;
                 this.clearStreamingText();
                 this.clearStreamingThinking();
                 this.clearStreamingTool();
@@ -740,9 +751,14 @@ var LemmaUI = (() => {
                   streamFailure = reconnectError;
                 }
               }
-            } else if (syncConversationId && (syncAfterStream != null ? syncAfterStream : this.options.syncOnTurnEnd)) {
-              await this.refreshConversation(syncConversationId);
-              await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+            } else if (syncConversationId) {
+              const answerWentMissing = unclaimedAnswer || this.streamingBuffer.trim().length > 0;
+              if (syncAfterStream != null ? syncAfterStream : this.options.syncOnTurnEnd) {
+                await this.refreshConversation(syncConversationId);
+                await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+              } else if (answerWentMissing) {
+                await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+              }
             }
             if (!controller.signal.aborted && streamFailure) {
               const normalized = normalizeError(streamFailure, "Failed to stream conversation.");
