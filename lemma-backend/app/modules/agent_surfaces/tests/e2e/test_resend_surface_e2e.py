@@ -177,7 +177,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
         surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
         assistant_address = surface_model.surface_identity_email
     assert assistant_address
-    # Provisioned per-pod, not a fixed constant (see _provision_resend_address).
+    # Minted per agent by `email_surface_provisioning`, not a fixed constant.
     assert assistant_address.endswith("@ops.asur.work")
 
     envelope = _raw_resend_envelope(
