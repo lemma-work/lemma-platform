@@ -48,6 +48,15 @@ OTEL          ?= 0
 OTEL_LOGS     ?= 1
 LLM_OTEL      ?= 0
 
+# What the backend unit lane selects. One variable because two targets run it
+# -- `test-backend-unit` locally and `coverage-backend-unit` in CI -- and they
+# had already drifted: only the second excluded `local_guest`, so the lane a
+# person runs before pushing collected seventeen tests the lane that gates the
+# merge did not. Every exclusion here is an environment-gated suite that would
+# otherwise skip green; `scripts/check_pytest_census.py` fails when a new one
+# appears.
+UNIT_MARKERS  ?= not e2e and not local_guest and not provider
+
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
@@ -1176,7 +1185,7 @@ test-backend:
 
 test-backend-unit:
 	@echo "→ Backend unit tests…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" -q
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" -q
 
 test-backend-e2e:
 	@echo "→ Backend e2e tests (workers=$(E2E_WORKERS))…"
@@ -1361,16 +1370,21 @@ coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-front
 
 coverage-backend: coverage-backend-unit coverage-backend-e2e
 
-# `local_guest` is excluded explicitly rather than left to skip.
+# `local_guest` and `provider` are excluded explicitly rather than left to skip.
 #
-# Those seventeen tests need Lemma Desktop installed with its VM booted, and
-# they are marked `integration`, not `e2e` -- so `-m "not e2e"` collected them
-# on every backend CI run and they reported green skips. A suite that always
-# skips is indistinguishable from one that has quietly stopped existing.
-# Deselecting says so in the summary instead.
+# The seventeen `local_guest` tests need Lemma Desktop installed with its VM
+# booted, and the three `provider` ones need real E2B credentials. Neither is
+# marked `e2e` -- so `-m "not e2e"` collected all twenty on every backend CI run
+# and they reported green skips. A suite that always skips is indistinguishable
+# from one that has quietly stopped existing. Deselecting says so in the
+# summary instead, and `scripts/check_pytest_census.py` now fails if another
+# environment-gated suite drifts back into this lane.
+#
+# Keep this expression identical to `test-backend-unit`'s and to the two
+# entries in that script's LANES table.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e and not local_guest" \
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:
@@ -1543,6 +1557,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Test census (no suite has quietly stopped running)…"
+	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"
 	@python3 scripts/plan_e2e_shards.py --verify
 	@echo "→ Product scenario traceability…"

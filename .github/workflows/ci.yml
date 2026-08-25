@@ -150,6 +150,8 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_ci_job_results.py'
+              - 'scripts/check_pytest_census.py'
               - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
@@ -174,8 +176,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # This lane runs `-m "not e2e"`, which includes the integration tests, and
-      # those skip themselves when no database answers. Without this service 57
+      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
+      # and those skip themselves when no database answers. Without this service 57
       # of them did -- the whole workspace integration suite: the sandbox state
       # machine, the repository, and every one of the sweeper's decisions about
       # what it may destroy. They passed locally and were absent here, which is
@@ -276,6 +278,12 @@ jobs:
       # exists to prevent -- growth nobody decided on.
       - name: Import budget
         run: make lint-import-budget
+      # Counts what collection actually found, against a committed floor. Two
+      # suites had already gone quiet without anything saying so: a directory
+      # missing from `testpaths`, and twenty environment-gated tests collected
+      # into a lane that reports "passed" and skipping every one of them.
+      - name: Test census (no suite has quietly stopped running)
+        run: python3 ../scripts/check_pytest_census.py
       # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
       # from eroding back into ~50 duplicated hand-rolled poll loops.
       - name: e2e wait patterns (no new hand-rolled poll loops)
@@ -1077,4 +1085,17 @@ jobs:
         run: |
           echo "::error::One or more required CI suites failed or were cancelled."
           exit 1
+      # The step above cannot see the third way this check goes green: a job
+      # that skipped although its filter said to run it. `skipped` is not
+      # `failure`, so a suite that stopped running reads exactly like a suite
+      # that was correctly unaffected. This compares each job's result against
+      # the filter it actually gates on, read back out of this file.
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: No gated job skipped while its filter was live
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."
