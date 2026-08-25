@@ -103,6 +103,14 @@ class Reachable:
                 held.append(thread)
         return held
 
+    #: How often to re-scan for the conversation. Slow on purpose: one scan is
+    #: a page walk plus a message read per conversation, and on a pod that
+    #: stands between runs that is not a cheap question. Asked twice a second —
+    #: which is what the default waiter did — it is hundreds of requests to
+    #: learn the same thing, and the deployment feels it more than the scenario
+    #: gains from it.
+    LOOK_AGAIN_EVERY = 6.0
+
     async def waits_for_a_conversation_holding(self, *said: str) -> Any:
         """The one conversation carrying all of `said`, once it is there.
 
@@ -112,13 +120,21 @@ class Reachable:
         went, and asking directly removes a dependence on reply timing that made
         the scenario fail for a reason it was not about.
         """
-        from harness.waiting import eventually
+        import asyncio
 
-        held = await eventually(
-            lambda: self.conversations_holding(*said),
-            bool,
-            describe=f"a conversation holding {' and '.join(repr(t) for t in said)}",
-            timeout=180.0,
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 180.0
+        held: list[Any] = []
+        while True:
+            held = await self.conversations_holding(*said)
+            if held or loop.time() >= deadline:
+                break
+            await asyncio.sleep(self.LOOK_AGAIN_EVERY)
+        assert held, (
+            f"nothing in {self.pod.get('name')!r} holds "
+            f"{' and '.join(repr(t) for t in said)} after 180s. The message was "
+            f"delivered and the surface accepted it; either it opened no "
+            f"conversation or it opened one this could not see."
         )
         assert len(held) == 1, (
             f"{len(held)} conversations hold these messages; they belong in one, "
