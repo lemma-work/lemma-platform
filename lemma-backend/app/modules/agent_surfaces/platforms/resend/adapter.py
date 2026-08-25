@@ -14,6 +14,9 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.email_one_reply import (
+    EmailOneReplyMixin,
+)
 from app.modules.agent_surfaces.platforms.common import provider_failure
 from app.modules.agent_surfaces.platforms.resend.parser import (
     ResendInboundParser,
@@ -24,7 +27,7 @@ from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformSe
 logger = get_logger(__name__)
 
 
-class ResendSurfaceAdapter(BaseSurfaceAdapter):
+class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
     platform = "RESEND"
 
     def __init__(self) -> None:

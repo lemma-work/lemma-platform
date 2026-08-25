@@ -1470,7 +1470,7 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -1503,7 +1503,7 @@ async def test_send_agent_message_strips_thinking_tokens_before_delivery():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -2103,7 +2103,7 @@ async def test_send_to_member_reuses_existing_thread():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.pod_membership_port = SimpleNamespace(
@@ -2154,7 +2154,7 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
             chat_id="latest-chat", message_id="latest-message"
         ).model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter, surfaces=[surface], existing_link=older_link
     )
@@ -2223,7 +2223,7 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         system_link.conversation_id: system_link,
         custom_link.conversation_id: custom_link,
     }
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[system_surface, custom_surface],

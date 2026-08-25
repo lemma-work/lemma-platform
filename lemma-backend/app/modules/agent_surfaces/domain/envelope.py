@@ -71,6 +71,15 @@ class EnvelopeFile(BaseModel):
     mime_type: str
     caption: str | None = None
     fallback: SurfaceDisplayRenderPlan | None = None
+    # The pod path these bytes came from, when there was one. Provenance, and
+    # the one thing a platform that attaches by *URL* rather than by bytes
+    # needs -- Composio's mail actions download a signed link server-side, so
+    # they cannot use `content` at all.
+    source_path: str | None = None
+    # A signed link to the same bytes, for a platform that attaches by URL
+    # instead of by content. Resolved by the caller that has the pod, because
+    # signing needs pod services an adapter has no way to reach.
+    signed_url: str | None = None
 
 
 class EnvelopeVoice(BaseModel):

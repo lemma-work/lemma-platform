@@ -63,6 +63,36 @@ class EnvelopeDeliveryMixin:
             raise AgentSurfacePlatformError(
                 self.platform, "refusing to deliver an empty envelope."
             )
+        if self._delivers_one_reply():
+            # One send, so the parts merge rather than degrade one at a time:
+            # an attachment on an email is part of the reply, not a second
+            # message that could fall back to a line of text.
+            return await self._render_one(
+                credentials=credentials,
+                event=event,
+                envelope=envelope,
+                metadata=metadata,
+            )
+        return await self._deliver_each_part(
+            credentials=credentials,
+            event=event,
+            envelope=envelope,
+            metadata=metadata,
+        )
+
+    async def _deliver_each_part(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any] | None,
+    ) -> DeliveryReceipt:
+        """Walk the parts, each degrading on its own. The MANY-cardinality path.
+
+        Order is the order a person reads: narration, then what it refers to,
+        then the thing being asked.
+        """
         parts: dict[str, PartDelivery] = {}
         if envelope.text and envelope.text.strip():
             parts["text"] = await self._deliver_text(
@@ -114,6 +144,40 @@ class EnvelopeDeliveryMixin:
                 f"nothing in this envelope reached the person ({sorted(parts)}).",
             )
         return receipt
+
+    def _delivers_one_reply(self) -> bool:
+        from app.modules.agent_surfaces.platforms.platform_capabilities import (
+            DeliveryCardinality,
+            get_platform_capabilities,
+        )
+
+        capabilities = get_platform_capabilities(getattr(self, "platform", None))
+        return bool(
+            capabilities
+            and capabilities.delivery_cardinality is DeliveryCardinality.ONE
+        )
+
+    async def _render_one(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any] | None,
+    ) -> DeliveryReceipt:
+        """Put a whole envelope into a single send.
+
+        Overridden by platforms that get one reply. The default walks the parts
+        anyway, so declaring ONE without implementing this degrades to sending
+        several things rather than to sending nothing -- wrong, but visibly
+        wrong, which is the better of the two failures.
+        """
+        return await self._deliver_each_part(
+            credentials=credentials,
+            event=event,
+            envelope=envelope,
+            metadata=metadata,
+        )
 
     async def _send_text_fallback(
         self,

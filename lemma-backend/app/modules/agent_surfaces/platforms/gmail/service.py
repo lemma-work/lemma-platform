@@ -1,32 +1,17 @@
 from __future__ import annotations
 
 import base64
-import mimetypes
 from email.message import EmailMessage
 from typing import Any
 
 import httpx
 
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
-from pydantic_ai.tools import RunContext
 
-from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
-)
-from app.modules.agent_surfaces.domain.surface_event_metadata import (
-    GmailSurfaceEventMetadata,
-)
-from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
-from app.modules.agent_surfaces.platforms.common import text_or_none
-from app.modules.agent_surfaces.platforms.email_attachments import (
-    append_attachment_links,
-    decode_base64_bytes,
-    resolve_outbound_email_attachment_urls,
-    outbound_paths_for_reply,
-    resolve_outbound_email_attachments,
 )
 from app.modules.agent_surfaces.platforms.email_render import (
     coerce_display_resource_plans,
@@ -35,13 +20,7 @@ from app.modules.agent_surfaces.platforms.email_render import (
 from app.modules.agent_surfaces.platforms.email_text import reply_subject
 from app.modules.agent_surfaces.platforms.composio_email import (
     execute_composio_operation,
-    fetch_composio_file_bytes,
     is_composio_credentials,
-)
-from app.modules.agent_surfaces.platforms.email_models import (
-    GmailFileAttachment,
-    GmailReplyEmailParams,
-    GmailReplyEmailResult,
 )
 
 _GMAIL_API_BASE = "https://gmail.googleapis.com"
@@ -64,6 +43,30 @@ class GmailPlatformService:
             display_name=event.sender_display_name,
         )
 
+    @staticmethod
+    def _reply_coordinates(
+        event: ParsedInboundSurfaceEvent,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Where this reply goes and what thread it joins.
+
+        One reader, used by every send on this surface. There used to be two --
+        this one off ``event.reply_target`` and the reply tool's off the
+        conversation's stored metadata -- and when they disagreed the reply
+        threaded somewhere else, so the recipient's answer arrived as a brand
+        new conversation with no history and nothing logged.
+        """
+        target = event.reply_target
+        return {
+            "recipient_email": str(target.get("recipient_email") or "").strip(),
+            "subject": str(
+                target.get("subject") or (metadata or {}).get("subject") or ""
+            ).strip(),
+            "thread_id": str(target.get("thread_id") or "").strip() or None,
+            "in_reply_to": str(target.get("in_reply_to") or "").strip() or None,
+            "references": [str(ref) for ref in list(target.get("references") or []) if ref],
+        }
+
     async def send_message(
         self,
         event: ParsedInboundSurfaceEvent,
@@ -71,29 +74,13 @@ class GmailPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         await self._send_email(
-            recipient_email=str(
-                event.reply_target.get("recipient_email") or ""
-            ).strip(),
-            subject=str(
-                event.reply_target.get("subject")
-                or (metadata or {}).get("subject")
-                or ""
-            ).strip(),
-            thread_id=str(event.reply_target.get("thread_id") or "").strip() or None,
-            in_reply_to=(
-                str(event.reply_target.get("in_reply_to") or "").strip() or None
-            ),
-            references=[
-                str(ref)
-                for ref in list(event.reply_target.get("references") or [])
-                if ref
-            ],
+            **self._reply_coordinates(event, metadata),
             content=message,
             content_type=str((metadata or {}).get("content_type") or "markdown"),
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),
-            attachments=[],
+            attachments=list((metadata or {}).get("attachments") or []),
         )
 
     async def _render_resource(
@@ -132,160 +119,6 @@ class GmailPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         return None
-
-    async def reply_email(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: GmailReplyEmailParams,
-    ) -> GmailReplyEmailResult:
-        metadata = self._gmail_metadata(ctx)
-        if metadata is None:
-            return GmailReplyEmailResult(
-                success=False,
-                error="Gmail reply tools are only available in Gmail surface conversations.",
-            )
-        if not metadata.reply_to_email:
-            return GmailReplyEmailResult(
-                success=False,
-                error="The current Gmail message is missing a reply recipient email.",
-            )
-
-        content, attachments, attachment_url = await self._resolve_reply_attachments(
-            ctx, request
-        )
-        try:
-            response = await self._send_email(
-                recipient_email=metadata.reply_to_email,
-                subject=request.subject or metadata.subject or "",
-                thread_id=metadata.thread_id,
-                in_reply_to=metadata.in_reply_to,
-                references=list(metadata.references),
-                content=content,
-                content_type=request.content_type,
-                attachments=attachments,
-                attachment_url=attachment_url,
-            )
-        except Exception as exc:
-            return GmailReplyEmailResult(
-                success=False,
-                error=f"Gmail reply failed: {exc}",
-            )
-
-        return GmailReplyEmailResult(
-            success=True,
-            message="Sent Gmail reply on the current email thread.",
-            thread_id=metadata.thread_id,
-            message_id=text_or_none((response or {}).get("id")),
-            attachment_count=(1 if attachment_url else 0) + len(attachments),
-        )
-
-    async def _resolve_reply_attachments(
-        self,
-        ctx: RunContext[ConversationContext],
-        request: GmailReplyEmailParams,
-    ) -> tuple[str, list[tuple[str, bytes, str]], str | None]:
-        """The body and attachments to send, by how this account is connected.
-
-        Composio's Gmail action attaches a single file passed as a URL, so
-        datastore paths become signed URLs: the first is attached natively and
-        the rest are appended as links. The native path can carry bytes, so
-        files at or below the inline cap go inline and larger ones become
-        download links.
-        """
-        if not self._is_composio:
-            attachments, links = await resolve_outbound_email_attachments(
-                ctx.deps,
-                outbound_paths_for_reply(ctx.deps, request.attachment_paths),
-                inline_cap_bytes=email_inline_cap("GMAIL"),
-            )
-            return append_attachment_links(request.content, links), attachments, None
-
-        url_attachments, unresolved = await resolve_outbound_email_attachment_urls(
-            ctx.deps, request.attachment_paths
-        )
-        content = append_attachment_links(request.content, url_attachments[1:])
-        if unresolved:
-            note = f"Could not attach: {', '.join(unresolved)}"
-            content = f"{content}\n\n{note}" if content else note
-        return content, [], (url_attachments[0][1] if url_attachments else None)
-
-    def _gmail_metadata(
-        self,
-        ctx: RunContext[ConversationContext],
-    ) -> GmailSurfaceEventMetadata | None:
-        metadata = ctx.deps.surface_metadata
-        if isinstance(metadata, GmailSurfaceEventMetadata):
-            return metadata
-        return None
-
-    async def _resolve_attachment_bytes(
-        self,
-        attachment: GmailFileAttachment,
-    ) -> bytes:
-        if attachment.content_bytes_base64:
-            return decode_base64_bytes(attachment.content_bytes_base64, urlsafe=True)
-        if not attachment.id or not attachment.message_id:
-            raise ValueError(
-                "The Gmail attachment payload did not include inline data or a retrievable attachment id."
-            )
-
-        if self._is_composio:
-            data = await execute_composio_operation(
-                connector_id=_GMAIL_APP_ID,
-                operation_name="GMAIL_GET_ATTACHMENT",
-                payload={
-                    "message_id": attachment.message_id,
-                    "attachment_id": attachment.id,
-                    "file_name": attachment.name or "gmail_attachment",
-                },
-                credentials=self.credentials,
-            )
-            return await fetch_composio_file_bytes(data)
-
-        url = (
-            f"{self._api_base.rstrip('/')}/gmail/v1/users/me/messages/"
-            f"{attachment.message_id}/attachments/{attachment.id}"
-        )
-        # Tenant-supplied base (sovereign-cloud endpoints are real), so the
-        # target is checked before the token is sent.
-        await assert_safe_api_base(self._api_base, platform="Gmail")
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-
-        data = str((payload or {}).get("data") or "").strip()
-        if not data:
-            raise ValueError(
-                "Gmail attachment response did not contain attachment data."
-            )
-        return decode_base64_bytes(data, urlsafe=True)
-
-    async def download_attachment_bytes(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        attachment: dict[str, Any],
-    ) -> tuple[bytes, str, str] | None:
-        """Download a single inbound Gmail attachment (no RunContext)."""
-        del event
-        try:
-            att = GmailFileAttachment.model_validate(attachment)
-        except Exception:
-            return None
-        if not att.content_bytes_base64 and not (att.id and att.message_id):
-            return None
-        content = await self._resolve_attachment_bytes(att)
-        file_name = (att.name or "").strip() or "gmail_attachment"
-        mime_type = (
-            (att.mime_type or "").strip()
-            or mimetypes.guess_type(file_name)[0]
-            or "application/octet-stream"
-        )
-        return content, file_name, mime_type
 
     async def _send_email(
         self,

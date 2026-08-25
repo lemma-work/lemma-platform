@@ -15,24 +15,13 @@ from typing import Any
 import httpx
 
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
-from pydantic_ai.tools import RunContext
 
-from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
-)
-from app.modules.agent_surfaces.domain.surface_event_metadata import (
-    ResendSurfaceEventMetadata,
-)
-from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
-from app.modules.agent_surfaces.platforms.email_attachments import (
-    outbound_paths_for_reply,
-    append_attachment_links,
-    resolve_outbound_email_attachments,
 )
 from app.modules.agent_surfaces.platforms.email_render import (
     coerce_display_resource_plans,
@@ -42,10 +31,6 @@ from app.modules.agent_surfaces.platforms.email_sender_identity import (
     sender_display_name,
 )
 from app.modules.agent_surfaces.platforms.email_text import reply_subject
-from app.modules.agent_surfaces.platforms.email_models import (
-    ResendReplyEmailParams,
-    ResendReplyEmailResult,
-)
 
 _RESEND_API_BASE = "https://api.resend.com"
 
@@ -99,7 +84,7 @@ class ResendPlatformService:
             references=[str(r) for r in (event.reply_target.get("references") or [])],
             content=message,
             content_type="markdown",
-            attachments=[],
+            attachments=list((metadata or {}).get("attachments") or []),
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),
@@ -289,57 +274,6 @@ class ResendPlatformService:
     ) -> None:
         # Email has no typing indicator.
         return None
-
-    async def reply_email(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: ResendReplyEmailParams,
-    ) -> ResendReplyEmailResult:
-        metadata = ctx.deps.surface_metadata
-        if not isinstance(metadata, ResendSurfaceEventMetadata):
-            return ResendReplyEmailResult(
-                success=False,
-                error="Email reply tools are only available in email surface conversations.",
-            )
-        if not metadata.reply_to_email:
-            return ResendReplyEmailResult(
-                success=False,
-                error="The current email is missing a reply recipient address.",
-            )
-
-        attachments, attachment_links = await resolve_outbound_email_attachments(
-            ctx.deps,
-            outbound_paths_for_reply(ctx.deps, request.attachment_paths),
-            inline_cap_bytes=email_inline_cap("RESEND"),
-        )
-        content = append_attachment_links(request.content, attachment_links)
-
-        try:
-            response = await self._send_email(
-                recipient_email=metadata.reply_to_email,
-                subject=request.subject or metadata.subject or "",
-                in_reply_to=metadata.in_reply_to,
-                references=list(metadata.references),
-                content=content,
-                content_type=request.content_type,
-                attachments=attachments,
-                from_name=self._sender_name(
-                    {"agent_display_name": ctx.deps.agent_display_name}
-                ),
-            )
-        except Exception as exc:
-            return ResendReplyEmailResult(
-                success=False, error=f"Email reply failed: {exc}"
-            )
-
-        return ResendReplyEmailResult(
-            success=True,
-            message="Sent the email reply on the current thread.",
-            thread_id=metadata.thread_id,
-            message_id=str((response or {}).get("id") or "").strip() or None,
-            attachment_count=len(attachments),
-        )
 
     async def _send_email(
         self,

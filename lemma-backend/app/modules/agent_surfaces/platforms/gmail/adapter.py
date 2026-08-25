@@ -5,13 +5,16 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.email_one_reply import (
+    EmailOneReplyMixin,
+)
 from app.modules.agent_surfaces.platforms.gmail.parser import GmailMessageParser
 from app.modules.agent_surfaces.platforms.gmail.service import (
     GmailPlatformService,
 )
 
 
-class ComposioGmailSurfaceAdapter(BaseSurfaceAdapter):
+class ComposioGmailSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
     platform = "GMAIL"
 
     def __init__(self) -> None:

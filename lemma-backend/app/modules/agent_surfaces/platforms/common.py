@@ -216,14 +216,12 @@ def attachment_tool_hint(platform: str) -> str | None:
     if normalized == "GMAIL":
         return (
             "Use gmail_download_attachment with the attachment_name or attachment_id "
-            "if you need the file in the workspace. Use gmail_reply_email to send a "
-            "formatted reply with optional workspace attachments."
+            "if you need the file in the workspace."
         )
     if normalized == "OUTLOOK":
         return (
             "Use outlook_download_attachment with the attachment_name or attachment_id "
-            "if you need the file in the workspace. Use outlook_reply_email to send a "
-            "formatted reply with optional workspace attachments."
+            "if you need the file in the workspace."
         )
     return None
 
@@ -254,21 +252,17 @@ def channel_author_label(
     return f"{who} (other participant)"
 
 
-_EMAIL_REPLY_TOOLS = {
-    "GMAIL": "gmail_reply_email",
-    "OUTLOOK": "outlook_reply_email",
-}
+_EMAIL_PLATFORMS = {"GMAIL", "OUTLOOK", "RESEND"}
 
 
 def email_reply_instruction(platform: str) -> str | None:
-    tool_name = _EMAIL_REPLY_TOOLS.get(str(platform or "").upper())
-    if not tool_name:
+    if str(platform or "").upper() not in _EMAIL_PLATFORMS:
         return None
     return (
         "This message arrived by email; the sender only sees emails, not this "
-        f"conversation. When your work is complete, call {tool_name} exactly once "
-        "with your full reply (markdown is rendered) and any workspace files to "
-        "attach. Do not send partial or progress updates."
+        "conversation, and they receive exactly one. Everything you write this "
+        "turn is composed into a single reply and sent when you finish. Do not "
+        "narrate progress -- nothing before the end is sent separately."
     )
 
 

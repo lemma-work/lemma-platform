@@ -6,21 +6,11 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent_surfaces.domain.surface_event_metadata import (
-    GmailSurfaceEventMetadata,
-    OutlookSurfaceEventMetadata,
-)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.email_render import render_email_content
-from app.modules.agent_surfaces.platforms.gmail.tools import build_gmail_surface_toolset
-from app.modules.agent_surfaces.platforms.outlook.tools import (
-    build_outlook_surface_toolset,
-)
-from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
 class _FakeHttpResponse:
@@ -147,136 +137,127 @@ def test_render_email_content_adds_display_resource_html_card():
     assert "https://app.example.test" in html
 
 
-@pytest.mark.asyncio
-async def test_gmail_reply_email_sends_html_and_attachment(monkeypatch):
-    toolset = build_gmail_surface_toolset(
-        credentials={
-            "access_token": "gmail-token",
-            "api_base_url": "https://gmail.example.test",
-        }
+def _email_event(platform: str, **reply_target):
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
     )
-    tool = toolset.tools["gmail_reply_email"]
 
-    async def fake_read_file(self, path: str):
-        assert path == "notes/report.txt"
-        return "hello world"
+    return ParsedInboundSurfaceEvent(
+        platform=platform,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id=str(reply_target.get("thread_id") or "thread-1"),
+        message_text="Need review",
+        reply_target=dict(reply_target),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_gmail_envelope_is_sent_as_one_message_with_its_attachment(monkeypatch):
+    """The reply tool is gone; the adapter folds the envelope into one send."""
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeFile,
+        SurfaceEnvelope,
+    )
+    from app.modules.agent_surfaces.platforms.gmail.adapter import (
+        ComposioGmailSurfaceAdapter,
+    )
+
+    sent: list[dict] = []
 
     async def fake_post(self, url: str, **kwargs):
         assert url.endswith("/gmail/v1/users/me/messages/send")
-        payload = kwargs["json"]
-        assert payload["threadId"] == "gmail-thread-1"
+        sent.append(kwargs["json"])
         return _FakeHttpResponse(json_data={"id": "gmail-sent-1"})
 
-    monkeypatch.setattr(WorkspaceFileManager, "read_file", fake_read_file)
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
-    ctx = SimpleNamespace(
-        deps=ConversationContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="GMAIL",
-            external_channel_id="assistant@gmail.test",
-            external_thread_id="gmail-thread-1",
-            surface_metadata=GmailSurfaceEventMetadata(
-                mailbox_email="assistant@gmail.test",
-                subject="Need review",
-                thread_id="gmail-thread-1",
-                message_id="gmail-message-1",
-                reply_to_email="rahul@example.com",
-                references=["<gmail-message-1@example.com>"],
-                in_reply_to="<gmail-message-1@example.com>",
-            ),
-        )
-    )
-    request = SimpleNamespace(
-        content="## Done\nPlease see the attached report.",
-        content_type="markdown",
-        attachment_paths=["notes/report.txt"],
-        subject=None,
+    receipt = await ComposioGmailSurfaceAdapter().deliver(
+        credentials={
+            "access_token": "gmail-token",
+            "api_base_url": "https://gmail.example.test",
+        },
+        event=_email_event(
+            "GMAIL",
+            recipient_email="rahul@example.com",
+            subject="Re: Need review",
+            thread_id="gmail-thread-1",
+            in_reply_to="<gmail-message-1@example.com>",
+            references=["<gmail-message-1@example.com>"],
+        ),
+        envelope=SurfaceEnvelope(
+            text="## Done\nPlease see the attached report.",
+            files=[
+                EnvelopeFile(
+                    file_name="report.txt",
+                    content=b"hello world",
+                    mime_type="text/plain",
+                )
+            ],
+        ),
     )
 
-    response = await tool.function(ctx, request)
-
-    assert response.success is True
-    assert response.message_id == "gmail-sent-1"
-    assert response.attachment_count == 1
+    assert len(sent) == 1, "one envelope is one email, attachment included"
+    assert sent[0]["threadId"] == "gmail-thread-1"
+    assert receipt.delivered
 
 
 @pytest.mark.asyncio
-async def test_outlook_reply_email_sends_graph_file_attachments(monkeypatch):
-    toolset = build_outlook_surface_toolset(
-        credentials={
-            "access_token": "outlook-token",
-            "api_base_url": "https://graph.example.test",
-        }
+async def test_an_outlook_envelope_with_a_file_goes_through_a_draft(monkeypatch):
+    """Graph refuses to attach bytes to a direct reply, so the send path drafts.
+
+    send_message used to reach past the method that knew this, which is how the
+    path carrying files and the path carrying the answer came to differ.
+    """
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeFile,
+        SurfaceEnvelope,
     )
-    tool = toolset.tools["outlook_reply_email"]
+    from app.modules.agent_surfaces.platforms.outlook.adapter import (
+        ComposioOutlookSurfaceAdapter,
+    )
 
-    async def fake_read_file(self, path: str):
-        assert path == "docs/brief.txt"
-        return "brief body"
-
-    calls: list[tuple[str, dict | None]] = []
+    calls: list[str] = []
 
     async def fake_post(self, url: str, **kwargs):
-        calls.append((url, kwargs.get("json")))
-        if url.endswith("/v1.0/me/messages/graph-message-1/createReply"):
+        calls.append(url)
+        if url.endswith("/createReply"):
             return _FakeHttpResponse(json_data={"id": "draft-1"})
-        if url.endswith("/v1.0/me/messages/draft-1/attachments"):
-            payload = kwargs["json"]
-            assert payload["@odata.type"] == "#microsoft.graph.fileAttachment"
-            assert payload["name"] == "brief.txt"
+        if url.endswith("/attachments"):
+            assert kwargs["json"]["name"] == "brief.txt"
             return _FakeHttpResponse(json_data={"id": "attachment-1"})
-        if url.endswith("/v1.0/me/messages/draft-1/send"):
-            return _FakeHttpResponse()
-        raise AssertionError(f"Unexpected POST url: {url}")
-
-    async def fake_patch(self, url: str, **kwargs):
-        assert url.endswith("/v1.0/me/messages/draft-1")
-        payload = kwargs["json"]
-        assert payload["subject"] == "Re: Need review"
-        assert payload["body"]["contentType"] == "HTML"
-        assert "Done. See attachment." in payload["body"]["content"]
         return _FakeHttpResponse()
 
-    monkeypatch.setattr(WorkspaceFileManager, "read_file", fake_read_file)
+    async def fake_patch(self, url: str, **kwargs):
+        calls.append(url)
+        return _FakeHttpResponse()
+
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     monkeypatch.setattr(httpx.AsyncClient, "patch", fake_patch)
 
-    ctx = SimpleNamespace(
-        deps=ConversationContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="OUTLOOK",
-            external_channel_id="assistant@outlook.test",
-            external_thread_id="outlook-thread-1",
-            surface_metadata=OutlookSurfaceEventMetadata(
-                mailbox_email="assistant@outlook.test",
-                subject="Need review",
-                thread_id="outlook-thread-1",
-                message_id="graph-message-1",
-                internet_message_id="<outlook-message-1@example.com>",
-                reply_to_email="rahul@example.com",
-                references=["<outlook-message-1@example.com>"],
-                in_reply_to="<outlook-message-1@example.com>",
-            ),
-        )
-    )
-    request = SimpleNamespace(
-        content="<p>Done. See attachment.</p>",
-        content_type="html",
-        attachment_paths=["docs/brief.txt"],
-        subject=None,
+    await ComposioOutlookSurfaceAdapter().deliver(
+        credentials={
+            "access_token": "outlook-token",
+            "api_base_url": "https://graph.example.test",
+        },
+        event=_email_event(
+            "OUTLOOK",
+            recipient_email="rahul@example.com",
+            subject="Re: Need review",
+            message_id="graph-message-1",
+        ),
+        envelope=SurfaceEnvelope(
+            text="Done. See attachment.",
+            files=[
+                EnvelopeFile(
+                    file_name="brief.txt",
+                    content=b"brief body",
+                    mime_type="text/plain",
+                )
+            ],
+        ),
     )
 
-    response = await tool.function(ctx, request)
-
-    assert response.success is True
-    assert response.attachment_count == 1
-    assert [url for url, _ in calls] == [
-        "https://graph.example.test/v1.0/me/messages/graph-message-1/createReply",
-        "https://graph.example.test/v1.0/me/messages/draft-1/attachments",
-        "https://graph.example.test/v1.0/me/messages/draft-1/send",
-    ]
+    assert any(url.endswith("/createReply") for url in calls)
+    assert any(url.endswith("/attachments") for url in calls)
+    assert any(url.endswith("/send") for url in calls)

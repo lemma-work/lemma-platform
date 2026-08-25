@@ -65,17 +65,20 @@ def test_unknown_platform_guidance_is_empty():
     assert platform_agent_guidance(None) == ""
 
 
-def test_email_platforms_carry_reply_tool():
-    assert get_platform_capabilities("GMAIL").reply_tool == "gmail_reply_email"
-    assert get_platform_capabilities("OUTLOOK").reply_tool == "outlook_reply_email"
-    assert get_platform_capabilities("SLACK").reply_tool is None
+def test_no_platform_names_a_reply_tool_any_more():
+    """Deleted with the tool. The observer sends the one reply on every email
+    surface now, so there is nothing for the prompt to name."""
+    for platform in PLATFORM_CAPABILITIES:
+        assert not hasattr(get_platform_capabilities(platform), "reply_tool")
 
 
 def test_email_guidance_routes_everything_through_the_one_reply():
     """Email delivers once, so the prompt has to describe one reply, not a chat."""
     text = platform_agent_guidance("GMAIL")
-    assert "gmail_reply_email" in text
-    assert "attachment_paths" in text
+    assert "exactly one" in text
+    assert "sent when you finish" in text
+    # No tool to call: writing the reply is sending it.
+    assert "reply_email" not in text
     # The chat delivery section belongs to platforms that can send more than once.
     assert "## Delivering things" not in text
 

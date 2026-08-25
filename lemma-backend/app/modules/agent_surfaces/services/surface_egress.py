@@ -35,6 +35,9 @@ from app.modules.agent_surfaces.domain.envelope import (
     EnvelopeVoice,
     SurfaceEnvelope,
 )
+from app.modules.agent_surfaces.services.one_reply_attachments import (
+    files_held_for_one_reply,
+)
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -62,8 +65,6 @@ from app.modules.agent_surfaces.services.surface_egress_target import (
 )
 
 logger = get_logger(__name__)
-
-# Recent thread/channel messages fetched per run for group-mention continuity.
 
 
 def _approval_plan(
@@ -194,16 +195,20 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return False
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await target.adapter.send_message(
-                credentials=target.credentials,
-                event=target.event,
-                message=clean_message,
-                metadata=message_metadata,
-            )
-            return True
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(
+                text=clean_message,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                ),
+            ),
+            metadata=await self._egress_metadata_with_agent_name(target, metadata),
+            conversation_id=conversation_id,
+        )
 
     async def send_display_resource_for_conversation(
         self,

@@ -90,9 +90,6 @@ class PlatformCapabilities:
     )
     formatting_style: str  # one-line human guidance, used verbatim in the fragment
     soft_char_limit: int  # rough per-message length budget for guidance
-    reply_tool: str | None = (
-        None  # email reply tool name (gmail/outlook); None for chat
-    )
     # Can the pod address someone who has never written to us first? Data, not a
     # rule in prose that every new call site has to remember. Chat bots cannot:
     # a Slack/Telegram/WhatsApp bot needs a prior interaction before it may DM.
@@ -317,7 +314,6 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="html_rendered",
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
-        reply_tool="gmail_reply_email",
         can_cold_open=True,
     ),
     "OUTLOOK": PlatformCapabilities(
@@ -330,7 +326,6 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="html_rendered",
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
-        reply_tool="outlook_reply_email",
         can_cold_open=True,
     ),
     "RESEND": PlatformCapabilities(
@@ -343,7 +338,6 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="html_rendered",
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
-        reply_tool="resend_reply_email",
         can_cold_open=True,
         # One API key, a catch-all domain, and a unique address per surface.
         # Sharing the key across pods is the point, not a conflict.
@@ -395,14 +389,13 @@ def platform_agent_guidance(platform: str | None) -> str:
         # display_resource. File paths attach inline or become download links.
         lines.append(
             "## Sending your reply\n"
-            f"The recipient only receives email. When your work is complete, call "
-            f"`{caps.reply_tool}` EXACTLY ONCE with your full reply in "
-            "`content` (markdown is rendered to HTML) and any workspace file paths "
-            "in `attachment_paths` — files up to "
-            f"{caps.inline_mb_cap} MB attach inline, larger files become "
-            "download links automatically. Do not send partial or progress "
-            "messages. A file you showed with `display_resource` is attached to "
-            "that reply automatically — you do not need to list it again."
+            "The recipient only receives email, and they receive exactly one: "
+            "everything you write this turn is composed into a single reply and "
+            "sent when you finish. Just write it. Markdown is rendered to HTML. "
+            "Show a file with `display_resource` (`type=FILE`, a pod path) and it "
+            f"is attached to that reply — up to {caps.inline_mb_cap} MB inline, "
+            "larger files become download links automatically. Do not narrate "
+            "progress; nothing you write before the end is sent separately."
         )
         lines.append(
             "## Email cannot wait for an answer\n"

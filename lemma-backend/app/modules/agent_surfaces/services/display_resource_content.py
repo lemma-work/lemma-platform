@@ -203,6 +203,7 @@ async def resolve_pod_file_parts(
             content=content,
             mime_type=entity.mime_type or "application/octet-stream",
             caption=caption,
+            source_path=path,
         )
     )
     return PodFileParts(

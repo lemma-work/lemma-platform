@@ -19,13 +19,6 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     OutlookSurfaceEventMetadata,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import email_inline_cap
-from app.modules.agent_surfaces.platforms.email_attachments import (
-    append_attachment_links,
-    resolve_outbound_email_attachment_urls,
-    outbound_paths_for_reply,
-    resolve_outbound_email_attachments,
-)
 from app.modules.agent_surfaces.platforms.email_render import (
     coerce_display_resource_plans,
     render_email_content,
@@ -33,8 +26,6 @@ from app.modules.agent_surfaces.platforms.email_render import (
 from app.modules.agent_surfaces.platforms.email_text import reply_subject
 from app.modules.agent_surfaces.platforms.email_models import (
     OutlookFileAttachment,
-    OutlookReplyEmailParams,
-    OutlookReplyEmailResult,
 )
 from app.modules.agent_surfaces.platforms.composio_email import (
     execute_composio_operation,
@@ -92,10 +83,21 @@ class OutlookPlatformService:
             raise ValueError(
                 "Outlook reply could not determine the provider message id."
             )
-        await self._reply_to_message(
+        # `_deliver_reply`, not `_reply_to_message`: it is the one that knows
+        # Graph refuses to attach bytes to a direct reply and has to go through
+        # a draft. Reaching past it is how the send path that carried files and
+        # the send path that carried the answer came to be different code.
+        await self._deliver_reply(
             message_id=provider_message_id,
             content=message,
             content_type=str((metadata or {}).get("content_type") or "markdown"),
+            subject=str(
+                event.reply_target.get("subject")
+                or (metadata or {}).get("subject")
+                or ""
+            ).strip(),
+            attachments=list((metadata or {}).get("attachments") or []),
+            attachment_url=(metadata or {}).get("attachment_url"),
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),
@@ -159,97 +161,6 @@ class OutlookPlatformService:
         }
         return enriched
 
-    async def reply_email(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: OutlookReplyEmailParams,
-    ) -> OutlookReplyEmailResult:
-        metadata = self._outlook_metadata(ctx)
-        if metadata is None:
-            return OutlookReplyEmailResult(
-                success=False,
-                error="Outlook reply tools are only available in Outlook surface conversations.",
-            )
-        if not metadata.reply_to_email:
-            return OutlookReplyEmailResult(
-                success=False,
-                error="The current Outlook message is missing a reply recipient email.",
-            )
-        message_id = str(metadata.message_id or "").strip()
-        if not message_id:
-            return OutlookReplyEmailResult(
-                success=False,
-                error="The current Outlook message is missing a provider message id.",
-            )
-
-        content, attachments, attachment_url = await self._resolve_reply_attachments(
-            ctx, request
-        )
-        try:
-            await self._deliver_reply(
-                message_id=message_id,
-                content=content,
-                content_type=request.content_type,
-                subject=request.subject or metadata.subject or "",
-                attachments=attachments,
-                attachment_url=attachment_url,
-            )
-        except Exception as exc:
-            return OutlookReplyEmailResult(
-                success=False,
-                error=f"Outlook reply failed: {exc}",
-            )
-
-        return OutlookReplyEmailResult(
-            success=True,
-            message="Sent Outlook reply on the current email thread.",
-            thread_id=metadata.thread_id,
-            message_id=None,
-            attachment_count=(1 if attachment_url else 0) + len(attachments),
-        )
-
-    async def _resolve_reply_attachments(
-        self,
-        ctx: RunContext[ConversationContext],
-        request: OutlookReplyEmailParams,
-    ) -> tuple[str, list[dict[str, Any]], str | None]:
-        """The body and attachments to send, by how this account is connected.
-
-        Composio's Outlook action attaches a single file passed as a URL, so
-        datastore paths become signed URLs: the first is attached natively and
-        the rest are appended as links. The Graph path can carry bytes, so files
-        within the inline cap ride along and larger ones become download links.
-        """
-        if not self._is_composio:
-            inline_files, links = await resolve_outbound_email_attachments(
-                ctx.deps,
-                outbound_paths_for_reply(ctx.deps, request.attachment_paths),
-                inline_cap_bytes=email_inline_cap("OUTLOOK"),
-            )
-            return (
-                append_attachment_links(request.content, links),
-                [
-                    {
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": name,
-                        "contentType": mime,
-                        "contentBytes": base64.b64encode(file_bytes).decode("ascii"),
-                    }
-                    for name, file_bytes, mime in inline_files
-                ],
-                None,
-            )
-
-        url_attachments, unresolved = await resolve_outbound_email_attachment_urls(
-            ctx.deps, request.attachment_paths
-        )
-        content = append_attachment_links(request.content, url_attachments[1:])
-        if unresolved:
-            note = f"Could not attach: {', '.join(unresolved)}"
-            content = f"{content}\n\n{note}" if content else note
-        return content, [], (url_attachments[0][1] if url_attachments else None)
-
     async def _deliver_reply(
         self,
         *,
@@ -259,6 +170,7 @@ class OutlookPlatformService:
         subject: str,
         attachments: list[dict[str, Any]],
         attachment_url: str | None,
+        display_resource_plans: list[SurfaceDisplayRenderPlan] | None = None,
     ) -> None:
         """Send the reply, through a draft when it has files to carry.
 
@@ -271,6 +183,7 @@ class OutlookPlatformService:
                 content=content,
                 content_type=content_type,
                 attachment_url=attachment_url,
+                display_resource_plans=display_resource_plans,
             )
             return
 

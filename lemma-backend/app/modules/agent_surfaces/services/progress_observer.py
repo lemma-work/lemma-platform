@@ -44,7 +44,6 @@ from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
     _assistant_text_from_event,
     _assistant_text_was_all_reasoning,
-    _email_reply_tool_called,
     _is_agent_host_permission_event,
     _is_final_answer_event,
     _is_tool_activity_event,
@@ -67,9 +66,11 @@ _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
-# Email recipients should get one composed reply, not a stream of chat
-# messages. Agents reply via the platform reply tools; the observer only
-# falls back to emailing the final assistant text if no reply was sent.
+# Email recipients get one composed reply, not a stream of chat messages, and
+# the observer is the only thing that sends it. There used to be a reply tool
+# the agent called instead, with this path as its fallback -- two senders
+# reading two different stores for the same threading headers, and a silent new
+# conversation whenever they drifted.
 #
 # Derived from the platform-capability registry (not hand-maintained) so a
 # newly added email platform is automatically covered here too — a hardcoded
@@ -122,11 +123,6 @@ class SurfaceAgentRunProgressObserver(
         self._buffered_text: str | None = None
         self._reset_text_on_next = False
         self._final_delivered = False
-        # Set when the agent calls an email reply tool. Display resources are
-        # delivered by the display_resource tool itself (chat) or shared via the
-        # email reply tool's attachments (email), so the observer no longer
-        # handles display_resource at all — it only buffers text + progress.
-        self._email_reply_tool_called = False
         self._run_errored = False
         self._run_error_text: str | None = None
         self._error_delivered = False
@@ -247,8 +243,6 @@ class SurfaceAgentRunProgressObserver(
         # next assistant text starts a fresh (final) answer block.
         if _is_tool_activity_event(event):
             self._reset_text_on_next = True
-            if _email_reply_tool_called(event):
-                self._email_reply_tool_called = True
             plan = plan_from_event(event)
             if plan is not None:
                 self._plan = plan
@@ -363,19 +357,21 @@ class SurfaceAgentRunProgressObserver(
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
 
-        Email surfaces only fall back to sending the buffered text when the
-        agent did not already reply via a reply tool. Chat surfaces always send
-        the final buffered answer. Nothing is sent if the run errored or there
-        is no usable text.
+        Every surface, the same way: the buffered answer goes out when the run
+        stops. Email used to be the exception, deferring to a reply tool the
+        agent had to remember to call -- and this path, which ran whenever the
+        agent forgot, was never a lesser implementation of it. It threads
+        correctly, renders markdown to HTML and keeps the thread's subject,
+        which is the whole of what the tool did.
+
+        Nothing is sent if the run errored (the error is delivered instead) or
+        if there is no usable text.
         """
         if self._final_delivered:
             return
         self._final_delivered = True
         if self._run_errored:
             await self._deliver_run_error(conversation)
-            return
-        platform = _surface_platform(conversation)
-        if platform in _EMAIL_PLATFORMS and self._email_reply_tool_called:
             return
         message = (self._final_answer_text or self._buffered_text or "").strip()
         if not message and self._answer_was_all_reasoning:
