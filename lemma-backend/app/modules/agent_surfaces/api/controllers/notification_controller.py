@@ -17,6 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 
+from app.composition.agent_notifications import deliver_replies_if_settled
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import (
@@ -177,15 +178,24 @@ async def respond_to_notification(
     service: NotificationServiceDep,
 ) -> NotificationResponse:
     del ctx
-    return NotificationResponse.from_entity(
-        await service.respond(
-            pod_id=pod_id,
-            notification_id=notification_id,
-            responder_user_id=user.id,
-            summary=request.summary,
-            data=request.data,
-        )
+    notification = await service.respond(
+        pod_id=pod_id,
+        notification_id=notification_id,
+        responder_user_id=user.id,
+        summary=request.summary,
+        data=request.data,
     )
+
+    async def _deliver_replies() -> None:
+        await deliver_replies_if_settled(notification)
+
+    # After the request's commit, not here. The delivery reads whether anything
+    # is still outstanding, and this answer is not yet visible to another
+    # session — running it now would count the row it just closed and leave the
+    # asker with nothing. `get_uow` commits in its teardown, before the response
+    # goes out.
+    service.uow.after_commit(_deliver_replies)
+    return NotificationResponse.from_entity(notification)
 
 
 @router.post(

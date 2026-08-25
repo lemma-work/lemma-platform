@@ -9,10 +9,20 @@ The distinction that matters, and the one the docstrings spend their words on:
                     thread, under *their* permissions, guided by the
                     ``background_instruction`` you write.
 
-Because nothing pauses, an agent that needs answers fires all its messages, then
-``snooze``s once for a realistic interval, then calls ``check_messages``. That
-loop only works if the model understands the tool does not block, which is why
-the docstring says so three different ways.
+Because nothing pauses, an agent that needs answers fires all its messages and
+then simply ends its turn. It does not sleep, and it does not poll. Once the
+*last* of those asks is answered,
+``composition.agent_notifications.deliver_replies_if_settled`` starts the next
+turn in the asking conversation, and the agent reads the answers with
+``check_messages`` from there.
+
+Waiting for the last one rather than the first is what keeps a four-person
+standup to one turn instead of four full conversation replays.
+
+Ending the turn is the whole trick, and it is why this tool is safe to make
+non-blocking. A person takes hours; an execution suspended for hours is one
+nobody can tell anything, holding a pause that has to be swept if it is ever
+abandoned. A finished turn holds nothing.
 """
 
 from __future__ import annotations
@@ -68,8 +78,9 @@ def _outcome(result: dict, *, requested: MessageChannel | None) -> str:
     status = result["delivery_status"]
     if status == "DELIVERED":
         return (
-            f"Sent on {result['delivered_via']}. They have not answered yet — "
-            "check with check_messages after giving them time."
+            f"Sent on {result['delivered_via']}. They have not answered yet. "
+            "Once you have sent everything you need, end your turn — you get a "
+            "fresh one as soon as everyone you asked has replied."
         )
     if status == "UNDELIVERABLE" and requested is not None:
         return (
@@ -96,9 +107,13 @@ async def message_user(
     a copy in their Lemma inbox.
 
     It does **not** pause your turn, and their reply never comes back as a tool
-    result. To get an answer: send every message you need, give each a
-    `background_instruction`, `snooze` once for as long as a person realistically
-    takes, then `check_messages`.
+    result. Send every message you need, give each a `background_instruction`,
+    then **finish your turn and stop**. Do not sleep on it and do not poll: you
+    get a fresh turn in this conversation as soon as the last person answers,
+    and you read what they said with `check_messages` then.
+
+    Say what you have done and who you are waiting on before you stop. That is
+    the last thing whoever asked you sees until the answers land.
 
     Leave `channel` unset unless you have a reason to pick one — the default is
     already the app they last spoke to you on. When you do name one it is
@@ -187,8 +202,11 @@ async def check_messages(
 ) -> CheckMessagesResponse:
     """Check whether the people you messaged have answered.
 
-    Call it after a `snooze`, not in a loop — each call replays this whole
-    conversation. `RESPONDED` is the only status that means somebody answered.
+    Call it when a turn opens saying they have replied — that is what it is for.
+    Not in a loop, and not to check on people who have not answered yet: each
+    call replays this whole conversation, and you are told when there is
+    something to read. `RESPONDED` is the only status that means somebody
+    answered.
 
     If some are still OPEN after you have genuinely waited, say who has not
     answered and finish with what you have.
