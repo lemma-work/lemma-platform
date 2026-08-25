@@ -220,3 +220,86 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
 
     resend_messages = await wait_for_messages(message_store, "RESEND", min_count=1)
     assert "E2E agent reply [RESEND]" in json.dumps(resend_messages[-1])
+
+
+async def test_connecting_email_returns_the_address_the_agent_already_has(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Connecting email twice must not produce two mailboxes.
+
+    Against a fully configured deployment, which is the configuration this
+    shard never ran in: the autouse fixture sets an inbound domain and no API
+    key, so `email_is_configured()` was false, no pod or agent was ever given a
+    mailbox at creation, and none of this could reproduce.
+
+    With one, both mailboxes exist before anyone asks. The agent's arrives with
+    the agent. So `POST /surfaces {"platform": "RESEND"}` — the plain "connect
+    email" call, and what the UI sends — used to ask for an address that agent
+    already held, lose the unique index to itself, and settle on a suffixed
+    second mailbox. The person who asked was then handed
+    `reporter.acme-p7k3@` for an agent already reachable at `reporter.acme@`.
+    """
+    from app.modules.agent_surfaces.tests.e2e.helpers import (
+        _create_agent,
+        _create_surface,
+    )
+
+    pod_id = pod_with_a_mailbox["id"]
+    agent = await _create_agent(authenticated_client, pod_id)
+
+    # The address the agent was given when it was created.
+    await db_session.commit()
+    minted = (
+        await db_session.execute(
+            _select_pod_resend_surfaces(pod_id, agent_name=agent["name"])
+        )
+    ).scalars()
+    before = list(minted)
+    assert len(before) == 1, f"an agent should be created holding one mailbox: {before}"
+    original_address = before[0].surface_identity_email
+    assert original_address
+
+    connected = await _create_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "RESEND"},
+        agent_name=agent["name"],
+    )
+
+    assert connected["surface_identity_email"] == original_address, (
+        "connecting email minted a second address instead of returning the "
+        f"one the agent already had: {connected['surface_identity_email']!r} "
+        f"vs {original_address!r}"
+    )
+
+    await db_session.commit()
+    after = list(
+        (
+            await db_session.execute(
+                _select_pod_resend_surfaces(pod_id, agent_name=agent["name"])
+            )
+        ).scalars()
+    )
+    assert len(after) == 1, f"the agent ended up with {len(after)} mailboxes"
+
+
+def _select_pod_resend_surfaces(pod_id: str, *, agent_name: str):
+    """This pod's Resend surfaces bound to the named agent."""
+    from sqlalchemy import select
+
+    from app.modules.agent.infrastructure.models import Agent
+
+    return (
+        select(AgentSurface)
+        .join(Agent, Agent.id == AgentSurface.agent_id)
+        .where(
+            AgentSurface.pod_id == UUID(pod_id),
+            AgentSurface.surface_type == "RESEND",
+            Agent.name == agent_name,
+        )
+    )

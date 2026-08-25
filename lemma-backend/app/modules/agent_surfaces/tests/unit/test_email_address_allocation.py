@@ -165,3 +165,67 @@ def test_the_rfc_2142_roles_are_all_covered():
     assert {"postmaster", "abuse", "hostmaster", "webmaster", "security"} <= (
         RESERVED_LOCAL_PARTS
     )
+
+
+def test_a_reserved_role_cannot_be_reached_by_respelling_it():
+    """`postmaster@` was refused and `post-master@` was not.
+
+    Pod names admit spaces, hyphens and underscores, and `slugify` turns all
+    three into a hyphen. So the guard screened the one spelling nobody would
+    type and let through the ones they would — on a domain every organization
+    on the deployment shares.
+    """
+    for spelling in ("Post Master", "Post-Master", "Post_Master", "POST  MASTER"):
+        first = candidate_addresses(
+            agent_name=None, pod_name=spelling, domain="ops.example.com"
+        )[0]
+        assert first != "post-master@ops.example.com", (
+            f"{spelling!r} still reaches the role address as {first!r}"
+        )
+        assert first.startswith("post-master-")
+
+
+def test_lemma_s_own_voice_is_not_claimable_by_a_tenant():
+    """The second thing the list is for: "this is Lemma talking, not a tenant".
+
+    `lemma@` was refused, but a pod named "Lemma Support" took
+    `lemma-support@` — which is precisely the address a person reads as Lemma's
+    own, on the shared inbound domain.
+    """
+    for name in ("Lemma Support", "Lemma Billing", "Lemma Security", "Lemma Team"):
+        first = candidate_addresses(
+            agent_name=None, pod_name=name, domain="ops.example.com"
+        )[0]
+        plain = f"{slugify(name)}@ops.example.com"
+        assert first != plain, f"{name!r} still claims {plain!r}"
+
+
+def test_a_pod_honestly_named_lemma_still_gets_a_mailbox():
+    """The reason these are entries and not a `lemma*` prefix rule.
+
+    Every candidate is screened, so a prefix rule would reject the suffixed
+    forms too — `lemma-7rmt@` starts with `lemma-` just as `lemma-support@`
+    does. The bounded generation loop would run out and return nothing, and the
+    pod would end up with no address at all: worse than an ugly one, which is
+    the trade this whole module exists to avoid.
+    """
+    candidates = candidate_addresses(
+        agent_name=None, pod_name="Lemma", domain="ops.example.com"
+    )
+
+    assert len(candidates) == 5, f"the generator starved: {candidates}"
+    assert all(c.startswith("lemma-") for c in candidates)
+    assert "lemma@ops.example.com" not in candidates
+
+
+def test_the_dot_is_left_alone_because_it_separates_rather_than_spells():
+    """Normalizing it away would refuse addresses nobody misreads.
+
+    An agent named "Sale" in a pod named "S" is `sale.s@`. Collapsing the dot
+    makes that `sales`, a reserved role — but the dot is the agent/pod
+    separator, and a local part carrying one is an agent's address rather than
+    a bare role word.
+    """
+    assert not is_reserved("sale.s")
+    assert not is_reserved("triage.support")
+    assert is_reserved("sales")

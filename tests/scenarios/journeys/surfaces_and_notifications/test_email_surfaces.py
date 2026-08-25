@@ -235,6 +235,84 @@ async def test_an_unsigned_email_is_refused(mailbox):
     )
 
 
+@scenario("Connecting email hands back the address the agent already has")
+@proves("PS-SURF-022")
+@covers("agent.surface.create", "agent.surface.list")
+async def test_connecting_email_does_not_mint_a_second_mailbox(world, run):
+    """An agent has one address, and connecting email is how you turn it on.
+
+    Every agent is given a mailbox as it is created, so by the time anyone
+    presses Connect the address already exists — which is what the button says
+    it does ("the address Lemma already runs for this agent"). Asking for one
+    anyway minted a *second* surface: the readable address was taken, by the
+    agent itself, so allocation fell through to a suffixed form and the person
+    who pressed the button was handed `reporter.acme-p7k3@` for an agent
+    already reachable at `reporter.acme@`.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
+
+    minted = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(minted) == 1, (
+        f"an agent should be created holding exactly one mailbox: {minted}"
+    )
+    original = _address_of(minted[0])
+
+    connected = await alice.connects_a_surface(
+        in_pod=pod, platform="RESEND", agent=agent["name"]
+    )
+
+    assert _address_of(connected) == original, (
+        f"connecting email minted a second address, {_address_of(connected)!r}, "
+        f"for an agent already reachable at {original!r}"
+    )
+
+    after = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(after) == 1, (
+        f"the agent ended up with {len(after)} mailboxes: "
+        f"{[_address_of(s) for s in after]}"
+    )
+
+
+@scenario("A pod is reachable by email without connecting anything")
+@proves("PS-SURF-022")
+@covers("agent.surface.list")
+async def test_a_new_pod_already_has_an_address(world, run):
+    """Inbound routes on the address, so it has to exist before the first send.
+
+    The pod assistant's mailbox used to be minted on its first *outbound*
+    notification. Until then mail to the obvious guess matched no surface and
+    started nothing — a pod nobody can write to, which is not cheaper than one
+    they can.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+
+    addressed = [
+        _address_of(surface)
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ]
+
+    assert addressed, (
+        "a pod nobody has connected anything to still has to be writable-to, "
+        "and this one has no address at all"
+    )
+    assert all(a.endswith(inbound_email_domain()) for a in addressed), (
+        f"an address outside this deployment's inbound domain never arrives: "
+        f"{addressed}"
+    )
+
+
 def _address_of(surface) -> str:
     """The address a person writes to in order to reach this surface."""
     reach = surface.get("reach") or {}

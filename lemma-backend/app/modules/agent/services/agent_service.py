@@ -277,6 +277,15 @@ class AgentService:
                 agent_id=agent.id,
                 ctx=ctx,
             )
+        # Before the row goes, not after: `agent_surfaces.agent_id` is
+        # ON DELETE SET NULL, so once the agent is deleted its surfaces are no
+        # longer identifiable as its own — they read as the pod assistant's,
+        # and the pod starts answering from a deleted agent's address.
+        from app.composition.agent_email_surface import teardown_agent_surfaces
+
+        await teardown_agent_surfaces(
+            self.agent_repository.uow, pod_id=pod_id, agent_id=agent.id
+        )
         await self.agent_repository.delete(agent.id)
         # Revoke any in-flight delegated token minted for this agent so it stops
         # working immediately rather than lingering until the token expires.
