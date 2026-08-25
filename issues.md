@@ -88,6 +88,33 @@ and short-lived enough that the poisoned connection is rarely the next one
 borrowed — which is why a deployment run found it and 400+ local scenarios did
 not.
 
+### DEV-SURF-005 — A new pod is already connected to a surface
+**Violates:** PS-SURF-001
+**Severity:** question
+**Where:** [`pod_service.py`](lemma-backend/app/modules/pod/services/pod_service.py):97
+
+**Required:** PS-SURF-001's scenarios open by asserting a new pod is connected
+to nothing, then connect one and check what changed. "A person connects a pod's
+agent to a platform" reads as something the person does.
+
+**Actual:** Creating a pod mints the assistant's mailbox, so
+`agent.surface.list` returns one `resend` surface immediately. Two scenarios
+fail on the precondition rather than on what they set out to prove:
+`test_available_platforms_are_listed` and `test_an_unconfigured_surface_is_refused`
+(both in `tests/scenarios/journeys/surfaces_and_notifications/test_surfaces.py`).
+
+This is a question rather than a bug because the behaviour looks deliberate and
+good — an agent with no other way to reach anyone should have an address, and
+`create_agent` has minted one for a while. What is unresolved is whether "a
+person connects a surface" is still the right framing for the *first* one, or
+whether the promise should say every pod starts with an address and connecting
+is about the rest. The scenarios cannot be edited to match either way until that
+is decided; that is what makes it a spec question.
+
+**Found:** running `tests/scenarios/journeys/surfaces_and_notifications` against
+a local deployment. Predates the surface-delivery work: minting at pod creation
+arrived in dcae7d88 (#494) and nothing in that branch touches `pod_service.py`.
+
 ### DEV-SURF-004 — A person's default surface governs where they are answered, not where they are reached
 **Violates:** PS-SURF-023
 **Severity:** question

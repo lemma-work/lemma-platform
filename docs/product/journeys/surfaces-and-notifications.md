@@ -13,7 +13,9 @@ anything, and a person who is not entitled to the pod gets nothing.
 **Every platform gets the full product**: asking a question, approving an action,
 sending a file — if it works in the workspace it works on the surface, natively
 where the platform supports it and as plain text where it does not, but never
-dropped.
+dropped. Email included: it receives one message per turn rather than several,
+so a question travels inside the reply and the person answers by replying — but
+it is asked, not skipped.
 
 ---
 
@@ -164,6 +166,13 @@ dropped.
   to exactly the pod that address belongs to.
 - If an inbound email cannot be read completely, then the system shall drop it
   rather than starting an agent on a partial message.
+- Where a surface is email, the system shall compose everything one turn produces
+  into a single reply — the answer, any file shown, and any question asked.
+- Where an agent asks a question or requests approval on an email surface, the
+  system shall put it in that reply and shall accept the person's emailed answer
+  as the response.
+- Where an inbound email's sender cannot be authenticated by the receiving mail
+  service, the system shall not resolve it to a member's identity.
 
 > **Verified by:** scenarios for everything except the reply. Addressing,
 > routing to the pod that owns the address, refusing mail no surface owns,
