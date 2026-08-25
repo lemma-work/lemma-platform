@@ -17,7 +17,7 @@ fn main() {
 fn run() -> io::Result<()> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref().unwrap_or("serve") {
-        "serve" => Daemon::new(LocalPaths::discover()?)?.serve(),
+        "serve" => serve(),
         "status" => client_request(json!({"cmd": "status", "id": "cli-status"})),
         "ping" => client_request(json!({"cmd": "ping", "id": "cli-ping"})),
         "send" => {
@@ -50,6 +50,27 @@ fn run() -> io::Result<()> {
             io::ErrorKind::InvalidInput,
             format!("unknown command {command:?}"),
         )),
+    }
+}
+
+/// Start the daemon, and make sure a failure to *construct* it leaves a record.
+///
+/// `Daemon::new` does every fallible thing before `serve()` binds anything --
+/// token, operator config, infra secrets, host pack, port reservation -- and
+/// `write_daemon_log` is a method on the value it failed to produce. So the
+/// reason went to stderr, which the desktop shell attaches to a null sink, and
+/// the user was told only "lemma-locald exited during startup (exit status: 1)".
+fn serve() -> io::Result<()> {
+    let paths = LocalPaths::discover()?;
+    match Daemon::new(paths.clone()) {
+        Ok(daemon) => daemon.serve(),
+        Err(error) => {
+            let _ = lemma_locald::protocol::append_bounded_daemon_log(
+                &paths.log,
+                &format!("lemma-locald could not start: {error}"),
+            );
+            Err(error)
+        }
     }
 }
 

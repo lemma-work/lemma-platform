@@ -37,10 +37,18 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => { element.hidden = true; }, 5500);
 }
 
+// Escapes quotes as well as angle brackets and ampersands.
+//
+// The `textContent` -> `innerHTML` trick handles `<`, `>` and `&` but leaves
+// quotes alone, and several call sites interpolate into a double-quoted
+// attribute value. That was inert while every value was an internal constant;
+// it stops being inert now that this page renders log lines, which carry error
+// strings, URLs and agent tool output. Log bodies themselves go through
+// `textContent` rather than here -- this covers the attribute cases.
 function escapeHtml(value) {
   const node = document.createElement("span");
   node.textContent = String(value ?? "");
-  return node.innerHTML;
+  return node.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function setPage(page) {
@@ -54,6 +62,105 @@ function setPage(page) {
   $("page-title").textContent = titles[page][0];
   $("page-subtitle").textContent = titles[page][1];
   document.querySelector(".content").scrollTo({ top: 0, behavior: "instant" });
+  // Only poll while the logs are actually on screen.
+  if (page === "diagnostics") startLogPolling();
+  else stopLogPolling();
+}
+
+/* ---------------------------------------------------------------- logs ---
+ * Local settings used to show only the *paths* to the logs, which meant the
+ * page that exists to explain a problem could not show one. The backing
+ * command already tails by cursor, survives rotation and redacts secrets --
+ * the only thing missing was the capability grant and somewhere to put it.
+ */
+
+let activeLogSource = "locald";
+let logCursor = null;
+let logTimer = null;
+let logFollow = true;
+
+// A line is only coloured when it genuinely reports a failure. Anchored to
+// word boundaries so a path like `.../error_handling/` does not light up.
+const LOG_BAD = /\b(error|fatal|panic|failed|failure|traceback|refused|denied)\b/i;
+const LOG_WARN = /\b(warn|warning|retry|retrying|timeout|timed out)\b/i;
+
+function renderLogLines(text) {
+  const view = $("diag-log");
+  view.textContent = "";
+  const body = (text ?? "").replace(/\s+$/, "");
+  if (!body) {
+    const empty = document.createElement("span");
+    empty.className = "empty";
+    empty.textContent = "No entries yet.";
+    view.appendChild(empty);
+    return;
+  }
+  for (const line of body.split("\n")) {
+    const row = document.createElement("span");
+    row.className = "line";
+    if (LOG_BAD.test(line)) row.classList.add("bad");
+    else if (LOG_WARN.test(line)) row.classList.add("warn");
+    // textContent, never innerHTML: this is the one surface here rendering
+    // text the app did not author.
+    row.textContent = line;
+    view.appendChild(row);
+  }
+  if (logFollow) view.scrollTop = view.scrollHeight;
+}
+
+function renderLogTabs(sources) {
+  const tabs = $("diag-log-tabs");
+  if (!Array.isArray(sources) || tabs.dataset.rendered === String(sources.length)) return;
+  tabs.dataset.rendered = String(sources.length);
+  tabs.textContent = "";
+  for (const source of sources) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = source.label;
+    button.classList.toggle("active", source.id === activeLogSource);
+    button.addEventListener("click", () => selectLogSource(source.id));
+    tabs.appendChild(button);
+  }
+}
+
+let logBody = "";
+
+async function refreshLog({ append = false } = {}) {
+  try {
+    const snapshot = await invoke("diagnostic_logs", {
+      source: activeLogSource,
+      cursor: append ? logCursor : null,
+    });
+    if (append && snapshot.entries && !snapshot.entries.startsWith("No ")) {
+      logBody += snapshot.entries;
+    } else if (!append) {
+      logBody = snapshot.entries || "";
+    }
+    logCursor = snapshot.nextCursor;
+    renderLogTabs(snapshot.sources);
+    renderLogLines(logBody);
+  } catch (error) {
+    renderLogLines(`Could not read the ${activeLogSource} log: ${String(error)}`);
+  }
+}
+
+async function selectLogSource(source) {
+  activeLogSource = source;
+  logCursor = null;
+  logBody = "";
+  $("diag-log-tabs").dataset.rendered = "";
+  await refreshLog();
+}
+
+function startLogPolling() {
+  stopLogPolling();
+  refreshLog();
+  logTimer = setInterval(() => refreshLog({ append: true }), 1000);
+}
+
+function stopLogPolling() {
+  clearInterval(logTimer);
+  logTimer = null;
 }
 
 async function closeLocalSettings() {
@@ -886,6 +993,28 @@ function handleLocaldEvent(event) {
 }
 
 configureInteractionHandlers();
+// Following pins the view to the newest line; scrolling up is how a person
+// reads what already happened, so that turns it off rather than fighting them.
+$("log-follow").addEventListener("click", () => {
+  logFollow = !logFollow;
+  $("log-follow").setAttribute("aria-pressed", String(logFollow));
+  $("log-follow").textContent = logFollow ? "Following" : "Paused";
+  if (logFollow) {
+    const view = $("diag-log");
+    view.scrollTop = view.scrollHeight;
+  }
+});
+$("diag-log").addEventListener("scroll", (event) => {
+  const view = event.currentTarget;
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+  if (atBottom === logFollow) return;
+  logFollow = atBottom;
+  $("log-follow").setAttribute("aria-pressed", String(logFollow));
+  $("log-follow").textContent = logFollow ? "Following" : "Paused";
+});
+// The webview is destroyed rather than navigated when Local settings closes,
+// but a stray interval that outlives the page would keep waking the daemon.
+window.addEventListener("pagehide", stopLogPolling);
 document.addEventListener("click", (event) => {
   const row = event.target.closest("[data-summary-page]");
   if (row?.dataset.summaryPage) setPage(row.dataset.summaryPage);

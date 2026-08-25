@@ -52,12 +52,19 @@ pub struct Daemon {
     sharing: Option<Arc<SharingController>>,
     host_operation_running: AtomicBool,
     agent_host: Arc<AgentHostSupervisor>,
+    /// State this daemon had to repair before it could start, in the operator's
+    /// words rather than serde's. Empty on every healthy launch.
+    healed: Vec<String>,
 }
 
 impl Daemon {
     pub fn new(paths: LocalPaths) -> io::Result<Arc<Self>> {
         paths.ensure()?;
-        let token = load_or_create_token(&paths.token)?;
+        // What this construction had to repair to get going. Reported by
+        // `serve`, never swallowed: replacing a credential or a config behind
+        // the operator's back is how a self-heal becomes the next mystery.
+        let mut healed: Vec<String> = Vec::new();
+        let token = load_or_create_token(&paths.token, &mut healed)?;
         let mut state = StateSnapshot::load(&paths.state);
         let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
         let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
@@ -142,12 +149,14 @@ impl Daemon {
             sharing,
             host_operation_running: AtomicBool::new(false),
             agent_host,
+            healed,
         }))
     }
 
     pub fn serve(self: Arc<Self>) -> io::Result<()> {
         let listener = create_listener(&self.paths)?;
         self.write_daemon_log("locald listening")?;
+        self.report_healed_state();
         self.prime_backend_environment();
         self.start_host_status_monitor();
         self.start_agent_host_monitor();
@@ -1994,24 +2003,31 @@ impl Daemon {
             .retain(|_, subscriber| subscriber.send(line.clone()).is_ok());
     }
 
+    /// One implementation, two callers: a running daemon writes through here,
+    /// and `lemma-locald serve` writes a construction failure through the same
+    /// free function before this type exists at all.
     fn write_daemon_log(&self, line: &str) -> io::Result<()> {
-        use std::fs::OpenOptions;
-        const MAX_DAEMON_LOG_BYTES: u64 = 5 * 1024 * 1024;
-        if self
-            .paths
-            .log
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() >= MAX_DAEMON_LOG_BYTES)
-        {
-            let previous = self.paths.log.with_extension("previous.log");
-            let _ = std::fs::remove_file(&previous);
-            std::fs::rename(&self.paths.log, previous)?;
+        crate::protocol::append_bounded_daemon_log(&self.paths.log, line)
+    }
+
+    /// Say out loud what `Daemon::new` had to replace to get this far.
+    ///
+    /// Broadcast as well as logged: a subscriber that connects later still gets
+    /// it from the journal, and the app can surface "your configuration was
+    /// reset" instead of the operator discovering it by finding their provider
+    /// missing.
+    fn report_healed_state(&self) {
+        if self.healed.is_empty() {
+            return;
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.paths.log)?;
-        writeln!(file, "{line}")
+        for note in &self.healed {
+            let _ = self.write_daemon_log(&format!("healed: {note}"));
+        }
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "local.healed",
+            "notes": self.healed.clone(),
+        }));
     }
 }
 

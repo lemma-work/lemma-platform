@@ -238,6 +238,14 @@ struct ProcessState {
     restart_history: HashMap<String, VecDeque<Instant>>,
     restart_not_before: HashMap<String, Instant>,
     circuit_open: HashSet<String>,
+    /// How many times each component has tripped its restart circuit.
+    ///
+    /// `circuit_open` now flickers -- it closes after a quiet window so a
+    /// transient burst is survivable -- which on its own would let a flapping
+    /// service oscillate the UI between "error" and "starting". This is the
+    /// durable half: once a component has tripped, it keeps reading as failed
+    /// until something clears it deliberately.
+    circuit_trips: HashMap<String, u32>,
     last_exit: HashMap<String, String>,
 }
 
@@ -247,6 +255,10 @@ pub struct HostProcessStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub circuit_open: bool,
+    /// Times this component has exhausted its restart budget since the last
+    /// deliberate start. Survives the circuit closing, so a service that keeps
+    /// flapping does not read as healthy between bursts.
+    pub circuit_trips: u32,
     pub restart_count: usize,
     pub last_exit: Option<String>,
 }
@@ -514,6 +526,8 @@ impl HostProcessManager {
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.clear();
+            // A deliberate start is the one thing that forgives past trips.
+            state.circuit_trips.clear();
             state.restart_history.clear();
             state.restart_not_before.clear();
         }
@@ -591,6 +605,29 @@ impl HostProcessManager {
         Ok(())
     }
 
+    /// Whether a failed setup should stop the start, or only be recorded.
+    ///
+    /// Hoisted out of `run_setups` because `optional` used to be honoured at
+    /// exactly one of the three places a setup can fail. A setup that *exited*
+    /// non-zero was tolerated; the same setup *hanging*, or running out of
+    /// budget before its next retry, took the whole stack down -- the reverse of
+    /// what `optional` means. `connector-catalog` is declared optional with a
+    /// 600-second timeout precisely so an unreachable third-party catalog cannot
+    /// stop a workspace, and a blackholed route defeated that.
+    ///
+    /// Returns the error to raise, or `None` when the caller should carry on to
+    /// the next setup. A function rather than a closure because the caller has
+    /// to `continue 'setups`, which a closure cannot do.
+    fn optional_setup_outcome(setup: &HostSetupSpec, detail: String) -> Option<io::Error> {
+        if setup.optional {
+            // Logged rather than raised: the log line is the record, and the
+            // stack still comes up.
+            eprintln!("locald: {detail}");
+            return None;
+        }
+        Some(io::Error::other(detail))
+    }
+
     fn run_setups(&self) -> io::Result<()> {
         'setups: for setup in &self.manifest.setup {
             let mut environment = setup.env.clone();
@@ -623,23 +660,24 @@ impl HostProcessManager {
                                 setup.id,
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
                             );
-                            if setup.optional {
-                                // Logged rather than raised: the log line is the
-                                // record, and the stack still comes up.
-                                eprintln!("locald: {detail}");
-                                continue 'setups;
+                            match Self::optional_setup_outcome(setup, detail) {
+                                None => continue 'setups,
+                                Some(error) => return Err(error),
                             }
-                            return Err(io::Error::other(detail));
                         }
                         let backoff = Duration::from_secs(
                             setup.retry_backoff_seconds.saturating_mul(attempt as u64),
                         );
                         if Instant::now() + backoff >= deadline {
-                            return Err(io::Error::other(format!(
+                            let detail = format!(
                                 "{} setup exited with {status}; see {}",
                                 setup.id,
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
-                            )));
+                            );
+                            match Self::optional_setup_outcome(setup, detail) {
+                                None => continue 'setups,
+                                Some(error) => return Err(error),
+                            }
                         }
                         writeln!(
                             process_log(&self.log_dir, &setup.id)?,
@@ -649,16 +687,23 @@ impl HostProcessManager {
                         break;
                     }
                     if Instant::now() >= deadline {
+                        // Terminate first, on both paths. An optional setup that
+                        // hangs and is then tolerated would otherwise be left
+                        // running as an orphan holding a copy of the backend
+                        // environment -- Postgres and Redis passwords included.
                         let _ = terminate_process_group(&mut child);
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!(
-                                "{} setup exceeded {} seconds; see {}",
-                                setup.id,
-                                setup.timeout_seconds,
-                                self.log_dir.join(format!("{}.log", setup.id)).display()
-                            ),
-                        ));
+                        let detail = format!(
+                            "{} setup exceeded {} seconds; see {}",
+                            setup.id,
+                            setup.timeout_seconds,
+                            self.log_dir.join(format!("{}.log", setup.id)).display()
+                        );
+                        match Self::optional_setup_outcome(setup, detail) {
+                            None => continue 'setups,
+                            Some(error) => {
+                                return Err(io::Error::new(io::ErrorKind::TimedOut, error))
+                            }
+                        }
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -700,6 +745,7 @@ impl HostProcessManager {
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.remove("backend");
+            state.circuit_trips.remove("backend");
             state.restart_history.remove("backend");
             state.restart_not_before.remove("backend");
         }
@@ -727,6 +773,7 @@ impl HostProcessManager {
                 running: state.children.contains_key(id),
                 pid: state.children.get(id).map(|child| child.child.id()),
                 circuit_open: state.circuit_open.contains(id),
+                circuit_trips: state.circuit_trips.get(id).copied().unwrap_or(0),
                 restart_count: state
                     .restart_history
                     .get(id)
@@ -751,7 +798,13 @@ impl HostProcessManager {
             && !self.startup_in_progress.load(Ordering::Acquire)
             && dependency_ready;
         let desired = self.desired_running();
-        let failed = components.iter().any(|component| component.circuit_open)
+        // `circuit_trips`, not just `circuit_open`: the circuit now closes on
+        // its own after a quiet window, so reading only the live flag would let
+        // a service that trips every minute report healthy in between and
+        // oscillate the splash between "error" and "starting".
+        let failed = components
+            .iter()
+            .any(|component| component.circuit_open || component.circuit_trips > 0)
             || (desired && dependency_error.is_some());
         let mut event = json!({
             "v": 1,
@@ -1034,6 +1087,30 @@ impl HostProcessManager {
             let spec = &self.by_id[id];
             let ready_to_spawn = {
                 let mut state = self.state.lock().expect("host process lock poisoned");
+                let now = Instant::now();
+                let window = Duration::from_secs(spec.restart.window_seconds);
+                // Prune *before* consulting the circuit, not after. The old
+                // order tested `circuit_open` first, so once a service tripped,
+                // its history was never trimmed again and no amount of elapsed
+                // time could reopen it -- a single transient burst (a laptop
+                // waking with the VM's forwarders not yet up) condemned the
+                // service until the user restarted the whole app, and nothing on
+                // screen said that was the remedy.
+                //
+                // Closing needs a full quiet window, so this is a real cooldown
+                // rather than an unconditional reset.
+                {
+                    let history = state.restart_history.entry(id.clone()).or_default();
+                    while history
+                        .front()
+                        .is_some_and(|started| now.duration_since(*started) > window)
+                    {
+                        history.pop_front();
+                    }
+                    if history.len() < spec.restart.max_restarts {
+                        state.circuit_open.remove(id);
+                    }
+                }
                 if state.children.contains_key(id)
                     || state.circuit_open.contains(id)
                     || spec
@@ -1042,31 +1119,27 @@ impl HostProcessManager {
                         .any(|dependency| !state.children.contains_key(dependency))
                 {
                     false
+                } else if let Some(deadline) = state.restart_not_before.get(id) {
+                    *deadline <= now
                 } else {
-                    let now = Instant::now();
-                    if let Some(deadline) = state.restart_not_before.get(id) {
-                        *deadline <= now
+                    // Length first, so the borrow of `restart_history` is over
+                    // before `circuit_open` and `circuit_trips` are touched.
+                    let attempts = state.restart_history.entry(id.clone()).or_default().len();
+                    if attempts >= spec.restart.max_restarts {
+                        state.circuit_open.insert(id.clone());
+                        *state.circuit_trips.entry(id.clone()).or_insert(0) += 1;
                     } else {
-                        let history = state.restart_history.entry(id.clone()).or_default();
-                        let window = Duration::from_secs(spec.restart.window_seconds);
-                        while history
-                            .front()
-                            .is_some_and(|started| now.duration_since(*started) > window)
-                        {
-                            history.pop_front();
-                        }
-                        if history.len() >= spec.restart.max_restarts {
-                            state.circuit_open.insert(id.clone());
-                            false
-                        } else {
-                            history.push_back(now);
-                            state.restart_not_before.insert(
-                                id.clone(),
-                                now + Duration::from_secs(spec.restart.backoff_seconds),
-                            );
-                            false
-                        }
+                        state
+                            .restart_history
+                            .entry(id.clone())
+                            .or_default()
+                            .push_back(now);
+                        state.restart_not_before.insert(
+                            id.clone(),
+                            now + Duration::from_secs(spec.restart.backoff_seconds),
+                        );
                     }
+                    false
                 }
             };
             if ready_to_spawn {
@@ -3003,5 +3076,120 @@ mod tests {
         assert!(backend.last_exit.is_some());
         assert!(process_status(&manager, "frontend").running);
         manager.stop_all().unwrap();
+    }
+
+    /// A tripped circuit reopens once the crash window has gone quiet.
+    ///
+    /// It never used to. `reconcile_crashes` tested `circuit_open` before it
+    /// pruned `restart_history`, so the history was frozen the moment the
+    /// circuit tripped and no amount of elapsed time could clear it. A single
+    /// transient burst — a laptop waking before the VM's port forwarders are
+    /// back — condemned the service until the user restarted the whole app,
+    /// and nothing on screen said so.
+    ///
+    /// The window has to outlast the two crashes that exhaust the budget --
+    /// otherwise the first restart ages out before the second crash and the
+    /// budget silently resets, which is a green test proving nothing. Four
+    /// seconds is comfortably longer than a spawn plus two observed exits, and
+    /// short enough that waiting it out does not dominate the suite.
+    #[test]
+    fn a_tripped_restart_circuit_reopens_after_a_quiet_window() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.restart = RestartSpec {
+            max_restarts: 1,
+            window_seconds: 4,
+            backoff_seconds: 0,
+        };
+        let mut frontend = service("frontend", &[]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
+        manager.reconcile_crashes(); // spends the budgeted restart
+        manager.reconcile_crashes(); // and performs it
+        wait_for_running(&manager, "backend");
+
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
+        manager.reconcile_crashes();
+        assert!(
+            process_status(&manager, "backend").circuit_open,
+            "the budget is exhausted, so the circuit is open"
+        );
+
+        // Nothing deliberate happens here — only the window elapsing.
+        thread::sleep(Duration::from_millis(4500));
+        manager.reconcile_crashes();
+
+        let backend = process_status(&manager, "backend");
+        assert!(
+            !backend.circuit_open,
+            "a quiet window reopens the circuit without an app restart"
+        );
+        // ...but the trip is remembered, so a service that flaps every window
+        // does not get to report healthy in the gaps.
+        assert_eq!(backend.circuit_trips, 1);
+        // `failed` is not a field of its own -- it decides the reported status,
+        // which is what the splash and Local settings actually render.
+        let event = manager.status_event(None);
+        assert_eq!(
+            event["status"], "error",
+            "a component that has tripped still reads as failed once the circuit closes"
+        );
+
+        manager.stop_all().unwrap();
+    }
+
+    /// An optional setup that *hangs* is tolerated, exactly like one that fails.
+    ///
+    /// `optional` was honoured at only one of the three places a setup can
+    /// fail. A non-zero exit was swallowed; running out of time was not — so
+    /// `connector-catalog`, which is declared optional with a 600-second budget
+    /// precisely so an unreachable third-party catalog cannot stop a workspace,
+    /// took the whole stack down whenever the network blackholed instead of
+    /// refusing.
+    #[test]
+    fn an_optional_setup_that_hangs_does_not_stop_the_stack() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let mut catalog = setup("connector-catalog");
+        catalog.command = long_running_command();
+        catalog.optional = true;
+        catalog.timeout_seconds = 1;
+        catalog.max_attempts = 1;
+        value.setup.push(catalog);
+        let manager = manager_in(&root, value);
+
+        manager
+            .run_setups()
+            .expect("an optional setup that never finishes must not fail the start");
+    }
+
+    /// The same hang, not marked optional, still stops the start.
+    ///
+    /// Without this the test above would pass just as well against a
+    /// `run_setups` that had stopped enforcing timeouts at all.
+    #[test]
+    fn a_required_setup_that_hangs_still_stops_the_stack() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = long_running_command();
+        value.setup[0].optional = false;
+        value.setup[0].timeout_seconds = 1;
+        value.setup[0].max_attempts = 1;
+        let manager = manager_in(&root, value);
+
+        let error = manager.run_setups().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("migrations"), "{error}");
     }
 }

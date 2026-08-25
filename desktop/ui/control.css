@@ -473,6 +473,44 @@ input[type="checkbox"] { width: auto; min-height: auto; accent-color: var(--gold
 code, pre { font: 11px/1.55 var(--mono); overflow-wrap: anywhere; }
 .url-row code { display: flex; align-items: center; min-height: 34px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); }
 pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
+
+/* Inline log viewer.
+   The one place in this page that renders text the app did not write, so every
+   line is set with textContent -- never innerHTML -- and only the row's class
+   is chosen by us. */
+.log-tabs { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+.log-tabs button {
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--muted);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+.log-tabs button:hover { color: var(--ink); }
+.log-tabs button.active {
+  border-color: color-mix(in srgb, var(--gold) 46%, var(--border));
+  background: var(--gold-soft);
+  color: var(--gold-strong);
+}
+.log-view {
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--ink);
+  overscroll-behavior: contain;
+}
+.log-view .line { display: block; }
+/* Only two tones. A log where half the lines are coloured is a log nobody
+   scans, so this is reserved for lines that actually report a failure. */
+.log-view .line.bad { color: var(--red); }
+.log-view .line.warn { color: var(--gold-strong); }
+.log-view .empty { color: var(--muted); }
 .warning-box, .danger-warning, .limitation-note {
   margin-top: 14px;
   padding: 11px 12px;

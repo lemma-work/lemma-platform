@@ -247,6 +247,60 @@ fn launch_log_path() -> PathBuf {
     runtime_install_root().join("launch.log")
 }
 
+/// Where the daemon's own stderr goes.
+///
+/// Deliberately its own file rather than `install.log`. `append_bounded_log`
+/// rotates by renaming, and a child holding an inherited descriptor keeps
+/// writing to the renamed inode -- so sharing a file would silently split the
+/// record exactly when someone is reading it.
+fn locald_stderr_path() -> PathBuf {
+    runtime_install_root().join("locald-stderr.log")
+}
+
+/// A sink for locald's stderr that cannot block the daemon.
+///
+/// This used to be `Stdio::null()`, which meant every fatal `Daemon::new`
+/// failure -- a malformed control token, an unreadable operator config, a port
+/// that could not be reserved -- was discarded, and the user was shown only
+/// "lemma-locald exited during startup (exit status: 1)".
+///
+/// A file, never `Stdio::piped()`: nothing in this process would drain a pipe,
+/// and a full pipe buffer blocks the writer. Falls back to `null()` rather than
+/// failing the spawn, because not having a log is not a reason to have no
+/// daemon.
+fn locald_stderr_sink() -> Stdio {
+    let path = locald_stderr_path();
+    let Some(parent) = path.parent() else {
+        return Stdio::null();
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return Stdio::null();
+    }
+    // Truncate per spawn: this file exists to explain *this* launch, and a
+    // stale reason from a previous run is worse than none.
+    match std::fs::File::create(&path) {
+        Ok(file) => Stdio::from(file),
+        Err(_) => Stdio::null(),
+    }
+}
+
+/// The last thing locald said before it died, for the message the user sees.
+///
+/// Bounded read from the tail: this is an error path and the file is normally
+/// empty, but a `cargo run` fallback in a source checkout puts compiler output
+/// here and that can be large.
+fn locald_stderr_tail() -> Option<String> {
+    const MAX_TAIL_BYTES: usize = 4096;
+    let raw = std::fs::read(locald_stderr_path()).ok()?;
+    let start = raw.len().saturating_sub(MAX_TAIL_BYTES);
+    let tail = String::from_utf8_lossy(&raw[start..]);
+    tail.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches("lemma-locald: ").to_owned())
+}
+
 /// When this process started, for the launch trace to measure against.
 static LAUNCH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
@@ -1471,7 +1525,7 @@ fn spawn_locald() -> Result<Child, String> {
         )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(locald_stderr_sink());
     if let Some(pack_root) = host_pack_root() {
         command.env("LEMMA_LOCALD_HOST_PACK_ROOT", pack_root);
     }
@@ -1525,7 +1579,13 @@ where
         // A daemon that has already exited will never open the endpoint, so say
         // why instead of spending the rest of the budget waiting for it.
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("lemma-locald exited during startup ({status})"));
+            // The status alone is "exit status: 1", which tells nobody
+            // anything. The daemon writes the actual reason to its stderr, and
+            // since it exited there is nothing left to race with for the read.
+            return Err(match locald_stderr_tail() {
+                Some(reason) => format!("lemma-locald could not start: {reason}"),
+                None => format!("lemma-locald exited during startup ({status})"),
+            });
         }
         std::thread::sleep(LOCALD_POLL_INTERVAL);
     }
@@ -2643,6 +2703,14 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
         ("vm", "VM helper", vm_log),
         ("guest", "Guest services", guest_log),
         ("locald", "Service manager", root.join("locald.log")),
+        // Separate from "locald" on purpose: this is what the daemon said on
+        // its way out, which is the one thing locald.log cannot contain when
+        // the failure was constructing the daemon in the first place.
+        (
+            "locald-stderr",
+            "Service manager startup",
+            locald_stderr_path(),
+        ),
         (
             "agent-host",
             "Agent Host",

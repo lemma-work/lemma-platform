@@ -12,6 +12,7 @@
     "allow-restart",
     "allow-open-app",
     "allow-open-logs",
+    "allow-diagnostic-logs",
     "allow-runtime-info",
     "allow-repair-runtime",
     "allow-control-snapshot",

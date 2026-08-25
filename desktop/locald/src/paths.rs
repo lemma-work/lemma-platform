@@ -126,6 +126,36 @@ pub(crate) fn stable_hash(path: &Path) -> u64 {
         })
 }
 
+/// Move a file the daemon cannot parse aside instead of deleting it.
+///
+/// Every fatal read in `Daemon::new` used to end the process; healing them means
+/// replacing the file, and replacing it must not destroy the only copy of
+/// whatever went wrong. A support request can still ask for the `.invalid-`
+/// sibling, and a downgrade that quarantines a newer schema can be recovered by
+/// upgrading again.
+///
+/// The name matches `artifact_install::quarantine_path` in the desktop crate
+/// byte for byte -- two processes write into the same tree and one convention
+/// covers both. Nothing globs for these, so a collision only costs a name.
+pub fn quarantine_aside(path: &Path) -> io::Result<PathBuf> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot quarantine a path with no safe file name",
+            )
+        })?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| io::Error::other("system clock is before the unix epoch"))?
+        .as_millis();
+    let aside = path.with_file_name(format!(".{name}.invalid-{millis}"));
+    std::fs::rename(path, &aside)?;
+    Ok(aside)
+}
+
 #[cfg(unix)]
 fn set_private_dir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -142,6 +172,28 @@ fn set_private_dir(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarantine_moves_aside_without_destroying_the_original_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let aside = quarantine_aside(&path).unwrap();
+
+        assert!(!path.exists(), "the unparseable file is out of the way");
+        assert_eq!(std::fs::read(&aside).unwrap(), b"{ not json");
+        assert_eq!(aside.parent(), path.parent());
+        let name = aside.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".operator-config.json.invalid-"), "{name}");
+    }
+
+    #[test]
+    fn quarantine_reports_a_missing_file_rather_than_pretending_it_moved() {
+        let root = tempfile::tempdir().unwrap();
+        let error = quarantine_aside(&root.path().join("absent")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
 
     #[test]
     fn state_files_share_one_root() {

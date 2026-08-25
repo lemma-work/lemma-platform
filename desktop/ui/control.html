@@ -244,6 +244,14 @@
         <div class="two-column">
           <article class="panel"><div class="panel-heading"><div><h2>Local paths</h2><p>Private app state and bounded logs.</p></div></div><pre id="diag-paths">Loading…</pre><div class="button-row"><button class="btn" data-action="logs">Open logs folder</button><button class="btn" data-action="devtools">Developer tools</button></div></article>
           <article class="panel"><div class="panel-heading"><div><h2>Network contract</h2><p>Canonical workspace and API origins.</p></div></div><div id="network-contract">Available after startup.</div></article>
+          <article class="panel span-two">
+            <div class="panel-heading">
+              <div><h2>Logs</h2><p>The last of each log, refreshed while this page is open. Lines that report a problem are highlighted.</p></div>
+              <button class="btn compact" id="log-follow" type="button" aria-pressed="true">Following</button>
+            </div>
+            <div class="log-tabs" id="diag-log-tabs"></div>
+            <pre class="log-view" id="diag-log" tabindex="0">Loading…</pre>
+          </article>
           <article class="panel span-two"><div class="panel-heading"><div><h2>Non-destructive repair</h2><p>Replaces signed application/runtime files only. Databases, files, and workspaces are preserved.</p></div></div><div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
         </div>
       </section>
