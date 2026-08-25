@@ -398,8 +398,19 @@ function SetupAssistant({
   const [allowDomainJoin, setAllowDomainJoin] = useState(
     initialDraft?.allowDomainJoin ?? Boolean(normalizedWorkDomain),
   );
+  // Never on a local install.
+  //
+  // The backend suggests an organization on a domain match alone, and the
+  // consent toggle that would let someone decline lives on a step the local
+  // flow skips. So on a machine where an `EMAIL_DOMAIN` organization already
+  // exists, the next person to sign up with an address at that domain was
+  // joined to it silently -- and told so by a success toast, after the fact.
+  //
+  // The org-creation path was gated for exactly this reason; this is the other
+  // half of it, and the one that was still open.
   const suggestedOrganizations = useSuggestedOrganizations({
     enabled:
+      !isLocal &&
       Boolean(profile?.email) &&
       organizations.length === 0,
   });
@@ -521,7 +532,10 @@ function SetupAssistant({
       }
 
       let organization = activeOrganization;
-      if (!organization && suggestedOrganization) {
+      // `!isLocal` again rather than relying on the query being disabled: a
+      // silent join is not something to leave resting on one condition several
+      // hundred lines away.
+      if (!organization && !isLocal && suggestedOrganization) {
         organization = await joinSuggestedOrganization.mutateAsync(
           suggestedOrganization.id,
         );

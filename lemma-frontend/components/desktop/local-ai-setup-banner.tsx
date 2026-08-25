@@ -5,7 +5,7 @@ import { useOrganization } from "@/components/dashboard/org-context";
 import { isLocalDeployment } from "@/lib/config";
 import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
 import { openLocalSettings, useLocalAiStatus } from "@/lib/desktop/local-capabilities";
-import { thisComputer } from "@/lib/desktop/this-computer";
+import { useThisComputer } from "@/lib/desktop/this-computer";
 import { useManagedAgentRuntimes } from "@/lib/hooks/use-agent-runtime";
 import { RuntimeProfileKind } from "lemma-sdk";
 
@@ -24,6 +24,10 @@ import { RuntimeProfileKind } from "lemma-sdk";
  */
 export function LocalAiSetupBanner() {
     const local = isLocalDeployment();
+    // A hook, not `thisComputer()`: this banner is `sticky top-0` on every
+    // page, so a server/client disagreement here is a hydration mismatch on
+    // every page.
+    const computerNoun = useThisComputer();
     // Runs before the early return, and deliberately outside the `local` gate:
     // connecting this computer is not conditional on whether the banner has
     // anything to say, nor on the workspace being the one on this machine. A
@@ -48,7 +52,7 @@ export function LocalAiSetupBanner() {
         <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
             <span>
                 <strong>No model is set up yet.</strong>{" "}
-                Connect a coding agent on {thisComputer()} or an API provider, and agents start working.
+                Connect a coding agent on {computerNoun} or an API provider, and agents start working.
             </span>
             <Button
                 variant="secondary"

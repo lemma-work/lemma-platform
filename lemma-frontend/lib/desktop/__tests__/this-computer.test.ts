@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ThisComputer, thisComputer } from '@/lib/desktop/this-computer';
+import { NEUTRAL_FOR_TESTS, ThisComputer, thisComputer } from '@/lib/desktop/this-computer';
 import { discoveryHeadline, discoveryLines } from '@/components/agents/harness-discovery-rows';
 
 const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -75,11 +75,32 @@ describe('the copy that reaches the screen', () => {
         expect(discoveryHeadline('settled', 3)).toBe('Found 3 coding agents on this PC');
     });
 
-    it('does not tell a Windows user about a macOS file-access prompt', () => {
+    it('keeps its line count the same on every platform', () => {
+        // Not a style point. A different array length between the server render
+        // and the first client one is a *structural* hydration mismatch, and
+        // React repairs those by discarding the server subtree rather than by
+        // patching the text. The line about file access is phrased to be true
+        // everywhere instead of being dropped off macOS.
         pretendToBe({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0)' });
-        expect(discoveryLines('scanning', 0).join(' ')).not.toContain('macOS');
-
+        const onWindows = discoveryLines('scanning', 0);
         pretendToBe({ platform: 'MacIntel', userAgent: 'Macintosh; Intel Mac OS X' });
-        expect(discoveryLines('scanning', 0).join(' ')).toContain('macOS');
+        const onMac = discoveryLines('scanning', 0);
+        pretendToBe(undefined);
+        const onTheServer = discoveryLines('scanning', 0);
+
+        expect(onWindows).toHaveLength(onMac.length);
+        expect(onTheServer).toHaveLength(onMac.length);
+        expect(onWindows.join(' ')).not.toContain('macOS');
+    });
+
+    it('renders the same on the server and the first client pass', () => {
+        // What `useThisComputer` is for: `thisComputer()` alone answers
+        // differently in the two, which is a mismatch on every caller.
+        pretendToBe(undefined);
+        const server = thisComputer();
+        expect(server).toBe('this computer');
+        // The hook's server snapshot is the same value, so the two renders
+        // agree and the specific noun arrives in the commit afterwards.
+        expect(NEUTRAL_FOR_TESTS).toBe(server);
     });
 });

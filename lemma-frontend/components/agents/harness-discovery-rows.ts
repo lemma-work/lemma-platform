@@ -167,10 +167,12 @@ export function discoveryLines(phase: DiscoveryPhase, foundCount: number): strin
     if (phase !== 'settled') {
         return [
             'Each agent is started once to see what it offers.',
-            // Only macOS gates this, and only macOS should be told about it.
-            ...(thisComputer() === 'this Mac'
-                ? ['macOS may ask for file access — allow it.']
-                : []),
+            // Two lines, always. This used to drop the second one off macOS,
+            // which changes the array's *length* between the server render and
+            // the first client one -- and React repairs a structural mismatch
+            // by discarding the server subtree, not by patching the text. The
+            // sentence is true everywhere; only macOS is loud about it.
+            'Your system may ask for file access — allow it.',
         ];
     }
     if (foundCount === 0) {

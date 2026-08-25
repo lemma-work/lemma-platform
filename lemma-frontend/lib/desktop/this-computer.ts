@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 /**
  * What to call the machine Lemma is installed on.
  *
@@ -37,4 +39,34 @@ export function thisComputer(): ComputerNoun {
 export function ThisComputer(): string {
     const noun = thisComputer();
     return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
+/**
+ * The same answer, safe to render.
+ *
+ * `thisComputer()` returns "this computer" where there is no `navigator` and
+ * the real noun where there is -- correct, but *different* between the server
+ * render and the first client render, which is a hydration mismatch on every
+ * caller. One of them changed an array's length, which React does not repair
+ * by patching text: it discards the server subtree and re-renders it.
+ *
+ * `useSyncExternalStore` is how this repo already handles the same problem in
+ * `agent-host-bridge.ts`: the server snapshot is returned for the server render
+ * *and* the first client render, and the specific answer arrives in the commit
+ * afterwards. So the two renders agree, and the noun still ends up right.
+ *
+ * The store never changes -- a machine does not stop being a Mac -- so
+ * `subscribe` has nothing to do beyond satisfying the signature.
+ */
+const NEUTRAL: ComputerNoun = "this computer";
+
+/** The server snapshot, exported so a test can assert the two renders agree. */
+export const NEUTRAL_FOR_TESTS: ComputerNoun = NEUTRAL;
+
+function subscribe(): () => void {
+    return () => {};
+}
+
+export function useThisComputer(): ComputerNoun {
+    return useSyncExternalStore(subscribe, thisComputer, () => NEUTRAL);
 }
