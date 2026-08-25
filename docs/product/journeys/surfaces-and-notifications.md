@@ -125,12 +125,7 @@ dropped.
 ## Capability: Answer on the platform
 
 ### PS-SURF-020 — The answer comes back where the question was asked
-**Status:** gap
-
-> **Gap:** on Telegram a plain answer is delivered with `sendRichMessage`, which
-> the platform accepts with `ok:true` and then renders as an empty message — so
-> the answer arrives where it was asked and cannot be read. Buttons are
-> unaffected. See `DEV-SURF-002`.
+**Status:** covered
 
 - When an agent answers a message from a surface, the system shall deliver the
   answer in the same channel and thread.

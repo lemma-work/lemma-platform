@@ -1,5 +1,5 @@
 import SuperTokens from "supertokens-web-js";
-import Session from "supertokens-web-js/recipe/session";
+import Session from "supertokens-web-js/recipe/session/index.js";
 
 const APP_NAME = "Lemma";
 const SESSION_API_SUFFIX = "/st/auth";

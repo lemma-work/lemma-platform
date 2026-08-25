@@ -37,7 +37,15 @@ async def _runs(alice, schedule, pod):
 
 @scenario("A change to a watched table fires the schedule")
 @proves("PS-SCHED-011", "PS-SCHED-021")
-@covers("schedule.create", "record.create", "schedule.run.list", "schedule_run.completed")
+@covers(
+    "schedule.create",
+    "record.create",
+    "schedule.run.list",
+    "schedule_run.completed",
+    # A schedule completing is an autonomous origin producing an outcome,
+    # which is branch (b) of activation -- the pod has delivered.
+    "pod.delivered",
+)
 async def test_a_record_change_fires_a_schedule(watched_table):
     alice, pod, agent, table = watched_table
     schedule = await alice.creates_a_schedule(
@@ -170,6 +178,42 @@ async def test_a_schedule_can_target_a_workflow(watched_table):
 
     reopened = await alice.opens_schedule(schedule, in_pod=pod)
     assert reopened.get("workflow_name") == workflow["name"], reopened
+
+
+@scenario("Deleting a schedule's target takes the schedule with it")
+@proves("PS-SCHED-030", "PS-SCHED-003")
+@covers("schedule.create", "workflow.delete", "schedule.get", "schedule.run.list")
+async def test_deleting_the_target_takes_the_schedule(watched_table):
+    """The dangling-target state is prevented rather than reported.
+
+    `PS-SCHED-030`'s unwanted clause asks for a firing recorded as failed,
+    saying the target is missing. For a workflow target that state cannot
+    arise: deleting the workflow removes the schedules pointing at it, so
+    there is no later firing to explain. Prevention is the stronger answer of
+    the two, and this pins it — a schedule left behind pointing at nothing
+    would fire on a timer forever with nobody able to see why it did nothing.
+    """
+    alice, pod, _agent, table = watched_table
+    workflow = await alice.creates_a_workflow(in_pod=pod)
+    schedule = await alice.creates_a_schedule(
+        in_pod=pod,
+        kind="DATASTORE",
+        config={"table_name": table, "operations": ["INSERT"]},
+        workflow=workflow["name"],
+    )
+    # It really is there and armed before the deletion, so the refusal
+    # afterwards is about the deletion rather than about a schedule that never
+    # existed.
+    await alice.opens_schedule(schedule, in_pod=pod)
+
+    await alice.deletes_workflow(workflow["name"], in_pod=pod)
+
+    gone = await alice.api.call("GET", f"/pods/{pod['id']}/schedules/{schedule['id']}")
+    assert gone.status_code == 404, (
+        f"the workflow was deleted and its schedule answered "
+        f"{gone.status_code}; a schedule pointing at nothing fires forever "
+        f"and explains nothing: {gone.text[:200]}"
+    )
 
 
 @scenario("Someone outside the pod cannot read a schedule's history")

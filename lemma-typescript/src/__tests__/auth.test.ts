@@ -10,7 +10,7 @@ vi.mock("../supertokens.js", () => ({
 }));
 
 const doesSessionExist = vi.fn<() => Promise<boolean>>();
-vi.mock("supertokens-web-js/recipe/session", () => ({
+vi.mock("supertokens-web-js/recipe/session/index.js", () => ({
   default: {
     doesSessionExist: () => doesSessionExist(),
     getAccessToken: vi.fn(),

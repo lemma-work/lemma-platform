@@ -126,10 +126,6 @@ async def test_the_python_sdk_writes_a_record(world, signed_in):
     )
 
 
-@pytest.mark.xfail(
-    reason="DEV-SDK-001: the built dist cannot be imported from Node",
-    strict=True,
-)
 @scenario("The TypeScript SDK reads the pods a person can see")
 @proves("PS-POD-030")
 @covers("pod.list")
@@ -140,7 +136,12 @@ async def test_the_typescript_sdk_lists_pods(world, signed_in):
         pytest.skip("lemma-typescript is not built; run `npm ci && npm run build` there")
 
     names = sdk.evaluate(
-        f"const pods = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        f"const page = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        # A page, not an array: the SDK returns `{items, ...}` the way every
+        # listing endpoint does. `pods.map(...)` threw a TypeError here, which
+        # the old spelling never reached because the client failed to
+        # authenticate first.
+        "const pods = page.items ?? page;\n"
         "console.log('<<<RESULT>>>' + JSON.stringify(pods.map((p) => p.name)));"
     )
 

@@ -75,13 +75,13 @@ class TestTelegramRefusesBeforeSending:
 class TestSlackRefusesAPrivateLiteral:
     """Slack's base URL is checked for a written-down private address.
 
-    Partial on purpose. `build_slack_client` is synchronous and reached from
-    thirty call sites, so it cannot await the resolving guard the other
-    surfaces use; making it async is its own change, tracked as DEV-SURF-003.
+    The cheap half of two checks, and it is kept because it fails usefully
+    where the other cannot: a literal needs no DNS to recognise, so
+    169.254.169.254 is refused on a host with no resolver, or one whose
+    resolver is being answered by somebody else.
 
-    What this closes is the case worth closing first. The metadata service has
-    no hostname anybody uses — it is the literal 169.254.169.254 — and a
-    literal needs no DNS to recognise.
+    The half that judges a *name* is `TestSlackResolvesTheHostBeforeSending`
+    below.
     """
 
     @pytest.fixture(autouse=True)
@@ -134,8 +134,54 @@ class TestSlackRefusesAPrivateLiteral:
 
         assert slack_base_url({"api_base_url": api_base})
 
-    def test_a_hostname_is_left_to_the_resolving_guard(self):
-        """A name that resolves somewhere private is DEV-SURF-003, not this."""
+    def test_a_hostname_passes_this_check_and_is_judged_by_the_other(self):
+        """This check reads the text; it cannot know where a name points."""
         from app.modules.agent_surfaces.platforms.slack.client import slack_base_url
 
         assert slack_base_url({"api_base_url": "https://internal.attacker.example"})
+
+
+class TestSlackResolvesTheHostBeforeSending:
+    """A Slack base URL naming a host that resolves privately is refused.
+
+    The case the literal check above cannot see, and the reason
+    `build_slack_client` is async: `internal.attacker.example` pointed at
+    10.0.0.5 is a name, so only resolution catches it. Slack was the last
+    surface reaching a tenant-supplied `api_base_url` without this.
+
+    Driven with `localhost` rather than a mock: it is a genuine name that
+    genuinely resolves into loopback, so the guard does the real work and the
+    test needs no resolver of its own.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _production(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", False)
+
+    @pytest.mark.asyncio
+    async def test_a_name_resolving_into_private_space_is_refused(self):
+        from app.modules.agent_surfaces.platforms.slack.client import (
+            build_slack_client,
+        )
+
+        with pytest.raises(UnsafeApiBaseError) as raised:
+            await build_slack_client(
+                {
+                    "access_token": "secret-token",
+                    "api_base_url": "http://localhost:8080",
+                }
+            )
+        assert raised.value.reason == "loopback_address"
+
+    @pytest.mark.asyncio
+    async def test_the_real_endpoint_is_still_reached(self):
+        from app.modules.agent_surfaces.platforms.slack.client import (
+            build_slack_client,
+        )
+
+        client = await build_slack_client(
+            {"access_token": "secret-token", "api_base_url": "https://slack.com/api"}
+        )
+        assert str(client.base_url).startswith("https://slack.com/api")

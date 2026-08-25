@@ -1248,9 +1248,9 @@ scenarios-sandbox:
 
 # The live lane: the same platform, driven against the real third parties people
 # connect — Google, GitHub, Telegram, Composio — and a real model. Credentials
-# come from tests/scenarios/.env.live, which is gitignored; providers you have
-# not configured are skipped with a reason naming what is missing. See
-# tests/scenarios/LIVE.md.
+# come from the backend's own .env (or LEMMA_ENV_FILE) — there are no test-only
+# credential variables; providers you have not configured are skipped with a
+# reason naming what is missing. See tests/scenarios/LIVE.md.
 scenarios-live:
 	@echo "→ Product scenarios against real providers…"
 	@cd $(SCENARIOS_DIR) && SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \

@@ -234,7 +234,30 @@ async def _live(world):
         # Tell Lemma which colleague this account is. Without it the sender is a
         # stranger — which the product handles well, and is a different promise
         # from the ones these scenarios are about.
-        await holder.is_known_on_telegram_as(person.username)
+        claimed = await holder.api.call(
+            "POST",
+            "/users/me/profile",
+            json={"telegram_username": person.username},
+        )
+        if claimed.status_code == 409:
+            # Telegram handles are unique per deployment, and somebody else on
+            # this deployment already holds this one. The usual cause is a
+            # tenant provisioned twice — once with SCENARIOS_MAILBOX set and
+            # once without — which leaves two casts and two Daniels, only one
+            # of whom is in the pod carrying the surface. See
+            # `tenant.mailbox`'s docstring, which predicts exactly this.
+            pytest.skip(
+                f"@{person.username} is already claimed by a different user on "
+                f"this deployment, so an inbound message from it resolves to "
+                f"somebody who is not {holder.label}. Usually a tenant "
+                f"provisioned twice: export SCENARIOS_MAILBOX so the cast is "
+                f"the one that was provisioned, and release the handle from "
+                f"the other cast member before running the live lane"
+            )
+        assert claimed.status_code < 400, (
+            f"{holder.label} could not declare their Telegram username: "
+            f"{claimed.status_code} {claimed.text[:200]}"
+        )
         before = await _already_in(holder, pod)
         async with person.talking_to(bot) as conversation:
             yield Reachable(

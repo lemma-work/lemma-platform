@@ -152,3 +152,47 @@ async def test_a_hostile_bundle_cannot_reach_outside_the_pod(world, what, archiv
         f"a bundle containing {what} produced a usable import plan "
         f"({plan.get('status')}): {str(plan)[:600]}"
     )
+
+
+@scenario("An archive that expands far beyond its size is rejected")
+@proves("PS-PACK-013")
+@covers("pod.bundle.upload", "pod.bundle.import.start", "pod.bundle.import.get")
+async def test_a_bundle_that_expands_enormously_is_refused(world, run):
+    """The zip-bomb clause, which the path-traversal cases do not reach.
+
+    A few hundred kilobytes of zeroes compress to almost nothing and unpack to
+    a gigabyte. Nothing about the archive looks hostile — no `..`, no absolute
+    path, a well-formed manifest — so a guard that only inspects entry *names*
+    passes it straight through, and the damage is done by decompressing it.
+
+    Either gate is a correct answer: refusing the upload, or accepting the
+    bytes and failing the plan. What must not happen is the platform quietly
+    writing a gigabyte because the compressed form was small.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("manifest.json", b'{"version": 1}')
+        # 512 MiB of zeroes, which deflate to well under a megabyte.
+        bundle.writestr("data/huge.csv", b"\0" * (512 * 1024 * 1024))
+    payload = buffer.getvalue()
+    assert len(payload) < 5 * 1024 * 1024, (
+        f"the bomb is meant to be small on the wire; it is {len(payload)} bytes"
+    )
+
+    staged = await alice.api.call(
+        "POST",
+        f"/pods/{pod['id']}/bundle/uploads",
+        files={"data": ("bundle.zip", payload, "application/zip")},
+    )
+    if staged.status_code >= 400:
+        return
+
+    plan = await alice.plans_import(staged.json()["url"], into_pod=pod)
+
+    assert str(plan.get("status")) == "FAILED", (
+        f"an archive expanding to half a gigabyte produced a usable import "
+        f"plan ({plan.get('status')}): {str(plan)[:600]}"
+    )

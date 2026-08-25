@@ -233,6 +233,9 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 - The system shall count anyone whose roles grant pod membership management, not
   only holders of the `POD_ADMIN` role, so that a pod using a custom role is not
   told it has one administrator when it has four.
+- The system shall apply this to everyone, including an owner of the pod's
+  organization, because reaching a pod through an organization role is not the
+  same as the pod having an administrator.
 **Contracts:** `pod.member.remove`, `pod.member.update_roles`
 
 ---

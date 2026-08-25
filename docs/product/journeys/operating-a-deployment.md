@@ -89,21 +89,15 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Delete cleanly
 
 ### PS-OPS-020 — Deleting a pod actually stops everything it was doing
-**Status:** gap
+**Status:** covered
 
 - When a pod is deleted, the system shall stop its schedules, its surfaces, and
   its standing work, and shall keep them stopped.
 - The system shall not leave a timer, a webhook registration, or a sandbox
   running for a pod that no longer exists.
+- The system shall stop answering for anything inside a deleted pod, on every
+  route, whoever is asking.
 - The system shall leave every other pod's data and running work untouched.
-
-> **Gap:** the work stops but the pod keeps answering for it. Deleting a pod
-> now does disarm its schedules — `is_active` comes back `false`, which is the
-> half `DEV-OPS-003` was about and which #452 fixed — but the pod's schedules,
-> its agents and its records are all still readable afterwards, through any
-> route that resolves the pod with `PodContextDep` rather than
-> `require_pod_membership`. The list endpoints refuse and the item endpoints do
-> not. See `DEV-OPS-007`. Covered by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `pod.delete`, `pod.deleted`
 
@@ -135,7 +129,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** *(health endpoints are outside the documented API surface)*
 
 ### PS-OPS-031 — Work that cannot be completed is not lost silently
-**Status:** covered
+**Status:** manual
 
 - If a background job fails repeatedly, then the system shall stop retrying it
   and shall keep it somewhere an operator can find it.
@@ -143,6 +137,19 @@ rather than degrading in a way that only shows up as confused users.
   discovering it through a user report.
 - The system shall not drop an event because nothing was listening at the time
   it was published.
+
+> **Verified by:** `test_dead_letter_e2e.py` in `app/core/tests/e2e/`, not by
+> a scenario. Every clause needs a dependency to fail repeatedly on demand, and
+> the scenario suite forbids mocking, so it has no way to induce one — see
+> [testing.md](../../testing.md) on which suite owns injected failure. The two
+> tests there drive a real dispatcher against a real outbox with a broker that
+> always raises, and hold the retry budget stopping, the row being kept with
+> its error type, a dead-lettered event not being claimed again, and an
+> operator finding it and replaying it.
+>
+> This previously read `covered` on the strength of
+> `test_feedback_can_be_reported`, which reports a broken *tool* and has
+> nothing to do with dead-lettering.
 
 **Contracts:** *(operational; see [Reliability](../../../lemma-backend/docs/operators/reliability.md))*
 

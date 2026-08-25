@@ -137,7 +137,7 @@ class TestWorkflows:
         assert workflow["name"] not in listed
 
     @scenario("Someone outside the pod cannot create a workflow in it")
-    @proves("PS-FLOW-014")
+    @proves("PS-POD-011")
     @covers("workflow.create")
     async def test_an_outsider_cannot_create_a_workflow(self, world, pod):
         alice, the_pod = pod

@@ -191,14 +191,21 @@ put it there having to think about it on every operation.
 - The system shall keep every query failing closed while it is in that state,
   never falling back to an unfiltered read.
 
-> **Verified by:** an operator, on a deployment without the datastore query
-> role. Direct querying runs as a dedicated Postgres role
-> (`datastore_query_role`); where that role is absent the facility is
-> unavailable, and that is the only way the state exists. A suite that
-> induced it would have to drop the role from the running database, which
-> breaks it for every other scenario sharing the stack. The fail-closed half
-> is covered by `PS-DATA-020`: a query from outside the pod is refused rather
-> than answered unfiltered.
+> **Verified by:** `test_a_query_says_the_facility_is_unavailable` in
+> `app/modules/datastore/tests/e2e/test_query_unavailable_e2e.py`, not by a
+> scenario. Direct querying runs as a dedicated Postgres role
+> (`datastore_query_role`), and taking that role away is the only way the state
+> exists — which a scenario cannot do: the suite forbids mocking, and dropping
+> the role from a shared stack breaks every other scenario using it. Inducing a
+> dependency failure is what the module e2e suite is for
+> (see [testing.md](../../testing.md)).
+>
+> That test was written for this promise and immediately failed it: a query
+> answered `400 DATASTORE_QUERY_ERROR` with the raw Postgres message, telling
+> a person their SQL was wrong when the deployment was the problem. It now
+> answers `503 DATASTORE_QUERY_UNAVAILABLE`. The fail-closed half is covered by
+> `PS-DATA-020`: a query from outside the pod is refused rather than answered
+> unfiltered.
 
 **Contracts:** `query.execute`
 

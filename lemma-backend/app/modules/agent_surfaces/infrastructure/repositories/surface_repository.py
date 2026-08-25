@@ -26,6 +26,18 @@ from app.composition.surface_identity import Pod
 from app.composition.surface_agent import ConversationModel
 
 
+#: A surface belongs to a pod, and a deleted pod has no business answering on
+#: it. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
+#: stopped -- and a surface is the one piece of standing work that keeps running
+#: without anybody in Lemma asking it to, because the trigger comes from
+#: outside. The surface row itself stays ACTIVE on purpose: deletion is soft, so
+#: nothing is rewritten and an undelete would restore a working surface. What
+#: changes is that the pod is joined and checked here, once, rather than by each
+#: of the ingress paths remembering to.
+def _in_a_live_pod():
+    return (Pod.id == AgentSurface.pod_id) & (Pod.is_deleted.is_(False))
+
+
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
     """Repository for agent surface installations."""
 
@@ -130,6 +142,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 AgentSurface.surface_type == surface_type,
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
+            .join(Pod, _in_a_live_pod())
             .order_by(AgentSurface.created_at, AgentSurface.id)
         )
         result = await self.session.execute(stmt)
@@ -149,6 +162,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 ),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
+            .join(Pod, _in_a_live_pod())
             .order_by(AgentSurface.surface_type, AgentSurface.id)
         )
         result = await self.session.execute(stmt)

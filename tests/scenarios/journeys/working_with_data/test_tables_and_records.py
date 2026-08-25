@@ -117,6 +117,40 @@ async def test_adding_and_removing_columns_keeps_the_records(pod):
     assert "body" not in rows[0]
 
 
+@scenario("Removing the column that identifies a row is refused")
+@proves("PS-DATA-002")
+@covers("table.column.remove", "record.list")
+async def test_the_primary_key_column_cannot_be_removed(pod):
+    """Every other column is the person's to drop; this one is the row's identity.
+
+    Dropping it would leave records that nothing can address — no update, no
+    delete, no reference from a workflow or an agent — so the rows survive as
+    something a person can read and never change again. Refusing is the only
+    answer that keeps the table usable.
+    """
+    alice, the_pod = pod
+    name = (await alice.creates_a_table(in_pod=the_pod, columns=[column("subject")]))[
+        "name"
+    ]
+    await alice.adds_record(
+        {"subject": "keeps its identity"}, to_table=name, in_pod=the_pod
+    )
+    key = (await alice.opens_table(name, in_pod=the_pod))["primary_key_column"]
+
+    refused = await alice.api.call(
+        "DELETE", f"/pods/{the_pod['id']}/datastore/tables/{name}/columns/{key}"
+    )
+
+    assert refused.status_code >= 400, (
+        f"the primary key column {key!r} was removed ({refused.status_code}); "
+        f"the records it identified are now unaddressable"
+    )
+    rows = await alice.records_in(name, in_pod=the_pod)
+    assert len(rows) == 1 and rows[0]["subject"] == "keeps its identity", (
+        f"the refusal still damaged the table: {rows}"
+    )
+
+
 @scenario("A column name already used on the table is refused")
 @proves("PS-DATA-002")
 @covers("table.column.add")

@@ -1,6 +1,6 @@
 """Connectors and accounts → installing, connecting, using, and removing.
 
-The provider is a server this suite runs (`harness.fake_platform`), installed
+The provider is a server this suite runs (`harness.fake_upstreams`), installed
 through the `http` connector kind — which exists so anyone can connect an
 internal API described by its own OpenAPI spec. So the operations really
 execute, over HTTP, against something that records what it received.

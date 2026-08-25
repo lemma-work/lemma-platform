@@ -32,7 +32,7 @@ make scenarios-guards
 To iterate against a Lemma you are already running:
 
 ```bash
-cd tests/scenarios && uv run pytest --base-url http://localhost:8000
+cd tests/scenarios && uv run pytest --base-url http://localhost:8710
 ```
 
 ## How it is put together
@@ -175,7 +175,7 @@ us it has drifted: when Telegram changes a response, our imitation keeps
 returning the old one and the suite stays green. A recording can — re-record it
 and the diff is the news. That is why the cassettes are committed and reviewed.
 
-**What is left of the old loopback fakes.** `harness/fake_platform.py` is being
+**What is left of the old loopback fakes.** `harness/fake_upstreams.py` is being
 retired one journey at a time, and a guard stops new callers appearing while it
 goes. One piece will stay: a small server that returns a 500 on demand and hangs
 past the outbound timeout. No real provider does that reliably, and the three
@@ -311,16 +311,49 @@ What this buys is the point of the standing tenant: consent once, then run the
 suite as often as you like — and somebody else can run it too, without being
 sent to a browser first.
 
-## The two lanes
+## The lanes
 
-`make scenarios` is the fast lane: everything runs against containers the stack
-starts itself, in about **90 seconds** including boot. That is deliberate — a
-suite that is slow enough to think about is a suite people stop running.
+Four, not two — [LIVE.md](LIVE.md) uses "the two lanes" for the fast/live pair
+and this used to use it for fast/sandbox, which made the same phrase mean two
+things.
 
-`make scenarios-sandbox` is the slow lane. Creating a function is not a metadata
-write: the API provisions a sandbox and extracts the declared schemas by loading
-the code inside it, so those scenarios need the workspace and function images
-built first. They are marked `@pytest.mark.sandbox` and deselected by default.
+`make scenarios` is the **fast lane**: everything runs against containers the
+stack starts itself, in about **90 seconds** including boot. That is deliberate
+— a suite that is slow enough to think about is a suite people stop running.
+
+`make scenarios-sandbox` is the **sandbox lane**. Creating a function is not a
+metadata write: the API provisions a sandbox and extracts the declared schemas
+by loading the code inside it, so those scenarios need the workspace and
+function images built first. They are marked `@pytest.mark.sandbox` and
+deselected by default.
+
+`make scenarios-live` is the **live lane** — real providers, real model. It has
+[its own document](LIVE.md), because what it can and cannot do unattended is
+most of what there is to say about it.
+
+`make scenarios-guards` is the **guard lane**: the rules the suite holds itself
+to, no Docker, ~20ms.
+
+### Running the whole suite locally
+
+Every journey shares one stack, which is not the shape CI runs (it shards by
+journey). Give it the replica shape the product is built for:
+
+```bash
+SCENARIOS_WORKERS=3 make scenarios
+```
+
+`SCENARIOS_WORKERS` is how many worker processes the stack boots — one unless
+asked. `schedule_poller` says "Every replica runs this. Nothing elects a leader;
+the claim decides who fires", and one worker draining several hundred queued
+agent runs through a single event loop is how a scenario ends up waiting on a
+reply that is merely behind a queue.
+
+It is **refused above 1 when a polling receiver is on** — Telegram answers a
+second `getUpdates` for the same bot with 409 Conflict and the two pollers take
+turns losing messages. That is also worth knowing outside the suite: two Lemma
+backends on one machine sharing a `.env` will fight over the same bot, and the
+symptom is a surface message that is simply never answered.
 
 ## When a scenario finds a bug
 

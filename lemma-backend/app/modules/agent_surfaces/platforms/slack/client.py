@@ -6,7 +6,10 @@ from urllib.parse import urlsplit
 
 from slack_sdk.web.async_client import AsyncWebClient
 
-from app.modules.agent_surfaces.platforms.common import UnsafeApiBaseError
+from app.modules.agent_surfaces.platforms.common import (
+    UnsafeApiBaseError,
+    assert_safe_api_base,
+)
 
 
 def slack_access_token(credentials: dict[str, Any]) -> str | None:
@@ -32,18 +35,15 @@ def slack_base_url(credentials: dict[str, Any]) -> str | None:
 def _refuse_a_private_literal(base_url: str | None) -> str | None:
     """Reject a base URL that is *written* as a private address.
 
-    The partial guard, and deliberately so. Every other surface checks its
-    `api_base_url` with `assert_safe_url`, which resolves the host — and cannot
-    be used here, because it is async and this is the synchronous constructor
-    thirty call sites reach for. Making it async is its own change.
+    Kept alongside the resolving guard in `build_slack_client` rather than
+    replaced by it, because the two fail differently and the cheap one fails
+    usefully: a literal needs no DNS to recognise, so this still refuses
+    169.254.169.254 on a host with no resolver, or one whose resolver is being
+    answered by somebody else.
 
-    What this does close is the case worth closing first: the cloud metadata
-    service has no hostname anybody uses. It is reached as the literal
-    169.254.169.254, and a literal needs no DNS to recognise. Loopback and the
-    RFC1918 ranges come free with the same check.
-
-    What it does not close: a *name* that resolves somewhere private. That
-    needs resolution, so it needs the async guard. Tracked as DEV-SURF-003.
+    The case it cannot judge is a *name* that resolves somewhere private —
+    `internal.attacker.example` pointed at 10.0.0.5. That needs resolution, and
+    resolution is what `assert_safe_api_base` does at the point of use.
     """
     if not base_url:
         return base_url
@@ -60,7 +60,7 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     try:
         address = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
-        return base_url  # a name; only the async guard can judge it
+        return base_url  # a name; the resolving guard judges it
     if (
         address.is_link_local
         or address.is_multicast
@@ -77,14 +77,23 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     return base_url
 
 
-def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
+async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
+    """A Slack client for these credentials, with its base URL vetted first.
+
+    Async because vetting resolves DNS. `api_base_url` arrives from stored
+    account credentials, which makes it tenant-supplied input, and a name
+    pointed at internal infrastructure is the SSRF the literal check above
+    cannot see. Every other surface — Gmail, Outlook, Resend, Telegram,
+    WhatsApp — goes through `assert_safe_api_base` for exactly this; Slack was
+    the one that did not, because this constructor used to be synchronous.
+    """
     kwargs: dict[str, Any] = {}
     token = slack_access_token(credentials)
     if token:
         kwargs["token"] = token
     base_url = slack_base_url(credentials)
     if base_url:
-        kwargs["base_url"] = base_url
+        kwargs["base_url"] = await assert_safe_api_base(base_url, platform="Slack")
     return AsyncWebClient(**kwargs)
 
 

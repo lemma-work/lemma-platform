@@ -29,11 +29,14 @@ prove Telegram itself accepts what Lemma sends, and the proxy cannot be
 Telegram. Those capabilities are named — `can_forge`, `is_live` — so a scenario
 that needs one skips with a reason rather than failing somewhere confusing.
 
-The lanes are also not equally strict, which is the point of running both.
-`Said.text` unwraps `sendRichMessage`'s nested markdown, so a message the proxy
-reads as full of words can arrive at a real client empty. That is `DEV-SURF-002`,
-and it is visible only from the live lane — which is exactly the kind of thing
-a stand-in is supposed to be checked against.
+Both lanes read a reply the same way, and that took fixing. Lemma answers with
+`sendRichMessage`, whose words live in `rich_message` rather than in the plain
+`text` field. `Said.text` unwrapped that from the start; the live lane's reader
+did not, so it reported an agent that had answered perfectly well as having
+said nothing — and the disagreement between the two lanes was written up as a
+product bug (`DEV-SURF-002`) before anyone looked at a phone. A rich message
+renders as ordinary text on a real client. The lesson kept here: a lane that
+reads a different field is not a stricter lane, it is a broken one.
 """
 
 from __future__ import annotations

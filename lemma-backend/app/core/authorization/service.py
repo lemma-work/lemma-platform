@@ -535,11 +535,25 @@ class AuthorizationDataService:
                 organization_id=organization_id,
                 pod_id=pod_id,
             )
+        pod_is_deleted = False
         if cached is None and pod_id is not None:
             # Miss: the snapshot has to be derived, and that needs the org.
             pod = await self.session.get(Pod, pod_id)
             if pod is not None:
                 organization_id = pod.organization_id
+            # The row is already in hand, so learning whether the pod was
+            # deleted costs nothing here, and this is the only place it is read.
+            # `get_pod_context` turns it into the refusal.
+            #
+            # A *missing* row is deliberately not "deleted". This verdict is
+            # cached in the role snapshot, so treating absence as deletion means
+            # one moment where the row is not visible to this session — a create
+            # not yet committed, a transaction boundary, replica lag — is
+            # remembered as "deleted" and 404s every pod-scoped request for the
+            # rest of the cache's life. A pod that genuinely does not exist is
+            # already 404'd by the routes that read it, which is the right place
+            # for that answer because it is not cached.
+            pod_is_deleted = pod is not None and bool(pod.is_deleted)
 
         if cached is not None:
             return Context(
@@ -553,6 +567,7 @@ class AuthorizationDataService:
                 permission_ids=cached.permission_ids,
                 principal_refs=cached.principal_refs,
                 grant_principal_sets=cached.grant_principal_sets,
+                pod_is_deleted=cached.pod_is_deleted,
                 authorizer=authorizer,
                 request_id=request_id,
             )
@@ -604,6 +619,7 @@ class AuthorizationDataService:
             permission_ids=frozenset(permission_ids),
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
+            pod_is_deleted=pod_is_deleted,
         )
         await self._cache_snapshot_without_holding(user_id, snapshot)
         return Context(
@@ -617,6 +633,7 @@ class AuthorizationDataService:
             permission_ids=snapshot.permission_ids,
             principal_refs=snapshot.principal_refs,
             grant_principal_sets=snapshot.grant_principal_sets,
+            pod_is_deleted=snapshot.pod_is_deleted,
             authorizer=authorizer,
             request_id=request_id,
         )
