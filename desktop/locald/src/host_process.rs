@@ -2656,7 +2656,7 @@ mod tests {
         for status in [401, 404, 503] {
             let (unhealthy, server) = one_response(status, "runtime-123");
             assert!(probe_http(&unhealthy).is_err());
-            server.join().unwrap();
+            crate::join_within(server, "the health endpoint");
         }
 
         let (stale, stale_server) = one_response(200, "runtime-old");
@@ -2665,11 +2665,11 @@ mod tests {
             error.to_string().contains("different runtime instance"),
             "{error}"
         );
-        stale_server.join().unwrap();
+        crate::join_within(stale_server, "the stale health endpoint");
 
         let (healthy, healthy_server) = one_response(200, "runtime-123");
         probe_http(&healthy).unwrap();
-        healthy_server.join().unwrap();
+        crate::join_within(healthy_server, "the healthy endpoint");
     }
 
     #[test]

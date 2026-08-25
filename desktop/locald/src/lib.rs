@@ -52,6 +52,90 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(windows)]
 pub(crate) const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
+/// Join a test's server thread, or fail rather than hang the binary.
+///
+/// These tests spawn a thread that blocks in `accept()` and then reads a fixed
+/// number of bytes. If the client under test connects zero times, or one time
+/// too few, or sends a byte less than expected, that thread never returns -- and
+/// an unconditional `join()` waits with it, forever, taking every remaining
+/// test in the binary with it. `host_process.rs` carries the note about how
+/// that "burned 44 minutes of a CI runner before it was cancelled rather than
+/// failing".
+///
+/// The blocked thread is left where it is: a thread parked in a syscall cannot
+/// be cancelled in Rust, and it dies with the process at the end of the run.
+/// What changes is that the run reaches the end.
+///
+/// Here rather than in each module because there are five of these across four
+/// files, and the first fix copied it into one of them.
+#[cfg(test)]
+pub(crate) fn join_within<T>(handle: std::thread::JoinHandle<T>, what: &str) -> T {
+    join_before(handle, what, std::time::Duration::from_secs(20))
+}
+
+/// The same, with the deadline named.
+///
+/// Only the helper's own test passes one: it needs to prove the deadline fires,
+/// and paying the real twenty seconds to do that would put this file's tests
+/// among the slowest in the crate for no extra confidence.
+#[cfg(test)]
+pub(crate) fn join_before<T>(
+    handle: std::thread::JoinHandle<T>,
+    what: &str,
+    timeout: std::time::Duration,
+) -> T {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if handle.is_finished() {
+            return handle.join().expect("the server thread panicked");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("{what} never finished; it is still blocked on the socket");
+}
+
+#[cfg(test)]
+mod join_within_policy {
+    /// The helper fails instead of hanging, and does not slow a healthy join.
+    ///
+    /// The behaviour is the whole point: five tests across four files hand it a
+    /// thread that is blocked in `accept()`, and the failure mode it replaces is
+    /// a test binary that never exits.
+    #[test]
+    fn a_thread_that_never_finishes_fails_rather_than_hanging() {
+        let started = std::time::Instant::now();
+        // Never signalled, so the thread parks for the life of the process --
+        // exactly like an `accept()` nobody connects to.
+        let (_keep, receiver) = std::sync::mpsc::channel::<()>();
+        let stuck = std::thread::spawn(move || receiver.recv());
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::join_before(
+                stuck,
+                "a thread that never finishes",
+                std::time::Duration::from_millis(200),
+            )
+        }));
+
+        assert!(panicked.is_err(), "it must fail, not return");
+        // Bounded by its deadline rather than by the life of the run, which is
+        // the whole property. Generous ceiling so a loaded machine does not
+        // turn this into the flake it exists to prevent.
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_thread_that_finishes_is_joined_immediately() {
+        let started = std::time::Instant::now();
+        let quick = std::thread::spawn(|| 7);
+        assert_eq!(super::join_within(quick, "a thread that finishes"), 7);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a healthy join must not pay the polling interval",
+        );
+    }
+}
+
 #[cfg(test)]
 mod http_client_policy {
     /// Every HTTP client locald builds must opt out of the system proxy.
