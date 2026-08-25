@@ -222,6 +222,40 @@ pub fn data_reset_reason(root: &Path) -> Option<String> {
     })
 }
 
+/// Has this installation ever held user data?
+///
+/// The question a *missing* secrets file raises. Both secret files carry the
+/// same invariant -- they are gone when the data is gone -- so reminting one
+/// beside a surviving data directory is what makes every encrypted row
+/// permanently unreadable, silently. The corrupt case already records a reset;
+/// the absent case fell straight through to minting, which is the same outcome
+/// arrived at more quietly.
+///
+/// A file can go missing without the data going with it: a restore from a
+/// backup that skipped dotfiles, a `cp -R` that dropped an owner-only file, a
+/// half-finished manual cleanup.
+///
+/// Deliberately generous about what counts. A first run has an empty `data/`
+/// tree and no disk, so this is false and nothing is said; anything that has
+/// actually run has one or the other.
+pub fn installation_has_data(root: &Path) -> bool {
+    let populated =
+        |path: PathBuf| std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some());
+    // The managed disk is the strongest signal: it only exists once a runtime
+    // has been prepared, and it holds the databases.
+    if std::fs::read_dir(root.join("runtime")).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().join("data.raw").exists())
+    }) {
+        return true;
+    }
+    // Files and object storage live on the host side, outside the disk.
+    ["data/files", "data/object-storage", "data/workspaces"]
+        .iter()
+        .any(|relative| populated(root.join(relative)))
+}
+
 /// Forget the marker. Only a completed data reset may call this.
 pub fn clear_data_reset(root: &Path) -> io::Result<()> {
     match std::fs::remove_file(root.join(DATA_RESET_MARKER_FILE)) {
@@ -265,6 +299,51 @@ mod tests {
                 "DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\""
             )),
             "lemma-guestd must declare the same marker phrase as this crate",
+        );
+    }
+
+    /// A first run mints its secrets quietly; an install that has data does not.
+    ///
+    /// Both secrets files carry the same invariant: they are gone when the data
+    /// is gone. The corrupt case already records a reset. The *missing* case
+    /// fell straight through to minting a replacement -- which, beside a
+    /// surviving data directory, makes every encrypted row unreadable and the
+    /// Postgres volume unopenable, with nothing said. A file can go missing
+    /// without the data: a restore that skipped an owner-only file, a `cp -R`
+    /// that dropped one, a half-finished cleanup.
+    #[test]
+    fn an_installation_that_has_run_is_told_apart_from_a_first_run() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+
+        // A first run: the tree exists and is empty.
+        for relative in ["data/files", "data/object-storage", "data/workspaces"] {
+            std::fs::create_dir_all(root.join(relative)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("runtime/macos")).unwrap();
+        assert!(
+            !installation_has_data(root),
+            "an empty tree is a first run and must mint without ceremony",
+        );
+
+        // One uploaded file is enough to make a reminted secret a loss.
+        std::fs::write(root.join("data/files/anything"), b"x").unwrap();
+        assert!(installation_has_data(root));
+    }
+
+    /// The managed disk counts on its own, because the databases are inside it.
+    #[test]
+    fn a_prepared_runtime_counts_as_data_even_with_an_empty_file_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        std::fs::create_dir_all(root.join("runtime/macos")).unwrap();
+        assert!(!installation_has_data(root));
+
+        std::fs::write(root.join("runtime/macos/data.raw"), b"").unwrap();
+        assert!(
+            installation_has_data(root),
+            "every table lives in this disk; a new password opens none of them",
         );
     }
 
