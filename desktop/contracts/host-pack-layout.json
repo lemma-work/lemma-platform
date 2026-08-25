@@ -1,0 +1,104 @@
+{
+  "$comment": [
+    "Where things live inside a host pack, asserted from both sides.",
+    "",
+    "`scripts/build_local_host_pack.py` writes this layout and",
+    "`desktop/locald/src/native_host_pack.rs` reads it. Neither had any idea",
+    "what the other did. The producer's only tests assert `npm_executable`;",
+    "the consumer hard-codes a dozen paths and, when one is missing, fails at",
+    "the point a user is watching a progress bar -- with `NotFound` and the",
+    "name of a file they have never heard of.",
+    "",
+    "The two are also built by different jobs on different triggers. A release",
+    "run produces the pack; a PR runs the consumer's unit tests against a",
+    "fixture the same PR wrote. So a rename lands green on both sides and is",
+    "discovered by whoever installs the release.",
+    "",
+    "The rule this file exists to serve, from docs/testing.md: a stub is",
+    "legitimate only when a contract test pins both sides against one",
+    "committed artifact. This is that artifact for the host pack.",
+    "",
+    "`required` names things the consumer refuses to start without, and lists",
+    "the alternatives it accepts in the order it tries them. Order matters:",
+    "Next's standalone output nests the server under a directory named after",
+    "the workspace, and which name that is has changed with Next versions --",
+    "so the consumer tries all three and the producer resolves the same three.",
+    "",
+    "`derived` names paths the consumer builds by joining rather than probing.",
+    "There is no fallback for these: they either exist or the service that",
+    "needs them starts and then fails at runtime, which is worse than failing",
+    "here.",
+    "",
+    "`producer_writes` is the literal the *producer* must contain for that",
+    "entry, which is not always the path -- the script assembles some of these",
+    "from pieces. Where it is null the producer is checked by running it",
+    "instead, which is stronger. Both lists use it."
+  ],
+  "required": [
+    {
+      "what": "backend Python",
+      "candidates": [
+        "backend/python/bin/python3",
+        "backend/python/bin/python",
+        "backend/python/python.exe"
+      ],
+      "producer_writes": "backend/python"
+    },
+    {
+      "what": "frontend Node.js",
+      "candidates": [
+        "frontend/node/bin/node",
+        "frontend/node/node.exe"
+      ],
+      "producer_writes": null
+    },
+    {
+      "what": "frontend launcher",
+      "candidates": [
+        "frontend/frontend-launcher.mjs"
+      ],
+      "producer_writes": "frontend-launcher.mjs"
+    },
+    {
+      "what": "Next.js standalone server",
+      "candidates": [
+        "frontend/server.js",
+        "frontend/app/server.js",
+        "frontend/lemma-frontend/server.js"
+      ],
+      "producer_writes": null
+    }
+  ],
+  "derived": [
+    {
+      "what": "browser SDK bundle",
+      "path": "backend/assets/browser-sdk/lemma-client.js",
+      "producer_writes": null
+    },
+    {
+      "what": "browser UI bundle",
+      "path": "backend/assets/browser-sdk/lemma-ui.js",
+      "producer_writes": null
+    },
+    {
+      "what": "agent skills",
+      "path": "backend/assets/lemma-skills",
+      "producer_writes": "assets/lemma-skills"
+    },
+    {
+      "what": "alembic migrations",
+      "path": "backend/migrations",
+      "producer_writes": "\"migrations\""
+    },
+    {
+      "what": "alembic configuration",
+      "path": "backend/alembic.ini",
+      "producer_writes": "alembic.ini"
+    },
+    {
+      "what": "the pack marker",
+      "path": "pack.json",
+      "producer_writes": "pack.json"
+    }
+  ]
+}

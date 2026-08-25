@@ -126,6 +126,7 @@ jobs:
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
               - 'desktop/locald/src/native_host_pack.rs'
+              - 'desktop/contracts/**'
               - 'desktop/local-runtime/guest-image/**'
               - '.github/workflows/ci.yml'
             repo_tooling:
@@ -138,6 +139,9 @@ jobs:
               # desktop job and skipped the test that reads it.
               - 'scripts/build_local_host_pack.py'
               - 'scripts/prepare_desktop_test_runtime.py'
+              # The host-pack layout contract. Both halves of it have to run
+              # when it changes, and this is the half that lives in tests/.
+              - 'desktop/contracts/**'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
