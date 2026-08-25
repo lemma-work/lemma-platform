@@ -928,7 +928,7 @@ mod tests {
     /// And the shape that makes that possible is not accidental.
     #[test]
     fn run_cli_puts_its_child_in_its_own_group_and_never_returns_unreaped() {
-        let source = include_str!("agent_host.rs");
+        let source = include_str!("agent_host.rs").replace("\r\n", "\n");
         let start = source.find("fn run_cli(").expect("run_cli exists");
         let body = &source[start..start + 2000];
 

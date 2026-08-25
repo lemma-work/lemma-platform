@@ -6905,7 +6905,7 @@ mod tests {
         // early for a state with no phase, and again for an undecided
         // connection mode -- so those states left the bare static logo on
         // screen indefinitely, which is what a stuck first run looked like.
-        let splash = include_str!("../ui/index.html");
+        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
         let body = {
             let start = splash
                 .find("function renderState(s) {")
@@ -6936,8 +6936,8 @@ mod tests {
         // heartbeat takes the same path, so opening settings during a first
         // install blocked for the whole install. The install has its own
         // single-flight now, and it must come first.
-        let source = include_str!("main.rs");
-        let body = function_body(source, "fn ensure_locald(app: &AppHandle)");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let body = function_body(&source, "fn ensure_locald(app: &AppHandle)");
         let install = body
             .find("ensure_runtime_artifacts(app)")
             .expect("ensure_locald installs the runtime");
@@ -6970,8 +6970,8 @@ mod tests {
         // this runs on the locald reader thread -- so holding the lock across
         // them stopped daemon events being read whenever the main thread was
         // busy. Progress froze and `ready` was never handled.
-        let source = include_str!("main.rs");
-        let body = function_body(source, "fn refresh_agent_host_tray(");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let body = function_body(&source, "fn refresh_agent_host_tray(");
         let guard_end = body
             .find("guard.clone()")
             .expect("the handles are cloned out of the guard");
@@ -7061,7 +7061,7 @@ mod tests {
         // error -- so every path that gives up and shows the splash has to
         // clear `ready` first, or the two bounce the user between a splash and
         // a dead workspace.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let setup = {
             let start = source.find(".setup(move |app| {").expect("setup exists");
             let end = source[start..]
@@ -7100,7 +7100,7 @@ mod tests {
         // came to sit on "Starting Lemma." with no progress for minutes.
         //
         // Both launch paths, resume and cold start, must hand that to a worker.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let setup = {
             let start = source.find(".setup(move |app| {").expect("setup exists");
             let end = source[start..]
@@ -7126,9 +7126,9 @@ mod tests {
         // saved, and the only signal that one had been was the placeholder
         // inside the input -- grey, and invisible until the drawer was opened.
         // Somebody who had just saved a Deepgram key had no way to see it land.
-        let markup = include_str!("../ui/control.html");
-        let script = include_str!("../ui/control.js");
-        let style = include_str!("../ui/control.css");
+        let markup = include_str!("../ui/control.html").replace("\r\n", "\n");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
+        let style = include_str!("../ui/control.css").replace("\r\n", "\n");
 
         assert!(
             !markup.contains(">Optional<"),
@@ -7169,7 +7169,7 @@ mod tests {
         // does not implement, so it returns false without drawing anything:
         // the click is received and discarded, and the button looks inert.
         // Destructive actions go through the native dialog command instead.
-        let script = include_str!("../ui/control.js");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
         assert!(
             !script.contains("window.confirm("),
             "a destructive button is gated on a confirm() that always says no"
@@ -7199,7 +7199,7 @@ mod tests {
     /// launch, every error and every shutdown flashed a full screen of cream.
     #[test]
     fn the_splash_is_the_products_colour_and_follows_the_system_theme() {
-        let splash = include_str!("../ui/index.html");
+        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
 
         for gold in [
             "#c0801f",
@@ -7247,7 +7247,7 @@ mod tests {
     /// The one screen where a metered connection decides says the real number.
     #[test]
     fn first_run_states_the_download_it_actually_makes() {
-        let splash = include_str!("../ui/index.html");
+        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
         assert!(
             !splash.contains("several gigabytes"),
             "the compressed download is ~500 MB; 'several gigabytes' is the \
@@ -7369,7 +7369,7 @@ mod tests {
                 "{name} must not grant process control",
             );
         }
-        let workspace = include_str!("../capabilities/workspace.json");
+        let workspace = include_str!("../capabilities/workspace.json").replace("\r\n", "\n");
         for command in ["allow-check-for-app-update", "allow-install-app-update"] {
             assert!(
                 !workspace.contains(command),
@@ -7383,7 +7383,7 @@ mod tests {
     /// stays out of the base config.
     #[test]
     fn the_updater_config_keeps_its_transport_and_build_boundaries() {
-        let config = include_str!("../tauri.conf.json");
+        let config = include_str!("../tauri.conf.json").replace("\r\n", "\n");
         assert!(config.contains("\"updater\""));
         assert!(
             !config.contains("dangerousInsecureTransportProtocol"),
@@ -7451,7 +7451,7 @@ mod tests {
     /// failure, for an update that never began.
     #[test]
     fn an_update_is_downloaded_and_verified_before_the_stack_is_stopped() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let start = source
             .find("async fn install_app_update(")
             .expect("install_app_update exists");
@@ -7565,6 +7565,42 @@ mod tests {
         assert!(masked.contains("expired"));
     }
 
+    /// A source-searching test must not depend on how the repo was checked out.
+    ///
+    /// Git's default on Windows rewrites text files to CRLF, and these tests
+    /// read their own source and the bundled UI through `include_str!`. A
+    /// needle containing `\n` then matches nothing -- but only sometimes:
+    /// `find("\nfn ")` still matches inside `"\r\nfn "`, so most survived and
+    /// exactly two did not. The failures appear only on the Windows job, which
+    /// is not in the desktop path filter, so each one costs a push to see.
+    ///
+    /// Two defences, and this asserts the one that can be asserted from here:
+    /// every `include_str!` bound for searching normalises on the way in.
+    /// `.gitattributes` is the other, and means a checkout never has CRLF to
+    /// normalise.
+    #[test]
+    fn every_included_source_is_read_with_normalised_line_endings() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let mut unnormalised = Vec::new();
+        for (number, line) in source.lines().enumerate() {
+            let trimmed = line.trim();
+            // A binding, which is what gets searched. An inline
+            // `include_str!(..).contains("one line")` cannot span a newline.
+            if !trimmed.starts_with("let ") || !trimmed.contains("= include_str!(") {
+                continue;
+            }
+            if !trimmed.contains(r#".replace("\r\n", "\n")"#) {
+                unnormalised.push(format!("main.rs:{}: {trimmed}", number + 1));
+            }
+        }
+        assert!(
+            unnormalised.is_empty(),
+            "these read included text without normalising, so a needle \
+             containing a newline finds nothing on a Windows checkout:\n{}",
+            unnormalised.join("\n"),
+        );
+    }
+
     /// Redaction does not reformat the log on the way past.
     ///
     /// The masker used to rebuild each line with
@@ -7636,7 +7672,7 @@ mod tests {
     /// the release behaviour by calling the function.
     #[test]
     fn a_release_build_ignores_every_runtime_redirecting_env_var() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         for name in [
             "LEMMA_DESKTOP_HOST_PACK_ROOT",
             "LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT",
@@ -7655,7 +7691,7 @@ mod tests {
         // The gate itself, so this cannot pass against a `dev_override` that
         // forgot to check.
         assert!(
-            function_body(source, "fn dev_override(name: &str)")
+            function_body(&source, "fn dev_override(name: &str)")
                 .contains("if !cfg!(debug_assertions)"),
             "dev_override must be inert outside a development build",
         );
@@ -7668,8 +7704,8 @@ mod tests {
         // been sent that never was: menu items did nothing at all, and
         // stop_then_quit armed the quit flags and then waited forever for the
         // completion of an operation it had not started.
-        let source = include_str!("main.rs");
-        let body = function_body(source, "fn send_local_operation(");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let body = function_body(&source, "fn send_local_operation(");
         assert!(
             body.contains("return Err(LOCALD_BUSY.to_string());"),
             "a busy daemon must refuse the operation"
@@ -7685,8 +7721,8 @@ mod tests {
         // The splash used to go up before the stop was sent, so a refusal left
         // a "stopping Lemma" screen in front of a stack nobody had asked to
         // stop, with no way back.
-        let source = include_str!("main.rs");
-        let body = function_body(source, "fn stop_impl(");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let body = function_body(&source, "fn stop_impl(");
         let sent = body.find("send_local_operation").expect("stop_impl sends");
         let splash = body
             .find("show_splash_with_intent")
@@ -7701,8 +7737,8 @@ mod tests {
     fn giving_up_on_quit_says_so() {
         // Confirming "Stop and Quit" and then getting neither, silently, is the
         // failure this guards.
-        let source = include_str!("main.rs");
-        let body = function_body(source, "fn stop_then_quit(");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let body = function_body(&source, "fn stop_then_quit(");
         assert!(
             body.contains("report_action_failure"),
             "a quit that cannot start its stop must tell the user why"
@@ -7782,7 +7818,7 @@ mod tests {
         // Declaring an app manifest means an ungranted command is rejected at
         // runtime, from the bundled pages too. Nothing in the build surfaces
         // that - the page just stops working - so pin it here instead.
-        let commands = include_str!("../build.rs");
+        let commands = include_str!("../build.rs").replace("\r\n", "\n");
         let all: Vec<String> = commands
             .lines()
             .filter_map(|line| {
@@ -8115,7 +8151,7 @@ mod tests {
         // accent, its own paper, its own display face. Colours now live in one
         // token block at the top and every rule reads from it, so this catches
         // the next raw hex before it becomes a third design system.
-        let css = include_str!("../ui/control.css");
+        let css = include_str!("../ui/control.css").replace("\r\n", "\n");
         let rules = css
             .split_once("* { box-sizing: border-box; }")
             .expect("control.css starts with a token block then its rules")
@@ -8201,7 +8237,7 @@ mod tests {
         //
         // Asserted on the source for the same reason as the wait below: reaching
         // the real path needs a running event loop.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let body = {
             let start = source
                 .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
@@ -8309,7 +8345,7 @@ mod tests {
 
         // And the stripping is actually wired, before the deliberate ones are
         // set -- `env` after `env_remove` is what makes those still win.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let start = source
             .find("fn spawn_locald()")
             .expect("spawn_locald exists");
@@ -8328,7 +8364,7 @@ mod tests {
 
     #[test]
     fn quitting_leaves_nothing_running_that_the_user_cannot_see() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let body_of = |name: &str| {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
             let end = source[start..]
@@ -8409,7 +8445,7 @@ mod tests {
     /// "Winding down." to the person who just asked to leave.
     #[test]
     fn a_wedged_daemon_cannot_stop_the_app_from_quitting() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let start = source.find("fn finish_quit(").expect("finish_quit exists");
         let body = &source[start..start + 1400];
 
@@ -8446,7 +8482,7 @@ mod tests {
         // The two highest-stakes strings in the app -- what is about to be
         // deleted -- were the ones this test did not reach. Both shipped in the
         // Windows build naming hardware that build's users do not have.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         for name in ["fn reset_local_data_impl(", "fn reset_full_reinstall_impl("] {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
             let body = &source[start..start + 1200];
@@ -8558,7 +8594,7 @@ mod tests {
     /// introduced to fix.
     #[test]
     fn a_rebuild_keeps_the_window_where_it_is_rather_than_where_it_once_was() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         assert!(
             source.contains("let placement = placement.or_else(|| remembered_placement(handle));"),
             "the caller's placement has to take precedence",
@@ -8572,7 +8608,7 @@ mod tests {
     /// launches where coming back at the wrong size is most irritating.
     #[test]
     fn window_geometry_survives_a_launch_that_was_never_a_clean_quit() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let start = source
             .find("fn build_main_window_at(")
             .expect("build_main_window_at exists");
@@ -8591,7 +8627,7 @@ mod tests {
         // Hidden-until-painted is only safe because something shows it anyway.
         // A window that never paints and never appears is an app with no
         // interface, which is the failure the label wait already guards.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let start = source
             .find("fn build_main_window_at(")
             .expect("build_main_window_at exists");
@@ -8624,7 +8660,7 @@ mod tests {
         //
         // Asserted on the source because reaching the real path needs a running
         // event loop; `wait_until_label_released` itself is tested above.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let body = {
             let start = source
                 .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
@@ -8670,7 +8706,7 @@ mod tests {
         // Asserted on the source because the alternative needs a running
         // AppHandle, and the thing worth pinning is that the one function every
         // mode change goes through is what rebuilds them.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let set_mode = {
             let start = source
                 .find("fn set_mode(app: &AppHandle, mode: &str)")
@@ -8695,7 +8731,7 @@ mod tests {
         // Scoped to the two menu builders rather than the whole file, because
         // a test that scans its own source matches the very strings it is
         // asserting are gone.
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         let menus = {
             let start = source
                 .find("fn build_app_menu")
@@ -8852,7 +8888,7 @@ mod tests {
     /// A web inspector does not ship enabled in the top-level menus.
     #[test]
     fn developer_tools_are_a_development_build_affordance() {
-        let source = include_str!("main.rs");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
         for block in source.split("\"devtools\",").skip(1) {
             let head = &block[..block.len().min(200)];
             assert!(
@@ -9077,7 +9113,7 @@ mod tests {
         assert!(!message.contains("Publish"), "{message}");
         assert!(!message.contains("PR test DMG"), "{message}");
 
-        let splash = include_str!("../ui/index.html");
+        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
         assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));
         assert!(splash.contains("refreshDiagnosticLog"));
         assert!(splash.contains("id=\"log-tabs\""));
@@ -9226,7 +9262,7 @@ mod tests {
 
     #[test]
     fn desktop_frontend_launcher_has_no_shared_development_origin_fallback() {
-        let launcher = include_str!("../runtime/frontend-launcher.mjs");
+        let launcher = include_str!("../runtime/frontend-launcher.mjs").replace("\r\n", "\n");
         assert!(launcher.contains("locald must provide the isolated frontend and API origins"));
         assert!(!launcher.contains("app.lemma.localhost:3711"));
         assert!(!launcher.contains("app.lemma.localhost:8711"));
@@ -9292,7 +9328,7 @@ mod tests {
 
     #[test]
     fn first_launch_chooser_explains_both_connection_modes() {
-        let html = include_str!("../ui/index.html");
+        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
 
         assert!(html.contains("Welcome to Lemma."));
         assert!(html.contains("run Lemma on this Mac"));
@@ -9332,10 +9368,10 @@ mod tests {
     /// extend anything.
     #[test]
     fn every_page_that_ships_on_windows_renames_the_machine() {
-        let splash = include_str!("../ui/index.html");
-        let control = include_str!("../ui/control.js");
+        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
+        let control = include_str!("../ui/control.js").replace("\r\n", "\n");
 
-        for (page, source) in [("index.html", splash), ("control.js", control)] {
+        for (page, source) in [("index.html", &splash), ("control.js", &control)] {
             assert!(
                 source.contains(r#"replace(/\bthis Mac\b/g, "this PC")"#),
                 "{page} has no device rewrite, so its copy is Mac-only",
@@ -9398,7 +9434,7 @@ mod tests {
         // who has not installed one that the app is not for them, on the first
         // screen they ever see. What this machine has is checked after sign-in,
         // where it is a fact.
-        let html = include_str!("../ui/index.html");
+        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
 
         assert!(
             !html.contains("setup-kicker\">Workspace location"),
@@ -9432,8 +9468,8 @@ mod tests {
 
     #[test]
     fn local_settings_exposes_honest_runtime_repair_and_rollback_boundaries() {
-        let html = include_str!("../ui/control.html");
-        let script = include_str!("../ui/control.js");
+        let html = include_str!("../ui/control.html").replace("\r\n", "\n");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
 
         assert!(html.contains("Signed release lifecycle"));
         assert!(script.contains("repair_runtime"));
@@ -9458,8 +9494,8 @@ mod tests {
 
     #[test]
     fn cloudflare_sharing_defaults_to_safe_automatic_provisioning() {
-        let html = include_str!("../ui/control.html");
-        let script = include_str!("../ui/control.js");
+        let html = include_str!("../ui/control.html").replace("\r\n", "\n");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
 
         assert!(html.contains("Automatic setup · recommended"));
         assert!(html.contains("Use an existing named tunnel"));
@@ -9473,8 +9509,8 @@ mod tests {
 
     #[test]
     fn local_models_are_reached_through_a_provider_endpoint_not_an_app_owned_server() {
-        let html = include_str!("../ui/control.html");
-        let script = include_str!("../ui/control.js");
+        let html = include_str!("../ui/control.html").replace("\r\n", "\n");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
 
         // Ollama and LM Studio are the supported local-model path: they are
         // ordinary OpenAI-compatible endpoints the user already runs, so they
@@ -9490,8 +9526,8 @@ mod tests {
 
     #[test]
     fn the_default_model_is_chosen_from_the_providers_own_list() {
-        let html = include_str!("../ui/control.html");
-        let script = include_str!("../ui/control.js");
+        let html = include_str!("../ui/control.html").replace("\r\n", "\n");
+        let script = include_str!("../ui/control.js").replace("\r\n", "\n");
 
         // Typing a model id from memory was the old contract and the reason a
         // correct provider could still be applied with a model it does not
@@ -9653,7 +9689,7 @@ mod tests {
 
     #[test]
     fn macos_allows_only_the_local_http_frontend_and_app_subdomains() {
-        let plist = include_str!("../Info.plist");
+        let plist = include_str!("../Info.plist").replace("\r\n", "\n");
 
         assert!(plist.contains("NSAllowsLocalNetworking"));
         assert!(plist.contains("lemma.localhost"));

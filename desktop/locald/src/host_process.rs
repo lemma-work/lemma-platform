@@ -3084,7 +3084,7 @@ mod tests {
             "wait_for_running(&",
             "wait_for_recorded_exit(&",
         ];
-        let source = include_str!("host_process.rs");
+        let source = include_str!("host_process.rs").replace("\r\n", "\n");
         let lines: Vec<&str> = source.lines().collect();
 
         let mut ungated = Vec::new();

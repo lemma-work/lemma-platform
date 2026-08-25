@@ -259,7 +259,7 @@ mod tests {
     /// no button, which is the failure this whole path exists to remove.
     #[test]
     fn the_guest_raises_the_same_reset_phrase_this_daemon_maps() {
-        let guestd = include_str!("../../local-runtime/guestd/src/lib.rs");
+        let guestd = include_str!("../../local-runtime/guestd/src/lib.rs").replace("\r\n", "\n");
         assert!(
             guestd.contains(&format!(
                 "DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\""

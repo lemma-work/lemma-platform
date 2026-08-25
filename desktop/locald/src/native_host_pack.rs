@@ -979,7 +979,7 @@ mod tests {
 
         // What this file actually probes for, read out of its own source so the
         // list cannot be maintained twice.
-        let source = include_str!("native_host_pack.rs");
+        let source = include_str!("native_host_pack.rs").replace("\r\n", "\n");
         let packaged = {
             let start = source
                 .find("fn packaged_bindings(")
