@@ -263,8 +263,10 @@ async def test_connecting_email_does_not_mint_a_second_mailbox(world, run):
     )
     original = _address_of(minted[0])
 
+    # No name, which is the plain "connect email" call and what the UI sends.
+    # A *named* request asks for a distinct surface and still mints one.
     connected = await alice.connects_a_surface(
-        in_pod=pod, platform="RESEND", agent=agent["name"]
+        in_pod=pod, platform="RESEND", agent=agent["name"], unnamed=True
     )
 
     assert _address_of(connected) == original, (
@@ -307,6 +309,13 @@ async def test_a_new_pod_already_has_an_address(world, run):
         "a pod nobody has connected anything to still has to be writable-to, "
         "and this one has no address at all"
     )
+    # The assistant's mailbox is not named for the platform, because that is the
+    # name an unnamed request resolves to and the two collided.
+    assert all(
+        surface["name"] != "resend"
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ), "the pod assistant is back on the name a plain connect request wants"
     assert all(a.endswith(inbound_email_domain()) for a in addressed), (
         f"an address outside this deployment's inbound domain never arrives: {addressed}"
     )
