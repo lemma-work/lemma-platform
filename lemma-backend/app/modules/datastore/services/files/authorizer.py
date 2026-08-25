@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Sequence
 from uuid import UUID
 
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import (
+    ActorType,
+    Context,
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
@@ -164,6 +169,31 @@ class FileAuthorizer:
             # human path below does for RESTRICTED-folder visibility) would defeat
             # a deep-folder grant — e.g. a grant on /docs/eng/runbooks would still
             # fail because the agent lacks a separate grant on /docs and /docs/eng.
+            await self.authz.require_document_read(
+                user_id=requester_user_id,
+                pod_id=file_entity.pod_id,
+                resource_id=file_entity.id,
+                resource_name=file_entity.path,
+                ctx=ctx,
+            )
+            return
+
+        if (
+            normalize_resource_visibility(file_entity.visibility)
+            == ResourceVisibility.PUBLIC
+        ):
+            # Shared with every signed-in account, so the folders it happens to
+            # sit in are not a second gate. Walking them was: a non-member holds
+            # no pod permissions, and an ancestor folder is POD by default, so a
+            # document explicitly opened to anyone still 403'd unless it lived at
+            # the datastore root. The share dialog said "anyone with a Lemma
+            # account can open it" and the download disagreed — and the preview
+            # route, which authorizes the document alone, said yes right before
+            # the download said no.
+            #
+            # Only reads reach here (require_document_read), and only the
+            # document's OWN visibility short-circuits, so a POD file inside a
+            # RESTRICTED folder is still covered by the walk below.
             await self.authz.require_document_read(
                 user_id=requester_user_id,
                 pod_id=file_entity.pod_id,
