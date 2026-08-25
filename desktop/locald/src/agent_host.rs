@@ -344,24 +344,35 @@ impl AgentHostSupervisor {
             )
         })?;
         std::fs::create_dir_all(&self.data_dir)?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .no_console_window()
             .arg("--data-dir")
             .arg(&self.data_dir)
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Its own group, for the same reason `spawn_process` does it: this
+            // is how `refresh` runs, and a refresh re-probes every installed
+            // agent -- which spawns each one. `child.kill()` reaches the CLI and
+            // nothing it started, so a `refresh` that hit its 180-second ceiling
+            // used to leave a probe of every agent on the machine behind.
+            command.process_group(0);
+        }
+        // Nothing below may return without reaping. `Child::drop` neither kills
+        // nor waits, and two of the lines that follow used `?`.
+        let mut child = Reaped(Some(command.spawn()?));
 
         let deadline = Instant::now() + cli_timeout(arguments[0]);
         loop {
-            if child.try_wait()?.is_some() {
+            if child.get().try_wait()?.is_some() {
                 break;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("Agent Host did not answer `{}` in time", arguments[0]),
@@ -370,7 +381,7 @@ impl AgentHostSupervisor {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        let output = child.wait_with_output()?;
+        let output = child.take().wait_with_output()?;
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr);
             let detail = detail.trim();
@@ -435,6 +446,35 @@ impl AgentHostSupervisor {
             command.process_group(0);
         }
         command.spawn()
+    }
+}
+
+/// A child that is terminated and reaped however its scope ends.
+///
+/// `std::process::Child::drop` does neither, so any `?` between a spawn and a
+/// `wait` leaks the process -- and `run_cli` had two, on a call that spawns
+/// every installed agent.
+struct Reaped(Option<Child>);
+
+impl Reaped {
+    fn get(&mut self) -> &mut Child {
+        self.0
+            .as_mut()
+            .expect("the child is taken only once, at the end")
+    }
+
+    /// Hand the child on to something that consumes it, so `Drop` stands down.
+    fn take(&mut self) -> Child {
+        self.0.take().expect("the child is taken only once")
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            // The group, so a probe the CLI spawned goes too.
+            let _ = terminate_process_tree(&mut child);
+        }
     }
 }
 
@@ -851,6 +891,59 @@ mod tests {
 
         assert_eq!(std::fs::metadata(&supervisor.log_path).unwrap().len(), 0);
         assert!(supervisor.log_path.with_extension("log.previous").is_file());
+    }
+
+    /// A CLI call that times out takes what it spawned with it.
+    ///
+    /// `run_cli` is how `refresh` runs, and a refresh re-probes every installed
+    /// agent -- which spawns each one. The timeout path used `child.kill()`,
+    /// which reaches the CLI and nothing it started, so a refresh that hit its
+    /// 180-second ceiling left a probe of every agent on the machine behind.
+    /// And two of the lines between the spawn and the wait used `?`, which
+    /// drops a `Child` -- neither killing nor reaping it.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_call_that_is_dropped_takes_its_process_group_with_it() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.process_group(0);
+        let child = command.spawn().expect("sh is available");
+        let group = i32::try_from(child.id()).expect("a pid fits in i32");
+
+        drop(Reaped(Some(child)));
+
+        assert_ne!(
+            unsafe { libc::kill(-group, 0) },
+            0,
+            "the group outlived the guard, so a spawned probe would too",
+        );
+    }
+
+    /// And the shape that makes that possible is not accidental.
+    #[test]
+    fn run_cli_puts_its_child_in_its_own_group_and_never_returns_unreaped() {
+        let source = include_str!("agent_host.rs");
+        let start = source.find("fn run_cli(").expect("run_cli exists");
+        let body = &source[start..start + 2000];
+
+        assert!(
+            body.contains("command.process_group(0)"),
+            "a CLI call spawns agents; killing only the CLI orphans them",
+        );
+        assert!(
+            body.contains("Reaped(Some(command.spawn()?))"),
+            "every path out of run_cli has to reap",
+        );
+        assert!(
+            !body.contains("let _ = child.kill();"),
+            "killing the process rather than the group is what leaked",
+        );
     }
 
     /// A supervisor that goes out of scope takes its sidecar with it.

@@ -577,7 +577,7 @@ dev:
 	@echo ""
 	@# The readiness check is what confirms the unified application finished
 	@# starting; sandbox provisioning is part of it rather than a second service.
-	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 		$(MAKE) --no-print-directory _run-backend & \
 		$(MAKE) --no-print-directory _run-frontend & \
 		$(MAKE) --no-print-directory _wait-backend || { \
@@ -601,7 +601,7 @@ dev-public:
 	echo "  Debug and safe request-access logs are enabled."; \
 	echo "  Press Ctrl-C or run 'make stop' to stop."; \
 	echo ""; \
-	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 	$(MAKE) --no-print-directory _run-backend \
 		BACKEND_API_URL="$$public_api_url" \
 		BACKEND_SESSION_COOKIE_DOMAIN= \
