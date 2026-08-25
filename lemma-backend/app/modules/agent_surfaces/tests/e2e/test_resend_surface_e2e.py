@@ -254,12 +254,13 @@ async def test_connecting_email_returns_the_address_the_agent_already_has(
 
     # The address the agent was given when it was created.
     await db_session.commit()
-    minted = (
-        await db_session.execute(
-            _select_pod_resend_surfaces(pod_id, agent_name=agent["name"])
-        )
-    ).scalars()
-    before = list(minted)
+    before = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
     assert len(before) == 1, f"an agent should be created holding one mailbox: {before}"
     original_address = before[0].surface_identity_email
     assert original_address
@@ -281,25 +282,23 @@ async def test_connecting_email_returns_the_address_the_agent_already_has(
     after = list(
         (
             await db_session.execute(
-                _select_pod_resend_surfaces(pod_id, agent_name=agent["name"])
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
             )
         ).scalars()
     )
     assert len(after) == 1, f"the agent ended up with {len(after)} mailboxes"
 
 
-def _select_pod_resend_surfaces(pod_id: str, *, agent_name: str):
-    """This pod's Resend surfaces bound to the named agent."""
+def _select_agent_resend_surfaces(pod_id: str, *, agent_id: str):
+    """This agent's Resend surfaces, by the binding rather than by name.
+
+    The binding is what the code under test resolves on, so asserting against
+    it asks the same question the fix answers.
+    """
     from sqlalchemy import select
 
-    from app.modules.agent.infrastructure.models import Agent
-
-    return (
-        select(AgentSurface)
-        .join(Agent, Agent.id == AgentSurface.agent_id)
-        .where(
-            AgentSurface.pod_id == UUID(pod_id),
-            AgentSurface.surface_type == "RESEND",
-            Agent.name == agent_name,
-        )
+    return select(AgentSurface).where(
+        AgentSurface.pod_id == UUID(pod_id),
+        AgentSurface.surface_type == "RESEND",
+        AgentSurface.agent_id == UUID(agent_id),
     )

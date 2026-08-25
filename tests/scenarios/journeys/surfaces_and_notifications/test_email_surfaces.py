@@ -308,8 +308,7 @@ async def test_a_new_pod_already_has_an_address(world, run):
         "and this one has no address at all"
     )
     assert all(a.endswith(inbound_email_domain()) for a in addressed), (
-        f"an address outside this deployment's inbound domain never arrives: "
-        f"{addressed}"
+        f"an address outside this deployment's inbound domain never arrives: {addressed}"
     )
 
 
