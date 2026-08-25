@@ -317,6 +317,26 @@ class TestInstallingAnMcpServer:
 
 
 class TestSqlInstallTargetsAreVetted:
+    @pytest.fixture(autouse=True)
+    def guard_is_closed(self, monkeypatch):
+        """Assert the refusal against a deployment that has not opted out.
+
+        This class is the only place that asserts the guard *refuses*, and it
+        was reading whatever ambient value the process happened to hold rather
+        than stating the precondition it needs. That is a real difference, not
+        a theoretical one: `agent_surfaces/tests/e2e/conftest.py` sets
+        `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS=true` in `os.environ` at
+        import time -- it has to, so the worker subprocess inherits it -- and
+        pytest imports every conftest for the directories a shard collects. So
+        the moment a shard happened to hold both modules, this test stopped
+        testing anything and reported `DID NOT RAISE`.
+
+        A test of a refusal has to own the setting that makes it a refusal.
+        """
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", False)
+
     async def test_a_private_database_host_is_refused(
         self, db_session, fixed_test_org, fixed_test_user
     ):

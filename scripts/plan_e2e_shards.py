@@ -24,6 +24,7 @@ rather than in a step that recomputes it invisibly on every run.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import shutil
@@ -71,11 +72,8 @@ PINNED = [
         # groups that need the built images, and splitting them meant paying
         # the same image build twice against one racing cache key.
         "why": "real Docker sandbox provisioning contends for the runner's CPU",
-        # Split across runners rather than across xdist workers. The reason
-        # above is about two workers inside *one* four-vCPU runner; separate
-        # jobs each get their own, so the parallelism is free of the
-        # contention. One bin here keeps today's layout; raise it once the
-        # 200s file inside this group has been split.
+        # One bin keeps today's grouping. Raising it needs the 200s file inside
+        # this group split first, or the extra bin has nothing to take.
         "bins": 1,
     },
     {
@@ -131,9 +129,12 @@ PINNED = [
 FIXED_SECONDS = {True: 134.0, False: 112.0}  # keyed by needs_sandbox_images
 
 # Everything else is packed into this many shards at this many xdist workers.
-# Five total shards keeps every bin under the pinned `sandbox` shard's
-# wall-clock, which is the floor for the whole workflow, while staying well
-# inside the free plan's twenty-concurrent-job budget.
+# The total shard count is a decision about queueing, not only about balance:
+# the free plan allows twenty concurrent jobs across the whole org, and a full
+# PR push already asks for about twenty-three. Every extra shard makes that
+# worse for everyone, and two of twelve sampled runs already lost about four
+# minutes to the queue -- more than a rebalance saves. So bins get added only
+# where they change which shard is the wall.
 PACKED_SHARDS = 3
 # Two, not three. Three was generalised from the one shard ever measured at it
 # -- the old `pod` shard, 94 tests of pure API work -- and it does not hold for
@@ -162,7 +163,7 @@ CATCH_ALL_ROOTS = ["app/modules", "app/core"]
 # sat in was the floor for the workflow no matter how the rest was arranged.
 # The trailing `\w+` stops at the first dot, so a class-based test
 # (`...test_records_e2e.TestDatastoreRlsRows`) keys on the module, not the class.
-CLASSNAME = re.compile(r"(app\.(?:modules\.\w+|core(?:\.\w+)*?))\.tests\.e2e\.(\w+)")
+CLASSNAME = re.compile(r"(app\.(?:modules\.\w+|core(?:\.\w+)*?))\.tests\.e2e\.(.+)")
 
 # A packed shard is named after its heaviest module. Two of those names read
 # badly as check names, so they get a shorter one.
@@ -204,7 +205,14 @@ class Measured(NamedTuple):
     file_seconds: Counter
     file_tests: Counter
 
+    #: Directories whose JUnit reported a test the file resolver could not
+    #: place. Refusing to split them is the safe half of that failure: the
+    #: directory's weight is still right, so it packs correctly as one unit.
+    unsplittable: frozenset
+
     def files_in(self, directory: str) -> list[str]:
+        if directory in self.unsplittable:
+            return []
         return sorted(
             path for path in self.file_seconds
             if path.startswith(directory + "/")
@@ -217,12 +225,34 @@ class Measured(NamedTuple):
         return self.file_tests[path] if path.endswith(".py") else self.tests[path]
 
 
-def _measure(junit_dir: Path) -> Measured:
+def _resolve_file(backend: Path, directory: str, tail: str) -> str | None:
+    """Turn the dotted tail of a JUnit `classname` into the file it came from.
+
+    `classname` is `<module path>` for a plain test and `<module path>.<Class>`
+    for a class-based one, and the module path may itself run through a
+    subpackage -- `pod.tests.e2e.workload_permissions.test_table_permissions_e2e`
+    is a directory, a file, and no class. Guessing by shape gets this wrong:
+    taking the first component invented `workload_permissions.py`, a file that
+    does not exist, and handed it to pytest as a shard argument.
+
+    So it is resolved against the tree instead: the longest dotted prefix that
+    is a real file wins, and nothing does when nothing matches.
+    """
+    parts = tail.split(".")
+    for stop in range(len(parts), 0, -1):
+        candidate = f"{directory}/{'/'.join(parts[:stop])}.py"
+        if (backend / candidate).is_file():
+            return candidate
+    return None
+
+
+def _measure(junit_dir: Path, backend: Path) -> Measured:
     """Sum test time and test count per e2e directory and per test file."""
     seconds: Counter = Counter()
     tests: Counter = Counter()
     file_seconds: Counter = Counter()
     file_tests: Counter = Counter()
+    unsplittable: set[str] = set()
     files = list(junit_dir.rglob("junit-*.xml"))
     if not files:
         sys.exit(f"no junit-*.xml under {junit_dir}")
@@ -235,10 +265,24 @@ def _measure(junit_dir: Path) -> Measured:
             elapsed = float(case.get("time") or 0)
             seconds[key] += elapsed
             tests[key] += 1
-            file_key = f"{key}/{match.group(2)}.py"
+            file_key = _resolve_file(backend, key, match.group(2))
+            if file_key is None:
+                unsplittable.add(key)
+                continue
             file_seconds[file_key] += elapsed
             file_tests[file_key] += 1
-    return Measured(seconds, tests, file_seconds, file_tests)
+    # A directory whose files do not account for all of its measured time
+    # cannot be split without losing the difference.
+    for directory in list(seconds):
+        covered = sum(
+            value for name, value in file_seconds.items()
+            if name.startswith(directory + "/")
+        )
+        if abs(covered - seconds[directory]) > 0.05:
+            unsplittable.add(directory)
+    return Measured(
+        seconds, tests, file_seconds, file_tests, frozenset(unsplittable)
+    )
 
 
 def _module_of(path: str) -> str:
@@ -247,39 +291,80 @@ def _module_of(path: str) -> str:
     return parts[2] if path.startswith("app/modules/") and len(parts) > 2 else "core"
 
 
-def _session_worker_conflict(backend: Path) -> tuple[set[str], set[str]]:
-    """Modules that own a session streaq worker, and modules that use the base one.
+def _negated_markers(markers: str) -> set[str]:
+    """The marker names a filter string deselects, e.g. `not workspace` -> workspace."""
+    return set(re.findall(r"\bnot\s+(\w+)", markers))
 
-    Two streaq workers in one pytest process consume from the same per-xdist
-    Redis database, and `production_worker_process` calls `flushdb` on entry --
-    so the second to start wipes the first one's queue. `agent_surfaces`
-    legitimately overrides the base `worker` fixture, so it must never share a
-    bin with a module that uses the base one.
 
-    Until now this was only a tripwire: a unit test rejected an illegal layout
-    after the packer had already produced it, and the layout that shipped
-    avoided the collision by luck. At file granularity the packer gets many more
-    chances to pair them, so it now avoids the collision by construction. The
-    unit test stays as the backstop.
+def _module_marks(path: Path) -> set[str]:
+    """Marker names in a module-level `pytestmark`, by AST rather than by grep.
+
+    A substring search for "workspace" matches the word in a docstring, an
+    import or a fixture name, so it would call most of this suite
+    workspace-marked. Only the module-level `pytestmark` decides which lane a
+    file is in, so that is the only thing read here.
     """
+    marks: set[str] = set()
+    for node in ast.parse(path.read_text()).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(getattr(t, "id", "") == "pytestmark" for t in node.targets):
+            continue
+        for inner in ast.walk(node.value):
+            if isinstance(inner, ast.Attribute):
+                marks.add(inner.attr)
+    return marks
+
+
+def _session_worker_conflict(backend: Path, markers: str) -> tuple[set[str], set[str]]:
+    """Modules that start their own session worker, and modules using the base one.
+
+    `production_worker_process` calls `flushdb` on entry *and* on teardown, and
+    every xdist process shares one Redis database. So a module that starts its
+    own session worker wipes the base worker's consumer group: the base worker
+    stays alive and simply stops being delivered anything, and every later test
+    that waits on a job hangs until pytest-timeout kills it.
+
+    Detected by what a fixture *does*, not by what it is called. Matching
+    `async def worker` -- which is what the contract test did, and what the
+    first version of this function copied -- finds `agent_surfaces` and misses
+    `datastore`, whose session-scoped fixture is named `document_worker`. That
+    miss is not hypothetical: it let the packer put `datastore` and `pod_bundle`
+    in one shard, and four `test_connector_import_e2e` tests each hung for the
+    full 120-second cap while the worker sat there healthy, `returncode: None`.
+
+    A module doing both is its own business -- `datastore` runs base-worker
+    tests and a document worker today and is green -- so an owner conflicts only
+    with a *different* module's use of the base worker.
+    """
+
     def module(path: Path) -> str:
-        # From the front (`app/modules/<name>/...`). The nested glob below
-        # reaches files at more than one depth, so counting backwards from the
+        # From the front (`app/modules/<name>/...`). The nested globs below
+        # reach files at more than one depth, so counting backwards from the
         # filename returns "e2e" for anything in a subpackage.
         return path.relative_to(backend).parts[2]
 
     owners = {
         module(path)
-        for path in backend.glob("app/modules/*/tests/e2e/conftest.py")
-        if "async def worker" in path.read_text()
+        # `**` matches zero directories too, so this covers the conftest sitting
+        # directly in tests/e2e as well as any in a subpackage.
+        for path in backend.glob("app/modules/*/tests/e2e/**/conftest.py")
+        if "production_worker_process" in path.read_text()
     }
     # Requesting it as a fixture, not merely mentioning the word: "worker"
     # appears in comments and docstrings all over this suite.
     requests = re.compile(r"(?m)^\s+worker[,:)]|pytest\.mark\.worker")
+    excluded = _negated_markers(markers)
     base_users = {
         module(path)
         for path in backend.glob("app/modules/*/tests/e2e/**/test_*.py")
-        if requests.search(path.read_text())
+        # A file this shard's filter deselects cannot collide with anything: it
+        # never runs, so it never asks for a worker. Without this, `workflow`
+        # counted as a base-worker user in the fast lane while every one of its
+        # e2e tests is `workspace`-marked and deselected there -- a conflict the
+        # packer would have worked to avoid, against a module contributing zero
+        # tests.
+        if not (_module_marks(path) & excluded) and requests.search(path.read_text())
     } - owners
     return owners, base_users
 
@@ -325,22 +410,69 @@ def _pack(
     return [entry[1] for entry in loads]
 
 
-def _explode(paths: list[str], measured: Measured, target: float) -> list[str]:
-    """Replace directories heavier than `target` with the test files inside them.
+#: How far over the ideal bin the heaviest bin may sit before another directory
+#: gets broken open. Every explosion costs readability in `args` and moves a
+#: file out from under the "new tests land here by default" rule, so this buys
+#: balance only while balance is still worth buying.
+BALANCE_TOLERANCE = 1.05
+
+
+def _plan_bins(
+    paths: list[str],
+    measured: Measured,
+    bins: int,
+    conflict: tuple[set[str], set[str]] = (frozenset(), frozenset()),
+) -> list[list[str]]:
+    """Pack `paths` into `bins`, breaking directories open only as needed.
 
     Mixed granularity on purpose. Directories are the better unit -- `args` stay
     readable, and a newly added `test_*.py` is collected by whichever shard
-    holds its directory instead of by nobody. So a directory is only broken open
-    when it is too heavy to be one bin, which today is true of exactly one.
+    holds its directory instead of by nobody. So this starts with directories
+    and explodes one at a time, heaviest-bin-first, until the heaviest bin is
+    within `BALANCE_TOLERANCE` of the ideal.
+
+    Doing it by iteration rather than by a weight threshold matters: the
+    threshold version left `app/modules/workspace/tests/e2e` whole at 79s
+    because it was under a 155s bar, and one indivisible 79s lump against two
+    ~155s bins is what unbalance looks like. The bin that is actually too heavy
+    is the only thing that says which directory to open.
     """
-    out = []
-    for path in paths:
-        files = measured.files_in(path)
-        if measured.seconds[path] > target and len(files) > 1:
-            out.extend(files)
-        else:
-            out.append(path)
-    return out
+    def load(bin_: list[str]) -> float:
+        return sum(measured.weight(path) for path in bin_)
+
+    units = list(paths)
+    ideal = sum(measured.weight(path) for path in units) / bins
+    packed = _pack([(u, measured.weight(u)) for u in units], bins, conflict)
+    # Bounded rather than `while True`: every pass must strictly reduce the
+    # number of unexploded directories, so this cannot run longer than there
+    # are directories, and the bound says so out loud.
+    for _ in range(len(units) + len(measured.seconds)):
+        heaviest = max(packed, key=load)
+        if load(heaviest) <= ideal * BALANCE_TOLERANCE:
+            break
+        openable = [
+            path for path in heaviest
+            if not path.endswith(".py") and len(measured.files_in(path)) > 1
+        ]
+        if not openable:
+            break
+        worst = max(openable, key=measured.weight)
+        units = [u for u in units if u != worst] + measured.files_in(worst)
+        packed = _pack([(u, measured.weight(u)) for u in units], bins, conflict)
+    return packed
+
+
+def _topmost(paths) -> list[str]:
+    """Drop any path already covered by another in the set.
+
+    `--ignore=a/b` and `--ignore=a/b/test_c.py` together say nothing more than
+    the first alone.
+    """
+    ordered = sorted(set(paths))
+    return [
+        path for path in ordered
+        if not any(path.startswith(other + "/") for other in ordered if other != path)
+    ]
 
 
 def _render_args(members: list[str], roots: list[str], given_away: list[str]) -> str:
@@ -448,10 +580,17 @@ def main() -> int:
         if args.run_id:
             junit_dir = Path(tmp)
             _download_junit(args.run_id, junit_dir)
-        measured = _measure(junit_dir)
+        measured = _measure(junit_dir, REPO_ROOT / "lemma-backend")
 
     seconds = measured.seconds
-    conflict = _session_worker_conflict(REPO_ROOT / "lemma-backend")
+    backend = REPO_ROOT / "lemma-backend"
+    # Per marker set, not once: which modules can collide depends on which
+    # tests the shard's filter actually selects, and the sandbox lane selects
+    # `workspace` while every other lane deselects it.
+    conflicts = {
+        markers: _session_worker_conflict(backend, markers)
+        for markers in {FAST_MARKERS, SANDBOX_MARKERS}
+    }
 
     # (name, members, roots) per shard. `roots` is non-empty for the one shard
     # in each group that collects by directory and subtracts the rest, which is
@@ -465,9 +604,7 @@ def main() -> int:
         if count == 1:
             planned.append((group["name"], dirs, dirs, group))
             continue
-        target = sum(seconds[d] for d in dirs) / count
-        members = _explode(dirs, measured, target)
-        bins = _pack([(m, measured.weight(m)) for m in members], count, conflict)
+        bins = _plan_bins(dirs, measured, count, conflicts[group["markers"]])
         # The roots shard also pays for collecting the directory to filter it,
         # so it goes to the lightest bin.
         bins.sort(key=lambda bin_: sum(measured.weight(m) for m in bin_))
@@ -475,13 +612,8 @@ def main() -> int:
             name = group["name"] if index == 0 else f"{group['name']}-{index + 1}"
             planned.append((name, bin_, dirs if index == 0 else [], group))
 
-    packable_dirs = [d for d in seconds if d not in pinned_dirs]
-    packable = _explode(
-        sorted(packable_dirs),
-        measured,
-        sum(seconds[d] for d in packable_dirs) / PACKED_SHARDS,
-    )
-    bins = _pack([(m, measured.weight(m)) for m in packable], PACKED_SHARDS, conflict)
+    packable_dirs = sorted(d for d in seconds if d not in pinned_dirs)
+    bins = _plan_bins(packable_dirs, measured, PACKED_SHARDS, conflicts[FAST_MARKERS])
     # The catch-all goes to the lightest bin, since collecting the whole tree
     # to filter it costs a little on top of the tests it actually runs.
     bins.sort(key=lambda bin_: sum(measured.weight(m) for m in bin_))
@@ -490,30 +622,60 @@ def main() -> int:
         name = SHARD_ALIASES.get(_module_of(heaviest), _module_of(heaviest))
         planned.append((name, bin_, CATCH_ALL_ROOTS if index == 0 else [], None))
 
-    everything = sorted({member for _, members, _, _ in planned for member in members})
+
+
+    leaves = sorted(measured.file_seconds)
 
     shards = []
     for name, members, roots, group in planned:
-        serial = round(sum(measured.weight(m) for m in members), 1)
+        # What other shards have claimed, and this one must therefore not
+        # collect. A pinned group claims its whole declared directory, not just
+        # the files its bins happen to hold: without that, the catch-all
+        # ignored `app/modules/function/tests/e2e`'s files one by one, so a new
+        # file added there would have been collected by the catch-all -- under
+        # FAST_MARKERS, which says `not workspace`, so it would have been
+        # deselected and silently never run.
+        claimed = {
+            path
+            for other_name, other_members, _, _ in planned
+            if other_name != name
+            for path in other_members
+        } | {
+            directory
+            for other in PINNED
+            if other is not group
+            for directory in other["dirs"]
+        }
+        # Reduced to its topmost entries: ignoring a directory already ignores
+        # its files, and listing both makes the args longer without changing
+        # what runs.
+        given_away = _topmost(
+            path for path in claimed
+            if path not in members
+            and any(path == r or path.startswith(r + "/") for r in roots)
+        )
+        args = _render_args(members, roots, given_away)
         workers = group["workers"] if group else PACKED_WORKERS
         needs_images = group["needs_sandbox_images"] if group else False
+        # Weigh what this shard actually collects, by asking the same function
+        # `--verify` asks, rather than by summing what was handed to it. The
+        # bookkeeping version was wrong twice over -- a roots shard's members
+        # can be one directory while its roots cover two, and the assigned set
+        # holds directories *and* the files split out of them, so subtracting
+        # the given-away paths double-counted and drove two shards negative.
+        # Deriving it from the rendered args cannot disagree with the args.
+        covered = [
+            leaf for leaf in leaves if _collectors(leaf, [{"name": name, "args": args}])
+        ]
+        serial = round(sum(measured.file_seconds[leaf] for leaf in covered), 1)
         shard = {
             "name": name,
-            "args": _render_args(
-                members,
-                roots,
-                # A roots shard subtracts everything assigned elsewhere that it
-                # would otherwise collect -- for a pinned group that is only its
-                # own siblings, for the catch-all it is every other shard.
-                [path for path in everything
-                 if path not in members
-                 and any(path == r or path.startswith(r + "/") for r in roots)],
-            ),
+            "args": args,
             "workers": workers,
             "markers": group["markers"] if group else FAST_MARKERS,
             "needs_sandbox_images": needs_images,
             "serial_seconds": serial,
-            "tests": sum(measured.count(m) for m in members),
+            "tests": sum(measured.file_tests[leaf] for leaf in covered),
             # What this shard's job is predicted to take: the fixed cost before
             # its first test plus the work divided by its workers. Balancing
             # `serial_seconds` is not the goal -- shards finish together or they

@@ -4,7 +4,6 @@ import ast
 import importlib.util
 import json
 import pathlib
-import re
 from pathlib import Path
 
 
@@ -312,43 +311,38 @@ def test_a_shard_never_runs_two_session_workers_in_one_process() -> None:
     """
     backend = _REPO_ROOT / "lemma-backend"
 
-    def _modules(shard: dict) -> set[str]:
+    planner = _load_planner()
+
+    def _modules_run_by(shard: dict) -> set[str]:
+        """Which modules this shard actually collects, not which its args name.
+
+        The catch-all's args are `app/modules app/core` plus ignores, so reading
+        module names off the args sees "core" and nothing else -- it missed
+        every module the catch-all sweeps up by default, which is most of them.
+        """
         return {
-            part.split("/")[2]
-            for part in shard["args"].split()
-            if part.startswith("app/modules/")
+            planner._module_of(str(path.relative_to(backend)))
+            for path in backend.glob("app/**/tests/e2e/**/test_*.py")
+            if planner._collectors(str(path.relative_to(backend)), [shard])
         }
 
-    def _module_of(path: pathlib.Path) -> str:
-        # From the front (`app/modules/<name>/...`), not from the back. The
-        # nested glob below reaches files at more than one depth, and counting
-        # backwards from those returns "e2e" for anything in a subpackage.
-        return path.relative_to(backend).parts[2]
-
-    overrides_worker = {
-        _module_of(path)
-        for path in backend.glob("app/modules/*/tests/e2e/conftest.py")
-        if "async def worker" in path.read_text()
-    }
-    # Requesting it as a fixture, not merely mentioning the word: the string
-    # "worker" appears in comments and docstrings all over this suite, and
-    # matching those put `identity` -- which asks for no worker at all -- on
-    # this list.
-    requests_worker = re.compile(r"(?m)^\s+worker[,:)]|pytest\.mark\.worker")
-    uses_base_worker = {
-        # `**`, not one level: a test in a nested package under tests/e2e asks
-        # for the same session worker and was invisible to this check.
-        _module_of(path)
-        for path in backend.glob("app/modules/*/tests/e2e/**/test_*.py")
-        if requests_worker.search(path.read_text())
-    } - overrides_worker
-
     for shard in _shards():
-        modules = _modules(shard)
-        own = modules & overrides_worker
-        base = modules & uses_base_worker
+        # Asked of the planner rather than reimplemented here. This test used to
+        # carry its own copy that matched `async def worker`, which finds
+        # `agent_surfaces` and misses `datastore` -- whose session-scoped
+        # fixture is named `document_worker` and runs the same
+        # `production_worker_process`. The copy said a datastore+pod_bundle
+        # shard was fine; four `test_connector_import_e2e` tests then hung for
+        # the full 120-second cap, with the worker alive and simply not being
+        # delivered anything.
+        owners, base_users = planner._session_worker_conflict(backend, shard["markers"])
+        modules = _modules_run_by(shard)
+        own = modules & owners
+        base = modules & base_users
         assert not (own and base), (
-            f"shard {shard['name']!r} packs {sorted(own)} (own session worker) "
-            f"with {sorted(base)} (base session worker); two streaq workers in "
-            f"one process flush each other's queue"
+            f"shard {shard['name']!r} packs {sorted(own)} (starts its own "
+            f"session worker) with {sorted(base)} (uses the base session "
+            f"worker); `production_worker_process` flushes the shared Redis "
+            f"database on entry and on teardown, which drops the base worker's "
+            f"consumer group"
         )

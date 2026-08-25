@@ -4,7 +4,7 @@
     "serial_seconds": 1558.5,
     "tests": 819,
     "directories": 14,
-    "files": 122
+    "files": 125
   },
   "shards": [
     {
@@ -30,36 +30,36 @@
       "why_serial": "MEASURED 2026-08-22: xdist coverage race disproven, but the per-run spread is 0.4pt against a 0.2pt bar -- re-measure before raising"
     },
     {
-      "name": "pod",
-      "args": "app/modules app/core --ignore=app/core/tests/e2e --ignore=app/modules/agent/tests/e2e --ignore=app/modules/agent_surfaces/tests/e2e --ignore=app/modules/apps/tests/e2e --ignore=app/modules/connectors/tests/e2e --ignore=app/modules/datastore/tests/e2e --ignore=app/modules/function/tests/e2e --ignore=app/modules/pod_bundle/tests/e2e --ignore=app/modules/workspace/tests/e2e",
+      "name": "schedule",
+      "args": "app/modules app/core --ignore=app/core/tests/e2e --ignore=app/modules/agent/tests/e2e --ignore=app/modules/agent_surfaces/tests/e2e --ignore=app/modules/datastore/tests/e2e --ignore=app/modules/function/tests/e2e --ignore=app/modules/identity/tests/e2e --ignore=app/modules/pod/tests/e2e/test_authorization_cost_e2e.py --ignore=app/modules/pod/tests/e2e/test_authz_hardening_e2e.py --ignore=app/modules/pod/tests/e2e/test_default_pod_agent_delegation_e2e.py --ignore=app/modules/pod/tests/e2e/test_permission_api_e2e.py --ignore=app/modules/pod/tests/e2e/test_pod_controller.py --ignore=app/modules/pod/tests/e2e/test_pod_join_request_controller_e2e.py --ignore=app/modules/pod/tests/e2e/test_pod_list_query_budget_e2e.py --ignore=app/modules/pod/tests/e2e/test_visibility_access_matrix_e2e.py --ignore=app/modules/pod/tests/e2e/workload_permissions/test_connector_permissions_e2e.py --ignore=app/modules/pod/tests/e2e/workload_permissions/test_personal_path_permissions_e2e.py --ignore=app/modules/usage/tests/e2e --ignore=app/modules/workspace/tests/e2e",
       "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
-      "serial_seconds": 347.5,
-      "tests": 199,
-      "estimated_seconds": 285.8,
+      "serial_seconds": 351.2,
+      "tests": 217,
+      "estimated_seconds": 287.6,
       "catch_all": true
     },
     {
       "name": "datastore",
-      "args": "app/modules/datastore/tests/e2e app/modules/pod_bundle/tests/e2e",
+      "args": "app/core/tests/e2e app/modules/datastore/tests/e2e app/modules/pod/tests/e2e/test_authorization_cost_e2e.py app/modules/pod/tests/e2e/test_default_pod_agent_delegation_e2e.py app/modules/pod/tests/e2e/test_pod_join_request_controller_e2e.py app/modules/pod/tests/e2e/test_visibility_access_matrix_e2e.py app/modules/pod/tests/e2e/workload_permissions/test_personal_path_permissions_e2e.py",
       "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
-      "serial_seconds": 353.4,
-      "tests": 131,
-      "estimated_seconds": 288.7,
+      "serial_seconds": 352.1,
+      "tests": 162,
+      "estimated_seconds": 288.1,
       "catch_all": false
     },
     {
       "name": "surfaces",
-      "args": "app/core/tests/e2e app/modules/agent_surfaces/tests/e2e app/modules/apps/tests/e2e app/modules/connectors/tests/e2e",
+      "args": "app/modules/agent_surfaces/tests/e2e app/modules/identity/tests/e2e app/modules/pod/tests/e2e/test_authz_hardening_e2e.py app/modules/pod/tests/e2e/test_permission_api_e2e.py app/modules/pod/tests/e2e/test_pod_controller.py app/modules/pod/tests/e2e/test_pod_list_query_budget_e2e.py app/modules/pod/tests/e2e/workload_permissions/test_connector_permissions_e2e.py app/modules/usage/tests/e2e",
       "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
-      "serial_seconds": 354.5,
-      "tests": 312,
-      "estimated_seconds": 289.2,
+      "serial_seconds": 352.1,
+      "tests": 263,
+      "estimated_seconds": 288.1,
       "catch_all": false
     }
   ]
