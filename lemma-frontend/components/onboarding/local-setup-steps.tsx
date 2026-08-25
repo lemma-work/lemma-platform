@@ -287,7 +287,12 @@ export function LocalIntelligenceStep({
     // and the user does not -- but a wait is only worth explaining once it has
     // gone on long enough to be worth explaining.
     const elapsedMs = useElapsedWhile(working);
-    const statusLine = discoveryStatusLine({ phase, foundCount, elapsedMs });
+    const statusLine = discoveryStatusLine({
+        phase,
+        foundCount,
+        elapsedMs,
+        computer: computerNoun,
+    });
     // Asking the host to look again, which is a different act from asking the
     // server what it was told last time. The host reads the request off its
     // control file on a five-second beat and then probes every agent, so the
@@ -383,8 +388,8 @@ export function LocalIntelligenceStep({
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
-                    headline={discoveryHeadline(phase, foundCount)}
-                    lines={discoveryLines(phase, foundCount)}
+                    headline={discoveryHeadline(phase, foundCount, computerNoun)}
+                    lines={discoveryLines(phase, foundCount, computerNoun)}
                     working={working}
                 />
             }

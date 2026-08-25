@@ -817,6 +817,27 @@ fn load_or_create_host_secrets(path: &Path, healed: &mut Vec<String>) -> io::Res
             }
         }
     }
+    // Absent, not unreadable -- and that is not automatically a first run. A
+    // restore that skipped an owner-only file, or a half-finished manual
+    // cleanup, leaves the data behind and takes the key. Minting silently there
+    // is the same permanent loss the corrupt path is careful about, arrived at
+    // more quietly.
+    else if path
+        .parent()
+        .is_some_and(crate::paths::installation_has_data)
+    {
+        let root = path.parent().expect("checked just above");
+        crate::paths::require_data_reset(
+            root,
+            "this installation's secret is missing, and anything encrypted with it can no \
+             longer be read",
+        )?;
+        healed.push(
+            "the installation secret was missing while local data was still present; a new \
+             one was created and the existing encrypted data cannot be decrypted with it"
+                .to_owned(),
+        );
+    }
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
         .map_err(|error| io::Error::other(format!("secure randomness failed: {error}")))?;
@@ -1296,6 +1317,54 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));
+    }
+
+    /// A secret that vanished beside surviving data stops the install.
+    ///
+    /// `installation_secret` derives the Fernet key for every encrypted column.
+    /// Reminting it while the data directory is still there does not fail --
+    /// that is the problem. Rows decrypt to garbage, and the only sign is
+    /// whatever breaks first, weeks later.
+    #[test]
+    fn a_missing_installation_secret_beside_real_data_demands_a_reset() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        std::fs::write(root.join("data/files/uploaded"), b"a user's file").unwrap();
+        let path = root.join("host.secrets.json");
+
+        let mut healed = Vec::new();
+        let secrets = load_or_create_host_secrets(&path, &mut healed).unwrap();
+
+        assert_eq!(
+            secrets.installation_secret.len(),
+            64,
+            "a key is still minted"
+        );
+        assert!(
+            crate::paths::data_reset_reason(root).is_some(),
+            "the install must stop with a reset offered, not carry on quietly",
+        );
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].contains("missing"), "{}", healed[0]);
+    }
+
+    /// And a genuine first run says nothing at all.
+    #[test]
+    fn a_first_run_mints_its_secret_without_ceremony() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        let path = root.join("host.secrets.json");
+
+        let mut healed = Vec::new();
+        load_or_create_host_secrets(&path, &mut healed).unwrap();
+
+        assert!(healed.is_empty(), "nothing was lost: {healed:?}");
+        assert!(
+            crate::paths::data_reset_reason(root).is_none(),
+            "a first run must not be told to reset the data it does not have",
+        );
     }
 
     #[test]

@@ -2615,6 +2615,7 @@ dependencies = [
 name = "lemma-desktop"
 version = "0.7.0"
 dependencies = [
+ "base64 0.22.1",
  "interprocess",
  "libc",
  "objc2",
