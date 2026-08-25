@@ -9135,20 +9135,22 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
     const podId = (_h = (_g = overrides.podId) != null ? _g : win.podId) != null ? _h : fromEnv("POD_ID");
+    const token = (_i = overrides.token) != null ? _i : fromEnv("TOKEN");
     return {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
-      app: (_i = overrides.app) != null ? _i : win.app,
-      timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
-      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
-      client: (_l = overrides.client) != null ? _l : win.client,
-      appId: (_m = overrides.appId) != null ? _m : win.appId
+      token,
+      app: (_j = overrides.app) != null ? _j : win.app,
+      timeoutMs: (_k = overrides.timeoutMs) != null ? _k : win.timeoutMs,
+      maxRetries: (_l = overrides.maxRetries) != null ? _l : win.maxRetries,
+      client: (_m = overrides.client) != null ? _m : win.client,
+      appId: (_n = overrides.appId) != null ? _n : win.appId
     };
   }
 
@@ -9237,8 +9239,9 @@ var LemmaClient = (() => {
     "st-refresh-token"
   ];
   var LOCALSTORAGE_TOKEN_KEY = "lemma_token";
+  var memoryToken = null;
   function readStorageToken() {
-    if (typeof window === "undefined") return null;
+    if (typeof window === "undefined") return memoryToken;
     try {
       return localStorage.getItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9246,14 +9249,20 @@ var LemmaClient = (() => {
     }
   }
   function writeStorageToken(token) {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = token;
+      return;
+    }
     try {
       localStorage.setItem(LOCALSTORAGE_TOKEN_KEY, token);
     } catch {
     }
   }
   function removeStorageToken() {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = null;
+      return;
+    }
     try {
       localStorage.removeItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9269,10 +9278,7 @@ var LemmaClient = (() => {
     removeStorageToken();
   }
   function detectInjectedToken() {
-    if (typeof window === "undefined") return null;
-    const localToken = readStorageToken();
-    if (localToken) return localToken;
-    return null;
+    return readStorageToken();
   }
   function normalizePath2(path) {
     const trimmed = path.trim();
@@ -9439,7 +9445,14 @@ var LemmaClient = (() => {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
   var AuthManager = class {
-    constructor(apiUrl, authUrl) {
+    /**
+     * @param token A credential to present as `Authorization: Bearer`. Supplying
+     *   it is the supported way to authenticate outside a browser, where there
+     *   is no session cookie and no `localStorage`. It wins over a token set
+     *   through `setTestingToken`, because it was passed for this client rather
+     *   than left lying in shared state.
+     */
+    constructor(apiUrl, authUrl, token) {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
@@ -9448,7 +9461,7 @@ var LemmaClient = (() => {
       __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
-      this.injectedToken = detectInjectedToken();
+      this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
       if (!this.injectedToken) {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
       }
@@ -16929,7 +16942,7 @@ var LemmaClient = (() => {
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
       this._podId = this._config.podId;
-      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl);
+      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,

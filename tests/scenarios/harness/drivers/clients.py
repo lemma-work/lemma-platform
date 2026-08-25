@@ -174,15 +174,14 @@ class TypescriptSdkDriver:
             # on `new Lemma(...)` being undefined long before it reached the
             # API -- which read as the SDK being unloadable and was filed as
             # half of `DEV-SDK-001`.
-            "const { LemmaClient, setTestingToken } = require('./dist/index.js');\n"
-            # `apiUrl`, and the token injected rather than passed: `LemmaConfig`
-            # has no `baseUrl` and no `token` field, so the old spelling built a
-            # client pointed nowhere and unauthenticated, and every call came
-            # back 401. `setTestingToken` is the SDK's own documented way to
-            # supply a bearer token outside a browser session.
-            f"setTestingToken({self.token!r});\n"
+            "const { LemmaClient } = require('./dist/index.js');\n"
+            # `apiUrl` and `token`, which is what `LemmaConfig` actually names.
+            # This used to say `new Lemma({baseUrl, token})` — a class the SDK
+            # does not export and two fields the config does not have — so the
+            # script failed before it reached the API and read as the package
+            # being unloadable.
             f"const lemma = new LemmaClient({{ apiUrl: {self.base_url!r}, "
-            f"authUrl: {self.base_url!r} }});\n"
+            f"authUrl: {self.base_url!r}, token: {self.token!r} }});\n"
             "(async () => {\n"
             f"{body}\n"
             "})().catch((e) => { console.error(e); process.exit(1); });\n"

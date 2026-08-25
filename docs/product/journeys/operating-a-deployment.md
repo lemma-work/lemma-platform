@@ -138,14 +138,18 @@ rather than degrading in a way that only shows up as confused users.
 - The system shall not drop an event because nothing was listening at the time
   it was published.
 
-> **Verified by:** the module e2e suites and an operator, not by a scenario.
-> Every clause here needs a dependency to fail repeatedly on demand, and the
-> scenario suite forbids mocking, so it has no way to induce one — see
-> [testing.md](../../testing.md) on which suite owns injected failure. This
-> read `covered` on the strength of `test_feedback_can_be_reported`, which
-> reports a broken *tool* and has nothing to do with dead-lettering; that test
-> now proves the promise it actually exercises and this says what is really
-> true.
+> **Verified by:** `test_dead_letter_e2e.py` in `app/core/tests/e2e/`, not by
+> a scenario. Every clause needs a dependency to fail repeatedly on demand, and
+> the scenario suite forbids mocking, so it has no way to induce one — see
+> [testing.md](../../testing.md) on which suite owns injected failure. The two
+> tests there drive a real dispatcher against a real outbox with a broker that
+> always raises, and hold the retry budget stopping, the row being kept with
+> its error type, a dead-lettered event not being claimed again, and an
+> operator finding it and replaying it.
+>
+> This previously read `covered` on the strength of
+> `test_feedback_can_be_reported`, which reports a broken *tool* and has
+> nothing to do with dead-lettering.
 
 **Contracts:** *(operational; see [Reliability](../../../lemma-backend/docs/operators/reliability.md))*
 

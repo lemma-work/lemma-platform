@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 156 |
+| `covered` | 157 |
 | `gap` | 0 |
 | `manual` | 4 |
-| `planned` | 1 |
+| `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **161** |
 
-Scenario tests declaring a promise: 367.
+Scenario tests declaring a promise: 368.
 
 ## Contract coverage
 
@@ -58,7 +58,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-FUNC-001` A person creates a function and runs it | `covered` | `test_a_function_runs_and_returns_its_output`, `test_a_mismatched_input_is_refused`, `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
-| `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox`, `test_browser_access_is_granted_or_refused_but_never_crashes` |
+| `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox`, `test_a_step_beyond_the_runs_authority_is_refused_readably`, `test_browser_access_is_granted_or_refused_but_never_crashes` |
 | `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_a_functions_reach_can_be_set`, `test_an_outsider_cannot_run_a_function`, `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
 | `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
 | `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
@@ -70,7 +70,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-FLOW-011` A run that waits survives the wait | `covered` | `test_a_waiting_run_is_held`, `test_answering_resumes_the_run`, `test_a_repeated_answer_resumes_once` |
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_a_person_who_was_not_asked_cannot_answer`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
-| `PS-FLOW-014` A workflow run carries the authority of whoever started it | `planned` | — |
+| `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 
 ## [Building a pod](journeys/building-a-pod.md)

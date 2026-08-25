@@ -110,8 +110,24 @@ const SUPERTOKENS_FRONTEND_MARKER_KEYS = [
 ];
 
 const LOCALSTORAGE_TOKEN_KEY = "lemma_token";
+
+/**
+ * Where a token lives when there is no `localStorage` to put it in.
+ *
+ * Outside a browser every one of the helpers below used to return early, so
+ * `setTestingToken(...)` was a silent no-op: the call succeeded, no token was
+ * stored, `AuthManager` started with none, and every request came back 401.
+ * The package declares itself Node-loadable — `"main": "dist/index.js"`, no
+ * `browser` condition — so "there is no window" cannot mean "there is no way
+ * to authenticate".
+ *
+ * Module-scoped rather than global: a server-side caller who wants no shared
+ * state passes `token` on `LemmaConfig` instead and never touches this.
+ */
+let memoryToken: string | null = null;
+
 function readStorageToken(): string | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined") return memoryToken;
   try {
     return localStorage.getItem(LOCALSTORAGE_TOKEN_KEY);
   } catch {
@@ -120,7 +136,10 @@ function readStorageToken(): string | null {
 }
 
 function writeStorageToken(token: string): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    memoryToken = token;
+    return;
+  }
   try {
     localStorage.setItem(LOCALSTORAGE_TOKEN_KEY, token);
   } catch {
@@ -129,7 +148,10 @@ function writeStorageToken(token: string): void {
 }
 
 function removeStorageToken(): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    memoryToken = null;
+    return;
+  }
   try {
     localStorage.removeItem(LOCALSTORAGE_TOKEN_KEY);
   } catch {
@@ -150,13 +172,9 @@ export function clearTestingToken(): void {
 }
 
 function detectInjectedToken(): string | null {
-  if (typeof window === "undefined") return null;
-
-  // 1. localStorage — the only supported browser testing path
-  const localToken = readStorageToken();
-  if (localToken) return localToken;
-
-  return null;
+  // `readStorageToken` answers from `localStorage` in a browser and from the
+  // module-scoped fallback outside one, so this works in both.
+  return readStorageToken();
 }
 
 function normalizePath(path: string): string {
@@ -372,10 +390,17 @@ export class AuthManager {
   private listeners: Set<AuthListener> = new Set();
   private authCheckPromise: Promise<AuthState> | null = null;
 
-  constructor(apiUrl: string, authUrl: string) {
+  /**
+   * @param token A credential to present as `Authorization: Bearer`. Supplying
+   *   it is the supported way to authenticate outside a browser, where there
+   *   is no session cookie and no `localStorage`. It wins over a token set
+   *   through `setTestingToken`, because it was passed for this client rather
+   *   than left lying in shared state.
+   */
+  constructor(apiUrl: string, authUrl: string, token?: string | null) {
     this.apiUrl = apiUrl;
     this.authUrl = authUrl;
-    this.injectedToken = detectInjectedToken();
+    this.injectedToken = token?.trim() || detectInjectedToken();
 
     if (!this.injectedToken) {
       ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());

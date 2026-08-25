@@ -126,18 +126,6 @@ async def test_the_python_sdk_writes_a_record(world, signed_in):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEV-SDK-001 — the TypeScript SDK cannot authenticate outside a "
-        "browser. `LemmaConfig` has no token field, and both `setTestingToken` "
-        "and `detectInjectedToken` return early when `window` is undefined, so "
-        "a Node caller has no supported way to present a credential and every "
-        "request comes back 401. The package declares itself Node-loadable "
-        "(`main: dist/index.js`, no browser condition) and, since the directory "
-        "import was fixed, it does load — it just cannot be used."
-    ),
-)
 @scenario("The TypeScript SDK reads the pods a person can see")
 @proves("PS-POD-030")
 @covers("pod.list")
@@ -148,7 +136,12 @@ async def test_the_typescript_sdk_lists_pods(world, signed_in):
         pytest.skip("lemma-typescript is not built; run `npm ci && npm run build` there")
 
     names = sdk.evaluate(
-        f"const pods = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        f"const page = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        # A page, not an array: the SDK returns `{items, ...}` the way every
+        # listing endpoint does. `pods.map(...)` threw a TypeError here, which
+        # the old spelling never reached because the client failed to
+        # authenticate first.
+        "const pods = page.items ?? page;\n"
         "console.log('<<<RESULT>>>' + JSON.stringify(pods.map((p) => p.name)));"
     )
 
