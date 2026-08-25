@@ -95,6 +95,95 @@ async def test_create_pod_success_adds_admin_and_domain_event(
 
 
 @pytest.mark.asyncio
+async def test_create_pod_gives_the_pod_assistant_its_mailbox(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A pod is writable-to from the moment it exists.
+
+    The address used to be minted on the assistant's first outbound
+    notification. Inbound routes on that address, so until something had been
+    sent, mail to the obvious guess matched no surface and started nothing.
+    """
+    provision = AsyncMock(return_value="test-pod@mail.example.com")
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        provision,
+    )
+    uow = object()
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=uow,
+    )
+
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.return_value = pod
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    created = await service.create_pod(pod, creator_id)
+
+    provision.assert_awaited_once_with(uow, pod_id=created.id, pod_name=created.name)
+
+
+@pytest.mark.asyncio
+async def test_create_pod_survives_a_mailbox_that_cannot_be_minted(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A deployment with no mail domain still gets a perfectly good pod."""
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        AsyncMock(return_value=None),
+    )
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=object(),
+    )
+
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.return_value = pod
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    assert await service.create_pod(pod, creator_id) == pod
+
+
+@pytest.mark.asyncio
 async def test_create_pod_requires_org_membership(
     pod_service: PodService,
     organization_repository_mock: AsyncMock,

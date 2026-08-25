@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -17,10 +18,33 @@ MAX_TITLE_LENGTH = 120
 MAX_STATUS_CHECK = 25
 
 
+# Declared here rather than imported from ``agent_surfaces``, which the agent
+# module must not depend on. That leaves two lists that have to agree with no
+# compiler to make them, so a test does it instead:
+# ``test_the_tool_offers_exactly_the_channels_routing_can_produce``.
+class MessageChannel(StrEnum):
+    """Where a message goes, when the agent has a reason to say.
+
+    Channels, not surface ids: you think "reach her on WhatsApp", not "send
+    through surface 3f2a…". Every mail provider is one `email`, because which
+    one carries it is a deployment detail.
+    """
+
+    EMAIL = "email"
+    SLACK = "slack"
+    TEAMS = "teams"
+    TELEGRAM = "telegram"
+    WHATSAPP = "whatsapp"
+
+
 class MessageUserRequest(BaseModel):
     to: str = Field(description="Pod member id, user id, or email address.")
     message: str = Field(
-        description="Delivered verbatim. Write it to them, not about them."
+        description=(
+            "Markdown — every surface renders it, and on email that includes "
+            "headings, lists and tables. Delivered verbatim otherwise: write "
+            "it to them, not about them."
+        )
     )
     background_instruction: str | None = Field(
         default=None,
@@ -34,6 +58,16 @@ class MessageUserRequest(BaseModel):
         default=None,
         max_length=MAX_TITLE_LENGTH,
         description="Inbox label and email subject. Defaults to the message.",
+    )
+    channel: MessageChannel | None = Field(
+        default=None,
+        description=(
+            "Where to send it. Omit unless you have a reason to choose — the "
+            "default reaches them where they last spoke to you. Name one and it "
+            "is that channel or nothing: it is never quietly swapped for "
+            "another. Check `reachable_on` from list_pod_members first, because "
+            "a chat app they have never messaged this agent on cannot be used."
+        ),
     )
     expects_response: bool = Field(default=True, description="False for a pure FYI.")
     expires_in_seconds: int | None = Field(
@@ -105,6 +139,13 @@ class PodMemberSummary(BaseModel):
     role: str | None = None
     is_you: bool = Field(
         default=False, description="True for the person this run belongs to."
+    )
+    reachable_on: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Channels that can carry a message to them right now — pass one as "
+            "message_user's `channel`. Empty means only their Lemma inbox."
+        ),
     )
 
 

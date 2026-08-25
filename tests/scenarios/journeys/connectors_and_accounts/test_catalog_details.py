@@ -117,7 +117,16 @@ async def test_an_oauth_connector_needs_credentials(world):
     unconfigured = [
         connector["id"]
         for connector in catalogue
-        for kind in connector.get("kinds") or []
+        # One kind only. This request names a connector and no kind, so a
+        # connector installable as more than one is refused for being ambiguous
+        # — correctly, and before credentials are looked at, since which
+        # credentials are wanted depends on the kind. Picking one of those meant
+        # asserting the credentials sentence against the ambiguity sentence.
+        # Dev's catalogue has `airtable` as both `package` and `composio`; a
+        # booted stack's does not, which is why this passed everywhere except
+        # the deployment.
+        if len(connector.get("kinds") or []) == 1
+        for kind in connector["kinds"]
         # The system default is the only thing that decides it: this installs
         # without naming a config source, so the product looks for a system
         # default and says so when there is none. Whether the connector *could*

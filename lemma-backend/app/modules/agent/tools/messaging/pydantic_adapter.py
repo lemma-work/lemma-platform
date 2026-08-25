@@ -44,6 +44,7 @@ from app.modules.agent.tools.messaging.models import (
     CheckMessagesResponse,
     ListPodMembersRequest,
     ListPodMembersResponse,
+    MessageChannel,
     MessageUserRequest,
     MessageUserResponse,
     NotificationStatusReport,
@@ -64,6 +65,39 @@ def _title_for(request: MessageUserRequest) -> str:
     return first_line[: MAX_TITLE_LENGTH - 1].rstrip() + "…"
 
 
+def _outcome(result: dict, *, requested: MessageChannel | None) -> str:
+    """What the model is told happened, in the terms it asked in.
+
+    A refused channel gets its own wording. The generic "no chat app or mailbox
+    could carry this" is true of a routing failure and false of this: something
+    could have carried it, and the agent needs to see that its own choice is
+    what stopped the send — otherwise it retries the same call and reads the
+    same sentence.
+    """
+    reason = result["undeliverable_reason"] or ""
+    status = result["delivery_status"]
+    if status == "DELIVERED":
+        return (
+            f"Sent on {result['delivered_via']}. They have not answered yet. "
+            "Once you have sent everything you need, end your turn — you get a "
+            "fresh one as soon as everyone you asked has replied."
+        )
+    if status == "UNDELIVERABLE" and requested is not None:
+        return (
+            f"Not sent: you asked for {requested.value}. {reason} It is in "
+            "their Lemma inbox."
+        ).strip()
+    if status == "UNDELIVERABLE":
+        return (
+            "No chat app or mailbox could carry this, so it is in their Lemma "
+            f"inbox only. {reason}"
+        ).strip()
+    return (
+        "Delivery failed, but the notification exists and is in their Lemma "
+        f"inbox. {reason}"
+    ).strip()
+
+
 async def message_user(
     ctx: RunContext[BaseAgentContext], request: MessageUserRequest
 ) -> MessageUserResponse:
@@ -80,6 +114,11 @@ async def message_user(
 
     Say what you have done and who you are waiting on before you stop. That is
     the last thing whoever asked you sees until the answers land.
+
+    Leave `channel` unset unless you have a reason to pick one — the default is
+    already the app they last spoke to you on. When you do name one it is
+    honoured or refused, never swapped, so read `reachable_on` from
+    `list_pod_members` before choosing.
 
     To answer the person you are already talking to, just reply — don't use this.
     """
@@ -132,6 +171,9 @@ async def message_user(
         # Reach out from the surface this run is already on, so the recipient
         # hears from the same bot rather than another of the agent's surfaces.
         origin_surface_id=deps.surface_id,
+        # Only when the agent asked. Everything above is a default the router
+        # applies; this is an instruction it either follows or refuses.
+        channel=request.channel.value if request.channel else None,
         background_instruction=request.background_instruction,
         expects_response=request.expects_response,
         expires_in_seconds=request.expires_in_seconds,
@@ -145,31 +187,13 @@ async def message_user(
         ),
     )
 
-    delivery_status = result["delivery_status"]
-    if delivery_status == "DELIVERED":
-        message = (
-            f"Sent on {result['delivered_via']}. They have not answered yet. "
-            "Once you have sent everything you need, end your turn — you get a "
-            "fresh one as soon as everyone you asked has replied."
-        )
-    elif delivery_status == "UNDELIVERABLE":
-        message = (
-            "No chat app or mailbox could carry this, so it is in their Lemma "
-            f"inbox only. {result['undeliverable_reason'] or ''}".strip()
-        )
-    else:
-        message = (
-            "Delivery failed, but the notification exists and is in their Lemma "
-            f"inbox. {result['undeliverable_reason'] or ''}".strip()
-        )
-
     return MessageUserResponse(
         success=True,
+        message=_outcome(result, requested=request.channel),
         notification_id=result["notification_id"],
-        delivery_status=delivery_status,
+        delivery_status=result["delivery_status"],
         delivered_via=result["delivered_via"],
         undeliverable_reason=result["undeliverable_reason"],
-        message=message,
     )
 
 
@@ -228,6 +252,11 @@ async def list_pod_members(
     — so start here whenever you know a person by name. Each result carries a
     `to` value to pass straight through.
 
+    Also tells you `reachable_on`: the channels that can carry a message to each
+    person right now. Read it before setting `message_user`'s `channel`, and
+    don't ask for one that isn't listed — the send will be refused rather than
+    rerouted.
+
     Searches names and email addresses; omit `search` to list everyone.
     """
     deps = ctx.deps
@@ -242,6 +271,10 @@ async def list_pod_members(
         requester_user_id=deps.user_id,
         search=request.search,
         limit=request.limit,
+        # Whose reach to report. Same sentinel handling as message_user: the pod
+        # assistant is not a row in `agents`, and its surfaces are the ones with
+        # no agent of their own.
+        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
     )
     if result is None:
         return ListPodMembersResponse(

@@ -11,6 +11,11 @@ through, so a recipient hears from the bot they already know that agent as. See
 ``notification_delivery.surfaces_for_agent`` for why that beats the recipient's
 own preferred surface.
 
+That ordering is a default, not a policy. An agent that names a ``channel`` gets
+that channel or a refusal — never a different one — because an agent picks a
+channel for reasons the router cannot see ("she is travelling, use WhatsApp"),
+and silently overriding it would leave the agent certain of something untrue.
+
 When an agent has no surface at all, one is minted here rather than the caller
 being told to go and connect something. That used to happen only when the *pod*
 had none, which left a hole big enough to break the pod assistant permanently:
@@ -34,11 +39,16 @@ from app.modules.agent_surfaces.services.email_surface_provisioning import (
     email_is_configured,
 )
 from app.modules.agent_surfaces.services.notification_delivery import (
+    EMAIL_CHANNEL,
     DeliveryChannel,
     UndeliverableReason,
+    channel_for_platform,
+    channel_refused,
+    channels_of,
     rank_candidates,
     reply_window_open,
     surfaces_for_agent,
+    surfaces_on_channel,
 )
 
 logger = get_logger(__name__)
@@ -86,10 +96,14 @@ class NotificationChannelResolver:
         actor_agent_id: UUID | None = None,
         origin_surface_id: UUID | None = None,
         agent_name: str | None = None,
+        channel: str | None = None,
     ) -> tuple[list[DeliveryChannel], str]:
         """Every way this agent can reach this person, best first.
 
         Returns the reason alongside, so an empty list is never a silent no.
+
+        ``channel`` narrows the whole thing to one channel the agent chose. It
+        is a filter, not a preference: nothing outside it is tried.
         """
         # ``list_by_pod`` is paginated and returns ``(items, next_cursor)``. A pod
         # with more surfaces than one page is not a real shape — they are bots a
@@ -97,6 +111,20 @@ class NotificationChannelResolver:
         all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
         active = [surface for surface in all_surfaces if surface.is_active]
         surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
+
+        # Before provisioning, not after: a mailbox is what "reach them somehow"
+        # falls back to, and minting one to answer "reach them on Telegram" hands
+        # out an address nobody asked for and that then has to keep working.
+        if channel:
+            return await self._resolve_on_channel(
+                surfaces,
+                channel=channel,
+                pod_id=pod_id,
+                recipient_user_id=recipient_user_id,
+                actor_agent_id=actor_agent_id,
+                agent_name=agent_name,
+                origin_surface_id=origin_surface_id,
+            )
 
         if not surfaces:
             provisioned, reason = await self.provision_mailbox(
@@ -138,6 +166,99 @@ class NotificationChannelResolver:
         if saw_chat_surface:
             return [], UndeliverableReason.NEVER_INTERACTED
         return [], UndeliverableReason.NO_EMAIL_ADDRESS
+
+    async def _resolve_on_channel(
+        self,
+        surfaces: list[AgentSurfaceEntity],
+        *,
+        channel: str,
+        pod_id: UUID,
+        recipient_user_id: UUID,
+        actor_agent_id: UUID | None,
+        agent_name: str | None,
+        origin_surface_id: UUID | None,
+    ) -> tuple[list[DeliveryChannel], str]:
+        """This channel or nothing, with the refusal saying what would work.
+
+        No email fallback and no rerouting: both exist to rescue a router that
+        was guessing, and this one was told. The ranking still runs, because a
+        channel can hold several surfaces and the freshest thread is still the
+        best of them.
+        """
+        wanted = surfaces_on_channel(surfaces, channel=channel)
+        cause = ""
+        if not wanted and channel == EMAIL_CHANNEL:
+            # Asking for email is the one request worth minting a surface for:
+            # a mailbox is the only channel we can create on demand, and this is
+            # the same first-need provisioning the default path already does. A
+            # failure keeps its own reason — "the mail domain is unset" and "this
+            # agent has no mailbox" send you to different places.
+            provisioned, cause = await self.provision_mailbox(
+                pod_id, actor_agent_id, agent_name
+            )
+            wanted = [provisioned] if provisioned is not None else []
+
+        candidates, _, window_closed = await self._channels_from(
+            wanted, recipient_user_id
+        )
+        if candidates:
+            return rank_candidates(candidates, origin_surface_id=origin_surface_id), ""
+
+        return [], channel_refused(
+            channel,
+            cause=cause
+            or self._refusal_cause(channel, wanted=wanted, window_closed=window_closed),
+            alternatives=await self._reachable_elsewhere(
+                surfaces, channel=channel, recipient_user_id=recipient_user_id
+            ),
+        )
+
+    @staticmethod
+    def _refusal_cause(
+        channel: str, *, wanted: list[AgentSurfaceEntity], window_closed: bool
+    ) -> str:
+        """Which of the four ways a named channel fails this one was."""
+        if not wanted:
+            return UndeliverableReason.no_surface_on(channel)
+        if window_closed:
+            return UndeliverableReason.window_closed_on(channel)
+        if channel == EMAIL_CHANNEL:
+            return UndeliverableReason.no_address_on(channel)
+        return UndeliverableReason.never_interacted_on(channel)
+
+    async def _reachable_elsewhere(
+        self,
+        surfaces: list[AgentSurfaceEntity],
+        *,
+        channel: str,
+        recipient_user_id: UUID,
+    ) -> list[str]:
+        """The channels that would have worked, for the refusal to name.
+
+        Costs a second resolution pass, which is why it only runs once the
+        requested channel has already failed. A refusal that cannot say what to
+        do instead just moves the guessing into the model.
+        """
+        others = [
+            surface
+            for surface in surfaces
+            if channel_for_platform(surface.surface_type) != channel
+        ]
+        candidates, _, _ = await self._channels_from(others, recipient_user_id)
+        alternatives = channels_of(candidates)
+        # A mailbox this agent does not have yet still counts, because dropping
+        # the channel argument would mint one and the message would go. Saying
+        # "no other channel can reach them" there would talk an agent out of the
+        # one call that works.
+        if (
+            EMAIL_CHANNEL not in alternatives
+            and channel != EMAIL_CHANNEL
+            and email_is_configured()
+            and self.surface_provisioner is not None
+            and await self.membership.get_user_email(recipient_user_id)
+        ):
+            alternatives = sorted([*alternatives, EMAIL_CHANNEL])
+        return alternatives
 
     async def provision_mailbox(
         self,
@@ -247,32 +368,47 @@ class NotificationChannelResolver:
         the person has written to that surface before. ``window_closed`` is
         reported separately because "they went quiet too long ago" is a
         different thing to tell somebody than "they have never messaged us".
+
+        Every identity the person holds on the platform is tried, not just the
+        most recently seen one. Slack ids are per workspace and Teams ids per
+        tenant, so a pod with two Slack surfaces gives one person two identities
+        — and taking whichever was seen last made the other surface permanently
+        unreachable while reporting it as "they have never messaged us". The
+        surface's own tenant narrows the list first; that check is permissive
+        where the tenant was never recorded, so surfaces predating it keep
+        working.
         """
-        external = await self.external_users.get_by_resolved_user(
+        identities = await self.external_users.list_by_resolved_users(
             platform=surface.surface_type.value,
-            resolved_user_id=recipient_user_id,
+            resolved_user_ids=[recipient_user_id],
         )
-        if external is None or not external.external_user_id:
-            return None, False
-        link = await self.links.get_latest_by_surface_and_external_user(
-            surface_id=surface.id,
-            external_user_id=external.external_user_id,
-        )
-        if link is None:
-            return None, False
-        if not reply_window_open(
-            platform=surface.surface_type,
-            last_inbound_at=link.inbound_activity_at,
-        ):
-            return None, True
-        return (
-            DeliveryChannel(
-                surface=surface,
+        window_closed = False
+        for external in identities:
+            if not external.external_user_id:
+                continue
+            if not surface.matches_tenant(external.tenant_id):
+                continue
+            link = await self.links.get_latest_by_surface_and_external_user(
+                surface_id=surface.id,
                 external_user_id=external.external_user_id,
-                link=link,
-            ),
-            False,
-        )
+            )
+            if link is None:
+                continue
+            if not reply_window_open(
+                platform=surface.surface_type,
+                last_inbound_at=link.inbound_activity_at,
+            ):
+                window_closed = True
+                continue
+            return (
+                DeliveryChannel(
+                    surface=surface,
+                    external_user_id=external.external_user_id,
+                    link=link,
+                ),
+                False,
+            )
+        return None, window_closed
 
     async def _email_channel(
         self, surface: AgentSurfaceEntity, recipient_user_id: UUID
@@ -281,6 +417,83 @@ class NotificationChannelResolver:
         if not address:
             return None
         return DeliveryChannel(surface=surface, email_address=address)
+
+    async def reachable_channels(
+        self,
+        *,
+        pod_id: UUID,
+        recipients: dict[UUID, str | None],
+        actor_agent_id: UUID | None = None,
+    ) -> dict[UUID, list[str]]:
+        """Which channels this agent could reach each of these people on now.
+
+        The question an agent has to answer before it can sensibly *choose* a
+        channel. Without it, picking one is a guess that costs a refused send to
+        discover, and the guess would be wrong in exactly the case the argument
+        exists for.
+
+        Deliberately does not provision anything: a lookup that mints a mailbox
+        as a side effect hands out an address nobody asked for. Where email is
+        configured but the agent has no mailbox yet, email is still reported —
+        the send path would create one, so reporting otherwise would be a
+        forecast we know to be wrong. Emails come from the caller, which is
+        already holding the member list, rather than a lookup per person.
+        """
+        all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
+        active = [surface for surface in all_surfaces if surface.is_active]
+        surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
+
+        reachable: dict[UUID, set[str]] = {user_id: set() for user_id in recipients}
+        can_mail = any(can_cold_open(surface) for surface in surfaces) or (
+            email_is_configured() and self.surface_provisioner is not None
+        )
+        if can_mail:
+            for user_id, email in recipients.items():
+                if email:
+                    reachable[user_id].add(EMAIL_CHANNEL)
+
+        for surface in surfaces:
+            if not can_cold_open(surface):
+                await self._add_chat_reach(surface, recipients, reachable)
+
+        return {user_id: sorted(names) for user_id, names in reachable.items()}
+
+    async def _add_chat_reach(
+        self,
+        surface: AgentSurfaceEntity,
+        recipients: dict[UUID, str | None],
+        reachable: dict[UUID, set[str]],
+    ) -> None:
+        """Add one chat surface's reach for everyone at once.
+
+        Two queries per surface rather than two per surface *per person*: this
+        runs on a tool the model calls before every message, and a pod of thirty
+        would otherwise spend a hundred round trips answering a lookup.
+        """
+        identities = await self.external_users.list_by_resolved_users(
+            platform=surface.surface_type.value,
+            resolved_user_ids=list(recipients),
+        )
+        owners = {
+            external.external_user_id: external.resolved_user_id
+            for external in identities
+            if external.external_user_id
+            and external.resolved_user_id in reachable
+            and surface.matches_tenant(external.tenant_id)
+        }
+        if not owners:
+            return
+
+        links = await self.links.list_latest_by_surface_and_external_users(
+            surface_id=surface.id, external_user_ids=list(owners)
+        )
+        channel = channel_for_platform(surface.surface_type)
+        for external_user_id, link in links.items():
+            if reply_window_open(
+                platform=surface.surface_type,
+                last_inbound_at=link.inbound_activity_at,
+            ):
+                reachable[owners[external_user_id]].add(channel)
 
 
 __all__ = ["NotificationChannelResolver", "SurfaceProvisioner", "can_cold_open"]

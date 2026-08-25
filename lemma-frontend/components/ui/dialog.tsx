@@ -33,12 +33,19 @@ const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
+  // `grid-cols-1` below, rather than the implicit column a bare `grid` makes: an
+  // implicit track is sized `auto`, so it grows to the widest child's min-content
+  // — and a child that truncates is `white-space: nowrap`, whose min-content is
+  // the whole unwrapped line. One long title or option description therefore
+  // pushed the track past `max-w`, and the row ran off the side under
+  // `overflow-hidden` instead of ellipsising. `minmax(0, 1fr)` pins the track to
+  // the dialog's own width, which is what truncation needs to measure against.
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "dialog-content-motion fixed left-[50%] top-[50%] z-50 grid w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border border-[color:var(--border-subtle)] bg-[var(--surface-1)] p-5 text-[var(--text-primary)] shadow-[var(--shadow-lg)] outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--field-border-focus)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 max-h-[calc(100dvh-2rem)]",
+        "dialog-content-motion fixed left-[50%] top-[50%] z-50 grid grid-cols-1 w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border border-[color:var(--border-subtle)] bg-[var(--surface-1)] p-5 text-[var(--text-primary)] shadow-[var(--shadow-lg)] outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--field-border-focus)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 max-h-[calc(100dvh-2rem)]",
         className
       )}
       {...props}

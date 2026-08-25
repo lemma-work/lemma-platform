@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -424,29 +425,59 @@ class SurfaceConversationLinkRepository:
         (and its valid reply target) to reach a member proactively — bots can't
         cold-DM, so a prior interaction is required.
 
+        One member's slice of ``list_latest_by_surface_and_external_users``,
+        which owns the ordering — see there for why it is inbound recency.
+        """
+        links = await self.list_latest_by_surface_and_external_users(
+            surface_id=surface_id, external_user_ids=[external_user_id]
+        )
+        return links.get(external_user_id)
+
+    async def list_latest_by_surface_and_external_users(
+        self,
+        *,
+        surface_id: UUID,
+        external_user_ids: Sequence[str],
+    ) -> dict[str, AgentSurfaceConversationLink]:
+        """``{external_user_id: their most recent thread}`` on one surface.
+
         Ordered by inbound recency, not ``updated_at``: an outbound message also
         bumps ``updated_at``, so ranking by it would mean "the thread we last
         talked *at* them on" rather than "the thread they last talked to us on".
         Only the second is evidence of where they are actually looking. COALESCE
         keeps pre-migration rows, where the two were the same thing, in the sort.
+
+        DISTINCT ON picks per person in the database rather than dragging a busy
+        surface's whole history back to reduce it here. The single-member form
+        delegates to this one so a reachability check and the send that follows
+        it can never disagree about which thread is theirs.
         """
+        if not external_user_ids:
+            return {}
+        recency = func.coalesce(
+            AgentSurfaceConversationLinkModel.last_inbound_at,
+            AgentSurfaceConversationLinkModel.updated_at,
+        )
         stmt = (
             select(AgentSurfaceConversationLinkModel)
             .where(
                 AgentSurfaceConversationLinkModel.surface_id == surface_id,
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
+                AgentSurfaceConversationLinkModel.external_user_id.in_(
+                    external_user_ids
+                ),
             )
+            .distinct(AgentSurfaceConversationLinkModel.external_user_id)
             .order_by(
-                func.coalesce(
-                    AgentSurfaceConversationLinkModel.last_inbound_at,
-                    AgentSurfaceConversationLinkModel.updated_at,
-                ).desc()
+                AgentSurfaceConversationLinkModel.external_user_id,
+                recency.desc(),
             )
-            .limit(1)
         )
         result = await self.session.execute(stmt)
-        model = result.scalars().first()
-        return model.to_entity() if model else None
+        return {
+            link.external_user_id: link
+            for link in (model.to_entity() for model in result.scalars().all())
+            if link.external_user_id
+        }
 
     async def get_by_conversation_id(
         self,

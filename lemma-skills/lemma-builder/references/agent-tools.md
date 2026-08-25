@@ -79,6 +79,12 @@ interval, then calls `check_messages`. Compare:
 | `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
 | `message_user` | any pod member, wherever they are | **no** | on the notification, read later with `check_messages` |
 
+By default it reaches someone wherever they last spoke to *this* agent, falling back to
+the agent's mailbox. An agent with a reason to choose passes `channel` — `email`, `slack`,
+`teams`, `telegram` or `whatsapp` — and a channel it names is used or refused, never
+swapped for another; `list_pod_members` reports each member's `reachable_on` so the choice
+is a read rather than a guess.
+
 `MESSAGING` is opt-in and withheld from sub-agents; holding it is the whole grant. Every
 delivered message names both the agent and the human whose authority the run carries — the
 recipient sees the pod's bot and extends it the trust they extend to Lemma, so an
