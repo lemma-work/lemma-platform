@@ -300,6 +300,11 @@ class NotificationService:
                     conversation_id=conversation_id,
                     notification=notification,
                     message=message,
+                    # The same two names ``attribute()`` puts in the body. On
+                    # email they also become the From display name, so the
+                    # attribution survives an inbox list nobody has opened yet.
+                    agent_name=agent_name,
+                    actor_display_name=actor_display_name,
                 )
                 if not sent:
                     last_error = (

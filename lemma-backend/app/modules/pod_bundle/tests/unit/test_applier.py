@@ -610,6 +610,12 @@ class FakeSurfaceService:
         }
         return SimpleNamespace(id=_uuid4(), config=config)
 
+    async def create_surface_minting_address(self, *, agent, **kwargs):
+        """What the applier calls. The real one mints an inbound address for an
+        email surface and then delegates here; these bundles are Slack and
+        Teams, so the interesting half is that the agent still arrives."""
+        return await self.create_surface(agent_id=getattr(agent, "id", None), **kwargs)
+
     async def update_surface(self, **kwargs):
         from types import SimpleNamespace
 

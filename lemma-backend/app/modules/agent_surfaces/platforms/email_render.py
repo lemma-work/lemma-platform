@@ -66,6 +66,61 @@ def render_email_content(
     )
 
 
+_LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
+
+
+def _blank_line_before_lists(content: str) -> str:
+    """Let a list interrupt a paragraph, the way CommonMark already would.
+
+    Python-Markdown requires a blank line before a list. Without one, a label
+    line followed straight by bullets is one paragraph, and because HTML does
+    not preserve newlines the whole thing arrives as a single flowed sentence
+    with hyphens loose in it -- "What you can do - Land results - Run agents".
+
+    That shape is close to the modal form of model output, so it is worth
+    meeting rather than correcting: no docstring reliably stops a model writing
+    a list directly under its heading, and every agent already deployed writes
+    it that way today.
+
+    Only the email path needs this. A chat surface renders newlines as
+    newlines, so the same message already reads as a list there.
+
+    ``in_list`` is what keeps a lazy continuation safe. Inside a list an
+    unindented line belongs to the item above it, so a break inserted before
+    the next item would split one list in two:
+
+        - item one
+          continued on the next line
+        - item two
+    """
+    out: list[str] = []
+    in_list = False
+    in_fence = False
+    fence = ""
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if in_fence:
+            if stripped.startswith(fence):
+                in_fence = False
+            out.append(line)
+            continue
+        # A hyphen inside a fenced block is code, not a bullet.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence, fence = True, stripped[:3]
+            out.append(line)
+            continue
+        if not stripped:
+            in_list = False
+            out.append(line)
+            continue
+        if _LIST_ITEM.match(line):
+            if not in_list and out and out[-1].strip():
+                out.append("")
+            in_list = True
+        out.append(line)
+    return "\n".join(out)
+
+
 def _markdown_to_email_html(content: str) -> str:
     """Render markdown with the extensions agents actually write against.
 
@@ -75,7 +130,7 @@ def _markdown_to_email_html(content: str) -> str:
     """
     return style_stashed_code_blocks(
         markdown_lib.markdown(
-            content,
+            _blank_line_before_lists(content),
             extensions=[*EMAIL_MARKDOWN_EXTENSIONS, EmailStylesExtension()],
         )
     )
