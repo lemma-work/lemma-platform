@@ -7381,6 +7381,69 @@ mod tests {
 
     /// The updater's transport policy is not weakened, and the artifact flag
     /// stays out of the base config.
+    /// The key an installed app verifies with is real, and matches its own id.
+    ///
+    /// `pubkey: ""` is not a permissive setting. `verify_signature` decodes it
+    /// and fails, so a build carrying an empty key offers an update, downloads
+    /// it, and then cannot verify a thing -- and `updates_enabled()` exists to
+    /// keep such a build from offering one at all.
+    ///
+    /// What was missing is the assertion that the key is *there*. The release
+    /// workflow required the private half and never looked at the public one,
+    /// and the config test asserted the endpoint and the CSP and not this. So a
+    /// release could ship with no key, which is the state this repo was in.
+    #[test]
+    fn the_shipped_public_key_is_a_real_minisign_key() {
+        use base64::Engine as _;
+
+        let config: Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("config parses");
+        let pubkey = config
+            .pointer("/plugins/updater/pubkey")
+            .and_then(Value::as_str)
+            .expect("the updater declares a pubkey field");
+
+        assert!(
+            !pubkey.trim().is_empty(),
+            "no public key: every install would download an update and then refuse it",
+        );
+        assert!(
+            updater_key_configured(),
+            "the gate that reads this must agree with it",
+        );
+
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(pubkey)
+            .expect("the pubkey is base64");
+        let text = String::from_utf8(decoded).expect("a minisign key is text");
+        let mut lines = text.lines();
+        let comment = lines.next().unwrap_or_default();
+        assert!(
+            comment.starts_with("untrusted comment:") && comment.contains("public key"),
+            "this is not a minisign public key: {comment}",
+        );
+
+        // The body carries the algorithm and the key id the signature must
+        // name. A truncated paste passes every check above and none of these.
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(lines.next().expect("a key line follows the comment"))
+            .expect("the key line is base64");
+        assert_eq!(&body[..2], b"Ed", "only Ed25519 keys are signed against");
+        assert_eq!(body.len(), 42, "a minisign public key is 2 + 8 + 32 bytes");
+        let key_id = &body[2..10];
+        assert!(
+            key_id.iter().any(|byte| *byte != 0),
+            "a zero key id is a placeholder, not a key",
+        );
+
+        // And it is not a secret key committed by mistake, which is the same
+        // file format with a different comment.
+        assert!(
+            !text.contains("secret key"),
+            "the SECRET key is in this config; rotate it immediately",
+        );
+    }
+
     #[test]
     fn the_updater_config_keeps_its_transport_and_build_boundaries() {
         let config = include_str!("../tauri.conf.json").replace("\r\n", "\n");
