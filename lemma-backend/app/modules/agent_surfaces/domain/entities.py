@@ -48,6 +48,39 @@ class ConversationType(StrEnum):
         return None
 
 
+class ThreadShape(StrEnum):
+    """Does one thread id carry many conversations, or exactly one?
+
+    The axis the conversation reset actually turns on, and it is a property of
+    the *conversation*, not of the surface. One Slack install has both shapes at
+    once, which is why asking ``surface.mode`` got it wrong: a channel thread
+    inherited the DM reset and a reply a day later started a fresh conversation
+    with no history -- while Slack showed the person the whole thread.
+    """
+
+    #: A chat DM. One permanent thread id carries every conversation you will
+    #: ever have there, so something has to cut it into conversations.
+    MULTIPLEXED = "MULTIPLEXED"
+    #: A channel thread, an email thread. The platform already bounded it to one
+    #: topic, so a time-based reset would cut a conversation that is still one.
+    TOPIC_SCOPED = "TOPIC_SCOPED"
+
+
+def thread_shape(conversation_kind: str | None) -> ThreadShape:
+    """The shape of the thread a conversation of this kind lives in.
+
+    Derived rather than stored: ``conversation_kind`` is already on every link
+    (``NOT NULL``, defaulting to ``DM``), so there is nothing to migrate and a
+    row written before routing set it degrades to the reset that was already
+    happening -- no change, rather than a new behaviour.
+    """
+    return (
+        ThreadShape.MULTIPLEXED
+        if str(conversation_kind or "DM").upper() == "DM"
+        else ThreadShape.TOPIC_SCOPED
+    )
+
+
 class SurfaceMode(StrEnum):
     DM = "DM"
     EMAIL = "EMAIL"

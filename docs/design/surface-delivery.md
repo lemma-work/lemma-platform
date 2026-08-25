@@ -303,20 +303,36 @@ port rather than calling the API raw.
 
 ## Conversation lifecycle
 
-`SurfaceMode` is replaced by a field that names the thing it actually decides:
+**Corrected from the first draft of this document.** It said to rename
+`SurfaceMode` to `thread_shape`, which reproduces the original bug: one Slack
+install has both a DM and channel threads at once, so nothing stored on the
+*surface* can describe them. Thread shape is a property of the **conversation**.
+
+`conversation_kind` already carries it, on the link, `NOT NULL` with a
+`DM` server default, present in the baseline schema. So the shape is derived,
+not stored, and there is nothing to migrate:
 
 ```
-thread_shape: MULTIPLEXED | TOPIC_SCOPED
+DM      → MULTIPLEXED   one permanent thread id carries every conversation
+CHANNEL → TOPIC_SCOPED  the platform already bounded it
+EMAIL   → TOPIC_SCOPED  the same
 ```
 
-`MULTIPLEXED` — a chat DM. Subject to `dm_conversation_reset_after_hours`.
-`TOPIC_SCOPED` — a channel thread, an email thread. Never TTL-reset.
+The reset reads that instead of `surface.mode`. Three consequences:
 
-The reset check reads `conversation_kind`, not the surface's platform family.
-That single change fixes the channel-thread amnesia and stops the next person
-hitting the same conflation. The agent-change reset moves *outside* the shape
-branch, because "this thread now routes to a different agent" is a reason to
-start fresh on every shape, email included.
+- A **channel thread is never cut by the clock**. Replying in a Slack thread a
+  day later kept the conversation, instead of starting a fresh one with no
+  history while Slack showed the person the whole thread above the reply.
+- The **agent-change reset moved outside the shape branch**. It used to sit
+  inside the `mode is DM` guard, so an email or channel thread re-routed to
+  another agent kept the old agent indefinitely.
+- A **link written before routing set a kind** defaults to `DM` → `MULTIPLEXED`
+  → the reset applies, which is exactly what already happened. Stale rows
+  degrade to today's behaviour rather than to a new one.
+
+`SurfaceMode` stays, and stops being overloaded. It is a genuine surface-level
+fact — is this an email install — used by routing. The bug was never that it
+existed; it was that the reset asked it instead of asking the conversation.
 
 Cold email keeps its asymmetry — it is the one case where Lemma opens a thread —
 but stops leaving a half-built conversation behind. Today
@@ -324,8 +340,8 @@ but stops leaving a half-built conversation behind. Today
 writes the link only and never sets the conversation's `surface_platform`
 metadata, and since [tool_assembler.py:150](../../lemma-backend/app/modules/agent/tools/tool_assembler.py:150)
 builds the surface toolset off exactly that key, an agent running in a
-cold-opened conversation has no reply tool and no platform guidance until the
-person writes back. Opening a thread writes both halves or neither.
+cold-opened conversation has no platform guidance until the person writes back.
+Opening a thread writes both halves or neither.
 
 ---
 
