@@ -25,6 +25,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, Webview, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_updater::UpdaterExt as _;
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
 mod artifact_install;
@@ -96,6 +97,38 @@ struct UiState {
     completed_operation_ids: Vec<String>,
     #[serde(skip)]
     terminal_recovery_pending: bool,
+}
+
+/// Which build this is, for support and for whether it self-updates.
+///
+/// A compile-time stamp rather than a version suffix. A suffix would have to
+/// travel through the runtime manifest, the per-version install directory and
+/// the branch-test version gate, none of which care which channel a build came
+/// from. This answers "what are you running?" -- which had no answer at all,
+/// because a nightly and a release both report `0.7.0` with the same bundle
+/// identifier.
+///
+/// Fails closed: anything unrecognised is `dev`, and only `stable` updates.
+fn release_channel() -> &'static str {
+    match option_env!("LEMMA_RELEASE_CHANNEL") {
+        Some("stable") => "stable",
+        Some("nightly") => "nightly",
+        _ => "dev",
+    }
+}
+
+fn build_commit() -> Option<&'static str> {
+    option_env!("LEMMA_BUILD_SHA")
+}
+
+/// Whether this build may update itself in place.
+///
+/// Nightlies deliberately cannot. Their runtime lives in a prerelease that is
+/// pruned to the three most recent builds, so there is no durable feed for them
+/// to follow -- and the signing key is never given to the nightly workflow, so
+/// a nightly could not produce a valid update even if it tried.
+fn updates_enabled() -> bool {
+    release_channel() == "stable" && !cfg!(debug_assertions)
 }
 
 /// What a broken installation can still be offered.
@@ -3151,6 +3184,157 @@ async fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?
 }
 
+/// What the app knows about a newer version, if anything.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppUpdateStatus {
+    channel: &'static str,
+    current_version: &'static str,
+    build_commit: Option<&'static str>,
+    /// False for a nightly or a development build. The UI explains why rather
+    /// than silently omitting the control.
+    updates_supported: bool,
+    available_version: Option<String>,
+    /// Bytes of runtime the *next* launch downloads after an app update, read
+    /// from the feed rather than guessed. An app update is ~24 MB; the runtime
+    /// that follows is two orders of magnitude larger, and saying so before the
+    /// user commits is the difference between a considered choice and a
+    /// surprise.
+    runtime_download_bytes: Option<u64>,
+    /// Whether taking this update requires discarding local data first.
+    data_compatibility: &'static str,
+}
+
+/// Ask the release feed whether there is a newer Lemma.
+///
+/// Runs in Rust so the webview's CSP stays exactly as it is. A JavaScript check
+/// would need `github.com` and `objects.githubusercontent.com` in
+/// `connect-src`, widening the network policy of the same webview that hosts
+/// the remote workspace origin.
+#[tauri::command]
+async fn check_for_app_update(window: Webview, app: AppHandle) -> Result<AppUpdateStatus, String> {
+    require_control_window(&window)?;
+    let mut status = AppUpdateStatus {
+        channel: release_channel(),
+        current_version: env!("CARGO_PKG_VERSION"),
+        build_commit: build_commit(),
+        updates_supported: updates_enabled(),
+        available_version: None,
+        runtime_download_bytes: None,
+        data_compatibility: "unknown",
+    };
+    if !updates_enabled() {
+        return Ok(status);
+    }
+    let update = app
+        .updater()
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .check()
+        .await
+        .map_err(|error| format!("could not check for updates: {error}"))?;
+    let Some(update) = update else {
+        status.data_compatibility = "compatible";
+        return Ok(status);
+    };
+    status.available_version = Some(update.version.clone());
+    // The feed's own `lemma` block. The updater ignores unknown top-level keys
+    // and hands back the parsed document, so this costs no extra request.
+    let metadata = lemma_update_metadata(&update.raw_json);
+    status.runtime_download_bytes = metadata.runtime_download_bytes;
+    status.data_compatibility = metadata.compatibility_with(installed_postgres_major());
+    Ok(status)
+}
+
+/// The `lemma` block a release feed carries alongside the standard fields.
+#[derive(Default)]
+struct LemmaUpdateMetadata {
+    postgres_major: Option<u64>,
+    runtime_download_bytes: Option<u64>,
+}
+
+impl LemmaUpdateMetadata {
+    /// Whether taking this update strands the data already on this Mac.
+    ///
+    /// Absent information warns rather than blocks. Blocking on absence would
+    /// strand every user the first time the feed lags a release, and the
+    /// runtime installer refuses an incompatible pairing anyway -- this exists
+    /// to say so *before* 506 MB is downloaded, not instead of that check.
+    fn compatibility_with(&self, installed: Option<u64>) -> &'static str {
+        match (installed, self.postgres_major) {
+            (Some(installed), Some(candidate)) if installed == candidate => "compatible",
+            (Some(_), Some(_)) => "requires-reset",
+            _ => "unknown",
+        }
+    }
+}
+
+fn lemma_update_metadata(raw: &Value) -> LemmaUpdateMetadata {
+    let Some(block) = raw.get("lemma") else {
+        return LemmaUpdateMetadata::default();
+    };
+    LemmaUpdateMetadata {
+        postgres_major: block.get("postgres_major").and_then(Value::as_u64),
+        runtime_download_bytes: block.get("runtime_download_bytes").and_then(Value::as_u64),
+    }
+}
+
+/// The Postgres major this installation's data was created with, if recorded.
+fn installed_postgres_major() -> Option<u64> {
+    read_config()
+        .pointer("/installedRuntime/dataCompatibility/postgres_major")
+        .and_then(Value::as_u64)
+}
+
+/// Download and install a newer Lemma, then offer to restart.
+#[tauri::command]
+async fn install_app_update(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_control_window(&window)?;
+    if !updates_enabled() {
+        return Err(
+            "this build does not update itself; download the current release instead".into(),
+        );
+    }
+    let update = app
+        .updater()
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .check()
+        .await
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .ok_or("Lemma is already up to date")?;
+
+    // Before the bundle underneath it is replaced.
+    //
+    // A DMG install moves the old app to the Trash, so the running daemon's
+    // executable path changes and `locald_is_this_build` notices. An in-place
+    // update writes to the *same* path, so a stale daemon from the previous
+    // version would report an identical path and be adopted by the new app --
+    // supervising the old runtime under a new shell.
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || stop_locald_for_runtime_maintenance(&handle))
+        .await
+        .map_err(|error| error.to_string())??;
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("could not install the update: {error}"))?;
+
+    let restart = confirm_destructive_action_impl(
+        app.clone(),
+        "Restart to finish updating?".into(),
+        format!(
+            "Lemma {} is installed. Restarting now finishes the update; it downloads \
+             its runtime once afterwards.",
+            update.version
+        ),
+        "Restart Now".into(),
+    )?;
+    if restart {
+        app.restart();
+    }
+    Ok(())
+}
+
 /// What this Mac still has that a reset could remove.
 ///
 /// Read by the splash so it can offer the right tier -- and only offer one at
@@ -5836,6 +6020,11 @@ fn main() {
         ))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        // Deliberately not `tauri-plugin-process` alongside it. That plugin
+        // exists to expose `relaunch` to JavaScript; the flow here is driven
+        // from Rust and `AppHandle::restart()` is core, so adding it would
+        // widen the ACL for nothing.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Shell::new(mode.clone()))
         .invoke_handler(tauri::generate_handler![
             start,
@@ -5870,7 +6059,9 @@ fn main() {
             open_developer_tools,
             local_recovery_options,
             reset_local_data,
-            reset_full_reinstall
+            reset_full_reinstall,
+            check_for_app_update,
+            install_app_update
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -6495,6 +6686,137 @@ mod tests {
             .find("\nfn ")
             .map_or(source.len(), |offset| start + offset);
         &source[start..end]
+    }
+
+    /// The channel stamp fails closed, and only stable self-updates.
+    ///
+    /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
+    /// developer's `cargo tauri dev` -- must never follow an update feed, and
+    /// must say so rather than appearing configured.
+    #[test]
+    fn only_a_stable_build_updates_itself() {
+        // The stamp this binary was compiled with. Tests are a debug build, so
+        // updates are off here whatever the channel says.
+        assert!(
+            !updates_enabled(),
+            "a development build must never self-update"
+        );
+        assert!(
+            matches!(release_channel(), "stable" | "nightly" | "dev"),
+            "the channel is a closed set, so an unknown value cannot leak through"
+        );
+    }
+
+    /// The feed's compatibility block decides before anything is downloaded.
+    #[test]
+    fn an_update_that_would_strand_local_data_says_so_first() {
+        let same = LemmaUpdateMetadata {
+            postgres_major: Some(18),
+            runtime_download_bytes: Some(531_000_000),
+        };
+        assert_eq!(same.compatibility_with(Some(18)), "compatible");
+        assert_eq!(
+            same.compatibility_with(Some(16)),
+            "requires-reset",
+            "a Postgres major bump cannot open the existing cluster"
+        );
+
+        // Absent information warns rather than blocks. Blocking would strand
+        // every user the first time the feed lags a release, and the runtime
+        // installer still refuses an incompatible pairing -- this exists to say
+        // so before 506 MB is downloaded, not instead of that check.
+        assert_eq!(same.compatibility_with(None), "unknown");
+        assert_eq!(
+            LemmaUpdateMetadata::default().compatibility_with(Some(18)),
+            "unknown"
+        );
+    }
+
+    /// A feed without the block, or with junk in it, is read safely.
+    #[test]
+    fn update_metadata_tolerates_a_feed_that_does_not_carry_it() {
+        let absent = lemma_update_metadata(&json!({"version": "0.8.0"}));
+        assert_eq!(absent.postgres_major, None);
+        assert_eq!(absent.runtime_download_bytes, None);
+
+        let wrong_types = lemma_update_metadata(&json!({
+            "lemma": {"postgres_major": "eighteen", "runtime_download_bytes": []}
+        }));
+        assert_eq!(wrong_types.postgres_major, None);
+        assert_eq!(wrong_types.runtime_download_bytes, None);
+
+        let good = lemma_update_metadata(&json!({
+            "lemma": {"postgres_major": 18, "runtime_download_bytes": 531_000_000_u64}
+        }));
+        assert_eq!(good.postgres_major, Some(18));
+        assert_eq!(good.runtime_download_bytes, Some(531_000_000));
+    }
+
+    /// The updater is never reachable from a remote origin.
+    ///
+    /// `workspace.json` grants commands to the locald-served app URL and to
+    /// lemma.work. A permission that can replace the application binary,
+    /// reachable from a page served over the network, would be a
+    /// remote-code-execution primitive -- so the grant lives only on the
+    /// control window, and nothing may hand the plugin's own permissions to
+    /// anyone.
+    #[test]
+    fn no_capability_exposes_the_updater_to_a_remote_origin() {
+        for (name, source) in [
+            ("main", include_str!("../capabilities/main.json")),
+            ("control", include_str!("../capabilities/control.json")),
+            ("workspace", include_str!("../capabilities/workspace.json")),
+        ] {
+            assert!(
+                !source.contains("\"updater:"),
+                "{name} must not grant the updater plugin's own permissions",
+            );
+            assert!(
+                !source.contains("\"process:"),
+                "{name} must not grant process control",
+            );
+        }
+        let workspace = include_str!("../capabilities/workspace.json");
+        for command in ["allow-check-for-app-update", "allow-install-app-update"] {
+            assert!(
+                !workspace.contains(command),
+                "a remote origin must not be able to replace the application",
+            );
+        }
+        assert!(include_str!("../capabilities/control.json")
+            .contains("allow-install-app-update"));
+    }
+
+    /// The updater's transport policy is not weakened, and the artifact flag
+    /// stays out of the base config.
+    #[test]
+    fn the_updater_config_keeps_its_transport_and_build_boundaries() {
+        let config = include_str!("../tauri.conf.json");
+        assert!(config.contains("\"updater\""));
+        assert!(
+            !config.contains("dangerousInsecureTransportProtocol"),
+            "an update served over plain HTTP is an update anyone can forge",
+        );
+        assert!(
+            config.contains("https://github.com/"),
+            "every endpoint must be HTTPS",
+        );
+        // `tauri build` runs from five places with no signing key -- CI's build
+        // check, the Windows check, two nightly jobs and `make desktop-dmg` --
+        // and every one of them fails if the base config demands updater
+        // artifacts. The flag belongs only in the overlay the release merges.
+        assert!(
+            !config.contains("createUpdaterArtifacts"),
+            "the artifact flag belongs in tauri.updater.conf.json, not the base config",
+        );
+        assert!(include_str!("../tauri.updater.conf.json").contains("createUpdaterArtifacts"));
+
+        // The CSP is untouched: the check runs in Rust precisely so the webview
+        // that also hosts the remote workspace never gains github.com.
+        assert!(
+            config.contains("connect-src 'self' ipc: http://ipc.localhost"),
+            "checking from Rust is what keeps the webview's network policy narrow",
+        );
     }
 
     /// Install failures say what happened and what to try.
@@ -7945,9 +8267,16 @@ mod tests {
         assert!(html.contains("id=\"connector-callback\""));
         assert!(script.contains("snapshot.state?.api_url"));
         assert!(!html.contains("http://app.lemma.localhost:8711/api/v1/connectors"));
-        assert!(html.contains(
-            "Rollback stays unavailable until a release declares its data rollback boundary"
-        ));
+        // The rollback notice used to be here, toggled `hidden = rollbackAvailable`
+        // against a value hardcoded `false` -- so it was *permanently* on
+        // screen, explaining a feature that does not exist. A standing
+        // paragraph about something that has never happened is a bug, not a
+        // flag, and the Previous runtime card now says what is actually true.
+        assert!(
+            !html.contains("Rollback stays unavailable"),
+            "a notice that can never be dismissed is not a boundary, it is noise",
+        );
+        assert!(html.contains("Reinstalling an earlier Lemma from the release page"));
         assert!(html.contains("Databases, files, and workspaces are preserved"));
     }
 

@@ -19,6 +19,12 @@
       "desktop": {
         "schemes": ["lemma"]
       }
+    },
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/lemma-work/lemma-platform/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {

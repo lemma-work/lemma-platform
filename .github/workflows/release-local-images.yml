@@ -1043,6 +1043,13 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SHA: ${{ github.sha }}
+          # Marks the build as a nightly, which turns its updater off. The
+          # signing key is deliberately absent from this workflow: a nightly's
+          # runtime lives in a prerelease pruned to the three most recent
+          # builds, so there is no durable feed for it to follow, and it must
+          # not be able to produce a valid update even by accident.
+          LEMMA_RELEASE_CHANNEL: nightly
+          LEMMA_BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           npx -y "$TAURI_CLI" build --config tauri.online.conf.json

@@ -163,6 +163,73 @@ function stopLogPolling() {
   logTimer = null;
 }
 
+/* ------------------------------------------------------------- updates ---
+ * Until now there was no updater at all, so a DMG in someone's hands could
+ * never be fixed. The check runs in Rust, which is why the webview's CSP does
+ * not have to learn about github.com.
+ */
+
+let appUpdate = null;
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
+function renderAppUpdate() {
+  if (!appUpdate) return;
+  const summary = $("app-update-summary");
+  const available = $("app-update-available");
+  const unsupported = $("app-update-unsupported");
+  // Reset first. The branches below return early, and a warning left over from
+  // a previous render is invisible only for as long as it stays nested inside
+  // the hidden banner -- which is not a property worth depending on.
+  $("app-update-reset-warning").hidden = true;
+  const channelSuffix = appUpdate.channel === "stable" ? "" : ` · ${appUpdate.channel}`;
+  const commit = appUpdate.buildCommit ? ` (${appUpdate.buildCommit.slice(0, 8)})` : "";
+  summary.textContent = `Lemma ${appUpdate.currentVersion}${channelSuffix}${commit}`;
+
+  if (!appUpdate.updatesSupported) {
+    // Visible, not silently missing: a build that cannot update itself should
+    // say so, or the absence reads as "there is nothing new".
+    available.hidden = true;
+    unsupported.hidden = false;
+    unsupported.textContent =
+      appUpdate.channel === "nightly"
+        ? "Nightly builds don't update themselves. Download a newer one from the releases page when you need it."
+        : "This is a development build, so it doesn't update itself.";
+    return;
+  }
+  unsupported.hidden = true;
+
+  if (!appUpdate.availableVersion) {
+    available.hidden = true;
+    summary.textContent += " · up to date";
+    return;
+  }
+  available.hidden = false;
+  $("app-update-headline").textContent = `Lemma ${appUpdate.availableVersion} is available.`;
+  // Honest about what follows the restart. The app payload is small; the
+  // runtime it then fetches is two orders of magnitude larger, and a user on a
+  // hotspot deserves to know before committing rather than after.
+  const runtime = formatBytes(appUpdate.runtimeDownloadBytes);
+  $("app-update-cost").textContent = runtime
+    ? `The update itself is small. After Lemma restarts it downloads about ${runtime} of runtime before the workspace opens.`
+    : "After Lemma restarts it downloads its runtime once before the workspace opens.";
+  $("app-update-reset-warning").hidden = appUpdate.dataCompatibility !== "requires-reset";
+}
+
+async function loadAppUpdate() {
+  try {
+    appUpdate = await invoke("check_for_app_update");
+    renderAppUpdate();
+  } catch (error) {
+    const summary = $("app-update-summary");
+    if (summary) summary.textContent = `Couldn't check for updates. ${friendlyError(error)}`;
+  }
+}
+
 async function closeLocalSettings() {
   try {
     await invoke("close_local_settings");
@@ -556,6 +623,28 @@ async function runDesktopAction(button) {
     // Both confirm natively inside the command rather than here: one dialog,
     // and the splash reaches the same commands without needing a dialog
     // primitive of its own.
+    if (action === "check-app-update") {
+      button.disabled = true;
+      button.textContent = "Checking…";
+      await loadAppUpdate();
+    }
+    if (action === "install-app-update") {
+      button.disabled = true;
+      button.textContent = "Downloading…";
+      // The reset warning is not decoration: taking an incompatible update
+      // without discarding data first produces an app that cannot start.
+      if (appUpdate?.dataCompatibility === "requires-reset") {
+        const proceed = await confirmAction(
+          "Update and reset local data?",
+          `Lemma ${appUpdate.availableVersion} upgrades the local database. Your pods, files and accounts on this Mac cannot be carried across and will be deleted.`,
+          "Update and Reset",
+        );
+        if (!proceed) return;
+        await invoke("reset_local_data");
+      }
+      await invoke("install_app_update");
+      await loadAppUpdate();
+    }
     if (action === "retry-snapshot") {
       clearTimeout(snapshotRetryTimer);
       snapshotRetryTimer = null;
@@ -579,6 +668,8 @@ async function runDesktopAction(button) {
     for (const [action, label] of [
       ["reset-local-data", "Reset local data"],
       ["full-reinstall", "Start over"],
+      ["check-app-update", "Check for updates"],
+      ["install-app-update", "Download and install"],
     ]) {
       document.querySelectorAll(`[data-action="${action}"]`).forEach((item) => {
         item.disabled = false;
@@ -602,7 +693,11 @@ function render() {
   const sharing = snapshot.sharing || {};
   const sharingMode = sharing.mode || "this_computer";
 
-  $("release").textContent = `Release ${snapshot.release || "development"}`;
+  // The channel, when it is not stable. A nightly and a release both report
+  // the same version with the same bundle id, so this is the only thing that
+  // answers "what are you running?" in a support conversation.
+  const channel = appUpdate && appUpdate.channel !== "stable" ? ` · ${appUpdate.channel}` : "";
+  $("release").textContent = `Release ${snapshot.release || "development"}${channel}`;
   $("metric-app").textContent = appReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
   $("metric-ai").textContent = aiReady ? "Ready" : "Needs setup";
   $("metric-ai-detail").textContent = aiReady
@@ -950,7 +1045,6 @@ function renderRuntime() {
     item.disabled = !runtimeInfo.repairAvailable;
   });
   setDot("updates", runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn");
-  $("rollback-notice").hidden = runtimeInfo.rollbackAvailable;
 }
 
 async function loadRuntimeInfo() {
@@ -1128,3 +1222,4 @@ listen("lemma:locald-event", handleLocaldEvent);
 setPage(titles[window.__LEMMA_CONTROL_PAGE__] ? window.__LEMMA_CONTROL_PAGE__ : "overview");
 requestSnapshot();
 loadRuntimeInfo();
+loadAppUpdate();

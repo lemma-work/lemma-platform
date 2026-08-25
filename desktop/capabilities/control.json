@@ -26,6 +26,8 @@
     "allow-open-developer-tools",
     "allow-local-recovery-options",
     "allow-reset-local-data",
-    "allow-reset-full-reinstall"
+    "allow-reset-full-reinstall",
+    "allow-check-for-app-update",
+    "allow-install-app-update"
   ]
 }

@@ -260,11 +260,30 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build online DMG
-        working-directory: desktop
+      - name: Require an updater signing key
+        shell: bash
+        env:
+          TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+          if [[ -z "${TAURI_UPDATER_PRIVATE_KEY}" ]]; then
+            echo "::error::TAURI_UPDATER_PRIVATE_KEY is required. Without it this \
+          release ships an app that cannot be updated in place, and every user \
+          who installs it is stranded on it." >&2
+            exit 1
+          fi
+
+      - name: Build online DMG
+        working-directory: desktop
+        # The updater overlay is merged only here. `tauri build` runs from five
+        # other places with no signing key -- CI's build check, the Windows
+        # check, both nightly jobs and `make desktop-dmg` -- and every one of
+        # them would fail if the base config demanded updater artifacts.
+        run: |
+          set -euo pipefail
+          npx -y "$TAURI_CLI" build \
+            --config tauri.online.conf.json \
+            --config tauri.updater.conf.json
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -276,6 +295,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
+          LEMMA_RELEASE_CHANNEL: stable
+          LEMMA_BUILD_SHA: ${{ github.sha }}
 
 
       # Tauri notarizes and staples the .app, then builds the DMG from it and
@@ -336,6 +359,89 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
+      # Tauri notarizes and staples the .app, then tars it. That ordering is
+      # believed, not documented -- and an update payload that is not notarized
+      # installs an app Gatekeeper then refuses, on a machine that was working
+      # before it updated. Asserted rather than assumed.
+      - name: Verify the updater payload is notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          test -f "${tarball}"
+          workdir="$(mktemp -d)"
+          tar -xzf "${tarball}" -C "${workdir}"
+          app="${workdir}/Lemma.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          xcrun stapler validate "${app}"
+          spctl -a -t exec -vv "${app}"
+
+      - name: Publish the update feed
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          # A prerelease must never become the feed every stable install
+          # follows. GitHub's `latest` alias already excludes prereleases, so
+          # this is the second of two independent guards.
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            echo "Prerelease: the DMG is attached, the update feed is not."
+            exit 0
+          fi
+          artifacts="desktop/target/release/release-artifacts"
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          cp "${tarball}" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz"
+          cp "${tarball}.sig" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz.sig"
+          python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          repository = os.environ["REPOSITORY"]
+          artifacts = pathlib.Path("desktop/target/release/release-artifacts")
+          # The signature is the *contents* of the .sig file. A path or a URL
+          # here produces a feed nothing can verify, and the failure only shows
+          # up on a user's machine.
+          signature = (artifacts / f"Lemma_{version}_aarch64.app.tar.gz.sig").read_text().strip()
+
+          # Carried alongside the standard fields so the app can warn about a
+          # data-incompatible upgrade *before* downloading half a gigabyte. The
+          # updater ignores unknown top-level keys.
+          manifest = json.loads(pathlib.Path("desktop/runtime/lemma-local.json").read_text())
+          host = manifest["host_packs"]["aarch64-apple-darwin"]
+          guest = manifest["guest_runtimes"]["macos-aarch64"]
+          postgres = manifest.get("infra", {}).get("postgres", "")
+          major = None
+          if "-pg" in postgres:
+              digits = postgres.split("-pg")[1].split("@")[0].split(".")[0]
+              major = int(digits) if digits.isdigit() else None
+
+          feed = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).isoformat(),
+              "notes": f"https://github.com/{repository}/releases/tag/v{version}",
+              "platforms": {
+                  "darwin-aarch64": {
+                      "url": (
+                          f"https://github.com/{repository}/releases/download/"
+                          f"v{version}/Lemma_{version}_aarch64.app.tar.gz"
+                      ),
+                      "signature": signature,
+                  }
+              },
+              "lemma": {
+                  "postgres_major": major,
+                  "runtime_download_bytes": host["size"] + guest["size"],
+              },
+          }
+          (artifacts / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
+          PY
+          echo "Update feed:"
+          cat "${artifacts}/latest.json"
+
       - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
         with:
@@ -349,7 +455,50 @@ jobs:
           # event does not fire (a release created by GITHUB_TOKEN does not
           # trigger workflows), so that path has to be able to attach.
           tag_name: v${{ steps.version.outputs.version }}
-          files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
+          files: |
+            desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
+            desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz
+            desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz.sig
+            desktop/target/release/release-artifacts/latest.json
+
+      # The feed is only real once it is fetchable at the URL every installed
+      # app polls. A malformed or unreachable one is silent: installs simply
+      # never update, and nobody finds out until a fix needs to reach them.
+      - name: Verify the published update feed
+        if: github.event.release.prerelease != true
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          feed="https://github.com/${REPOSITORY}/releases/latest/download/latest.json"
+          # GitHub takes a moment to re-point `latest` after a publish.
+          for attempt in {1..10}; do
+            if body="$(curl -fsSL "${feed}")"; then
+              break
+            fi
+            if [[ "${attempt}" == 10 ]]; then
+              echo "::error::The update feed is not reachable at ${feed}" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          printf '%s' "${body}" | python3 -c '
+          import json, os, sys, urllib.request
+          feed = json.load(sys.stdin)
+          version = os.environ["VERSION"]
+          if feed["version"] != version:
+              raise SystemExit(f"feed names {feed[\'version\']}, expected {version}")
+          entry = feed["platforms"]["darwin-aarch64"]
+          if not entry["signature"].strip():
+              raise SystemExit("the feed carries an empty signature")
+          request = urllib.request.Request(entry["url"], method="HEAD")
+          with urllib.request.urlopen(request) as response:
+              if response.status != 200:
+                  raise SystemExit(f"update payload is not downloadable: {response.status}")
+          print("update feed verified:", feed["version"])
+          '
 
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
