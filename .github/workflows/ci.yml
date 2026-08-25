@@ -213,7 +213,6 @@ jobs:
             # three tests. The e2e shards upload theirs and get a slowest-tests
             # summary out of it; this is the same line.
             lemma-backend/coverage-backend/junit-*.xml
-            lemma-backend/coverage-backend/html
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates

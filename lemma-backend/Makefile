@@ -223,7 +223,17 @@ coverage-backend-report:
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage report --skip-covered --sort=cover
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage json -o $(BACKEND_COVERAGE_DIR)/coverage.json
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage xml -o $(BACKEND_COVERAGE_DIR)/coverage.xml
-	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage html -d $(BACKEND_COVERAGE_DIR)/html
+# Opt-in: 1248 annotated HTML files that nothing reads. It ran here on the
+# unit job *and* on all eight e2e shards, ~10s of each shard's critical path
+# and ~15s of the unit required check, purely to be uploaded and browsed --
+# no gate, script or workflow consumes the directory. The artifacts still
+# carry `.coverage.backend`, so anyone who wants the report runs
+# `COVERAGE_HTML=1 make coverage-backend-report` against it in ~8 seconds.
+	@if [ "$(COVERAGE_HTML)" = "1" ]; then \
+		$(BACKEND_COVERAGE_DATA_ENV) uv run coverage html -d $(BACKEND_COVERAGE_DIR)/html; \
+	else \
+		echo "coverage html skipped (COVERAGE_HTML=1 to generate)"; \
+	fi
 	uv run python scripts/backend_coverage_report.py \
 		--phase $(COVERAGE_PHASE) \
 		--coverage-json $(BACKEND_COVERAGE_DIR)/coverage.json \

@@ -260,7 +260,6 @@ jobs:
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/junit-*.xml
-            lemma-backend/coverage-backend/html
           if-no-files-found: ignore
 
   e2e-passed:
