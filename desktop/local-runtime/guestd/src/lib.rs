@@ -1356,7 +1356,9 @@ impl<E: Engine> GuestService<E> {
     /// PostgreSQL refuses an unusable data directory with a *paragraph*, and
     /// the last line of the official image's version-mismatch block is
     ///
-    ///     discussion around this process, and suggestions for how to do so.
+    /// ```text
+    /// discussion around this process, and suggestions for how to do so.
+    /// ```
     ///
     /// which is what a user was shown, appended to a nerdctl error, as the
     /// whole explanation for an install that would never finish. The sentence
