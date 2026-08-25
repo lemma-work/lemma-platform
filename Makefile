@@ -21,7 +21,9 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
+        desktop-lint desktop-guestd desktop-check-windows \
+        desktop-host-pack desktop-host-pack-check \
+        desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
         version-check \
@@ -47,6 +49,15 @@ MODULE        ?=
 OTEL          ?= 0
 OTEL_LOGS     ?= 1
 LLM_OTEL      ?= 0
+
+# What the backend unit lane selects. One variable because two targets run it
+# -- `test-backend-unit` locally and `coverage-backend-unit` in CI -- and they
+# had already drifted: only the second excluded `local_guest`, so the lane a
+# person runs before pushing collected seventeen tests the lane that gates the
+# merge did not. Every exclusion here is an environment-gated suite that would
+# otherwise skip green; `scripts/check_pytest_census.py` fails when a new one
+# appears.
+UNIT_MARKERS  ?= not e2e and not local_guest and not provider
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -317,6 +328,8 @@ help:
 	@echo "    make desktop-dmg        self-contained macOS test DMG (needs runtime-fetch first)"
 	@echo "    make desktop-exe        Windows installer — says how to build it on Windows"
 	@echo "    make desktop-guestd     build and test the Linux guest daemon (Linux only)"
+	@echo "    make desktop-check-windows  compile the Windows paths from a Mac"
+	@echo "    make desktop-host-pack  build the shipped host pack and run its interpreters"
 	@echo "    make desktop-verify-guest  workspace sandbox + file persistence in the real VM"
 	@echo "    make desktop-clean      remove desktop build output and staged runtime"
 	@echo ""
@@ -566,7 +579,7 @@ dev:
 	@echo ""
 	@# The readiness check is what confirms the unified application finished
 	@# starting; sandbox provisioning is part of it rather than a second service.
-	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 		$(MAKE) --no-print-directory _run-backend & \
 		$(MAKE) --no-print-directory _run-frontend & \
 		$(MAKE) --no-print-directory _wait-backend || { \
@@ -590,7 +603,7 @@ dev-public:
 	echo "  Debug and safe request-access logs are enabled."; \
 	echo "  Press Ctrl-C or run 'make stop' to stop."; \
 	echo ""; \
-	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 	$(MAKE) --no-print-directory _run-backend \
 		BACKEND_API_URL="$$public_api_url" \
 		BACKEND_SESSION_COOKIE_DOMAIN= \
@@ -955,6 +968,61 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Memory balloon policy…"
 	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
+# Build the ~1 GB artifact the app ships, and prove its interpreters run.
+#
+# This is what CI's `host-pack-macos` job does, runnable by hand. It is the only
+# check that catches a relocatable CPython whose baked `sys.prefix` still points
+# at the build machine -- which unpacks perfectly, reports the right version,
+# and fails the instant it is asked to import anything, on a user's machine,
+# four minutes into a first run.
+#
+# ~15 minutes and ~1 GB. PACK_OUT to keep the result; the default is a
+# throwaway. PYTHON_ROOT to copy an interpreter you already have, which is the
+# fix when your `uv` predates the pinned CPython patch version.
+PACK_OUT     ?= out/host-pack
+PYTHON_ROOT  ?=
+
+desktop-host-pack:
+	@echo "→ Building the host pack (this takes a while and ~1 GB)…"
+	@mkdir -p $(PACK_OUT)
+	@python3 -c "import json,pathlib,sys; \
+	  image=lambda n: {'ref': f'ghcr.io/lemma-work/{n}:0.0.0-local', 'digest': 'sha256:'+'0'*64}; \
+	  pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, \
+	    'version': '0.0.0-local', 'min_admin_version': '0.1.0', \
+	    'images': {n: image('lemma-'+n) for n in ('backend','frontend','workspace','function')}, \
+	    'infra': {'postgres': image('postgres'), 'redis': image('redis')}}, indent=2)+chr(10))" \
+	  $(PACK_OUT)/host-release.json
+	@uv run --no-project python scripts/build_local_host_pack.py 		--output $(PACK_OUT)/local-runtime 		--release-manifest $(PACK_OUT)/host-release.json 		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),)
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Just the checks, against a pack you already have.
+desktop-host-pack-check:
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Compile the Windows code paths from a Mac, before pushing.
+#
+# The `desktop-windows` CI job is not in the desktop path filter, so its result
+# arrives a push later -- and it has now caught four separate things one round
+# at a time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
+# breaking source searches, and tests that spawn `/bin/sh`.
+#
+# This catches the *compile* half of that class locally. `lemma-agent-host` is
+# left out on purpose: it pulls `libsqlite3-sys`, whose build script needs a
+# Windows C toolchain that a Mac does not have. locald is where every one of
+# those failures was.
+#
+# The runtime half -- a POSIX binary that is simply not there -- is not a
+# compile error, and is caught by the source lint in `host_process.rs` instead.
+desktop-check-windows:
+	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
+		echo "→ Adding the Windows target…"; \
+		rustup target add x86_64-pc-windows-msvc)
+	@echo "→ Windows compile check (locald, runtime manager, tests included)…"
+	@cd $(DESKTOP_DIR) && cargo clippy \
+		-p lemma-locald -p lemma-runtime-manager \
+		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+	@echo "  ✓ the Windows code paths compile and lint"
+
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs
 # in the guest.
@@ -1176,7 +1244,7 @@ test-backend:
 
 test-backend-unit:
 	@echo "→ Backend unit tests…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" -q
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" -q
 
 test-backend-e2e:
 	@echo "→ Backend e2e tests (workers=$(E2E_WORKERS))…"
@@ -1361,9 +1429,21 @@ coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-front
 
 coverage-backend: coverage-backend-unit coverage-backend-e2e
 
+# `local_guest` and `provider` are excluded explicitly rather than left to skip.
+#
+# The seventeen `local_guest` tests need Lemma Desktop installed with its VM
+# booted, and the three `provider` ones need real E2B credentials. Neither is
+# marked `e2e` -- so `-m "not e2e"` collected all twenty on every backend CI run
+# and they reported green skips. A suite that always skips is indistinguishable
+# from one that has quietly stopped existing. Deselecting says so in the
+# summary instead, and `scripts/check_pytest_census.py` now fails if another
+# environment-gated suite drifts back into this lane.
+#
+# Keep this expression identical to `test-backend-unit`'s and to the two
+# entries in that script's LANES table.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" \
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:
@@ -1536,6 +1616,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Test census (no suite has quietly stopped running)…"
+	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"
 	@python3 scripts/plan_e2e_shards.py --verify
 	@echo "→ Product scenario traceability…"

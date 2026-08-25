@@ -27,6 +27,7 @@ jobs:
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
+      desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -109,6 +110,25 @@ jobs:
               - 'desktop/runtime/lemma-local.json'
               # See the note in the `desktop` filter above: ci.yml is left out
               # on purpose.
+            # What can change the *desktop* meaning of a backend or frontend
+            # edit. `desktop` deliberately does not list these -- it starts two
+            # 90-minute jobs -- but `build_local_host_pack.py` packs the backend
+            # and the frontend into the host pack the app ships and supervises,
+            # and no CI job ran that script at all. A backend dependency without
+            # an arm64 wheel, or a Next config change that breaks the standalone
+            # output, merged green and was discovered in a release run.
+            #
+            # This one is cheap enough to list ci.yml, so a change to the
+            # desktop CI steps finally runs something desktop-shaped.
+            desktop_contract:
+              - 'lemma-backend/**'
+              - 'lemma-frontend/**'
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/build_local_guest_runtime.sh'
+              - 'desktop/locald/src/native_host_pack.rs'
+              - 'desktop/contracts/**'
+              - 'desktop/local-runtime/guest-image/**'
+              - '.github/workflows/ci.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -119,6 +139,9 @@ jobs:
               # desktop job and skipped the test that reads it.
               - 'scripts/build_local_host_pack.py'
               - 'scripts/prepare_desktop_test_runtime.py'
+              # The host-pack layout contract. Both halves of it have to run
+              # when it changes, and this is the half that lives in tests/.
+              - 'desktop/contracts/**'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
@@ -131,6 +154,15 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_ci_job_results.py'
+              - 'scripts/check_pytest_census.py'
+              - 'scripts/check_test_run.py'
+              # The recorded floors and ceilings themselves. Without these a PR
+              # that edits only a baseline runs nothing at all.
+              - '.github/pytest-census.json'
+              - '.github/test-run-baseline.json'
+              - 'scripts/_pytest_census_plugin.py'
+              - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
@@ -158,8 +190,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # This lane runs `-m "not e2e"`, which includes the integration tests, and
-      # those skip themselves when no database answers. Without this service 57
+      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
+      # and those skip themselves when no database answers. Without this service 57
       # of them did -- the whole workspace integration suite: the sandbox state
       # machine, the repository, and every one of the sweeper's decisions about
       # what it may destroy. They passed locally and were absent here, which is
@@ -190,6 +222,16 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
+      # Collection-time checks cannot see a test that starts and then skips
+      # itself from a fixture. 72 of this lane's tests do exactly that when
+      # Postgres is unreachable, and this job's own comment records what the
+      # same suite silently skipping 57 tests once cost.
+      - name: No suite skipped itself at runtime
+        if: always()
+        run: >-
+          python3 ../scripts/check_test_run.py --lane unit
+          coverage-backend/junit-unit.xml
+
       - name: Add backend coverage to job summary
         if: always()
         run: |
@@ -273,6 +315,12 @@ jobs:
       # exists to prevent -- growth nobody decided on.
       - name: Import budget
         run: make lint-import-budget
+      # Counts what collection actually found, against a committed floor. Two
+      # suites had already gone quiet without anything saying so: a directory
+      # missing from `testpaths`, and twenty environment-gated tests collected
+      # into a lane that reports "passed" and skipping every one of them.
+      - name: Test census (no suite has quietly stopped running)
+        run: python3 ../scripts/check_pytest_census.py
       # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
       # from eroding back into ~50 duplicated hand-rolled poll loops.
       - name: e2e wait patterns (no new hand-rolled poll loops)
@@ -541,8 +589,12 @@ jobs:
       # workflow file was ever run. The other two cover the scripts that build
       # the host pack and stage a bundled runtime -- both of which the desktop
       # installers now depend on.
+      # pyyaml because two of these gates read the workflow files themselves --
+      # the aggregator check and the skipped-job check. Without it their tests
+      # fail to *import*, which pytest reports as a collection error rather
+      # than a failure, and which is easy to skim past.
       - name: Run repo tooling tests
-        run: uv run --with pytest python -m pytest tests/ -q
+        run: uv run --with pytest --with pyyaml python -m pytest tests/ -q
       # The two required checks are aggregator jobs, so their `needs:` lists
       # are the merge gate. This asserts nothing has fallen out of one -- the
       # failure ci.yml's own comment records -- and that every job still
@@ -623,6 +675,46 @@ jobs:
           if ($content -notmatch "lemma-stack") { Write-Error "install.ps1 missing lemma-stack"; exit 1 }
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
+
+  # The cheap desktop lane: contract checks only, no app compiler and no VM.
+  #
+  # This exists because the expensive `desktop` job is deliberately not
+  # triggered by backend or frontend changes -- it costs 476s on macOS and 940s
+  # on Windows -- while `build_local_host_pack.py` packs both of them into the
+  # host pack the app ships. Nothing connected the two, so a backend change
+  # that broke the desktop stack merged with CI fully green.
+  #
+  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  desktop-contract:
+    timeout-minutes: 20
+    name: Desktop contracts
+    needs: changes
+    if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-contract
+
+      # The host-pack layout locald hard-codes, and the guest protocol the
+      # backend's stub stands in for. Both are pure assertions over committed
+      # files, so they need neither the app crate nor a runtime.
+      - name: Host pack and guest contracts
+        working-directory: desktop
+        run: cargo test -p lemma-locald -p lemma-guestd --locked
+
+      # `make desktop-lint` has always run this; CI never did, and it guards a
+      # guest-kernel Oops during first setup.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
 
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
@@ -730,6 +822,11 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
+      # One second, and it guards a guest-kernel Oops during first setup.
+      # `make desktop-lint` has always run it; CI never did.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -809,6 +906,28 @@ jobs:
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
 
+      # The build-check DMG is meant to refuse to install, by name rather than
+      # by failing a DNS lookup -- `artifact_install.rs` recognises
+      # `artifact_source: ci-build-check` and says so specifically. There is a
+      # unit test for the recognition; nothing checked that the *shipped
+      # artifact* still carries the marker. A packaging change that dropped it
+      # would leave whoever tried it debugging a network error for an hour.
+      - name: The build-check app refuses to install, and says why
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="desktop/target/release/bundle/macos/Lemma.app/Contents/Resources/lemma-local.json"
+          test -f "${manifest}"
+          python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          if data.get("artifact_source") != "ci-build-check":
+              raise SystemExit(
+                  "the build-check app lost its refusal marker, so it now fails "
+                  "with a generic network error instead of naming itself"
+              )
+          ' "${manifest}"
+
       - name: Upload macOS build-check DMG
         uses: actions/upload-artifact@v4
         with:
@@ -820,6 +939,94 @@ jobs:
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  # Build the artifact the app actually ships, and prove its interpreters run.
+  #
+  # `desktop-contract` proves the *layout* both sides agree on; nothing proved
+  # the pack can be produced at all. It is built by a release job, from the
+  # backend and the frontend, using a relocatable CPython and a copied Node --
+  # and the ways that breaks are all invisible to every other job here: a
+  # backend dependency with no arm64 wheel, a Next config change that stops
+  # emitting standalone output, an interpreter whose baked prefix points at the
+  # build machine.
+  #
+  # That last one is the reason this cannot just be a build. A relocatable
+  # CPython with a wrong `sys.prefix` unpacks, passes every file-existence
+  # check, has the right version, and fails the moment it is asked to import
+  # anything -- on a user's machine, four minutes into a first run. So the
+  # packed interpreters are executed here, not merely produced.
+  #
+  # Merge-to-main only. It is ~25 minutes on a macOS runner and it guards
+  # release-time breakage rather than review-time correctness, so a red one is
+  # "look in the morning", not a blocked PR. It is deliberately absent from the
+  # `ci` aggregator for the same reason, and exempted in
+  # scripts/check_ci_aggregators.py where that decision is written down.
+  host-pack-macos:
+    name: Host pack builds and runs (macOS)
+    timeout-minutes: 60
+    needs: changes
+    if: >-
+      github.event_name == 'push' &&
+      (needs.changes.outputs.desktop_contract == 'true' ||
+       needs.changes.outputs.desktop == 'true')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Digests nobody resolves. The pack embeds a release manifest, and this
+      # job is about the pack's own layout and interpreters -- not about which
+      # images a release points at. Placeholders keep it off the network and
+      # out of the release workflow's way.
+      - name: Stage a release manifest
+        run: |
+          mkdir -p host-pack-out
+          python3 - <<'PY'
+          import json, pathlib
+          image = lambda name: {
+              "ref": f"ghcr.io/lemma-work/{name}:0.0.0-ci",
+              "digest": "sha256:" + "0" * 64,
+          }
+          pathlib.Path("host-pack-out/host-release.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "version": "0.0.0-ci",
+                      "min_admin_version": "0.1.0",
+                      "images": {
+                          name: image(f"lemma-{name}")
+                          for name in ("backend", "frontend", "workspace", "function")
+                      },
+                      "infra": {
+                          "postgres": image("postgres"),
+                          "redis": image("redis"),
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n"
+          )
+          PY
+
+      # The build smoke-executes the packed Python itself, importing FastMCP,
+      # uvicorn, keyring and the local sandbox provider. That is the check a
+      # wrong `sys.prefix` fails.
+      - name: Build the host pack
+        run: |
+          uv run --no-project python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-pack-out/host-release.json
+
+      # And the same question asked of the frontend half, which the build does
+      # not ask: a copied Node that cannot resolve its own standalone server is
+      # a frontend that never serves.
+      - name: The packed runtimes execute
+        run: uv run --no-project python scripts/check_host_pack.py host-pack-out/local-runtime
 
   # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
   # compiles, so the macOS workspace run says nothing about the code that
@@ -997,6 +1204,7 @@ jobs:
       - dev-workflow
       - windows-cli
       - desktop
+      - desktop-contract
       - desktop-guestd
       - desktop-windows
     runs-on: ubuntu-latest
@@ -1006,4 +1214,20 @@ jobs:
         run: |
           echo "::error::One or more required CI suites failed or were cancelled."
           exit 1
+      # The step above cannot see the third way this check goes green: a job
+      # that skipped although its filter said to run it. `skipped` is not
+      # `failure`, so a suite that stopped running reads exactly like a suite
+      # that was correctly unaffected. This compares each job's result against
+      # the filter it actually gates on, read back out of this file.
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: No gated job skipped while its filter was live
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          # So a merge-to-main-only job's skip on a PR reads as correct rather
+          # than as one more job this gate stopped covering.
+          CI_EVENT_NAME: ${{ github.event_name }}
+        run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."

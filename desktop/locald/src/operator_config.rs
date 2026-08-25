@@ -103,9 +103,20 @@ pub struct ApplyOperatorConfig {
 
 impl OperatorConfig {
     fn fresh() -> io::Result<Self> {
+        Self::fresh_with_install_id(random_hex(16)?)
+    }
+
+    /// A default configuration that keeps an existing installation's identity.
+    ///
+    /// The identity is not decoration: every one of `SECRET_NAMES` is stored in
+    /// the OS credential vault under `{install_id}:{name}`. Minting a new id
+    /// while healing a broken config would leave all of them in the user's
+    /// keychain, addressable by nothing -- `keyring` needs the account name to
+    /// find an entry, so they could not even be enumerated to clean up.
+    fn fresh_with_install_id(install_id: String) -> io::Result<Self> {
         Ok(Self {
             schema_version: CONFIG_SCHEMA_VERSION,
-            install_id: random_hex(16)?,
+            install_id,
             revision: 0,
             onboarding_complete: false,
             ai: AiProfile {
@@ -250,44 +261,124 @@ pub(crate) struct OperatorConfigState {
 
 impl OperatorConfigStore {
     pub fn load(path: PathBuf) -> io::Result<Arc<Self>> {
-        Self::load_components(
+        Self::load_reporting(path, &mut Vec::new())
+    }
+
+    /// `load`, plus a note for anything it had to repair on the way.
+    ///
+    /// The public entry point takes the vault as an implementation detail; only
+    /// tests substitute one.
+    pub fn load_reporting(path: PathBuf, healed: &mut Vec<String>) -> io::Result<Arc<Self>> {
+        Self::load_healing(
             path,
             Arc::new(CachingVault::new(Arc::new(PlatformVault))),
             Arc::new(HttpModelProviderProbe),
+            healed,
         )
     }
 
     #[cfg(test)]
     fn load_with_vault(path: PathBuf, vault: Arc<dyn SecretVault>) -> io::Result<Arc<Self>> {
-        Self::load_components(path, vault, Arc::new(EchoModelProviderProbe))
+        Self::load_with_vault_reporting(path, vault, &mut Vec::new())
     }
 
-    fn load_components(
+    /// A store with both collaborators substituted, for tests that assert on
+    /// provider probing rather than on loading.
+    #[cfg(test)]
+    fn load_probing(
         path: PathBuf,
         vault: Arc<dyn SecretVault>,
         provider_probe: Arc<dyn ModelProviderProbe>,
     ) -> io::Result<Arc<Self>> {
+        Self::load_healing(path, vault, provider_probe, &mut Vec::new())
+    }
+
+    #[cfg(test)]
+    fn load_with_vault_reporting(
+        path: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        healed: &mut Vec<String>,
+    ) -> io::Result<Arc<Self>> {
+        Self::load_healing(path, vault, Arc::new(EchoModelProviderProbe), healed)
+    }
+
+    /// Load the operator's configuration, replacing it only if it is unusable.
+    ///
+    /// This file used to be able to end the daemon three separate ways: a
+    /// permissions check, a strict parse, and an exact `schema_version` match.
+    /// Every nested struct carries `deny_unknown_fields`, so running a build
+    /// that adds a field and then going back to one that does not was enough to
+    /// make an installation refuse to start -- silently, because the reason went
+    /// to a null stderr. `state.json` has self-healed all along; the file on the
+    /// critical path did not.
+    ///
+    /// Order matters: migrate a known older shape, and only quarantine what
+    /// cannot be understood at all. A *newer* schema is quarantined rather than
+    /// downgraded, which is what makes downgrade-then-upgrade recoverable.
+    fn load_healing(
+        path: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        provider_probe: Arc<dyn ModelProviderProbe>,
+        healed: &mut Vec<String>,
+    ) -> io::Result<Arc<Self>> {
         let config = if path.is_file() {
-            ensure_private_file(&path)?;
-            serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid operator configuration: {error}"),
-                )
-            })?
+            match Self::read_existing(&path) {
+                Ok(config) => config,
+                Err(reason) => {
+                    // Salvage the identity before the file naming it goes away.
+                    let salvaged = fs::read(&path)
+                        .ok()
+                        .and_then(|raw| salvage_install_id(&raw));
+                    let aside = crate::paths::quarantine_aside(&path)?;
+                    let config = match salvaged {
+                        Some(install_id) => {
+                            healed.push(format!(
+                                "the operator configuration was unusable ({reason}); kept as {} \
+                                 and replaced, keeping this installation's stored secrets",
+                                aside.display()
+                            ));
+                            OperatorConfig::fresh_with_install_id(install_id)?
+                        }
+                        None => {
+                            healed.push(format!(
+                                "the operator configuration was unusable ({reason}) and its \
+                                 installation id could not be recovered; kept as {} and replaced. \
+                                 Previously stored secrets are unreachable and a full reinstall \
+                                 is the only thing that will clear them",
+                                aside.display()
+                            ));
+                            OperatorConfig::fresh()?
+                        }
+                    };
+                    validate_config(&config)?;
+                    write_private_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
+                    config
+                }
+            }
         } else {
             let config = OperatorConfig::fresh()?;
             validate_config(&config)?;
             write_private_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
             config
         };
-        validate_config(&config)?;
         Ok(Arc::new(Self {
             path,
             vault,
             provider_probe,
             config: Mutex::new(config),
         }))
+    }
+
+    /// Parse an existing file, migrating an older schema rather than rejecting
+    /// it. Returns the reason it is unusable, for the caller to record.
+    fn read_existing(path: &Path) -> Result<OperatorConfig, String> {
+        ensure_private_file(path).map_err(|error| error.to_string())?;
+        let raw = fs::read(path).map_err(|error| error.to_string())?;
+        let value: Value =
+            serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+        let config = migrate_config(value).ok_or("unsupported configuration shape")?;
+        validate_config(&config).map_err(|error| error.to_string())?;
+        Ok(config)
     }
 
     pub fn snapshot(&self) -> io::Result<Value> {
@@ -752,6 +843,114 @@ fn validate_config(config: &OperatorConfig) -> io::Result<()> {
     Ok(())
 }
 
+/// The oldest `schema_version` this build knows how to bring forward.
+///
+/// Anything below it, and anything above `CONFIG_SCHEMA_VERSION`, is quarantined
+/// rather than guessed at.
+const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
+
+/// Remove every secret this installation stored, reporting what would not go.
+///
+/// Used only by `lemma-locald reset`. It runs inside *this* binary rather than
+/// the app because the OS credential vault keys an item's access control to the
+/// code identity that created it -- `work.lemma.locald`, fixed by the
+/// `Info.plist` linked into this executable. A delete issued from the Tauri
+/// shell is a different program as far as the vault is concerned, and would
+/// prompt or fail.
+///
+/// Failures are collected rather than raised: a reset that stopped at the first
+/// stubborn keychain item would leave the rest behind *and* skip removing the
+/// state directory, which is the part the user actually asked for.
+pub fn purge_secrets(install_id: &str) -> Vec<String> {
+    let vault = PlatformVault;
+    let mut failures = Vec::new();
+    for name in SECRET_NAMES {
+        if let Err(error) = vault.delete(install_id, name) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    failures
+}
+
+/// Recover an installation identity from a config file that may be unreadable.
+///
+/// Exposed for `lemma-locald reset`, which must find the id *before* it deletes
+/// the file naming it -- and which runs precisely when that file may be the
+/// thing that is broken.
+pub fn recover_install_id(path: &Path) -> Option<String> {
+    salvage_install_id(&fs::read(path).ok()?)
+}
+
+/// Bring a stored configuration up to the current schema, or refuse it.
+///
+/// Operates on a `Value` rather than the typed struct on purpose: every nested
+/// type carries `deny_unknown_fields`, so a strict parse is exactly what cannot
+/// read a document written by a build that added a field. Working untyped first
+/// is what lets a future v1 -> v2 bump drop unknown keys and fill in defaults
+/// instead of bricking the install.
+///
+/// `sharing.json` has done this all along -- this is the same shape.
+fn migrate_config(mut value: Value) -> Option<OperatorConfig> {
+    let version = value.get("schema_version").and_then(Value::as_u64)?;
+    if !(MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION..=CONFIG_SCHEMA_VERSION).contains(&version) {
+        // A newer schema is never downgraded. Quarantining it instead means
+        // downgrade-then-upgrade gets the file back.
+        return None;
+    }
+
+    // Future per-version fixups land here, oldest first. There is only one
+    // schema today, so the sole job right now is to drop keys a newer build
+    // wrote that this one does not know -- which is the case that made a
+    // rollback fatal.
+    let known: &[&str] = &[
+        "schema_version",
+        "install_id",
+        "revision",
+        "onboarding_complete",
+        "ai",
+        "integrations",
+        "surfaces",
+    ];
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|key, _| known.contains(&key.as_str()));
+    }
+    value["schema_version"] = Value::from(CONFIG_SCHEMA_VERSION);
+
+    serde_json::from_value(value).ok()
+}
+
+/// Recover just the installation identity from a file nothing else can read.
+///
+/// Deliberately the most permissive parse in this module: it runs when the
+/// strict one has already failed, and what it protects is the link between this
+/// installation and the 19 secrets in the user's keychain.
+fn salvage_install_id(raw: &[u8]) -> Option<String> {
+    fn looks_like_an_id(candidate: &str) -> bool {
+        candidate.len() == 32 && candidate.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    // The structured read first, for a file that parses but does not fit.
+    if let Ok(value) = serde_json::from_slice::<Value>(raw) {
+        if let Some(install_id) = value.get("install_id").and_then(Value::as_str) {
+            if looks_like_an_id(install_id) {
+                return Some(install_id.to_owned());
+            }
+        }
+    }
+
+    // Then a plain text scan, because the case this exists for is a file that
+    // is not JSON at all -- a truncated write, a torn page. A JSON parser
+    // cannot help there, and the identity is a fixed-width hex string that is
+    // trivially recognisable without one.
+    let text = std::str::from_utf8(raw).ok()?;
+    let after_key = text.split("\"install_id\"").nth(1)?;
+    let opening = after_key.find('"')?;
+    let rest = &after_key[opening + 1..];
+    let closing = rest.find('"')?;
+    let candidate = &rest[..closing];
+    looks_like_an_id(candidate).then(|| candidate.to_owned())
+}
+
 fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
     if config.schema_version != CONFIG_SCHEMA_VERSION
         || config.install_id.len() != 32
@@ -1123,16 +1322,29 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     ensure_private_file(path)
 }
 
+/// Make sure the config is a regular file only this user can read.
+///
+/// Over-broad permissions are *repaired* rather than rejected. Refusing to
+/// start does not make the file any less readable -- it just means the
+/// installation never runs again -- and the way this actually happens is
+/// somebody moving their state directory with `cp -R` instead of `cp -Rp`,
+/// which lands 0644 and used to be permanently fatal, silently.
+///
+/// Anything that is not a regular file still fails: a symlink or a directory
+/// here is not a permissions accident, and following one would be the bug.
 fn ensure_private_file(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() || metadata.mode() & 0o077 != 0 {
+        if !metadata.file_type().is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("operator config is not a private file: {}", path.display()),
+                format!("operator config is not a regular file: {}", path.display()),
             ));
+        }
+        if metadata.mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
     }
     #[cfg(not(unix))]
@@ -1328,7 +1540,7 @@ mod tests {
         // way. locald reads the vault instead and hands the keyset over.
         let root = tempdir().unwrap();
         let vault = Arc::new(MemoryVault::default());
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             vault.clone(),
             Arc::new(FixedModelProviderProbe),
@@ -1368,7 +1580,7 @@ mod tests {
         // whole configuration, a caller that echoed back a stale copy would
         // silently reset the user's sharing and integration settings.
         let root = tempdir().unwrap();
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             Arc::new(MemoryVault::default()),
             Arc::new(FixedModelProviderProbe),
@@ -1409,7 +1621,7 @@ mod tests {
     #[test]
     fn successful_provider_probe_discovers_default_and_marks_profile_ready() {
         let root = tempdir().unwrap();
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             Arc::new(MemoryVault::default()),
             Arc::new(FixedModelProviderProbe),
@@ -1434,6 +1646,120 @@ mod tests {
         );
         assert!(snapshot["config"]["ai"]["last_validated_at_unix_ms"].is_number());
         assert_eq!(snapshot["readiness"]["ai"], "ready");
+    }
+
+    /// A config written by a newer build does not brick the older one.
+    ///
+    /// Every nested struct is `deny_unknown_fields`, so running a build that
+    /// adds a field and then going back was enough to make the daemon refuse to
+    /// start -- silently. The unknown key is dropped and the install comes up.
+    #[test]
+    fn a_config_from_a_newer_build_is_migrated_rather_than_rejected() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        // Built from a real config rather than a hand-written literal, so this
+        // tests the migration and not my memory of the schema.
+        let mut document = serde_json::to_value(OperatorConfig::fresh().unwrap()).unwrap();
+        let install_id = document["install_id"].as_str().unwrap().to_owned();
+        document["revision"] = json!(3);
+        document["a_field_a_later_build_added"] = json!({"nested": true});
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let mut healed = Vec::new();
+        let store = OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            Arc::new(MemoryVault::default()),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert!(
+            healed.is_empty(),
+            "a migration is not a repair; nothing was quarantined: {healed:?}"
+        );
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot["config"]["install_id"], install_id);
+        assert_eq!(
+            snapshot["config"]["revision"], 3,
+            "the operator's own settings survive the migration"
+        );
+    }
+
+    /// An unreadable config keeps the identity that addresses the keychain.
+    ///
+    /// Minting a fresh `install_id` here would strand all 19 secrets under
+    /// `{old_id}:{name}` -- present in the user's login keychain, addressable by
+    /// nothing, and not even enumerable to clean up.
+    #[test]
+    fn healing_an_unparseable_config_keeps_the_installation_identity() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        let install_id = "fedcba9876543210fedcba9876543210";
+        std::fs::write(&path, format!("{{\"install_id\":\"{install_id}\", oops")).unwrap();
+
+        let vault = Arc::new(MemoryVault::default());
+        vault
+            .set(install_id, "ai.api_key", "sk-still-here")
+            .unwrap();
+
+        let mut healed = Vec::new();
+        let store = OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            vault.clone(),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert_eq!(healed.len(), 1, "the replacement is reported");
+        assert!(healed[0].contains("stored secrets"), "{}", healed[0]);
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot["config"]["install_id"], install_id);
+        // The secret is still reachable through the recovered identity.
+        assert_eq!(
+            vault.get(install_id, "ai.api_key").unwrap().as_deref(),
+            Some("sk-still-here")
+        );
+    }
+
+    /// A schema from the future is quarantined, never silently downgraded --
+    /// so upgrading again gets the operator's configuration back.
+    #[test]
+    fn a_config_from_an_unknown_future_schema_is_kept_not_downgraded() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema_version": 99,
+                "install_id": "0123456789abcdef0123456789abcdef",
+                "revision": 7,
+                "onboarding_complete": true,
+                "ai": {"protocol": "unconfigured"},
+                "integrations": {},
+                "surfaces": {"resend_inbound_domain": ""},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut healed = Vec::new();
+        OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            Arc::new(MemoryVault::default()),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert_eq!(healed.len(), 1);
+        let aside: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "the future config is kept, not deleted");
+        let kept: Value = serde_json::from_slice(&std::fs::read(aside[0].path()).unwrap()).unwrap();
+        assert_eq!(kept["schema_version"], 99);
+        assert_eq!(kept["revision"], 7);
     }
 
     #[test]

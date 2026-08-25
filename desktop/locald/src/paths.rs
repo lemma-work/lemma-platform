@@ -77,7 +77,36 @@ impl LocalPaths {
     pub fn socket_name(&self) -> io::Result<Name<'_>> {
         #[cfg(unix)]
         {
-            self.socket_path().to_fs_name::<GenericFilePath>()
+            let path = self.socket_path();
+            // `sun_path` is 104 bytes on macOS and 108 on Linux, and the
+            // interprocess crate's own message for exceeding it -- "local
+            // socket name length exceeds capacity of sun_path of sockaddr_un"
+            // -- names a struct field and no path, so it reads as a bug in
+            // Lemma rather than as something about where the state directory
+            // is. The daemon then exits during startup and the app reports
+            // "exit status: 1".
+            //
+            // Unreachable at the default root, which is ~60 characters plus a
+            // username. Very reachable via LEMMA_LOCALD_ROOT, which is how the
+            // test harnesses and every developer point an installation at a
+            // temporary directory -- and macOS hands those out under
+            // /private/var/folders with paths well over a hundred characters
+            // before anything is appended.
+            const SUN_PATH_LIMIT: usize = 104;
+            let length = path.as_os_str().len();
+            if length >= SUN_PATH_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "the control socket path is {length} characters and the \
+                         operating system allows at most {}: {}. Set \
+                         LEMMA_LOCALD_ROOT to a shorter directory.",
+                        SUN_PATH_LIMIT - 1,
+                        path.display(),
+                    ),
+                ));
+            }
+            path.to_fs_name::<GenericFilePath>()
         }
 
         #[cfg(windows)]
@@ -126,6 +155,81 @@ pub(crate) fn stable_hash(path: &Path) -> u64 {
         })
 }
 
+/// Move a file the daemon cannot parse aside instead of deleting it.
+///
+/// Every fatal read in `Daemon::new` used to end the process; healing them means
+/// replacing the file, and replacing it must not destroy the only copy of
+/// whatever went wrong. A support request can still ask for the `.invalid-`
+/// sibling, and a downgrade that quarantines a newer schema can be recovered by
+/// upgrading again.
+///
+/// The name matches `artifact_install::quarantine_path` in the desktop crate
+/// byte for byte -- two processes write into the same tree and one convention
+/// covers both. Nothing globs for these, so a collision only costs a name.
+pub fn quarantine_aside(path: &Path) -> io::Result<PathBuf> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot quarantine a path with no safe file name",
+            )
+        })?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| io::Error::other("system clock is before the unix epoch"))?
+        .as_millis();
+    let aside = path.with_file_name(format!(".{name}.invalid-{millis}"));
+    std::fs::rename(path, &aside)?;
+    Ok(aside)
+}
+
+/// The phrase that turns a daemon error into an offer to reset.
+///
+/// Anything a user cannot fix by retrying, but *can* fix by discarding local
+/// data, says this. `runtime_operation_error_code` maps it to a stable code and
+/// the splash renders the reset button for it, so a new detector needs no new
+/// transport -- only this phrase in its message.
+pub const DATA_RESET_MARKER: &str = "local data must be reset";
+
+/// Name of the marker recording that this installation's data can no longer be
+/// read by the credentials it now has.
+const DATA_RESET_MARKER_FILE: &str = "data-reset-required";
+
+/// Record that local data has been stranded, and why.
+///
+/// Written when a secret is replaced. Reminting `infra.secrets.json` does not
+/// change the password baked into the Postgres volume at `initdb`, and
+/// reminting `host.secrets.json` makes every encrypted column undecryptable --
+/// so healing those files, on its own, would turn a loud failure into a silent
+/// one. This is the deliberate exception to "a self-heal should soften the
+/// failure": a hard stop with a button beats an install that quietly cannot
+/// read its own data.
+pub fn require_data_reset(root: &Path, reason: &str) -> io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::write(root.join(DATA_RESET_MARKER_FILE), format!("{reason}\n"))
+}
+
+/// Why this installation needs its data discarded, if it does.
+pub fn data_reset_reason(root: &Path) -> Option<String> {
+    let reason = std::fs::read_to_string(root.join(DATA_RESET_MARKER_FILE)).ok()?;
+    let reason = reason.trim();
+    Some(if reason.is_empty() {
+        "this installation's private credentials were replaced".to_owned()
+    } else {
+        reason.to_owned()
+    })
+}
+
+/// Forget the marker. Only a completed data reset may call this.
+pub fn clear_data_reset(root: &Path) -> io::Result<()> {
+    match std::fs::remove_file(root.join(DATA_RESET_MARKER_FILE)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(unix)]
 fn set_private_dir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -142,6 +246,74 @@ fn set_private_dir(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guest and the daemon must agree on the phrase, character for
+    /// character.
+    ///
+    /// `lemma-guestd` is a Linux binary that ships inside the VM image and
+    /// links nothing from this crate, so the constant is duplicated rather than
+    /// shared. The phrase is the entire contract between them: guestd raises it
+    /// when it finds a cluster it cannot open, this crate maps it to
+    /// `local-data-incompatible`, and the splash renders a reset button for
+    /// that code. Change it on one side only and the guest still fails -- with
+    /// no button, which is the failure this whole path exists to remove.
+    #[test]
+    fn the_guest_raises_the_same_reset_phrase_this_daemon_maps() {
+        let guestd = include_str!("../../local-runtime/guestd/src/lib.rs").replace("\r\n", "\n");
+        assert!(
+            guestd.contains(&format!(
+                "DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\""
+            )),
+            "lemma-guestd must declare the same marker phrase as this crate",
+        );
+    }
+
+    #[test]
+    fn quarantine_moves_aside_without_destroying_the_original_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let aside = quarantine_aside(&path).unwrap();
+
+        assert!(!path.exists(), "the unparseable file is out of the way");
+        assert_eq!(std::fs::read(&aside).unwrap(), b"{ not json");
+        assert_eq!(aside.parent(), path.parent());
+        let name = aside.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".operator-config.json.invalid-"), "{name}");
+    }
+
+    #[test]
+    fn quarantine_reports_a_missing_file_rather_than_pretending_it_moved() {
+        let root = tempfile::tempdir().unwrap();
+        let error = quarantine_aside(&root.path().join("absent")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    /// A path too long for a Unix socket says so, and says what to do.
+    ///
+    /// Hit for real while testing the quit path: the daemon exited immediately
+    /// with "local socket name length exceeds capacity of sun_path of
+    /// sockaddr_un", which names a C struct field and no path at all. Every
+    /// temporary directory macOS hands out lives under /private/var/folders
+    /// and is already most of the budget, so this is what a harness pointed at
+    /// one gets -- and what it used to get was a daemon that would not start
+    /// for reasons it did not explain.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_path_too_long_for_the_kernel_explains_itself() {
+        let roomy = LocalPaths::new(PathBuf::from("/tmp/lemma-test"));
+        assert!(roomy.socket_name().is_ok());
+
+        let long = LocalPaths::new(PathBuf::from(format!("/tmp/{}", "d".repeat(120))));
+        let error = long.socket_name().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(message.contains("control socket path"), "{message}");
+        assert!(message.contains("LEMMA_LOCALD_ROOT"), "{message}");
+        // The path itself, because "too long" without it is not actionable.
+        assert!(message.contains("dddd"), "{message}");
+    }
 
     #[test]
     fn state_files_share_one_root() {

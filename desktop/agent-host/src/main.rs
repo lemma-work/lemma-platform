@@ -159,18 +159,48 @@ async fn main() -> anyhow::Result<()> {
             // network, must still serve the agents it already has, and a failure
             // here is recorded rather than fatal -- `install_cache` runs again
             // on the next launch and `doctor --repair` is the deliberate fix.
+            //
+            // Skippable, for one caller: the hermetic integration suite, which
+            // shims adapter resolution and must not reach the npm registry.
+            // Without this it did -- every `serve` in it installed the Codex and
+            // Claude Agent adapters for real, then discovery found them Ready
+            // and *probed* them, launching the developer's own Codex and Claude
+            // Code. The README puts those behind `#[ignore]` as "release
+            // qualification, not public CI"; the default suite was doing it on
+            // every run.
+            //
+            // It was also the trigger for an intermittent 90-second hang: an
+            // install finishing mid-test makes the host re-publish its
+            // harnesses, and re-publishing used to be a race. That race is
+            // fixed in the test double, but a required CI job that depends on
+            // the npm registry is a spurious red build waiting for an outage,
+            // so the dependency goes too.
+            //
+            // Deliberately its own variable rather than keying off
+            // `LEMMA_AGENT_HOST_PATH`: that one only *prepends* to the search
+            // path and a real user may set it, so a machine pointing at a
+            // custom agent install would silently stop fetching its adapters.
+            let skip_warmup = std::env::var_os("LEMMA_AGENT_HOST_SKIP_ADAPTER_DOWNLOAD")
+                .is_some_and(|value| value == "1");
             let warm_paths = paths.clone();
-            std::thread::spawn(move || {
-                match AdapterManifest::builtin()
-                    .map(|manifest| manifest.with_cache_root(warm_paths.adapters.clone()))
-                    .and_then(|manifest| manifest.install_cache(&warm_paths.adapters, false))
-                {
-                    Ok(()) => tracing::info!("adapter cache ready"),
-                    Err(error) => {
-                        tracing::warn!(%error, "adapter cache warm-up failed; agents may be missing");
+            if skip_warmup {
+                tracing::info!("adapter download skipped by request");
+            } else {
+                std::thread::spawn(move || {
+                    match AdapterManifest::builtin()
+                        .map(|manifest| manifest.with_cache_root(warm_paths.adapters.clone()))
+                        .and_then(|manifest| manifest.install_cache(&warm_paths.adapters, false))
+                    {
+                        Ok(()) => tracing::info!("adapter cache ready"),
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                "adapter cache warm-up failed; agents may be missing"
+                            );
+                        }
                     }
-                }
-            });
+                });
+            }
             HostRuntime::new(config, paths)?.serve().await
         }
         Command::Connect {

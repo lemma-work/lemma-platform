@@ -121,11 +121,12 @@ pub(crate) fn prepare(
     paths: &LocalPaths,
     pack_root: &Path,
     material: ManagedManifestMaterial,
+    healed: &mut Vec<String>,
 ) -> io::Result<PathBuf> {
     crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
     let source = source_layout()?;
-    let manifest = build(paths, pack_root, &material, ports, source.as_ref())?;
+    let manifest = build(paths, pack_root, &material, ports, source.as_ref(), healed)?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
@@ -230,6 +231,7 @@ fn build(
     material: &ManagedManifestMaterial,
     ports: NetworkPorts,
     source: Option<&SourceLayout>,
+    healed: &mut Vec<String>,
 ) -> io::Result<Value> {
     validate_hex_secret("postgres password", &material.postgres_password)?;
     validate_hex_secret("Redis password", &material.redis_password)?;
@@ -331,7 +333,7 @@ fn build(
         fs::create_dir_all(directory)?;
     }
 
-    let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"))?;
+    let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"), healed)?;
     // Derived from this installation's own secret rather than stored separately,
     // the same way the runtime credential key below is: stable across restarts
     // so encrypted rows stay readable, distinct from every other key by its
@@ -517,6 +519,18 @@ fn build(
         backend_env.insert("LEMMA_SKILLS_ROOT", path_text(skills)?);
     }
 
+    // What decides whether the one-time setups need to run again.
+    //
+    // Migrations ship inside the pack, so the release identifies them -- except
+    // in source mode, where one version spans many edits, so the revision files
+    // are fingerprinted too. Adding a Composio key must still pick up its apps
+    // on the next start, which is why that is part of the catalog's stamp
+    // rather than the release alone.
+    let migrations_fingerprint = migrations_fingerprint(&bindings.backend_dir);
+    let backend_env_has_composio_key = backend_env
+        .get("COMPOSIO_API_KEY")
+        .is_some_and(|value| !value.trim().is_empty());
+
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", bindings.node_env.to_owned()),
         ("PORT", frontend_port.to_string()),
@@ -585,6 +599,16 @@ fn build(
                 "timeout_seconds": 300,
                 "max_attempts": 5,
                 "retry_backoff_seconds": 3,
+                // Migrations ship inside the pack, so the pack's identity is
+                // exactly what decides whether there is anything new to apply.
+                // Alembic would work this out for itself in one `SELECT` --
+                // the cost is `env.py` importing the whole ORM graph before it
+                // can, several seconds on every single start.
+                //
+                // The revisions are hashed in as well as the release, because
+                // a source-mode run keeps one version across many edits, and a
+                // developer adding a migration must not have it skipped.
+                "stamp": setup_stamp(&[&release_version, &migrations_fingerprint]),
             },
             // Seeds the connector catalog. Without it a packaged install has no
             // connectors at all: `make dev` seeds one and the shipped app never
@@ -614,6 +638,14 @@ fn build(
                 "max_attempts": 1,
                 "retry_backoff_seconds": 0,
                 "optional": true,
+                // The pack, plus whether a Composio key is present. The second
+                // half preserves the behaviour the comment above describes: a
+                // user who adds a key later gets the Composio apps on the very
+                // next start, because adding one changes this stamp.
+                "stamp": setup_stamp(&[
+                    &release_version,
+                    if backend_env_has_composio_key { "composio" } else { "native-only" },
+                ]),
             },
         ],
         "services": [
@@ -757,12 +789,33 @@ fn pull_ref(value: Option<&Value>, label: &str) -> io::Result<String> {
     Ok(reference)
 }
 
-fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
+/// Read the installation secret, replacing it only if unreadable.
+///
+/// `installation_secret` derives the Fernet key for encrypted columns and the
+/// workspace runtime credential key. Its invariant is that it is gone when the
+/// data directory is -- so reminting it while the data directory survives makes
+/// every encrypted row permanently undecryptable, quietly. Healing it therefore
+/// also records that the data must be reset.
+fn load_or_create_host_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<HostSecrets> {
     if path.is_file() {
-        ensure_private_file(path)?;
-        let secrets: HostSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_hex_secret("installation secret", &secrets.installation_secret)?;
-        return Ok(secrets);
+        match read_existing_host_secrets(path) {
+            Ok(secrets) => return Ok(secrets),
+            Err(reason) => {
+                let aside = crate::paths::quarantine_aside(path)?;
+                if let Some(root) = path.parent() {
+                    crate::paths::require_data_reset(
+                        root,
+                        "this installation's secret was replaced, and anything encrypted with \
+                         the previous one can no longer be read",
+                    )?;
+                }
+                healed.push(format!(
+                    "the installation secret was unreadable ({reason}); kept as {} and replaced. \
+                     Encrypted local data cannot be decrypted with the new one",
+                    aside.display()
+                ));
+            }
+        }
     }
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
@@ -772,6 +825,58 @@ fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
     Ok(secrets)
+}
+
+fn read_existing_host_secrets(path: &Path) -> Result<HostSecrets, String> {
+    ensure_private_file(path).map_err(|error| error.to_string())?;
+    let raw = fs::read(path).map_err(|error| error.to_string())?;
+    let secrets: HostSecrets =
+        serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+    validate_hex_secret("installation secret", &secrets.installation_secret)
+        .map_err(|error| error.to_string())?;
+    Ok(secrets)
+}
+
+/// One stamp value from the things a setup's result depends on.
+///
+/// Hashed rather than concatenated so the manifest never carries a path or a
+/// key's presence in readable form, and so the value stays a fixed width
+/// whatever goes into it.
+fn setup_stamp(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        // Length-delimited: without this, ("ab", "c") and ("a", "bc") hash the
+        // same, and two different states would share a stamp.
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// A fingerprint of the migration revisions a pack carries.
+///
+/// Names only, not contents: the file set changes when a revision is added or
+/// removed, which is the case that matters, and reading every file on each
+/// start would trade one cost for another. Empty when the directory cannot be
+/// read, which makes the stamp depend on the release alone -- the conservative
+/// direction, since a stamp that cannot be computed should not become a stamp
+/// that matches.
+fn migrations_fingerprint(backend_dir: &Path) -> String {
+    let Ok(entries) = fs::read_dir(backend_dir.join("migrations/versions")) else {
+        return String::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".py"))
+        .collect();
+    names.sort();
+    let mut hasher = Sha256::new();
+    for name in &names {
+        hasher.update(name.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn random_hex(byte_count: usize) -> io::Result<String> {
@@ -848,6 +953,101 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// Every path this file probes for is one the contract names.
+    ///
+    /// The producer of a host pack is a Python script run by a release job; the
+    /// consumer is this file, and it hard-codes a dozen paths. Nothing checked
+    /// that the two agreed, and nothing could: a PR runs this file's tests
+    /// against a fixture the same PR wrote, while the pack is built somewhere
+    /// else on a different trigger. A rename lands green on both sides and is
+    /// found by whoever installs the release, as `NotFound` and the name of a
+    /// file they have never heard of.
+    ///
+    /// So both sides assert against one committed artifact -- the rule
+    /// docs/testing.md states for when a stub is allowed to exist at all. The
+    /// Python half of this pair is
+    /// `tests/test_build_local_host_pack.py::test_the_builder_writes_every_path_the_app_looks_for`.
+    ///
+    /// Asserted as a set equality rather than containment, in both directions.
+    /// A candidate here that the contract does not name is a path the producer
+    /// has never been told to write; a candidate there that this file does not
+    /// probe is a fallback nobody would ever reach.
+    #[test]
+    fn the_packaged_layout_matches_the_committed_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../contracts/host-pack-layout.json")).unwrap();
+
+        // What this file actually probes for, read out of its own source so the
+        // list cannot be maintained twice.
+        let source = include_str!("native_host_pack.rs").replace("\r\n", "\n");
+        let packaged = {
+            let start = source
+                .find("fn packaged_bindings(")
+                .expect("packaged_bindings exists");
+            let end = source[start..]
+                .find("\nfn source_bindings(")
+                .expect("source_bindings follows it");
+            &source[start..start + end]
+        };
+
+        for entry in contract["required"].as_array().unwrap() {
+            let what = entry["what"].as_str().unwrap();
+            for candidate in entry["candidates"].as_array().unwrap() {
+                let candidate = candidate.as_str().unwrap();
+                assert!(
+                    packaged.contains(&format!("\"{candidate}\"")),
+                    "the contract promises {what} at {candidate}, which this file never looks for",
+                );
+            }
+        }
+
+        // And nothing probed for is absent from the contract. `required_file`
+        // takes its candidates as string literals, so they are exactly the
+        // quoted paths in this function.
+        let promised: std::collections::BTreeSet<&str> = contract["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| entry["candidates"].as_array().unwrap())
+            .map(|candidate| candidate.as_str().unwrap())
+            .collect();
+        for line in packaged.lines() {
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix('"') else {
+                continue;
+            };
+            let Some(path) = rest.strip_suffix("\",") else {
+                continue;
+            };
+            if !path.contains('/') {
+                continue;
+            }
+            assert!(
+                promised.contains(path),
+                "this file probes for {path}, which the contract does not promise",
+            );
+        }
+
+        // The derived paths are joins rather than probes, so they are checked
+        // as substrings -- but of the shipping half of the file only. Searching
+        // the whole thing let a path be "found" in this module's own fixtures,
+        // which is a test satisfying itself.
+        let shipping = &source[..source
+            .find("#[cfg(test)]")
+            .expect("this file has a test module")];
+        for entry in contract["derived"].as_array().unwrap() {
+            if !entry["named_by_consumer"].as_bool().unwrap_or(true) {
+                continue;
+            }
+            let path = entry["path"].as_str().unwrap();
+            let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+            assert!(
+                shipping.contains(leaf),
+                "the contract names {path}, which nothing in this file joins ({parent})",
+            );
+        }
+    }
+
     fn fixture(root: &Path) {
         for relative in [
             "backend/python/bin/python3",
@@ -908,6 +1108,7 @@ mod tests {
                 redis_password: "b".repeat(64),
                 bridge_executable: PathBuf::from("/signed/lemma-runtime"),
             },
+            &mut Vec::new(),
         )
         .unwrap();
         let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
@@ -1091,6 +1292,7 @@ mod tests {
             },
             load_or_allocate(&paths).unwrap(),
             None,
+            &mut Vec::new(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));

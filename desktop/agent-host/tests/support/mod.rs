@@ -628,6 +628,46 @@ struct ControlState {
     decisions: Arc<Mutex<Vec<DecisionSnapshot>>>,
     events: Arc<Mutex<Vec<Event>>>,
     snapshots: Arc<Mutex<Vec<Value>>>,
+    /// Commands the host refused, and why.
+    ///
+    /// The poll body carries these and this double used to take no body at
+    /// all, so the one field that explains a run which never starts was
+    /// discarded on arrival. A `START_RUN` rejected as `HARNESS_NOT_FOUND` is
+    /// permanent -- `retryable: false`, and this double sends `START_RUN`
+    /// exactly once -- and presented as a 90-second wait for a terminal event
+    /// that was never coming, with nothing anywhere saying why.
+    rejections: Arc<Mutex<Vec<Value>>>,
+    /// The id assigned to each harness key, once and for the life of this
+    /// control plane.
+    ///
+    /// `agent_host_harnesses` is unique on `(host_id, harness_key)` -- see
+    /// `uq_agent_host_harness_key` -- so the real backend upserts a row and a
+    /// harness keeps one id for as long as the host does. This double used to
+    /// mint a fresh `Uuid::new_v4()` per snapshot on *every* publish, which is
+    /// the whole of an intermittent 90-second hang:
+    ///
+    /// The host re-publishes whenever a harness changes state. `published` was
+    /// then updated to an id the host had not yet been told about -- the
+    /// publish response carrying it was still in flight -- and a poll landing
+    /// in that window sent `START_RUN` naming it. `handle_start` looks the id
+    /// up in the map built from the *last* response, does not find it, and
+    /// fails with "command references an unknown harness".
+    ///
+    /// Which is permanent. `command_rejection` classifies it as
+    /// `HARNESS_NOT_FOUND` with `retryable: false`, and `start_sent` means this
+    /// double sends `START_RUN` exactly once -- so nothing was ever going to
+    /// arrive after it, and the test waited out its full 90 seconds for a
+    /// terminal event with `events=[]`.
+    ///
+    /// Measured at a 5ms window, hit whenever an adapter install happened to
+    /// finish inside it.
+    harness_ids: Arc<Mutex<BTreeMap<String, Uuid>>>,
+    /// Where the host process writes its own log, once one is running.
+    ///
+    /// Registered by `HostProcess::start` so a timeout can quote it. The tests
+    /// keep the host in a `TempDir` that unwinding deletes, so by the time a
+    /// panic reaches a human the log is already gone.
+    host_log: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl ControlPlane {
@@ -657,6 +697,9 @@ impl ControlPlane {
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
             snapshots: Arc::new(Mutex::new(Vec::new())),
+            rejections: Arc::new(Mutex::new(Vec::new())),
+            harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
+            host_log: Arc::new(Mutex::new(None)),
         };
         let app = Router::new()
             .route("/agent-host/pairings:complete", post(pairing))
@@ -738,6 +781,24 @@ impl ControlPlane {
         self.state.decisions.lock().unwrap().clone()
     }
 
+    /// Commands the host refused, and why.
+    ///
+    /// # Panics
+    /// If the rejection mutex is poisoned.
+    #[must_use]
+    pub fn rejections(&self) -> Vec<Value> {
+        self.state.rejections.lock().unwrap().clone()
+    }
+
+    /// Tell this control plane where the host writes its log, so a timeout can
+    /// quote it.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn watch_host_log(&self, path: &Path) {
+        *self.state.host_log.lock().unwrap() = Some(path.to_path_buf());
+    }
+
     #[must_use]
     pub fn permission_requests(&self) -> Vec<Event> {
         self.events()
@@ -767,9 +828,57 @@ impl ControlPlane {
         let published = self.state.published.lock().unwrap().clone();
         panic!(
             "timed out waiting for {what}; published={published:?}, \
-             start_sent={}, events={kinds:?}",
+             start_sent={}, events={kinds:?}{}{}",
             self.state.start_sent.load(Ordering::SeqCst),
+            self.rejection_summary(),
+            self.host_log_tail(),
         );
+    }
+
+    /// What the host refused, if anything, phrased as the answer to "why is
+    /// this run not running".
+    fn rejection_summary(&self) -> String {
+        let rejections = self.rejections();
+        if rejections.is_empty() {
+            return String::new();
+        }
+        let described = rejections
+            .iter()
+            .map(|rejection| {
+                format!(
+                    "{} (retryable={}) {}",
+                    rejection["code"].as_str().unwrap_or("?"),
+                    rejection["retryable"].as_bool().unwrap_or(false),
+                    rejection["detail"].as_str().unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "\n  the host REFUSED {} command(s): {described:?}\n  \
+             A refusal with retryable=false is permanent, and this control \
+             plane sends START_RUN exactly once, so nothing was ever going to \
+             arrive after it.",
+            rejections.len(),
+        )
+    }
+
+    /// The last of the host's own log.
+    ///
+    /// Only the tail: these logs run to thousands of lines at
+    /// `lemma_agent_host=debug`, and a panic message nobody can read is worth
+    /// about as much as the one that said nothing.
+    fn host_log_tail(&self) -> String {
+        const LINES: usize = 40;
+        let path = self.state.host_log.lock().unwrap().clone();
+        let Some(path) = path else {
+            return String::new();
+        };
+        let Ok(log) = std::fs::read_to_string(&path) else {
+            return format!("\n  (no host log at {})", path.display());
+        };
+        let lines = log.lines().collect::<Vec<_>>();
+        let tail = lines[lines.len().saturating_sub(LINES)..].join("\n    ");
+        format!("\n  last {LINES} lines of the host log:\n    {tail}")
     }
 }
 
@@ -807,7 +916,20 @@ async fn publish(
     let items = snapshots
         .iter()
         .map(|snapshot| {
-            let id = Uuid::new_v4();
+            // One id per harness key, for the life of this control plane. See
+            // `ControlState::harness_ids` for what minting a fresh one per
+            // publish cost.
+            let id = *state
+                .harness_ids
+                .lock()
+                .unwrap()
+                .entry(
+                    snapshot["harness_key"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+                .or_insert_with(Uuid::new_v4);
             if snapshot["harness_key"].as_str() == Some(state.harness_key.as_str())
                 && snapshot["health"].as_str() == Some("READY")
             {
@@ -833,8 +955,19 @@ async fn publish(
 async fn poll(
     State(state): State<ControlState>,
     headers: HeaderMap,
+    Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     require_auth(&headers)?;
+    // Kept, not ignored. See `ControlState::rejections`.
+    if let Some(rejections) = body.get("rejections").and_then(Value::as_array)
+        && !rejections.is_empty()
+    {
+        state
+            .rejections
+            .lock()
+            .unwrap()
+            .extend(rejections.iter().cloned());
+    }
     let mut commands = Vec::new();
     let published = state.published.lock().unwrap().clone();
     if let Some((harness_id, revision)) = published
@@ -1017,6 +1150,16 @@ impl HostProcess {
             // Adapter resolution reads this before PATH, so the pinned
             // manifest's native adapters resolve to the scripted agent.
             .env("LEMMA_AGENT_HOST_PATH", &shims.directory)
+            // Hermetic means hermetic. Without this every host in this suite
+            // npm-installed the Codex and Claude Agent adapters from the public
+            // registry, and discovery then probed them -- launching the
+            // developer's own Codex and Claude Code, which the README puts
+            // behind `#[ignore]` as release qualification rather than CI.
+            //
+            // It also made the suite time-variable in a way that mattered: an
+            // install landing mid-test makes the host re-publish its harnesses,
+            // which is what used to strand a run.
+            .env("LEMMA_AGENT_HOST_SKIP_ADAPTER_DOWNLOAD", "1")
             .env("RUST_LOG", "lemma_agent_host=debug")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1024,6 +1167,11 @@ impl HostProcess {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
+        // So a `wait_for` timeout can quote the host's own account of what it
+        // did. The tests keep this whole directory in a `TempDir`, which
+        // unwinding deletes -- so without this the log is gone by the time
+        // anybody reads the panic.
+        control.watch_host_log(&stderr_path);
         Self { child, stderr_path }
     }
 

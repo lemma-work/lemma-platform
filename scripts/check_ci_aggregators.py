@@ -14,6 +14,7 @@ discover a hang the next morning.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -32,6 +33,13 @@ AGGREGATORS = {
 # aggregator waiting forever.
 EXEMPT = {
     ("e2e.yml", "surface-live-smoke"),
+    # Merge-to-main only, and deliberately not a merge gate: it builds the real
+    # ~700 MB host pack on a macOS runner and executes its interpreters, which
+    # is ~25 minutes and guards release-time breakage rather than review-time
+    # correctness. Requiring it would leave every PR's aggregator waiting for a
+    # job that never starts, since its `if:` includes `github.event_name ==
+    # 'push'`. A red one is "look in the morning".
+    ("ci.yml", "host-pack-macos"),
 }
 
 # Every workflow is checked for timeouts, not just the two with aggregators.
@@ -41,6 +49,38 @@ EXEMPT = {
 # bounds; they have them now, so nothing needs an exemption and a new workflow
 # cannot quietly acquire one.
 NO_TIMEOUT_REQUIRED: set[str] = set()
+
+
+def unknown_change_outputs(workflow: str, jobs: dict) -> list[str]:
+    """Every `needs.changes.outputs.X` a job gates on must actually exist.
+
+    A typo here is silent and total. GitHub evaluates an unknown output as the
+    empty string, so `if: needs.changes.outputs.dekstop == 'true'` is never
+    true: the job never runs, it is reported as skipped, and the aggregator
+    treats skipped as passing. The result is a required check that is green
+    because a suite stopped running -- the exact failure this file exists to
+    prevent, one level further out.
+    """
+    changes = jobs.get("changes") or {}
+    declared = set((changes.get("outputs") or {}).keys())
+    if not declared:
+        return []
+
+    pattern = re.compile(r"needs\.changes\.outputs\.([A-Za-z0-9_-]+)")
+    problems = []
+    for name, job in jobs.items():
+        condition = job.get("if")
+        if not isinstance(condition, str):
+            continue
+        for referenced in pattern.findall(condition):
+            if referenced not in declared:
+                problems.append(
+                    f"{workflow}: job '{name}' gates on "
+                    f"needs.changes.outputs.{referenced}, which is not declared. "
+                    f"An unknown output is the empty string, so this job never "
+                    f"runs and its skip reads as a pass"
+                )
+    return problems
 
 
 def main() -> int:
@@ -57,6 +97,8 @@ def main() -> int:
                         f"{path.name}: job '{name}' has no timeout-minutes, so it "
                         f"runs to GitHub's 6-hour default"
                     )
+
+        problems.extend(unknown_change_outputs(path.name, jobs))
 
         aggregator = AGGREGATORS.get(path.name)
         if aggregator is None:

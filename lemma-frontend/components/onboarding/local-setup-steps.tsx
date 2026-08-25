@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useThisComputer } from "@/lib/desktop/this-computer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -178,9 +179,14 @@ type Preset = {
 
 // Local runners first: someone running Lemma on their own Mac most likely has
 // one of these serving already, and neither needs a key or an account.
-const PRESETS: Preset[] = [
-    { id: "ollama", title: "Ollama", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
-    { id: "lmstudio", title: "LM Studio", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
+//
+// `hint` takes the noun rather than reading it: evaluated at module scope it is
+// whatever the *first* evaluation saw, which on the server is "this computer"
+// for the life of the process -- frozen, and different from what the client
+// would render.
+const presets = (computer: string): Preset[] => [
+    { id: "ollama", title: "Ollama", hint: `Runs on ${computer}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
+    { id: "lmstudio", title: "LM Studio", hint: `Runs on ${computer}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
     { id: "openai", title: "OpenAI", hint: "API key", protocol: "openai_compat", baseUrl: "https://api.openai.com/v1", needsKey: true },
     { id: "anthropic", title: "Anthropic", hint: "API key", protocol: "anthropic_compat", baseUrl: "https://api.anthropic.com", needsKey: true },
     { id: "openrouter", title: "OpenRouter", hint: "API key", protocol: "openai_compat", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
@@ -223,6 +229,10 @@ export function LocalIntelligenceStep({
     onContinue: (outcome: "ready" | "deferred") => void;
 }) {
     const hasBridge = useDesktopBridge();
+    // A hook, so the server render and the first client render agree. Reading
+    // `thisComputer()` directly answers differently in the two, which is a
+    // hydration mismatch on every string below.
+    const computerNoun = useThisComputer();
     // Connects itself. Nobody is asked to press anything for a machine that is
     // already this workspace's own computer.
     const { status } = useAutoConnectThisComputer();
@@ -288,7 +298,7 @@ export function LocalIntelligenceStep({
         setRechecking(true);
         void agentHostBridge.refresh().then(
             () => {
-                toast.success("Rechecking the agents on this Mac");
+                toast.success(`Rechecking the agents on ${computerNoun}`);
                 // Long enough to cover the control-file beat and a probe, so the
                 // button stays busy until there is something new to look at
                 // rather than for a guessed 1.2s that expired before the host
@@ -300,7 +310,7 @@ export function LocalIntelligenceStep({
                 toast.error(error instanceof Error ? error.message : String(error));
             },
         );
-    }, []);
+    }, [computerNoun]);
     // Which harnesses already have a profile, so a row can say so instead of
     // offering to add the same agent again. Mutations invalidate the whole
     // agent-runtime tree, so this updates itself the moment one is saved.
@@ -369,7 +379,7 @@ export function LocalIntelligenceStep({
     return (
         <SetupSplitPanel
             title="What should answer in your chats?"
-            subtitle="A coding agent already on this Mac, an API provider, or both. Nothing here has AI until one of them is set."
+            subtitle={`A coding agent already on ${computerNoun}, an API provider, or both. Nothing here has AI until one of them is set.`}
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
@@ -517,7 +527,7 @@ export function LocalIntelligenceStep({
                         Or connect a model provider
                     </p>
                     <div className="flex flex-wrap gap-2">
-                        {PRESETS.map((candidate) => (
+                        {presets(computerNoun).map((candidate) => (
                             <button
                                 key={candidate.id}
                                 type="button"
@@ -606,7 +616,7 @@ export function LocalIntelligenceStep({
                 <p className="text-xs text-[var(--text-tertiary)]">
                     A provider is this installation&apos;s single default — one profile, not one per
                     person. If you later open Lemma to your network or the web, that key answers for
-                    everyone. A coding agent stays on this Mac and uses its own credentials.
+                    everyone. A coding agent stays on {computerNoun} and uses its own credentials.
                 </p>
 
                 {/*

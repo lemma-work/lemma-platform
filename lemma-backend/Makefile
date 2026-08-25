@@ -16,6 +16,18 @@ OUTPUT ?= $(TEAMS_MANIFEST_DIR)/lemma-teams.zip
 E2E_WORKERS ?= 2
 E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 
+# What the unit lane selects. Every exclusion is an environment-gated suite
+# that would otherwise be collected and skipped, and a suite that always skips
+# reports the same green as a suite that proves something.
+#
+# This is the expression CI runs -- the job sets `working-directory:
+# lemma-backend`, so `make coverage-backend-unit` resolves here and not to the
+# same-named target in the root Makefile. The two had already drifted: the root
+# one excluded `local_guest`, this one did not, so the fix went in where CI
+# could not see it. `scripts/check_pytest_census.py` reads both and fails if
+# they differ again.
+UNIT_MARKERS ?= not e2e and not local_guest and not provider
+
 # The marker filter a CI shard runs under. Defaults to the standard fast-lane
 # exclusions (matches test-e2e-fast); a shard whose module structurally needs
 # real sandbox execution to be covered at all (function -- see e2e.yml) can
@@ -130,7 +142,7 @@ test:
 	uv run pytest
 
 test-unit:
-	uv run pytest -m "not e2e"
+	uv run pytest -m "$(UNIT_MARKERS)"
 
 # Default e2e gate: fast + deterministic. The agent LLM is a mocked
 # FunctionModel and workspace tools hit the in-process fake sandbox, so there
@@ -189,7 +201,7 @@ test-module:
 coverage: coverage-unit coverage-e2e
 
 coverage-unit:
-	uv run pytest -m "not e2e" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
+	uv run pytest -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
 
 coverage-e2e:
 	uv run pytest -m e2e --cov=app --cov-report=term-missing --cov-report=xml:coverage-e2e.xml
@@ -199,7 +211,7 @@ coverage-backend-unit:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
-		-m "not e2e" \
+		-m "$(UNIT_MARKERS)" \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit
 

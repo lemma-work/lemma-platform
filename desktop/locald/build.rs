@@ -15,6 +15,13 @@ use std::path::Path;
 /// this daemon as a sidecar and passes no identifier of its own.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // `telemetry.rs` reads this with `option_env!`, which is resolved at
+    // compile time -- and cargo will not rebuild a crate just because an
+    // environment variable changed. Both release workflows restore a warm
+    // cache, so without this a build that sets the key for the first time
+    // would happily reuse an object file compiled without it, and ship
+    // telemetry that can never fire while appearing to be configured.
+    println!("cargo:rerun-if-env-changed=LEMMA_TELEMETRY_KEY");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

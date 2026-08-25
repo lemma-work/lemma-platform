@@ -20,6 +20,14 @@ const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
+/// The phrase that turns a guest failure into an offer to reset local data.
+///
+/// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` rather than shared:
+/// guestd is a Linux binary that ships inside the VM image and links nothing
+/// from the host daemon. Both sides are pinned by tests, and the string is the
+/// entire contract -- locald maps it to `local-data-incompatible` and the
+/// splash renders a reset button for that code.
+const DATA_RESET_MARKER: &str = "local data must be reset";
 const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
@@ -494,6 +502,7 @@ impl<E: Engine> GuestService<E> {
             }
             "core.status" => self.core_status(),
             "core.stop" => self.stop_core(),
+            "core.reset_data" => self.reset_data(request.parameters),
             "sandbox.ensure" => self.ensure(request.parameters),
             "sandbox.status" => self.status(request.parameters),
             "sandbox.list" => self.list(),
@@ -619,6 +628,7 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_postgres(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-postgres-data")?;
+        self.refuse_incompatible_postgres_data(&parameters.images.postgres)?;
         let postgres_env = BTreeMap::from([
             ("POSTGRES_USER".into(), "postgres".into()),
             (
@@ -894,6 +904,134 @@ impl<E: Engine> GuestService<E> {
         Ok(json!({"stopped": true}))
     }
 
+    /// Destroy everything the user made, and nothing else.
+    ///
+    /// The only global destructive verb in this table -- everything else is
+    /// per-sandbox. That is deliberate and worth knowing: its blast radius
+    /// equals `system.shutdown`'s, it sits behind the same 0600 app-owned
+    /// capability file, and it additionally requires a literal `confirm` so a
+    /// replayed or malformed frame cannot trigger it.
+    ///
+    /// This is the surgical half of a local-data reset. The alternative --
+    /// discarding the whole 24 GiB disk from the host -- also works and needs no
+    /// cooperation from the guest, but it takes the pulled container images with
+    /// it. For the case this was built for, a Postgres major that moved, exactly
+    /// one volume needs replacing and re-pulling several hundred megabytes would
+    /// be a poor trade.
+    ///
+    /// Order is the correctness property:
+    ///
+    /// 1. core containers, so nothing holds the volumes;
+    /// 2. sandbox containers, so nothing holds a workspace directory;
+    /// 3. the volumes;
+    /// 4. the workspace directories.
+    ///
+    /// Removing workspaces before their containers would leave a running
+    /// sandbox bind-mounted onto a path that no longer exists.
+    fn reset_data(&self, parameters: Value) -> Result<Value, GuestError> {
+        if required_string(&parameters, "confirm")? != "reset-local-data" {
+            return Err(GuestError::invalid(
+                "a local data reset must be confirmed explicitly",
+            ));
+        }
+
+        let mut removed_containers = 0;
+        for name in ["supertokens", "redis", "postgres"] {
+            let container = format!("lemma-core-{name}");
+            if self.inspect_raw(&container)?.is_some() {
+                self.run_checked(&["rm".into(), "--force".into(), container])?;
+                removed_containers += 1;
+            }
+        }
+        removed_containers += self.remove_managed_sandbox_containers()?;
+
+        let mut removed_volumes = 0;
+        for volume in ["lemma-postgres-data", "lemma-redis-data"] {
+            let output = self
+                .engine
+                .run(&[
+                    "volume".into(),
+                    "rm".into(),
+                    "--force".into(),
+                    volume.into(),
+                ])
+                .map_err(GuestError::engine)?;
+            if output.status.success() {
+                removed_volumes += 1;
+            }
+        }
+
+        let removed_workspaces = self.remove_all_workspaces()?;
+        Ok(json!({
+            "removed_containers": removed_containers,
+            "removed_volumes": removed_volumes,
+            "removed_workspaces": removed_workspaces,
+        }))
+    }
+
+    /// Every sandbox container this guest owns, by label rather than by name.
+    fn remove_managed_sandbox_containers(&self) -> Result<usize, GuestError> {
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--all".into(),
+            "--quiet".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+        ])?;
+        let ids: Vec<String> = output
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                if value.len() > 128 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(GuestError::engine(
+                        "container engine returned an invalid container identifier",
+                    ));
+                }
+                Ok(value.to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut arguments = vec!["rm".into(), "--force".into()];
+        arguments.extend(ids.iter().cloned());
+        self.run_checked(&arguments)?;
+        Ok(ids.len())
+    }
+
+    /// Remove every workspace directory, with `purge_workspace`'s discipline.
+    ///
+    /// What actually stops this clearing the guest is the `is_dir()` below,
+    /// which is `entry.file_type()` and so does *not* follow a symlink: a
+    /// symlinked entry is skipped rather than followed into.
+    ///
+    /// The parent re-check is belt to that braces and cannot fire on its own --
+    /// `read_dir` yields `root.join(name)`, so the parent is `root` by
+    /// construction, `..` included. Kept because it costs nothing and because
+    /// the day someone changes how these paths are built is the day it starts
+    /// mattering. The comment used to credit it with the symlink defence, which
+    /// is the wrong line to trust.
+    fn remove_all_workspaces(&self) -> Result<usize, GuestError> {
+        let root = self.state_root.join("workspaces");
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Ok(0);
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.parent() != Some(root.as_path()) {
+                return Err(GuestError::invalid("workspace escaped managed root"));
+            }
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            fs::remove_dir_all(&path).map_err(|error| GuestError::engine(error.to_string()))?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
     fn shutdown(&self) -> Result<Value, GuestError> {
         let stopped_containers = self.stop_all_containers()?;
         let mut result = schedule_shutdown()?;
@@ -980,6 +1118,88 @@ impl<E: Engine> GuestService<E> {
         arguments.extend(container_ids.iter().cloned());
         self.run_checked(&arguments)?;
         Ok(container_ids.len())
+    }
+
+    /// Stop before starting Postgres on a data directory it cannot open.
+    ///
+    /// `lemma-postgres-data` carries no version in its name, so a release that
+    /// moves the Postgres major starts the new server against the old cluster.
+    /// Postgres refuses -- correctly -- and the failure arrives as a 120-second
+    /// `pg_isready` timeout with a container log nobody reads, on an
+    /// installation that will never start again and offers nothing to press.
+    /// pg16 -> pg18 is exactly this, and it shipped.
+    ///
+    /// Compares the cluster's own `PG_VERSION` against the image's own
+    /// `PG_MAJOR` rather than a number restated in a manifest: asking the
+    /// artifact means bumping the image is the only thing anyone has to
+    /// remember. Either side unreadable means proceed -- a fresh volume has no
+    /// `PG_VERSION`, which is the common case and must cost nothing.
+    fn refuse_incompatible_postgres_data(&self, image: &str) -> Result<(), GuestError> {
+        let (Some(found), Some(expected)) = (
+            self.postgres_data_major("lemma-postgres-data"),
+            self.postgres_image_major(image),
+        ) else {
+            return Ok(());
+        };
+        if found == expected {
+            return Ok(());
+        }
+        Err(GuestError {
+            code: "postgres_data_incompatible".into(),
+            message: format!(
+                "the workspace database on this computer was created by PostgreSQL {found} and \
+                 this release runs PostgreSQL {expected}; {DATA_RESET_MARKER}"
+            ),
+            retryable: false,
+            status_code: 409,
+        })
+    }
+
+    /// The major version of the cluster already on a volume, if there is one.
+    fn postgres_data_major(&self, volume: &str) -> Option<u32> {
+        let inspect = self
+            .engine
+            .run(&["volume".into(), "inspect".into(), volume.into()])
+            .ok()?;
+        if !inspect.status.success() {
+            return None;
+        }
+        let parsed: Value = serde_json::from_slice(&inspect.stdout).ok()?;
+        let mountpoint = parsed
+            .as_array()
+            .and_then(|entries| entries.first())
+            .unwrap_or(&parsed)
+            .get("Mountpoint")?
+            .as_str()?;
+        let raw = std::fs::read_to_string(Path::new(mountpoint).join("PG_VERSION")).ok()?;
+        raw.trim().split('.').next()?.parse().ok()
+    }
+
+    /// The major version an image ships, asked of the image itself.
+    fn postgres_image_major(&self, image: &str) -> Option<u32> {
+        let output = self
+            .engine
+            .run(&[
+                "run".into(),
+                "--rm".into(),
+                "--network".into(),
+                "none".into(),
+                "--platform".into(),
+                guest_platform().into(),
+                image.into(),
+                "/usr/bin/printenv".into(),
+                "PG_MAJOR".into(),
+            ])
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .split('.')
+            .next()?
+            .parse()
+            .ok()
     }
 
     fn ensure_volume(&self, name: &str) -> Result<(), GuestError> {
@@ -2875,6 +3095,223 @@ mod tests {
         .to_string()
     }
 
+    fn core_parameters(postgres_image: &str) -> CoreParameters {
+        CoreParameters {
+            images: CoreImages {
+                postgres: postgres_image.to_owned(),
+                redis: "docker.io/redis:7.4-alpine".into(),
+                supertokens: "docker.io/supertokens/supertokens-postgresql:11.4.5".into(),
+                workspace: None,
+                function: None,
+            },
+            credentials: CoreCredentials {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+            },
+        }
+    }
+
+    /// A data reset without the literal confirmation destroys nothing.
+    ///
+    /// This is the only global destructive verb in the table, so a replayed or
+    /// malformed frame must not be able to reach it.
+    #[test]
+    fn a_data_reset_without_explicit_confirmation_is_refused() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        assert!(service.reset_data(json!({})).is_err());
+        assert!(service.reset_data(json!({"confirm": "yes"})).is_err());
+        assert!(
+            service.engine.commands.lock().unwrap().is_empty(),
+            "a refused reset must not reach the engine at all"
+        );
+    }
+
+    /// Containers go before the volumes and workspaces they hold.
+    ///
+    /// Removing a workspace directory while a sandbox is still bind-mounted
+    /// onto it, or a volume while Postgres still has it open, is the difference
+    /// between a clean reset and a guest in an unexplainable state. The order is
+    /// the correctness property, so it is what this asserts.
+    #[test]
+    fn a_data_reset_removes_holders_before_the_data_they_hold() {
+        let root = tempdir().unwrap();
+        let workspaces = root.path().join("workspaces");
+        fs::create_dir_all(workspaces.join("sandbox-one")).unwrap();
+        fs::create_dir_all(workspaces.join("sandbox-two")).unwrap();
+        fs::write(workspaces.join("sandbox-one/notes.md"), b"user work").unwrap();
+
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                // `inspect` answers with an array; anything else reads as absent.
+                output(true, "[{}]"),     // inspect supertokens: present
+                output(true, ""),         // rm supertokens
+                output(true, "[{}]"),     // inspect redis: present
+                output(true, ""),         // rm redis
+                output(true, "[{}]"),     // inspect postgres: present
+                output(true, ""),         // rm postgres
+                output(true, "abc123\n"), // ps --filter label=...
+                output(true, ""),         // rm the sandbox container
+                output(true, ""),         // volume rm lemma-postgres-data
+                output(true, ""),         // volume rm lemma-redis-data
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let result = service
+            .reset_data(json!({"confirm": "reset-local-data"}))
+            .unwrap();
+
+        assert_eq!(result["removed_containers"], 4);
+        assert_eq!(result["removed_volumes"], 2);
+        assert_eq!(result["removed_workspaces"], 2);
+        assert!(!workspaces.join("sandbox-one").exists());
+        assert!(!workspaces.join("sandbox-two").exists());
+
+        let commands = service.engine.commands.lock().unwrap();
+        let position =
+            |predicate: &dyn Fn(&Vec<String>) -> bool| commands.iter().position(predicate);
+        let core_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"rm".to_owned())
+                && command.iter().any(|part| part == "lemma-core-postgres")
+        })
+        .expect("core containers are removed");
+        let sandbox_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"rm".to_owned()) && command.iter().any(|part| part == "abc123")
+        })
+        .expect("sandbox containers are removed");
+        let volume_removed = position(&|command: &Vec<String>| {
+            command.first() == Some(&"volume".to_owned())
+                && command.get(1) == Some(&"rm".to_owned())
+        })
+        .expect("volumes are removed");
+
+        assert!(
+            core_removed < volume_removed,
+            "Postgres must let go of its volume before the volume is removed"
+        );
+        assert!(
+            sandbox_removed < volume_removed,
+            "sandboxes are removed before the data they mount"
+        );
+    }
+
+    /// A Postgres major bump is refused before the container is ever run.
+    ///
+    /// This is the pg16 -> pg18 case that shipped. Without the check, the new
+    /// server starts against the old cluster, refuses, and the user waits out a
+    /// 120-second `pg_isready` timeout to be told nothing useful. The assertion
+    /// that matters is not just the error -- it is that **no `run` reached the
+    /// engine**, because the whole point is to fail in about a second.
+    #[test]
+    fn a_postgres_major_bump_is_refused_before_the_container_starts() {
+        let root = tempdir().unwrap();
+        let cluster = tempdir().unwrap();
+        std::fs::write(cluster.path().join("PG_VERSION"), "16\n").unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": cluster.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, ""),     // ensure_volume: inspect succeeds, volume exists
+                inspect,              // postgres_data_major: where does it live
+                output(true, "18\n"), // postgres_image_major: what does the image ship
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service
+            .ensure_postgres(&core_parameters("docker.io/pgvector/pgvector:0.8.3-pg18"))
+            .unwrap_err();
+
+        assert_eq!(error.code, "postgres_data_incompatible");
+        assert_eq!(error.status_code, 409);
+        assert!(!error.retryable, "retrying cannot help; resetting can");
+        assert!(error.message.contains("PostgreSQL 16"), "{}", error.message);
+        assert!(error.message.contains("PostgreSQL 18"), "{}", error.message);
+        assert!(
+            error.message.contains(DATA_RESET_MARKER),
+            "the phrase locald maps to a reset button: {}",
+            error.message
+        );
+        let commands = service.engine.commands.lock().unwrap();
+        assert!(
+            !commands
+                .iter()
+                .any(|command| command.first() == Some(&"run".to_owned())
+                    && command.iter().any(|part| part == "--name")),
+            "no core container may be started against an unreadable cluster: {commands:?}"
+        );
+    }
+
+    /// A fresh volume has no `PG_VERSION`, which is the common case.
+    ///
+    /// If this cost anything -- or worse, refused -- every first run would
+    /// break. So an unreadable version on either side means proceed.
+    #[test]
+    fn a_fresh_postgres_volume_is_not_treated_as_incompatible() {
+        let root = tempdir().unwrap();
+        let empty = tempdir().unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": empty.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![inspect, output(true, "18\n")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .refuse_incompatible_postgres_data("docker.io/pgvector/pgvector:0.8.3-pg18")
+            .expect("a volume with no cluster on it yet is not a mismatch");
+    }
+
+    /// An image that does not report `PG_MAJOR` degrades to today's behaviour
+    /// rather than blocking every start.
+    #[test]
+    fn an_image_that_cannot_be_asked_its_version_does_not_block_startup() {
+        let root = tempdir().unwrap();
+        let cluster = tempdir().unwrap();
+        std::fs::write(cluster.path().join("PG_VERSION"), "16\n").unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": cluster.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![inspect, output(false, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .refuse_incompatible_postgres_data("some/image:without-pg-major")
+            .expect("an unanswerable image is not evidence of a mismatch");
+    }
+
     #[test]
     fn ensure_volume_reuses_data_preserved_across_container_cache_repair() {
         let root = tempdir().unwrap();
@@ -3850,5 +4287,48 @@ mod tests {
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
+    }
+
+    /// The guest must never force a filesystem onto a disk that has one.
+    ///
+    /// `mkfs.ext4 -F` on `/dev/vdb` destroys every database, volume and
+    /// workspace on the machine, and the branch that reached it treated a
+    /// *corrupt* superblock exactly like an empty disk -- so the one situation
+    /// where the data most needed preserving was the situation that destroyed
+    /// it, silently, after which the app reported a healthy first run.
+    ///
+    /// A shell script cannot be unit-tested here, so this pins its text. The
+    /// negative assertion is the one that matters: anything reintroducing `-F`
+    /// fails this, and the failure names why.
+    #[test]
+    fn the_guest_never_force_formats_a_disk_that_already_holds_a_filesystem() {
+        let mount_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+
+        assert!(
+            !mount_data.contains("mkfs.ext4 -F"),
+            "forcing a filesystem over an unrecognised disk destroys user data; \
+             format only an unsigned disk the host says it just created",
+        );
+        assert!(
+            mount_data.contains("/mnt/lemma-control/data-disk-fresh"),
+            "only the host knows whether this disk was just created, so the \
+             guest must consult its marker before formatting",
+        );
+        assert!(
+            mount_data.contains("e2fsck -p"),
+            "the stop path ends in SIGKILL, so dirty filesystems are guaranteed \
+             and must be repaired rather than accumulated",
+        );
+        assert!(
+            mount_data.contains("noatime,discard"),
+            "without discard the sparse data disk only ever grows: space freed \
+             inside the guest is never returned to macOS",
+        );
+        assert!(
+            mount_data.contains("needs-repair:"),
+            "an unmountable disk must announce itself on the console, or the \
+             host waits out a 120-second timeout and reports nothing useful",
+        );
     }
 }

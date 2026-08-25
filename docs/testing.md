@@ -239,6 +239,34 @@ everywhere else, and each is now guarded — see
 **Wait on a condition, never on the clock.** A sleep is either too short and
 flakes under load, or too long and everyone pays for it on every run.
 
+**A stub is legitimate only when a contract test pins both sides against one
+committed artifact.** A stand-in you wrote proves your half of an interface and
+certifies nothing about the half that ships. This is not hypothetical: the
+Python stub guest returned a top-level `sandbox_id` where the real guest nests
+it, and every test against the stub passed.
+
+Two pairs do this properly today, and both follow the same shape — one JSON
+file in the repo, asserted from both languages, with the failure it exists to
+catch written into the file itself:
+
+| Contract | Asserted from |
+|---|---|
+| `desktop/agent-host/tests/fixtures/wire_contract.json` | the Agent Host (Rust) and the backend (Python) |
+| `desktop/contracts/host-pack-layout.json` | `native_host_pack.rs` (consumer) and `build_local_host_pack.py` (producer) |
+
+The host-pack one is worth reading as the example, because it is the case where
+nothing *could* have caught the drift: the producer is a Python script run by a
+release job, the consumer hard-codes a dozen paths, and a PR runs the consumer's
+tests against a fixture the same PR wrote. A rename lands green on both sides
+and is found by whoever installs the release — as `NotFound` and the name of a
+file they have never heard of.
+
+Prefer running the producer to reading its source. Where a path is assembled
+from pieces rather than spelled out, a substring assertion proves nothing;
+`copy_node_runtime` and `copy_browser_assets` are both called for real against a
+temporary directory, and the contract marks those entries `producer_writes:
+null` so the weaker check knows to stand aside.
+
 **A failing test is evidence, not an obstacle.** If a scenario fails because the
 product is wrong, the finding goes in [`issues.md`](../issues.md) with a `DEV-`
 id, the promise moves to `gap`, and the scenario is marked

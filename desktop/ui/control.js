@@ -4,6 +4,18 @@ const listen = (event, handler) => tauri.event.listen(event, ({ payload }) => ha
 const $ = (id) => document.getElementById(id);
 const csv = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
 
+// This window ships in the Windows build too, and every sentence about the
+// machine said "Mac" -- including the recovery panel that names what is about
+// to be deleted, which is the worst place to describe hardware the reader does
+// not own. `forThisDevice` covers the strings written from JS; the walk at the
+// bottom of this file covers the ones written in control.html.
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+const forThisDevice = (text) =>
+  IS_WINDOWS ? String(text).replace(/\bthis Mac\b/g, "this PC") : String(text);
+// Named per platform because the sentence is about the operating system
+// refusing access, not about the box it runs on.
+const OS_NAME = IS_WINDOWS ? "Windows" : "macOS";
+
 const titles = {
   overview: ["Overview", "Health, attention, and exposure at a glance."],
   ai: ["AI provider", "Choose and validate the system model profile used by local agents."],
@@ -37,10 +49,18 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => { element.hidden = true; }, 5500);
 }
 
+// Escapes quotes as well as angle brackets and ampersands.
+//
+// The `textContent` -> `innerHTML` trick handles `<`, `>` and `&` but leaves
+// quotes alone, and several call sites interpolate into a double-quoted
+// attribute value. That was inert while every value was an internal constant;
+// it stops being inert now that this page renders log lines, which carry error
+// strings, URLs and agent tool output. Log bodies themselves go through
+// `textContent` rather than here -- this covers the attribute cases.
 function escapeHtml(value) {
   const node = document.createElement("span");
   node.textContent = String(value ?? "");
-  return node.innerHTML;
+  return node.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function setPage(page) {
@@ -54,13 +74,179 @@ function setPage(page) {
   $("page-title").textContent = titles[page][0];
   $("page-subtitle").textContent = titles[page][1];
   document.querySelector(".content").scrollTo({ top: 0, behavior: "instant" });
+  // Only poll while the logs are actually on screen.
+  if (page === "diagnostics") startLogPolling();
+  else stopLogPolling();
+}
+
+/* ---------------------------------------------------------------- logs ---
+ * Local settings used to show only the *paths* to the logs, which meant the
+ * page that exists to explain a problem could not show one. The backing
+ * command already tails by cursor, survives rotation and redacts secrets --
+ * the only thing missing was the capability grant and somewhere to put it.
+ */
+
+let activeLogSource = "locald";
+let logCursor = null;
+let logTimer = null;
+let logFollow = true;
+
+// A line is only coloured when it genuinely reports a failure. Anchored to
+// word boundaries so a path like `.../error_handling/` does not light up.
+const LOG_BAD = /\b(error|fatal|panic|failed|failure|traceback|refused|denied)\b/i;
+const LOG_WARN = /\b(warn|warning|retry|retrying|timeout|timed out)\b/i;
+
+function renderLogLines(text) {
+  const view = $("diag-log");
+  view.textContent = "";
+  const body = (text ?? "").replace(/\s+$/, "");
+  if (!body) {
+    const empty = document.createElement("span");
+    empty.className = "empty";
+    empty.textContent = "No entries yet.";
+    view.appendChild(empty);
+    return;
+  }
+  for (const line of body.split("\n")) {
+    const row = document.createElement("span");
+    row.className = "line";
+    if (LOG_BAD.test(line)) row.classList.add("bad");
+    else if (LOG_WARN.test(line)) row.classList.add("warn");
+    // textContent, never innerHTML: this is the one surface here rendering
+    // text the app did not author.
+    row.textContent = line;
+    view.appendChild(row);
+  }
+  if (logFollow) view.scrollTop = view.scrollHeight;
+}
+
+function renderLogTabs(sources) {
+  const tabs = $("diag-log-tabs");
+  if (!Array.isArray(sources) || tabs.dataset.rendered === String(sources.length)) return;
+  tabs.dataset.rendered = String(sources.length);
+  tabs.textContent = "";
+  for (const source of sources) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = source.label;
+    button.classList.toggle("active", source.id === activeLogSource);
+    button.addEventListener("click", () => selectLogSource(source.id));
+    tabs.appendChild(button);
+  }
+}
+
+let logBody = "";
+
+async function refreshLog({ append = false } = {}) {
+  try {
+    const snapshot = await invoke("diagnostic_logs", {
+      source: activeLogSource,
+      cursor: append ? logCursor : null,
+    });
+    if (append && snapshot.entries && !snapshot.entries.startsWith("No ")) {
+      logBody += snapshot.entries;
+    } else if (!append) {
+      logBody = snapshot.entries || "";
+    }
+    logCursor = snapshot.nextCursor;
+    renderLogTabs(snapshot.sources);
+    renderLogLines(logBody);
+  } catch (error) {
+    renderLogLines(`Could not read the ${activeLogSource} log: ${String(error)}`);
+  }
+}
+
+async function selectLogSource(source) {
+  activeLogSource = source;
+  logCursor = null;
+  logBody = "";
+  $("diag-log-tabs").dataset.rendered = "";
+  await refreshLog();
+}
+
+function startLogPolling() {
+  stopLogPolling();
+  refreshLog();
+  logTimer = setInterval(() => refreshLog({ append: true }), 1000);
+}
+
+function stopLogPolling() {
+  clearInterval(logTimer);
+  logTimer = null;
+}
+
+/* ------------------------------------------------------------- updates ---
+ * Until now there was no updater at all, so a DMG in someone's hands could
+ * never be fixed. The check runs in Rust, which is why the webview's CSP does
+ * not have to learn about github.com.
+ */
+
+let appUpdate = null;
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
+function renderAppUpdate() {
+  if (!appUpdate) return;
+  const summary = $("app-update-summary");
+  const available = $("app-update-available");
+  const unsupported = $("app-update-unsupported");
+  // Reset first. The branches below return early, and a warning left over from
+  // a previous render is invisible only for as long as it stays nested inside
+  // the hidden banner -- which is not a property worth depending on.
+  $("app-update-reset-warning").hidden = true;
+  const channelSuffix = appUpdate.channel === "stable" ? "" : ` · ${appUpdate.channel}`;
+  const commit = appUpdate.buildCommit ? ` (${appUpdate.buildCommit.slice(0, 8)})` : "";
+  summary.textContent = `Lemma ${appUpdate.currentVersion}${channelSuffix}${commit}`;
+
+  if (!appUpdate.updatesSupported) {
+    // Visible, not silently missing: a build that cannot update itself should
+    // say so, or the absence reads as "there is nothing new".
+    available.hidden = true;
+    unsupported.hidden = false;
+    unsupported.textContent =
+      appUpdate.channel === "nightly"
+        ? "Nightly builds don't update themselves. Download a newer one from the releases page when you need it."
+        : "This is a development build, so it doesn't update itself.";
+    return;
+  }
+  unsupported.hidden = true;
+
+  if (!appUpdate.availableVersion) {
+    available.hidden = true;
+    summary.textContent += " · up to date";
+    return;
+  }
+  available.hidden = false;
+  $("app-update-headline").textContent = `Lemma ${appUpdate.availableVersion} is available.`;
+  // Honest about what follows the restart. The app payload is small; the
+  // runtime it then fetches is two orders of magnitude larger, and a user on a
+  // hotspot deserves to know before committing rather than after.
+  const runtime = formatBytes(appUpdate.runtimeDownloadBytes);
+  $("app-update-cost").textContent = runtime
+    ? `The update itself is small. After Lemma restarts it downloads about ${runtime} of runtime before the workspace opens.`
+    : "After Lemma restarts it downloads its runtime once before the workspace opens.";
+  $("app-update-reset-warning").hidden = appUpdate.dataCompatibility !== "requires-reset";
+}
+
+async function loadAppUpdate() {
+  try {
+    appUpdate = await invoke("check_for_app_update");
+    renderAppUpdate();
+  } catch (error) {
+    const summary = $("app-update-summary");
+    if (summary) summary.textContent = `Couldn't check for updates. ${friendlyError(error)}`;
+  }
 }
 
 async function closeLocalSettings() {
   try {
     await invoke("close_local_settings");
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -142,7 +328,7 @@ function configureInteractionHandlers() {
         action: "preflight",
         id: nextId("sharing-preflight"),
         payload: { provider: sharingProvider },
-      }).catch((error) => toast(String(error), true));
+      }).catch((error) => toast(friendlyError(error), true));
     });
   });
   $("cloudflare-setup").addEventListener("change", () => {
@@ -236,7 +422,7 @@ async function discoverModels() {
     // happened to be listening.
     applyDiscoveredModels(Array.isArray(models) ? models : []);
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -396,7 +582,7 @@ async function saveConfiguration(button) {
   } catch (error) {
     button.disabled = false;
     button.textContent = original;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -446,9 +632,69 @@ async function runDesktopAction(button) {
       await loadRuntimeInfo();
       toast("Runtime verification finished. Lemma is starting.");
     }
+    // Both confirm natively inside the command rather than here: one dialog,
+    // and the splash reaches the same commands without needing a dialog
+    // primitive of its own.
+    if (action === "check-app-update") {
+      button.disabled = true;
+      button.textContent = "Checking…";
+      await loadAppUpdate();
+    }
+    if (action === "install-app-update") {
+      button.disabled = true;
+      button.textContent = "Downloading…";
+      let resetData = false;
+      // The reset warning is not decoration: taking an incompatible update
+      // without discarding data first produces an app that cannot start.
+      if (appUpdate?.dataCompatibility === "requires-reset") {
+        const proceed = await confirmAction(
+          "Update and reset local data?",
+          forThisDevice(`Lemma ${appUpdate.availableVersion} upgrades the local database. Your pods, files and accounts on this Mac cannot be carried across and will be deleted.`),
+          "Update and Reset",
+        );
+        if (!proceed) return;
+        resetData = true;
+      }
+      // The reset is the *command's* job, not this handler's. Doing it here
+      // meant the data was destroyed before the download had even been
+      // attempted, so a network drop or an unverifiable signature took every
+      // pod, file and account with it -- and `reset_local_data` returns as soon
+      // as the request is written, so the install then raced the wipe and
+      // force-terminated the daemon in the middle of it.
+      await invoke("install_app_update", { resetData });
+      await loadAppUpdate();
+    }
+    if (action === "retry-snapshot") {
+      clearTimeout(snapshotRetryTimer);
+      snapshotRetryTimer = null;
+      requestSnapshot();
+    }
+    if (action === "reset-local-data") {
+      button.disabled = true;
+      button.textContent = "Resetting…";
+      await invoke("reset_local_data");
+      toast("Local data was erased. Lemma is starting with a clean workspace.");
+    }
+    if (action === "full-reinstall") {
+      button.disabled = true;
+      button.textContent = "Starting over…";
+      await invoke("reset_full_reinstall");
+      toast("Everything local was removed. Choose how to run Lemma to set up again.");
+    }
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   } finally {
+    for (const [action, label] of [
+      ["reset-local-data", "Reset local data"],
+      ["full-reinstall", "Start over"],
+      ["check-app-update", "Check for updates"],
+      ["install-app-update", "Download and install"],
+    ]) {
+      document.querySelectorAll(`[data-action="${action}"]`).forEach((item) => {
+        item.disabled = false;
+        item.textContent = label;
+      });
+    }
     document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
       item.disabled = !runtimeInfo?.repairAvailable;
       item.textContent = "Verify & repair runtime";
@@ -466,7 +712,11 @@ function render() {
   const sharing = snapshot.sharing || {};
   const sharingMode = sharing.mode || "this_computer";
 
-  $("release").textContent = `Release ${snapshot.release || "development"}`;
+  // The channel, when it is not stable. A nightly and a release both report
+  // the same version with the same bundle id, so this is the only thing that
+  // answers "what are you running?" in a support conversation.
+  const channel = appUpdate && appUpdate.channel !== "stable" ? ` · ${appUpdate.channel}` : "";
+  $("release").textContent = `Release ${snapshot.release || "development"}${channel}`;
   $("metric-app").textContent = appReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
   $("metric-ai").textContent = aiReady ? "Ready" : "Needs setup";
   $("metric-ai-detail").textContent = aiReady
@@ -722,7 +972,7 @@ async function enableLanSharing() {
     toast("Preparing the local-network gateway…");
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -767,7 +1017,7 @@ async function activatePublicSharing() {
     toast(`Starting ${sharingProvider === "cloudflare" ? "Cloudflare" : "ngrok"} and validating the public origin…`);
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -782,7 +1032,7 @@ async function disableSharing() {
     toast("Restoring This computer mode…");
   } catch (error) {
     sharingBusy = false;
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
 
@@ -814,7 +1064,6 @@ function renderRuntime() {
     item.disabled = !runtimeInfo.repairAvailable;
   });
   setDot("updates", runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn");
-  $("rollback-notice").hidden = runtimeInfo.rollbackAvailable;
 }
 
 async function loadRuntimeInfo() {
@@ -822,21 +1071,97 @@ async function loadRuntimeInfo() {
     runtimeInfo = await invoke("runtime_info");
     renderRuntime();
   } catch (error) {
-    toast(String(error), true);
+    toast(friendlyError(error), true);
   }
 }
+
+/* The page that exists to explain a problem must not be the page that gives up.
+ *
+ * This used to be called once on load and thereafter only from the daemon
+ * event handler -- which needs a live daemon. So if the first call rejected,
+ * nothing ever asked again: `render()` returns early with no snapshot, the
+ * state pill stays "Connecting…" forever, and the only feedback is a toast that
+ * clears itself after five seconds. That is the state a user reaches by opening
+ * Local settings *because* the stack is broken.
+ *
+ * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
+ * while it is trying.
+ */
+const SNAPSHOT_RETRY_MS = 5000;
+let snapshotRetryTimer = null;
 
 function requestSnapshot() {
   clearTimeout(snapshotTimer);
   snapshotTimer = setTimeout(() => {
-    invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => toast(String(error), true));
+    invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => {
+      showSnapshotUnavailable(String(error));
+      scheduleSnapshotRetry();
+    });
   }, 100);
+}
+
+function scheduleSnapshotRetry() {
+  if (snapshot || snapshotRetryTimer) return;
+  snapshotRetryTimer = setTimeout(() => {
+    snapshotRetryTimer = null;
+    if (!snapshot) requestSnapshot();
+  }, SNAPSHOT_RETRY_MS);
+}
+
+/* Daemon errors, said in a way a person can act on.
+ *
+ * These strings are `io::Error` and `Err(String)` values from locald, written
+ * for whoever is reading a stack trace. Shown verbatim they tell a user
+ * "control endpoint unavailable: No such file or directory (os error 2)",
+ * which names an internal component, describes a syscall, and suggests
+ * nothing. The raw text is still available in the logs below.
+ */
+const FRIENDLY_ERRORS = [
+  [/control endpoint unavailable|is not connected|disconnected/i,
+   "Lemma's background service isn't running. Starting Lemma usually brings it back."],
+  [/control token/i,
+   "Lemma couldn't authenticate with its own background service. Restarting Lemma replaces the credential."],
+  [/local data must be reset/i,
+   "The workspace data on this Mac can't be read by this version of Lemma. Reset local data below to start clean."],
+  [/another local operation is running|busy/i,
+   "Lemma is already doing something. Wait for it to finish and try again."],
+  [/broken pipe|connection reset/i,
+   "The background service stopped mid-request. Try again."],
+  [/permission denied/i,
+   `${OS_NAME} refused Lemma access to its own files. ` +
+   (IS_WINDOWS
+     ? "Check that Lemma is installed for this user and try again."
+     : "Check that Lemma is in Applications and try again.")],
+];
+
+function friendlyError(reason) {
+  const text = String(reason ?? "");
+  const match = FRIENDLY_ERRORS.find(([pattern]) => pattern.test(text));
+  return forThisDevice(match ? match[1] : text.replace(/^Error:\s*/, ""));
+}
+
+function showSnapshotUnavailable(reason) {
+  if (snapshot) return;
+  const banner = $("snapshot-unavailable");
+  if (!banner) return;
+  banner.hidden = false;
+  const detail = $("snapshot-unavailable-detail");
+  // textContent: `reason` is a daemon error string, not something to parse.
+  if (detail) detail.textContent = friendlyError(reason);
+}
+
+function clearSnapshotUnavailable() {
+  clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = null;
+  const banner = $("snapshot-unavailable");
+  if (banner) banner.hidden = true;
 }
 
 function handleLocaldEvent(event) {
   if (event.event === "control.snapshot") {
     snapshot = event;
     state = event.state;
+    clearSnapshotUnavailable();
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();
@@ -886,6 +1211,28 @@ function handleLocaldEvent(event) {
 }
 
 configureInteractionHandlers();
+// Following pins the view to the newest line; scrolling up is how a person
+// reads what already happened, so that turns it off rather than fighting them.
+$("log-follow").addEventListener("click", () => {
+  logFollow = !logFollow;
+  $("log-follow").setAttribute("aria-pressed", String(logFollow));
+  $("log-follow").textContent = logFollow ? "Following" : "Paused";
+  if (logFollow) {
+    const view = $("diag-log");
+    view.scrollTop = view.scrollHeight;
+  }
+});
+$("diag-log").addEventListener("scroll", (event) => {
+  const view = event.currentTarget;
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+  if (atBottom === logFollow) return;
+  logFollow = atBottom;
+  $("log-follow").setAttribute("aria-pressed", String(logFollow));
+  $("log-follow").textContent = logFollow ? "Following" : "Paused";
+});
+// The webview is destroyed rather than navigated when Local settings closes,
+// but a stray interval that outlives the page would keep waking the daemon.
+window.addEventListener("pagehide", stopLogPolling);
 document.addEventListener("click", (event) => {
   const row = event.target.closest("[data-summary-page]");
   if (row?.dataset.summaryPage) setPage(row.dataset.summaryPage);
@@ -894,6 +1241,22 @@ listen("lemma:control-page", (page) => {
   if (typeof page === "string") setPage(page);
 });
 listen("lemma:locald-event", handleLocaldEvent);
+// Static copy in control.html, rewritten wholesale rather than kept as a list
+// of ids someone has to remember to extend. Text nodes only -- attributes and
+// element structure are untouched.
+if (IS_WINDOWS) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentNode && /^(SCRIPT|STYLE)$/.test(node.parentNode.nodeName)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const spoken = forThisDevice(node.nodeValue);
+    if (spoken !== node.nodeValue) node.nodeValue = spoken;
+  }
+}
 setPage(titles[window.__LEMMA_CONTROL_PAGE__] ? window.__LEMMA_CONTROL_PAGE__ : "overview");
 requestSnapshot();
 loadRuntimeInfo();
+loadAppUpdate();

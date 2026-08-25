@@ -85,6 +85,7 @@ tauri-plugin-deep-link = "2"
 # hidden is the ordinary case. An OS-drawn alert is the only surface that
 # survives that, so this is used from Rust only and needs no capability entry.
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 interprocess = "2.4"

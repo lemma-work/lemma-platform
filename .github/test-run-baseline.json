@@ -1,0 +1,7 @@
+{
+  "_comment": "Ceilings for runtime skips, per lane. A test that skips reports the same green as one that passes, and collection-time checks cannot see it. Regenerate with `python3 scripts/check_test_run.py --update --lane <lane> <junit.xml>`.",
+  "unit": {
+    "tests": 5773,
+    "skipped": 18
+  }
+}

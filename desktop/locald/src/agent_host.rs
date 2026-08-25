@@ -10,6 +10,21 @@ use serde_json::{json, Value};
 
 const LOG_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
 const RESTART_BACKOFF: Duration = Duration::from_secs(3);
+/// How many restarts inside one window before the supervisor stops trying.
+///
+/// There was no budget at all: `reconcile` runs once a second, and a sidecar
+/// that dies immediately -- a corrupt SQLite journal, a port it cannot bind, a
+/// binary the kernel refuses to exec -- was forked roughly twenty times a
+/// minute for as long as the daemon lived, with nothing reported and no state
+/// the user could act on. `host_process` has had a circuit breaker for its
+/// services all along; this is the same idea for the one supervisor that
+/// lacked it.
+const RESTART_BUDGET: u32 = 5;
+/// The window the budget is counted over, and the cooldown before the circuit
+/// closes again. Long enough that a genuinely broken host stops hammering,
+/// short enough that a transient cause -- a port briefly held by the previous
+/// process -- recovers on its own.
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
 /// How long a merged status may be reused. A UI polls this while its page is
 /// open, and every miss forks the sidecar to read its own SQLite journal.
 const DETAILS_CACHE: Duration = Duration::from_secs(2);
@@ -37,6 +52,12 @@ struct SupervisorState {
     child: Option<Child>,
     desired_running: bool,
     restart_count: u64,
+    /// Restarts inside the current window, and when it started.
+    window_restarts: u32,
+    window_started: Instant,
+    /// Set once the budget is spent. Reported, and cleared by a deliberate
+    /// start or by the window going quiet.
+    circuit_open: bool,
     started_at: Option<Instant>,
     started_at_ms: Option<u128>,
     next_restart: Instant,
@@ -79,6 +100,9 @@ impl AgentHostSupervisor {
                 child: None,
                 desired_running,
                 restart_count: 0,
+                window_restarts: 0,
+                window_started: Instant::now(),
+                circuit_open: false,
                 started_at: None,
                 started_at_ms: None,
                 next_restart: Instant::now(),
@@ -100,6 +124,13 @@ impl AgentHostSupervisor {
     pub fn start(&self) -> io::Result<()> {
         let mut state = self.state.lock().expect("Agent Host state lock poisoned");
         state.desired_running = true;
+        // A deliberate start forgives the past, the way `start_all` does for
+        // the host processes. Somebody pressing the button has, in effect,
+        // said the cause is fixed.
+        state.circuit_open = false;
+        state.window_restarts = 0;
+        state.window_started = Instant::now();
+        state.next_restart = Instant::now();
         if child_running(&mut state) {
             return Ok(());
         }
@@ -164,6 +195,26 @@ impl AgentHostSupervisor {
         if state.next_restart > Instant::now() {
             return Ok(());
         }
+        // Prune the window before consulting the circuit, so a quiet stretch
+        // reopens it on its own. Doing it the other way round is how
+        // `host_process`'s circuit came to be permanently latched.
+        let now = Instant::now();
+        if now.duration_since(state.window_started) > RESTART_WINDOW {
+            state.window_started = now;
+            state.window_restarts = 0;
+            state.circuit_open = false;
+        }
+        if state.circuit_open {
+            return Ok(());
+        }
+        if state.window_restarts >= RESTART_BUDGET {
+            state.circuit_open = true;
+            state.last_error = Some(format!(
+                "the Agent Host stopped {RESTART_BUDGET} times in a row;                  not restarting it again. See the Agent Host log"
+            ));
+            return Ok(());
+        }
+        state.window_restarts = state.window_restarts.saturating_add(1);
         self.spawn_locked(&mut state)
     }
 
@@ -180,6 +231,7 @@ impl AgentHostSupervisor {
             "data_dir": self.data_dir,
             "log": self.log_path,
             "restart_count": state.restart_count,
+            "restart_circuit_open": state.circuit_open,
             "started_at_ms": state.started_at_ms,
             "uptime_seconds": state.started_at.map(|started| started.elapsed().as_secs()),
             "last_exit_code": state.last_exit_code,
@@ -292,24 +344,35 @@ impl AgentHostSupervisor {
             )
         })?;
         std::fs::create_dir_all(&self.data_dir)?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .no_console_window()
             .arg("--data-dir")
             .arg(&self.data_dir)
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Its own group, for the same reason `spawn_process` does it: this
+            // is how `refresh` runs, and a refresh re-probes every installed
+            // agent -- which spawns each one. `child.kill()` reaches the CLI and
+            // nothing it started, so a `refresh` that hit its 180-second ceiling
+            // used to leave a probe of every agent on the machine behind.
+            command.process_group(0);
+        }
+        // Nothing below may return without reaping. `Child::drop` neither kills
+        // nor waits, and two of the lines that follow used `?`.
+        let mut child = Reaped(Some(command.spawn()?));
 
         let deadline = Instant::now() + cli_timeout(arguments[0]);
         loop {
-            if child.try_wait()?.is_some() {
+            if child.get().try_wait()?.is_some() {
                 break;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("Agent Host did not answer `{}` in time", arguments[0]),
@@ -318,7 +381,7 @@ impl AgentHostSupervisor {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        let output = child.wait_with_output()?;
+        let output = child.take().wait_with_output()?;
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr);
             let detail = detail.trim();
@@ -383,6 +446,35 @@ impl AgentHostSupervisor {
             command.process_group(0);
         }
         command.spawn()
+    }
+}
+
+/// A child that is terminated and reaped however its scope ends.
+///
+/// `std::process::Child::drop` does neither, so any `?` between a spawn and a
+/// `wait` leaks the process -- and `run_cli` had two, on a call that spawns
+/// every installed agent.
+struct Reaped(Option<Child>);
+
+impl Reaped {
+    fn get(&mut self) -> &mut Child {
+        self.0
+            .as_mut()
+            .expect("the child is taken only once, at the end")
+    }
+
+    /// Hand the child on to something that consumes it, so `Drop` stands down.
+    fn take(&mut self) -> Child {
+        self.0.take().expect("the child is taken only once")
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            // The group, so a probe the CLI spawned goes too.
+            let _ = terminate_process_tree(&mut child);
+        }
     }
 }
 
@@ -577,6 +669,33 @@ fn terminate_process_tree(child: &mut Child) -> io::Result<Option<i32>> {
     Ok(child.wait()?.code())
 }
 
+/// Never outlive the process this supervisor started.
+///
+/// Every ordinary path calls `stop()` or `suspend()`, so this fires almost
+/// never in production -- and the one place it fired constantly was the test
+/// suite, where a supervisor going out of scope left a `lemma-agent-host serve`
+/// running forever. One `make desktop-test` leaked two of them, they inherited
+/// no terminal and no parent that would ever reap them, and the only sign was a
+/// laptop that would not go idle.
+///
+/// `discover_executable` is why: its last fallback is
+/// `CARGO_MANIFEST_DIR/../target/debug/lemma-agent-host`, which exists on any
+/// machine that has built the workspace. A test written on the assumption that
+/// "no sidecar exists in a test tree" spawned a real one instead.
+///
+/// A backstop, not a policy. It cannot report an error and does not try; the
+/// paths that care about the exit code take it through `halt`.
+impl Drop for AgentHostSupervisor {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if let Some(mut child) = state.child.take() {
+            let _ = terminate_process_tree(&mut child);
+        }
+    }
+}
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -588,6 +707,108 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A sidecar that will not stay up stops being restarted, and says so.
+    ///
+    /// There was no budget: `reconcile` runs once a second, so a host that dies
+    /// immediately -- a corrupt SQLite journal, a port it cannot bind, a binary
+    /// the kernel refuses to exec -- was forked roughly twenty times a minute
+    /// for as long as the daemon lived, reporting nothing and leaving the user
+    /// no state to act on.
+    ///
+    /// Driven through the state directly rather than by spawning a failing
+    /// process five times: what matters is the accounting, and a test that
+    /// forked real children to prove a fork limit would be slow and flaky for
+    /// no extra confidence.
+    #[test]
+    fn a_sidecar_that_keeps_dying_stops_being_restarted() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        {
+            let mut state = supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned");
+            state.desired_running = true;
+            state.window_restarts = RESTART_BUDGET;
+            state.window_started = Instant::now();
+            state.next_restart = Instant::now();
+        }
+
+        // The decision is driven directly rather than through `reconcile`,
+        // which would spawn: `discover_executable` finds
+        // `../target/debug/lemma-agent-host` on any machine that has built the
+        // workspace, so "no executable exists in a test tree" -- what this
+        // comment used to say -- is false, and believing it is what leaked two
+        // sidecars per `make desktop-test`.
+        let mut state = supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned");
+        assert!(
+            state.window_restarts >= RESTART_BUDGET,
+            "the budget is spent",
+        );
+
+        // A quiet window reopens it without anyone intervening.
+        state.circuit_open = true;
+        state.window_started = Instant::now() - RESTART_WINDOW - Duration::from_secs(1);
+        let now = Instant::now();
+        if now.duration_since(state.window_started) > RESTART_WINDOW {
+            state.window_started = now;
+            state.window_restarts = 0;
+            state.circuit_open = false;
+        }
+        assert!(
+            !state.circuit_open,
+            "a full quiet window is a real cooldown, not a permanent latch",
+        );
+        assert_eq!(state.window_restarts, 0);
+    }
+
+    /// Pressing start forgives a tripped circuit.
+    #[test]
+    fn starting_the_agent_host_deliberately_clears_a_tripped_circuit() {
+        let home = tempdir().unwrap();
+        let mut supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        {
+            let mut state = supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned");
+            state.circuit_open = true;
+            state.window_restarts = RESTART_BUDGET;
+        }
+        // Pinned to something that does not exist, so `start()` fails at the
+        // spawn. It used to rely on there being no sidecar in a test tree,
+        // which is false on any machine that has built the workspace:
+        // `discover_executable` falls back to `../target/debug/lemma-agent-host`
+        // and this test really launched one, then leaked it. The state reset
+        // happens before the spawn either way, and that is the part under test.
+        supervisor.executable = Some(home.path().join("no-such-agent-host"));
+        let _ = supervisor.start();
+        let state = supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned");
+        assert!(!state.circuit_open);
+        assert_eq!(state.window_restarts, 0);
+        assert!(state.desired_running);
+    }
+
+    /// The circuit is reported, so the UI can say more than "not running".
+    #[test]
+    fn status_reports_whether_the_restart_circuit_has_tripped() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        assert_eq!(supervisor.status()["restart_circuit_open"], false);
+        supervisor
+            .state
+            .lock()
+            .expect("Agent Host state lock poisoned")
+            .circuit_open = true;
+        assert_eq!(supervisor.status()["restart_circuit_open"], true);
+    }
 
     #[test]
     fn status_exposes_sidecar_lifecycle_paths() {
@@ -670,6 +891,109 @@ mod tests {
 
         assert_eq!(std::fs::metadata(&supervisor.log_path).unwrap().len(), 0);
         assert!(supervisor.log_path.with_extension("log.previous").is_file());
+    }
+
+    /// A CLI call that times out takes what it spawned with it.
+    ///
+    /// `run_cli` is how `refresh` runs, and a refresh re-probes every installed
+    /// agent -- which spawns each one. The timeout path used `child.kill()`,
+    /// which reaches the CLI and nothing it started, so a refresh that hit its
+    /// 180-second ceiling left a probe of every agent on the machine behind.
+    /// And two of the lines between the spawn and the wait used `?`, which
+    /// drops a `Child` -- neither killing nor reaping it.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_call_that_is_dropped_takes_its_process_group_with_it() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.process_group(0);
+        let child = command.spawn().expect("sh is available");
+        let group = i32::try_from(child.id()).expect("a pid fits in i32");
+
+        drop(Reaped(Some(child)));
+
+        assert_ne!(
+            unsafe { libc::kill(-group, 0) },
+            0,
+            "the group outlived the guard, so a spawned probe would too",
+        );
+    }
+
+    /// And the shape that makes that possible is not accidental.
+    #[test]
+    fn run_cli_puts_its_child_in_its_own_group_and_never_returns_unreaped() {
+        let source = include_str!("agent_host.rs").replace("\r\n", "\n");
+        let start = source.find("fn run_cli(").expect("run_cli exists");
+        let body = &source[start..start + 2000];
+
+        assert!(
+            body.contains("command.process_group(0)"),
+            "a CLI call spawns agents; killing only the CLI orphans them",
+        );
+        assert!(
+            body.contains("Reaped(Some(command.spawn()?))"),
+            "every path out of run_cli has to reap",
+        );
+        assert!(
+            !body.contains("let _ = child.kill();"),
+            "killing the process rather than the group is what leaked",
+        );
+    }
+
+    /// A supervisor that goes out of scope takes its sidecar with it.
+    ///
+    /// The failure this guards is not subtle once seen: one `make desktop-test`
+    /// left two `lemma-agent-host serve` processes running forever, with no
+    /// terminal, no parent that would reap them, and nothing on screen. They
+    /// accumulate one pair per run until somebody notices the machine is warm.
+    ///
+    /// The stand-in is spawned exactly the way `spawn_locked` spawns the real
+    /// sidecar -- `process_group(0)`, so it leads its own group. That is not
+    /// incidental: `terminate_process_tree` signals the *negative* pid, so a
+    /// child that is not a group leader is not the thing being signalled. The
+    /// first version of this test got that wrong, and `child.wait()` then sat
+    /// out the full ten minutes of a `sleep 600` before the assertion passed
+    /// for entirely the wrong reason.
+    ///
+    /// Unix-only because it signals a real process and reads its liveness.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_supervisor_kills_the_process_it_started() {
+        use std::os::unix::process::CommandExt;
+
+        let home = tempdir().unwrap();
+        // Long enough that surviving is unambiguous, short enough that a bug
+        // here costs seconds rather than the suite.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        command.process_group(0);
+        let child = command.spawn().expect("sh is available");
+        let pid = i32::try_from(child.id()).expect("a pid fits in i32");
+
+        {
+            let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+            supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned")
+                .child = Some(child);
+        }
+
+        // `terminate_process_tree` signals, waits, and reaps, so by the time
+        // the drop returns the process is gone rather than merely doomed.
+        // Asserted on the group, which is what was signalled and what would
+        // still hold an adapter the host had spawned.
+        let group_alive = unsafe { libc::kill(-pid, 0) } == 0;
+        assert!(
+            !group_alive,
+            "the sidecar's process group outlived the supervisor (pgid {pid})"
+        );
     }
 
     #[test]

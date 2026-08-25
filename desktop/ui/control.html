@@ -46,6 +46,20 @@
         <div class="state-pill" id="state-pill">Connecting…</div>
       </header>
 
+      <!-- Shown when no snapshot has arrived. Without it this page draws
+           nothing at all and the state pill reads "Connecting…" forever, which
+           is exactly what a user sees when they open Local settings because
+           something is already broken. -->
+      <div class="warning-box" id="snapshot-unavailable" hidden>
+        <strong>Can't reach Lemma's background service.</strong>
+        <p>Settings can't be shown until it answers. Retrying every few seconds.</p>
+        <p class="limitation-note" id="snapshot-unavailable-detail"></p>
+        <div class="button-row">
+          <button class="btn" data-action="retry-snapshot">Try again</button>
+          <button class="btn" data-action="logs">Open logs folder</button>
+        </div>
+      </div>
+
       <section class="page active" data-page="overview">
         <div class="attention-banner" id="attention-banner" hidden>
           <span class="attention-icon">!</span>
@@ -229,21 +243,56 @@
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
         </article>
+        <!-- A separate panel, not more buttons in the one above: that panel
+             promises it does not delete workspace data, and these do. -->
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Destructive recovery</h2><p>These permanently delete data on this Mac. Use them when Lemma cannot start and repair has not helped.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button><button class="btn danger solid" data-action="full-reinstall">Start over</button></div>
+          <p class="limitation-note" id="recovery-note">Reset local data erases your pods, files and accounts and keeps your AI provider settings and the downloaded runtime. Start over erases everything, including stored keys, and downloads the runtime again.</p>
+        </article>
       </section>
 
       <section class="page" data-page="updates">
         <div class="metric-grid">
           <article class="metric-card"><span class="metric-label">Desktop</span><strong id="runtime-desktop-release">—</strong><p>Signed native application.</p></article>
           <article class="metric-card"><span class="metric-label">Active runtime</span><strong id="runtime-active-release">—</strong><p id="runtime-source">Checking verified packs.</p></article>
-          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Retained only for controlled recovery.</p></article>
+          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Kept for reference. Reinstalling an earlier Lemma from the release page is the supported way back.</p></article>
         </div>
-        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="warning-box" id="rollback-notice">Rollback stays unavailable until a release declares its data rollback boundary.</div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
+        <article class="panel">
+          <div class="panel-heading">
+            <div><h2>Lemma</h2><p id="app-update-summary">Checking for updates…</p></div>
+            <button class="btn compact" data-action="check-app-update">Check for updates</button>
+          </div>
+          <!-- Shown only when there is one. A permanently visible notice about
+               something that has not happened is noise people learn to skip. -->
+          <div class="warning-box" id="app-update-available" hidden>
+            <strong id="app-update-headline">A new version of Lemma is available.</strong>
+            <p id="app-update-cost"></p>
+            <p class="danger-warning" id="app-update-reset-warning" hidden>
+              This version upgrades the local database. Your existing pods and files
+              cannot be carried across and must be reset first.
+            </p>
+            <div class="button-row">
+              <button class="btn primary" data-action="install-app-update">Download and install</button>
+            </div>
+          </div>
+          <p class="limitation-note" id="app-update-unsupported" hidden></p>
+        </article>
+        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
       </section>
 
       <section class="page" data-page="diagnostics">
         <div class="two-column">
           <article class="panel"><div class="panel-heading"><div><h2>Local paths</h2><p>Private app state and bounded logs.</p></div></div><pre id="diag-paths">Loading…</pre><div class="button-row"><button class="btn" data-action="logs">Open logs folder</button><button class="btn" data-action="devtools">Developer tools</button></div></article>
           <article class="panel"><div class="panel-heading"><div><h2>Network contract</h2><p>Canonical workspace and API origins.</p></div></div><div id="network-contract">Available after startup.</div></article>
+          <article class="panel span-two">
+            <div class="panel-heading">
+              <div><h2>Logs</h2><p>The last of each log, refreshed while this page is open. Lines that report a problem are highlighted.</p></div>
+              <button class="btn compact" id="log-follow" type="button" aria-pressed="true">Following</button>
+            </div>
+            <div class="log-tabs" id="diag-log-tabs"></div>
+            <pre class="log-view" id="diag-log" tabindex="0">Loading…</pre>
+          </article>
           <article class="panel span-two"><div class="panel-heading"><div><h2>Non-destructive repair</h2><p>Replaces signed application/runtime files only. Databases, files, and workspaces are preserved.</p></div></div><div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
         </div>
       </section>

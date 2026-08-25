@@ -205,8 +205,15 @@ export LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1
 ```
 
 Only that explicitly selected manifest may use `file://` artifact sources.
-Packaged releases ignore development port overrides and do not enable arbitrary
-local artifacts.
+
+These are **development-build overrides and a packaged release ignores them
+entirely** — along with `LEMMA_DESKTOP_HOST_PACK_ROOT`,
+`LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`, and the port overrides below. That is not
+tidiness: the manifest carries the digests every downloaded artifact is verified
+against, so honouring an override in a signed build would let anything already
+running as the user choose both the runtime Lemma executes and the check on it.
+`dev_override` in `desktop/src/main.rs` is the single gate, and a test asserts
+none of those variables is read around it.
 
 ## Build a test installer
 
@@ -304,8 +311,9 @@ Acceptance flow:
    thinking and structured tool calls. Also verify an API provider can replace
    them, and that a model the provider does not serve is refused.
 9. From the onboarding agents step, and again from **Models**, press
-   **Connect this computer** and confirm pairing needs no code and no terminal.
-   Add a detected agent with **Add to chat models**, pick it in a chat, run a
+   confirm the computer pairs on its own -- no code, no terminal, and no
+   button to press.
+   Add a detected agent with **Use in chat**, pick it in a chat, run a
    prompt, and approve a permission. Confirm the tray reads
    `Agent Host: connected`, that turning it off from either the tray or the card
    stops the process and survives an app restart, and that a full quit stops it
@@ -348,6 +356,49 @@ Acceptance flow:
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.
 
+### Recovery and update scenarios
+
+None of these are reachable from a fake engine, so they belong here rather than
+in the Rust suite. Each one is a path that used to have no way out.
+
+19. **Incompatible data.** Install a build pinned to an older Postgres major,
+    create a pod with data, then install one pinned to a newer major and press
+    Start. The failure must arrive in **under ten seconds**, not after a
+    two-minute timeout; `errorCode` must be `local-data-incompatible`; **Reset
+    local data** must be offered and **Try again** must not be. After the reset,
+    confirm no container images were re-pulled — the guest tidies itself
+    precisely so they survive.
+20. **A data disk that cannot be read.** With Lemma closed, overwrite the first
+    megabyte of `locald/runtime/macos/data.raw`. Launch: the console must carry
+    `lemma-data: needs-repair:`, the app must say so rather than waiting out its
+    budget, and the reset must recover. Worth running once against a build from
+    before this change, to see the old one destroy the disk silently.
+21. **Reset with the stack up.** Press **Reset local data** while everything is
+    running. `ps` must show no `lemma-vz` at the moment the disk is discarded,
+    and the app must come back to a clean workspace.
+22. **Start over from a wedged installation.** Truncate `locald/control.token`
+    *and* corrupt `operator-config.json`, launch, and confirm the splash names
+    the actual reason. After **Start over**:
+    `security find-generic-password -s work.lemma.local` finds nothing, the
+    locald root and `runtime/releases` are gone, `runtime/install.log`
+    **survives**, and the next launch shows the chooser.
+23. **Start over with an orphaned VM.** `kill -9` the locald pid, leaving
+    `lemma-vz` alive, then start over. The helper must be gone afterwards — it
+    is reclaimed by verified identity, not by name.
+24. **Session isolation.** Sign in, reset local data, sign up again. There must
+    be no 401 refresh storm in `backend.log`: a cookie minted against the
+    deleted database would otherwise be accepted as a session that can do
+    nothing.
+25. **Concurrency.** Press Start and Reset within the same second. One must be
+    refused as busy, and the loser must touch nothing.
+26. **Update.** Install v(N-1) from its DMG into Applications, complete first
+    run, create a workspace. Publish v(N) and confirm Local settings offers it
+    with the real runtime download size. Update, restart, and confirm the
+    workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
+    from the previous bundle, and that the relaunched app does not bounce off
+    its own single-instance lock. Repeat with Lemma in a non-writable location
+    and confirm it says to download the DMG instead.
+
 ## Runtime state and debugging
 
 macOS state root:
@@ -374,7 +425,14 @@ locald/runtime/macos/console.log
 
 Set `LEMMA_DESKTOP_DEVTOOLS=1` for the WKWebView inspector and
 `LEMMA_DESKTOP_DEBUG=1` for protocol event output. The in-app Diagnostics view
-is the preferred user-facing path; it returns bounded redacted data.
+is the preferred user-facing path; it returns bounded data, redacted two ways.
+
+Values read out of `control.token` and the on-disk secret files are substituted
+exactly. Everything else is masked **by shape** — vendor key prefixes, JWTs, and
+whatever follows an `Authorization:` header — because the operator's 19 secrets
+live in the OS credential vault, not on disk, and reading them back to redact
+them would put every one of them into a diagnostics buffer. Treat the shape
+pass as best effort: skim a log before pasting it into a support thread.
 
 Development-only dynamic-port overrides require both variables:
 

@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
 import { isLocalDeployment } from '@/lib/config';
+import { thisComputer } from '@/lib/desktop/this-computer';
 
 /**
  * How the desktop shell reports the sandbox image download.
@@ -66,7 +67,7 @@ export function sandboxImageNotice(
         return {
             kind: 'ready',
             title: 'Workspace sandbox ready',
-            description: 'Pods can run code, shells, and browsers on this Mac.',
+            description: `Pods can run code, shells, and browsers on ${thisComputer()}.`,
         };
     }
     if (next.state === 'failed') {
