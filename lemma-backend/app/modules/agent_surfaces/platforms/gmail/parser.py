@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.platforms.common import (
 from app.modules.agent_surfaces.platforms.email_attachments import decode_base64_bytes
 from app.modules.agent_surfaces.platforms.email_identity import (
     ParsedEmailIdentity,
+    email_sender_authentication,
     parse_email_identity,
 )
 from app.modules.agent_surfaces.platforms.email_text import (
@@ -163,6 +164,17 @@ def _extract_message_headers(data: dict[str, Any]) -> dict[str, str]:
     return _header_map(payload.get("headers"))
 
 
+def _raw_message_headers(data: dict[str, Any]) -> Any:
+    """The header list before it is collapsed to a map.
+
+    Authentication-Results can legitimately appear more than once and only the
+    first is the receiver's own, so that check reads the list; ``_header_map``
+    is last-wins and would hand a forged copy the final say.
+    """
+    payload = data.get("payload")
+    return payload.get("headers") if isinstance(payload, dict) else None
+
+
 @dataclass(frozen=True)
 class _GmailEnvelope:
     """A push notification's addressing, before its content is read.
@@ -253,6 +265,9 @@ class GmailMessageParser:
             external_message_id=envelope.message_id,
             sender_external_user_id=sender.email,
             sender_email=sender.email,
+            sender_authentication=email_sender_authentication(
+                _raw_message_headers(data), sender.email
+            ),
             sender_display_name=sender.display_name,
             message_text=f"Email subject: {subject}\n\n{body}".strip(),
             is_dm=True,

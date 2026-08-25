@@ -112,6 +112,10 @@ class ParsedInboundSurfaceEvent(BaseModel):
     sender_email: str | None = None
     sender_phone: str | None = None
     sender_display_name: str | None = None
+    # Did the receiving mail service vouch for ``sender_email``? Email only:
+    # None everywhere else, where a signed platform payload asserts the sender
+    # and there is nothing to authenticate. See ``email_authentication``.
+    sender_authentication: str | None = None
     message_text: str
     is_dm: bool = False
     mentioned_agent: bool = False

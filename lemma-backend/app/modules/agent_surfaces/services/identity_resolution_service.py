@@ -61,6 +61,47 @@ class _KnownSender:
         )
 
 
+def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
+    """May this inbound email's ``From:`` be resolved to a Lemma user?
+
+    Only email is asked. Every chat platform asserts its sender inside a payload
+    whose signature was already verified, so there is nothing here to doubt --
+    ``sender_authentication`` is None for them and this passes.
+
+    A verdict of FAIL is never believed, whatever the configuration says: the
+    receiving service evaluated the message and it did not pass. UNKNOWN means
+    no usable header arrived, which is a deployment question rather than a
+    security one, so policy decides -- and it is logged either way, so an
+    operator can see whether their provider supplies the header before turning
+    the stricter setting on.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.platforms.email_authentication import (
+        EmailAuthenticationVerdict,
+    )
+
+    verdict = event.sender_authentication
+    if verdict is None:
+        return True
+    if verdict == EmailAuthenticationVerdict.PASS:
+        return True
+    if verdict == EmailAuthenticationVerdict.FAIL:
+        logger.warning(
+            "agent_surfaces.identity.email_sender_failed_authentication.degraded",
+            platform=str(event.platform),
+            sender_email=event.sender_email,
+        )
+        return False
+    allowed = bool(surface_settings.surface_email_allow_unauthenticated_identity)
+    logger.warning(
+        "agent_surfaces.identity.email_sender_unauthenticated.degraded",
+        platform=str(event.platform),
+        sender_email=event.sender_email,
+        resolved=allowed,
+    )
+    return allowed
+
+
 class SurfaceIdentityResolutionService:
     """Resolve an inbound platform message sender to an internal Lemma user.
 
@@ -92,6 +133,21 @@ class SurfaceIdentityResolutionService:
         sender_profile: SurfaceSenderProfile | None = None,
     ) -> ResolvedSurfaceUser:
         known = _KnownSender.of(sender_profile or SurfaceSenderProfile(), event)
+
+        # ── 0. An email sender is only who they say they are if the receiving
+        #      mail service said so ──────────────────────────────────────────
+        #
+        # Above the cache, and that placement is the whole control. On an email
+        # surface the external_user_id *is* the From address, so a spoofed
+        # message from an address that resolved once before would hit the cache
+        # hit below and never reach a check placed with the other matches.
+        if not _email_sender_is_believable(event):
+            return ResolvedSurfaceUser(
+                internal_user_id=None,
+                external_user_id=known.external_user_id,
+                email=known.email,
+                display_name=known.display_name,
+            )
 
         # ── 1. Upsert the ExternalSurfaceUser row with whatever we know ─────
         external_user = None

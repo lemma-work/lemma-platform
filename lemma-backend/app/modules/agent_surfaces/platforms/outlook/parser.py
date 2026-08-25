@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.platforms.common import (
 )
 from app.modules.agent_surfaces.platforms.email_identity import (
     ParsedEmailIdentity,
+    email_sender_authentication,
     parse_email_identity,
 )
 from app.modules.agent_surfaces.platforms.email_text import (
@@ -189,6 +190,9 @@ class OutlookMessageParser:
             external_message_id=envelope.external_message_id,
             sender_external_user_id=sender.email,
             sender_email=sender.email,
+            sender_authentication=email_sender_authentication(
+                envelope.data.get("internetMessageHeaders"), sender.email
+            ),
             sender_display_name=sender.display_name,
             message_text=f"Email subject: {subject}\n\n{body}".strip(),
             is_dm=True,

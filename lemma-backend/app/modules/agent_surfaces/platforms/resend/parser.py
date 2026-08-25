@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.platforms.common import text_or_none
 from app.modules.agent_surfaces.platforms.email_identity import (
+    email_sender_authentication,
     email_thread_root,
     normalize_email_address,
     parse_email_identity,
@@ -75,6 +76,9 @@ def merge_received_email(
             "external_thread_id": thread["thread_id"],
             "external_message_id": thread["message_id"],
             "sender_display_name": identity.display_name,
+            "sender_authentication": email_sender_authentication(
+                received.get("headers"), identity.email
+            ),
             "reply_target": reply_target,
             "metadata": metadata,
         }

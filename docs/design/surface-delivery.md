@@ -331,16 +331,42 @@ member's full RLS scope, tables and connectors.
 Chat platforms do not have this hole: the sender id is asserted inside a signed
 platform payload. Email's is a string a stranger typed.
 
-Two changes, neither large:
+Three outcomes, not two, because "the header says the sender failed" and "there
+is no header" are different facts and only one of them is an attack:
 
-- An inbound email resolves to a Lemma user **only** when the provider reports
-  DMARC alignment (or SPF+DKIM pass on the `From:` domain). Without it the
-  sender is anonymous and gets the same treatment as an unknown Slack user —
-  the signup path in `fallback_reply_service`, not a run.
-- [user_repositories.py:79](../../lemma-backend/app/modules/identity/infrastructure/user_repositories.py:79)
-  gains the `is_active` / `is_deleted` filters that the phone lookup ten lines
-  below it already has. A deactivated member's address currently still resolves
-  to their user.
+- **FAIL** — the receiving service evaluated the message and it did not pass.
+  Never resolved to a user, under any configuration. The sender is anonymous
+  and gets what an unknown Slack user gets: the signup path in
+  `fallback_reply_service`, not a run.
+- **PASS** — DMARC passed, or SPF/DKIM passed *aligned to the `From:` domain*.
+  An unaligned pass is worth nothing; a bulk mailer's valid signature says
+  nothing about the line a person reads.
+- **UNKNOWN** — no usable header. This is a deployment fact rather than a
+  security one, so `SURFACE_EMAIL_ALLOW_UNAUTHENTICATED_IDENTITY` decides. It
+  defaults to permitting resolution and logging
+  `email_sender_unauthenticated.degraded`, because whether a given provider
+  supplies the header could not be confirmed from the repository, and defaulting
+  the other way would stop every inbound sender resolving on a deployment where
+  it is absent. Operators watch that line, then set it `False`.
+
+The check reads every `Authentication-Results` occurrence itself rather than
+going through `header_map`, whose dict is last-wins. Anyone can put that header
+in a message they send; the receiver strips untrusted copies and prepends its
+own, so the *first* is the real one and a last-wins map would hand a forged copy
+the final say. `SURFACE_EMAIL_TRUSTED_AUTHSERV_IDS` names the receivers whose
+word is taken, which is the guarantee RFC 8601 actually intends — without it
+only the first header is read, which is weaker but not nothing.
+
+The gate sits **above** the resolution cache, and that placement is the whole
+control: on an email surface the `external_user_id` *is* the `From:` address, so
+a spoofed message from an address that resolved once before takes the cache-hit
+return and never reaches a check placed alongside the other matches.
+
+One more, unrelated to spoofing:
+[user_repositories.py:79](../../lemma-backend/app/modules/identity/infrastructure/user_repositories.py:79)
+gains the `is_active` / `is_deleted` filters that the phone lookup ten lines
+below it already has. A departed member's address resolved to their user, and
+that match is an authority grant.
 
 ---
 

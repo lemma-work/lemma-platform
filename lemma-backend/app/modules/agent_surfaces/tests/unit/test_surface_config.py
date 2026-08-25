@@ -10,6 +10,16 @@ pytestmark = pytest.mark.unit
 
 # (field, ENV var, default) transcribed from the former app/core/config.py.
 EXPECTED = [
+    (
+        "surface_email_trusted_authserv_ids",
+        "SURFACE_EMAIL_TRUSTED_AUTHSERV_IDS",
+        "",
+    ),
+    (
+        "surface_email_allow_unauthenticated_identity",
+        "SURFACE_EMAIL_ALLOW_UNAUTHENTICATED_IDENTITY",
+        True,
+    ),
     ("microsoft_bot_app_id", "MICROSOFT_BOT_APP_ID", None),
     ("microsoft_bot_app_password", "MICROSOFT_BOT_APP_PASSWORD", None),
     ("microsoft_bot_tenant_id", "MICROSOFT_BOT_TENANT_ID", None),
