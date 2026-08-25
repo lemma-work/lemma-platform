@@ -218,6 +218,25 @@ fn set_private_dir(_path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// The guest and the daemon must agree on the phrase, character for
+    /// character.
+    ///
+    /// `lemma-guestd` is a Linux binary that ships inside the VM image and
+    /// links nothing from this crate, so the constant is duplicated rather than
+    /// shared. The phrase is the entire contract between them: guestd raises it
+    /// when it finds a cluster it cannot open, this crate maps it to
+    /// `local-data-incompatible`, and the splash renders a reset button for
+    /// that code. Change it on one side only and the guest still fails -- with
+    /// no button, which is the failure this whole path exists to remove.
+    #[test]
+    fn the_guest_raises_the_same_reset_phrase_this_daemon_maps() {
+        let guestd = include_str!("../../local-runtime/guestd/src/lib.rs");
+        assert!(
+            guestd.contains(&format!("DATA_RESET_MARKER: &str = \"{DATA_RESET_MARKER}\"")),
+            "lemma-guestd must declare the same marker phrase as this crate",
+        );
+    }
+
     #[test]
     fn quarantine_moves_aside_without_destroying_the_original_bytes() {
         let root = tempfile::tempdir().unwrap();

@@ -20,6 +20,14 @@ const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
+/// The phrase that turns a guest failure into an offer to reset local data.
+///
+/// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` rather than shared:
+/// guestd is a Linux binary that ships inside the VM image and links nothing
+/// from the host daemon. Both sides are pinned by tests, and the string is the
+/// entire contract -- locald maps it to `local-data-incompatible` and the
+/// splash renders a reset button for that code.
+const DATA_RESET_MARKER: &str = "local data must be reset";
 const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
@@ -619,6 +627,7 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_postgres(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-postgres-data")?;
+        self.refuse_incompatible_postgres_data(&parameters.images.postgres)?;
         let postgres_env = BTreeMap::from([
             ("POSTGRES_USER".into(), "postgres".into()),
             (
@@ -980,6 +989,88 @@ impl<E: Engine> GuestService<E> {
         arguments.extend(container_ids.iter().cloned());
         self.run_checked(&arguments)?;
         Ok(container_ids.len())
+    }
+
+    /// Stop before starting Postgres on a data directory it cannot open.
+    ///
+    /// `lemma-postgres-data` carries no version in its name, so a release that
+    /// moves the Postgres major starts the new server against the old cluster.
+    /// Postgres refuses -- correctly -- and the failure arrives as a 120-second
+    /// `pg_isready` timeout with a container log nobody reads, on an
+    /// installation that will never start again and offers nothing to press.
+    /// pg16 -> pg18 is exactly this, and it shipped.
+    ///
+    /// Compares the cluster's own `PG_VERSION` against the image's own
+    /// `PG_MAJOR` rather than a number restated in a manifest: asking the
+    /// artifact means bumping the image is the only thing anyone has to
+    /// remember. Either side unreadable means proceed -- a fresh volume has no
+    /// `PG_VERSION`, which is the common case and must cost nothing.
+    fn refuse_incompatible_postgres_data(&self, image: &str) -> Result<(), GuestError> {
+        let (Some(found), Some(expected)) = (
+            self.postgres_data_major("lemma-postgres-data"),
+            self.postgres_image_major(image),
+        ) else {
+            return Ok(());
+        };
+        if found == expected {
+            return Ok(());
+        }
+        Err(GuestError {
+            code: "postgres_data_incompatible".into(),
+            message: format!(
+                "the workspace database on this computer was created by PostgreSQL {found} and \
+                 this release runs PostgreSQL {expected}; {DATA_RESET_MARKER}"
+            ),
+            retryable: false,
+            status_code: 409,
+        })
+    }
+
+    /// The major version of the cluster already on a volume, if there is one.
+    fn postgres_data_major(&self, volume: &str) -> Option<u32> {
+        let inspect = self
+            .engine
+            .run(&["volume".into(), "inspect".into(), volume.into()])
+            .ok()?;
+        if !inspect.status.success() {
+            return None;
+        }
+        let parsed: Value = serde_json::from_slice(&inspect.stdout).ok()?;
+        let mountpoint = parsed
+            .as_array()
+            .and_then(|entries| entries.first())
+            .unwrap_or(&parsed)
+            .get("Mountpoint")?
+            .as_str()?;
+        let raw = std::fs::read_to_string(Path::new(mountpoint).join("PG_VERSION")).ok()?;
+        raw.trim().split('.').next()?.parse().ok()
+    }
+
+    /// The major version an image ships, asked of the image itself.
+    fn postgres_image_major(&self, image: &str) -> Option<u32> {
+        let output = self
+            .engine
+            .run(&[
+                "run".into(),
+                "--rm".into(),
+                "--network".into(),
+                "none".into(),
+                "--platform".into(),
+                guest_platform().into(),
+                image.into(),
+                "/usr/bin/printenv".into(),
+                "PG_MAJOR".into(),
+            ])
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .split('.')
+            .next()?
+            .parse()
+            .ok()
     }
 
     fn ensure_volume(&self, name: &str) -> Result<(), GuestError> {
@@ -2873,6 +2964,125 @@ mod tests {
             }}
         }])
         .to_string()
+    }
+
+    fn core_parameters(postgres_image: &str) -> CoreParameters {
+        CoreParameters {
+            images: CoreImages {
+                postgres: postgres_image.to_owned(),
+                redis: "docker.io/redis:7.4-alpine".into(),
+                supertokens: "docker.io/supertokens/supertokens-postgresql:11.4.5".into(),
+                workspace: None,
+                function: None,
+            },
+            credentials: CoreCredentials {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+            },
+        }
+    }
+
+    /// A Postgres major bump is refused before the container is ever run.
+    ///
+    /// This is the pg16 -> pg18 case that shipped. Without the check, the new
+    /// server starts against the old cluster, refuses, and the user waits out a
+    /// 120-second `pg_isready` timeout to be told nothing useful. The assertion
+    /// that matters is not just the error -- it is that **no `run` reached the
+    /// engine**, because the whole point is to fail in about a second.
+    #[test]
+    fn a_postgres_major_bump_is_refused_before_the_container_starts() {
+        let root = tempdir().unwrap();
+        let cluster = tempdir().unwrap();
+        std::fs::write(cluster.path().join("PG_VERSION"), "16\n").unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": cluster.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, ""), // ensure_volume: inspect succeeds, volume exists
+                inspect,          // postgres_data_major: where does it live
+                output(true, "18\n"), // postgres_image_major: what does the image ship
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service
+            .ensure_postgres(&core_parameters("docker.io/pgvector/pgvector:0.8.3-pg18"))
+            .unwrap_err();
+
+        assert_eq!(error.code, "postgres_data_incompatible");
+        assert_eq!(error.status_code, 409);
+        assert!(!error.retryable, "retrying cannot help; resetting can");
+        assert!(error.message.contains("PostgreSQL 16"), "{}", error.message);
+        assert!(error.message.contains("PostgreSQL 18"), "{}", error.message);
+        assert!(
+            error.message.contains(DATA_RESET_MARKER),
+            "the phrase locald maps to a reset button: {}",
+            error.message
+        );
+        let commands = service.engine.commands.lock().unwrap();
+        assert!(
+            !commands.iter().any(|command| command.first()
+                == Some(&"run".to_owned())
+                && command.iter().any(|part| part == "--name")),
+            "no core container may be started against an unreadable cluster: {commands:?}"
+        );
+    }
+
+    /// A fresh volume has no `PG_VERSION`, which is the common case.
+    ///
+    /// If this cost anything -- or worse, refused -- every first run would
+    /// break. So an unreadable version on either side means proceed.
+    #[test]
+    fn a_fresh_postgres_volume_is_not_treated_as_incompatible() {
+        let root = tempdir().unwrap();
+        let empty = tempdir().unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": empty.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![inspect, output(true, "18\n")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .refuse_incompatible_postgres_data("docker.io/pgvector/pgvector:0.8.3-pg18")
+            .expect("a volume with no cluster on it yet is not a mismatch");
+    }
+
+    /// An image that does not report `PG_MAJOR` degrades to today's behaviour
+    /// rather than blocking every start.
+    #[test]
+    fn an_image_that_cannot_be_asked_its_version_does_not_block_startup() {
+        let root = tempdir().unwrap();
+        let cluster = tempdir().unwrap();
+        std::fs::write(cluster.path().join("PG_VERSION"), "16\n").unwrap();
+        let inspect = output(
+            true,
+            &serde_json::to_string(&json!([{ "Mountpoint": cluster.path() }])).unwrap(),
+        );
+        let service = GuestService::new(
+            FakeEngine::new(vec![inspect, output(false, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .refuse_incompatible_postgres_data("some/image:without-pg-major")
+            .expect("an unanswerable image is not evidence of a mismatch");
     }
 
     #[test]
