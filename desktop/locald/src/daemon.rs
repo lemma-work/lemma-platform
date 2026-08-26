@@ -1756,19 +1756,35 @@ impl Daemon {
     /// and re-downloading several hundred megabytes.
     fn discard_local_data(&self) -> io::Result<Value> {
         let Some(runtime) = self.managed_runtime.as_ref() else {
-            // No app-owned runtime: there is no guest and no data disk, so
-            // there is nothing of the user's for this daemon to remove.
-            return Ok(json!({"strategy": "none"}));
+            // No guest and no data disk -- but files and object storage are on
+            // the host either way, so they still have to go.
+            let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
+            return Ok(json!({"strategy": "none", "host_bytes": host_side}));
         };
+        // The user's files live on the Mac, not in the guest, so neither
+        // strategy below touches them. `LOCAL_FILE_STORAGE_ROOT` and
+        // `LOCAL_OBJECT_STORAGE_ROOT` point at `<root>/data/...`, and clearing
+        // only the guest erased the rows while leaving every uploaded byte on
+        // disk -- under a button whose own text says it "erases your pods,
+        // files and accounts". Someone resetting before handing the machine on
+        // would have kept all of it.
+        let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
         if runtime.probe().is_ok() {
             let removed = runtime.reset_guest_data()?;
             runtime.stop_infrastructure()?;
-            return Ok(json!({"strategy": "guest", "removed": removed}));
+            return Ok(json!({
+                "strategy": "guest",
+                "removed": removed,
+                "host_bytes": host_side,
+            }));
         }
         #[cfg(target_os = "macos")]
         {
             let reclaimed = runtime.discard_data_disk()?;
-            Ok(json!({"strategy": "disk", "reclaimed_bytes": reclaimed}))
+            Ok(json!({
+                "strategy": "disk",
+                "reclaimed_bytes": reclaimed + host_side,
+            }))
         }
         // Elsewhere the guest is the only way in: a WSL distribution is
         // unregistered rather than having a disk file to unlink, and that path

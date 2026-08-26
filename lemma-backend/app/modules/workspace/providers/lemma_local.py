@@ -37,6 +37,13 @@ from uuid import UUID
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.lemma_local_snapshot import (
+    guest_id_of as _guest_id_of,
+    is_running as _is_running,
+    is_serving as _is_serving,
+    sandbox_id_from_guest_id as _sandbox_id_from_guest_id,
+    state_of as _state_of,
+)
 from app.modules.workspace.providers.base import (
     ProviderCreateAmbiguous,
     ProviderCreateSpec,
@@ -260,7 +267,36 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         wait out. Only ever reached for a *running* instance -- a stopped one
         is rebuilt by the service, because nothing here could start it.
         """
+        # Imported here rather than at module scope, matching the workspace
+        # branch below: `sandbox_runtime.errors` pulls in the in-sandbox runtime
+        # package, which must not be a hard import of the provider.
+        from sandbox_runtime.errors import SandboxUnavailable
+
         if kind is not SandboxKind.WORKSPACE:
+            # A function sandbox is confirmed through the guest's own view.
+            #
+            # This used to return here, which made `verify_ready=True` from the
+            # function resolver verify nothing at all: a sandbox that had been
+            # created but was not yet serving was reported ready, and the
+            # failure surfaced later as a runtime endpoint that never answered.
+            # Nothing caught it, because none of the real-guest tests exercise a
+            # FUNCTION sandbox -- they are all workspaces.
+            #
+            # Checked through `inspect`, which is a short status call, rather
+            # than by holding the guest's single control channel open: that
+            # channel serves one request at a time, and a long wait on it stalls
+            # every other sandbox operation on the machine.
+            snapshot = await self._find(instance.provider_id, deadline_at=deadline_at)
+            if snapshot is None:
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} disappeared before "
+                    "it was ready"
+                )
+            if not _is_serving(snapshot):
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} is not serving yet "
+                    f"(state {_state_of(snapshot)})"
+                )
             return
         # Converted here, not only in `runtime_scope`. `SandboxUnavailable` is
         # how this codebase spells "worth another go", and every retry the
@@ -271,8 +307,6 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         # ensure takes the identical branch -- which is why a stopped container
         # produced four byte-identical failures in a row instead of being
         # rebuilt on the second.
-        from sandbox_runtime.errors import SandboxUnavailable
-
         try:
             client = await self._runtime_client(
                 instance.provider_id, deadline_at=deadline_at
@@ -556,41 +590,3 @@ def _app(name: str, port: int, startup: str, exposure: str) -> dict[str, object]
             else "manager_api_key"
         ),
     }
-
-
-def _is_running(snapshot: dict[str, Any]) -> bool:
-    status = snapshot.get("status")
-    if isinstance(status, dict):
-        state = status.get("state") or status.get("status")
-        return str(state).lower() in {"running", "ready"}
-    return str(snapshot.get("state", "")).lower() in {"running", "ready"}
-
-
-def _guest_id_of(entry: dict[str, Any]) -> str | None:
-    """The guest id of one `sandbox.list` entry.
-
-    A list entry wraps the snapshot: the id lives at ``status.id``, while
-    ``sandbox.status`` returns that snapshot unwrapped. Both shapes are read
-    here so a caller never has to know which call produced the dict.
-    """
-
-    status = entry.get("status")
-    if isinstance(status, dict):
-        nested = status.get("id")
-        if isinstance(nested, str) and nested:
-            return nested
-    for key in ("sandbox_id", "id"):
-        value = entry.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _sandbox_id_from_guest_id(guest_id: str) -> UUID | None:
-    prefix, _, raw = guest_id.partition("-")
-    if prefix not in {"w", "f"}:
-        return None
-    try:
-        return UUID(hex=raw)
-    except ValueError:
-        return None

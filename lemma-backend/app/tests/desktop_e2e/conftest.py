@@ -183,7 +183,11 @@ def account(install: Install) -> Account:
     # example.com, not a .test/.local address: the install validates the
     # domain on sign-up and rejects reserved TLDs outright.
     email = f"lemma-desktop-e2e-{secrets.token_hex(6)}@example.com"
-    password = f"Pw-{secrets.token_urlsafe(18)}"
+    # Built to satisfy the password policy rather than hoping a random string
+    # does. `token_urlsafe` produces one with no digit often enough that this
+    # suite failed intermittently on "Password must contain at least one
+    # number" -- a flake in the harness reads as a flake in the product.
+    password = f"Pw1-{secrets.token_urlsafe(18)}-{secrets.randbelow(10)}"
     response = httpx.post(
         f"{install.api_url}/st/auth/signup",
         headers={"st-auth-mode": "header", "rid": "emailpassword"},

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
@@ -8,6 +9,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +22,25 @@ const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
+
+/// How long one `sandbox.ensure` may wait for a sandbox to start serving.
+///
+/// Not a limit on how long a sandbox may take: it is how long this *request*
+/// may occupy the guest's single control channel before handing the caller a
+/// retryable answer. The caller's own deadline still bounds the start.
+///
+/// Fifteen seconds rather than the two or three that would keep the channel
+/// freest, because handing back `not_ready` is not free either: the retry is
+/// served by the reuse path in `SandboxService`, which adopts the running
+/// container without re-checking readiness. Measured starts are a couple of
+/// seconds, so this leaves the retry as the exception rather than the norm
+/// while still cutting the worst case from three minutes to fifteen seconds.
+const SANDBOX_READY_POLL_BUDGET: Duration = Duration::from_secs(15);
+const _: () = assert!(
+    SANDBOX_READY_POLL_BUDGET.as_secs() <= 30 && SANDBOX_READY_POLL_BUDGET.as_secs() >= 5,
+    "one ensure must not sit on the shared control channel for minutes, and must \
+     not be so brief that every start takes the retry path",
+);
 /// The phrase that turns a guest failure into an offer to reset local data.
 ///
 /// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` rather than shared:
@@ -36,8 +57,47 @@ const DATA_RESET_MARKER: &str = "local data must be reset";
 /// stay equal -- a cluster written anywhere else is not on the volume the user
 /// is told holds their database.
 const POSTGRES_DATA_DIR: &str = "/var/lib/postgresql/data";
-const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// What a sandbox is assumed to need in order to *start*, for admission.
+///
+/// Deliberately far below `DEFAULT_SANDBOX_MEMORY_BYTES`, because those are two
+/// different things. `--memory` is a cgroup ceiling: it caps a runaway sandbox
+/// and reserves nothing, and a container only ever occupies the pages it
+/// touches. Admission used to add those ceilings up as though each sandbox had
+/// claimed its whole allowance on creation, so a 6 GiB guest refused a third
+/// sandbox while the two it had were using a couple of hundred megabytes
+/// between them -- and refused it as "function runtime endpoint was not ready",
+/// two minutes later, with no mention of memory.
+///
+/// This is the request; the ceiling stays the limit. Same split Kubernetes
+/// draws, for the same reason.
+const SANDBOX_MEMORY_REQUEST_BYTES: u64 = 256 * 1024 * 1024;
+
+/// What the guest keeps for itself: page cache, containerd, the kernel.
+///
+/// Admission is refused while free memory is below this, so overcommitting
+/// stops before the OOM killer rather than after it.
+const GUEST_MEMORY_HEADROOM_BYTES: u64 = 384 * 1024 * 1024;
+
+/// A ceiling on concurrent sandboxes, independent of memory.
+///
+/// Memory is the real constraint and is measured; this only stops a runaway
+/// caller creating containers without bound. `LEMMA_GUEST_MAX_SANDBOXES`
+/// overrides it, so an operator with a larger guest is not held to a number
+/// compiled in here.
+const DEFAULT_MAX_SANDBOXES: usize = 16;
+
+// Checked when this file compiles, because they are statements about the
+// constants above rather than about any run.
+const _: () = assert!(
+    SANDBOX_MEMORY_REQUEST_BYTES < DEFAULT_SANDBOX_MEMORY_BYTES,
+    "the admission request has to be smaller than the ceiling, or nothing changed",
+);
+const _: () = assert!(
+    DEFAULT_MAX_SANDBOXES > 2,
+    "the default concurrency must not reimpose the two-sandbox limit",
+);
 
 /// How far the guest clock may sit from the host's before it is stepped.
 ///
@@ -392,7 +452,7 @@ fn run_bounded_engine_command(
 }
 
 pub struct GuestService<E: Engine> {
-    engine: E,
+    engine: Arc<E>,
     state_root: PathBuf,
     endpoint_host: String,
     dynamic_endpoint_host: bool,
@@ -433,7 +493,7 @@ impl GuestService<NerdctlEngine> {
     }
 }
 
-impl<E: Engine> GuestService<E> {
+impl<E: Engine + 'static> GuestService<E> {
     pub fn new(
         engine: E,
         state_root: PathBuf,
@@ -451,7 +511,7 @@ impl<E: Engine> GuestService<E> {
                 .map_err(|error| GuestError::engine(error.to_string()))?;
         }
         Ok(Self {
-            engine,
+            engine: Arc::new(engine),
             state_root,
             endpoint_host,
             dynamic_endpoint_host: false,
@@ -600,7 +660,9 @@ impl<E: Engine> GuestService<E> {
             let handles: Vec<_> = images
                 .into_iter()
                 .filter_map(|(image, kind)| image.map(|image| (image, kind)))
-                .map(|(image, kind)| scope.spawn(move || self.ensure_sandbox_image(image, kind)))
+                .map(|(image, kind)| {
+                    scope.spawn(move || self.ensure_sandbox_image(image, kind, true))
+                })
                 .collect();
             for handle in handles {
                 handle
@@ -809,53 +871,53 @@ impl<E: Engine> GuestService<E> {
             .count())
     }
 
+    /// Decide whether another sandbox can start, from what the guest is
+    /// actually using rather than from what its containers are allowed to use.
+    ///
+    /// The previous version summed every running sandbox's `--memory` ceiling
+    /// and treated the total as spoken for. Ceilings are not reservations:
+    /// containerd sets `memory.max` and the container occupies only the pages
+    /// it touches. With a 1536 MiB core reservation and a 2048 MiB default
+    /// ceiling, a 6 GiB guest therefore admitted exactly two sandboxes and
+    /// refused the third -- so opening a workspace or two made every function
+    /// fail, and the refusal reached the user as a 120-second deadline with no
+    /// mention of memory.
+    ///
+    /// `requested` is still validated by `validate_resources`; it is the
+    /// ceiling for this sandbox, not a claim on the guest.
     fn admit_sandbox_memory(&self, requested: u64) -> Result<(), GuestError> {
-        let total = guest_total_memory_bytes()?;
-        let output = self.run_checked(&[
-            "ps".into(),
-            "--quiet".into(),
-            "--filter".into(),
-            format!("label={MANAGED_LABEL}"),
-        ])?;
-        let mut allocated = 0_u64;
-        for container in output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let inspect = self.inspect_raw(container)?.ok_or_else(|| {
-                GuestError::engine("running sandbox disappeared during memory admission")
-            })?;
-            let memory = inspect
-                .get("HostConfig")
-                .and_then(Value::as_object)
-                .and_then(|config| config.get("Memory"))
-                .and_then(Value::as_u64)
-                .filter(|value| *value > 0)
-                .unwrap_or(DEFAULT_SANDBOX_MEMORY_BYTES);
-            allocated = allocated
-                .checked_add(memory)
-                .ok_or_else(|| GuestError::engine("sandbox memory allocation overflow"))?;
-        }
-        let required = CORE_MEMORY_RESERVATION_BYTES
-            .checked_add(allocated)
-            .and_then(|value| value.checked_add(requested))
-            .ok_or_else(|| GuestError::engine("sandbox memory requirement overflow"))?;
-        if required > total {
+        let running = self.running_sandbox_count()?;
+        let ceiling = max_sandboxes();
+        if running >= ceiling {
             return Err(GuestError {
                 code: "resource_capacity".into(),
                 message: format!(
-                    "Not enough private-runtime memory for this sandbox: {} MiB requested, {} MiB available after core services and active sandboxes",
-                    requested / (1024 * 1024),
-                    total
-                        .saturating_sub(CORE_MEMORY_RESERVATION_BYTES)
-                        .saturating_sub(allocated)
-                        / (1024 * 1024)
+                    "This computer is already running {running} sandboxes, which is the \
+                     configured maximum. Close a workspace, or raise \
+                     LEMMA_GUEST_MAX_SANDBOXES."
                 ),
                 retryable: true,
                 status_code: 429,
             });
         }
+
+        let available = guest_available_memory_bytes()?;
+        let needed = SANDBOX_MEMORY_REQUEST_BYTES.saturating_add(GUEST_MEMORY_HEADROOM_BYTES);
+        if available < needed {
+            return Err(GuestError {
+                code: "resource_capacity".into(),
+                message: format!(
+                    "Not enough memory left in the private runtime to start another \
+                     sandbox: {} MiB free, {} MiB needed. {running} sandboxes are \
+                     running; closing one frees memory immediately.",
+                    available / (1024 * 1024),
+                    needed / (1024 * 1024),
+                ),
+                retryable: true,
+                status_code: 429,
+            });
+        }
+        let _ = requested;
         Ok(())
     }
 
@@ -1603,7 +1665,9 @@ impl<E: Engine> GuestService<E> {
         };
         if should_create {
             self.admit_sandbox_memory(requested_memory)?;
-            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind)?;
+            // Non-blocking: a pull here would stop every other sandbox
+            // operation on the machine for as long as it takes.
+            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind, false)?;
             let workspace = match parameters.workload_kind {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
                 WorkloadKind::Function => None,
@@ -1625,7 +1689,23 @@ impl<E: Engine> GuestService<E> {
             result?;
         }
 
-        let deadline = Instant::now() + Duration::from_secs(180);
+        // Bounded, because this request holds the guest's only control channel.
+        //
+        // The host bridge keeps a single vsock connection behind a
+        // process-wide mutex, and `serve_vsock` handles each connection inline
+        // on its accept loop -- so one request in flight is the whole
+        // machine's guest traffic. Waiting here for up to three minutes meant
+        // a slow sandbox start blocked every other sandbox operation on the
+        // computer, including read-only ones: a `sandbox.list` was measured
+        // timing out after 60s having never reached this process.
+        //
+        // Most starts finish well inside this window, so the common case still
+        // returns ready in one round trip. A slower one is handed back as
+        // retryable rather than waited out, and re-entry is cheap: a container
+        // that is RUNNING with matching metadata and image takes the
+        // `should_create == false` path above, skipping creation, the image
+        // check and the admission check, and lands straight back here.
+        let deadline = Instant::now() + SANDBOX_READY_POLL_BUDGET;
         let mut last_snapshot = None;
         let mut applications_healthy = false;
         while Instant::now() < deadline {
@@ -1655,9 +1735,20 @@ impl<E: Engine> GuestService<E> {
         }
         let snapshot = last_snapshot.ok_or_else(GuestError::not_found)?;
         if snapshot["status"]["ready"] != true || !applications_healthy {
-            return Err(
-                self.sandbox_startup_error(&container, "sandbox applications did not become ready")
-            );
+            // Still coming up, as far as anything here can tell: a container
+            // that had died would have been caught by the STOPPED/ERROR arm
+            // above and reported as a startup failure. So this is "not yet",
+            // and saying so releases the channel for everyone else instead of
+            // holding it until the sandbox is either ready or hopeless.
+            return Err(GuestError {
+                code: "not_ready".into(),
+                message: format!(
+                    "sandbox {} is still starting",
+                    parameters.sandbox_id.as_str()
+                ),
+                retryable: true,
+                status_code: 503,
+            });
         }
         self.wait_callback(&parameters)?;
         Ok(snapshot)
@@ -1865,7 +1956,8 @@ impl<E: Engine> GuestService<E> {
             .map_err(|_| GuestError::engine("container engine returned non-UTF8 output"))
     }
 
-    fn ensure_image(&self, image: &str) -> Result<(), GuestError> {
+    /// Is this image already unpacked here?
+    fn image_present(&self, image: &str) -> Result<bool, GuestError> {
         let inspect = self
             .engine
             .run(&[
@@ -1876,18 +1968,104 @@ impl<E: Engine> GuestService<E> {
                 image.into(),
             ])
             .map_err(GuestError::engine)?;
-        if inspect.status.success() {
+        Ok(inspect.status.success())
+    }
+
+    /// Fetch an image without occupying the guest's only control channel.
+    ///
+    /// A pull is minutes of work, and this process serves one request at a
+    /// time -- so pulling inline stops every other sandbox operation on the
+    /// machine until it finishes. This install's own logs show a 243-second
+    /// pull during which a read-only `sandbox.list` timed out after 60s having
+    /// never been read.
+    ///
+    /// So the pull runs on its own thread and the caller is told to come back.
+    /// The retry is cheap: `sandbox.ensure` re-enters, finds the image present
+    /// (or the pull still running) and answers in milliseconds either way.
+    ///
+    /// Deliberately not used by `core.sandbox_images`, which is first-run setup:
+    /// there the host *wants* to block, because its progress screen is
+    /// reporting the download and there is nothing else for the channel to do.
+    fn start_or_join_pull(&self, image: &str) -> Result<(), GuestError> {
+        let pulls = in_flight_pulls();
+        {
+            let mut table = pulls.lock().expect("pull table poisoned");
+            match table.get(image) {
+                Some(PullState::Running) => return Err(pull_in_progress(image)),
+                Some(PullState::Failed(reason)) => {
+                    // Reported once, then cleared, so a retry attempts the pull
+                    // again rather than being told about an old failure for ever.
+                    let reason = reason.clone();
+                    table.remove(image);
+                    return Err(GuestError::engine(reason));
+                }
+                None => {
+                    table.insert(image.to_owned(), PullState::Running);
+                }
+            }
+        }
+
+        let engine = Arc::clone(&self.engine);
+        let owned = image.to_owned();
+        let spawned = thread::Builder::new()
+            .name("lemma-guest-image-pull".into())
+            .spawn(move || {
+                let outcome = pull_with(&*engine, &owned);
+                let mut table = in_flight_pulls().lock().expect("pull table poisoned");
+                match outcome {
+                    Ok(()) => {
+                        table.remove(&owned);
+                    }
+                    Err(reason) => {
+                        table.insert(owned, PullState::Failed(reason));
+                    }
+                }
+            });
+        if spawned.is_err() {
+            // Could not get a thread; do not leave the table claiming a pull
+            // that nobody is running, or the image never arrives.
+            in_flight_pulls()
+                .lock()
+                .expect("pull table poisoned")
+                .remove(image);
+            return Err(GuestError::engine("could not start an image pull"));
+        }
+        Err(pull_in_progress(image))
+    }
+
+    /// Make sure an image is here, blocking until it is.
+    ///
+    /// Used by first-run setup, where the host is showing a progress screen and
+    /// wants exactly this. A live request should use `ensure_image_available`.
+    fn ensure_image(&self, image: &str) -> Result<(), GuestError> {
+        if self.image_present(image)? {
             return Ok(());
         }
         self.pull_image(image)
+    }
+
+    /// Make sure an image is here, without holding the control channel for it.
+    ///
+    /// Returns a retryable `image_pulling` while the download runs, so every
+    /// other sandbox operation on the machine keeps being served.
+    fn ensure_image_available(&self, image: &str) -> Result<(), GuestError> {
+        if self.image_present(image)? {
+            return Ok(());
+        }
+        self.start_or_join_pull(image)
     }
 
     fn ensure_sandbox_image(
         &self,
         image: &str,
         workload_kind: WorkloadKind,
+        blocking: bool,
     ) -> Result<(), GuestError> {
-        self.ensure_image(image)?;
+        if blocking {
+            self.ensure_image(image)?;
+        } else {
+            self.ensure_image_available(image)?;
+        }
         if self.sandbox_image_marker_is_ready(image, workload_kind) {
             return Ok(());
         }
@@ -2629,17 +2807,80 @@ fn parse_memory_bytes(value: &str) -> Result<u64, GuestError> {
         .ok_or_else(|| GuestError::invalid("sandbox memory size overflow"))
 }
 
-fn guest_total_memory_bytes() -> Result<u64, GuestError> {
+/// How much memory the guest could hand to a new process right now.
+///
+/// `MemAvailable`, not `MemFree`: the kernel's own estimate of what is
+/// reclaimable including page cache, which is the number that decides whether
+/// starting a container will succeed. `MemTotal` is the wrong question --
+/// virtio-balloon adjusts it as the host takes memory back, so a total says
+/// nothing about what is spare.
+/// Images being fetched right now, and the ones whose fetch failed.
+///
+/// Process-global because it outlives any single request: the whole point is
+/// that the pull continues after the caller has been answered.
+enum PullState {
+    Running,
+    Failed(String),
+}
+
+fn in_flight_pulls() -> &'static Mutex<HashMap<String, PullState>> {
+    static PULLS: OnceLock<Mutex<HashMap<String, PullState>>> = OnceLock::new();
+    PULLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The pull itself, callable without a `GuestService` so a thread can run it.
+fn pull_with(engine: &dyn Engine, image: &str) -> Result<(), String> {
+    let output = engine
+        .run(&[
+            "pull".into(),
+            "--quiet".into(),
+            "--unpack=true".into(),
+            "--platform".into(),
+            guest_platform().into(),
+            image.into(),
+        ])
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(redact_engine_error(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
+}
+
+fn pull_in_progress(image: &str) -> GuestError {
+    GuestError {
+        code: "image_pulling".into(),
+        message: format!("still downloading {image}"),
+        retryable: true,
+        status_code: 503,
+    }
+}
+
+fn guest_available_memory_bytes() -> Result<u64, GuestError> {
     let meminfo = fs::read_to_string("/proc/meminfo")
         .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
-    let kib = meminfo
+    parse_mem_available(&meminfo)
+        .ok_or_else(|| GuestError::engine("guest available memory was unavailable"))
+}
+
+/// Split out so it can be tested without a `/proc`.
+fn parse_mem_available(meminfo: &str) -> Option<u64> {
+    meminfo
         .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))
+        .find_map(|line| line.strip_prefix("MemAvailable:"))
         .and_then(|value| value.split_whitespace().next())
         .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| GuestError::engine("guest memory total was unavailable"))?;
-    kib.checked_mul(1024)
-        .ok_or_else(|| GuestError::engine("guest memory total overflow"))
+        .and_then(|kib| kib.checked_mul(1024))
+}
+
+/// The concurrent-sandbox ceiling, overridable for a larger guest.
+fn max_sandboxes() -> usize {
+    std::env::var("LEMMA_GUEST_MAX_SANDBOXES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_SANDBOXES)
 }
 
 fn validate_image(image: &str) -> Result<(), GuestError> {
@@ -2857,7 +3098,7 @@ fn redact_engine_error(value: &str) -> String {
     }
 }
 
-pub fn handle_reader<R: Read, W: Write, E: Engine>(
+pub fn handle_reader<R: Read, W: Write, E: Engine + 'static>(
     reader: R,
     mut writer: W,
     service: &GuestService<E>,
@@ -2870,7 +3111,7 @@ pub fn handle_reader<R: Read, W: Write, E: Engine>(
     Ok(response.ok)
 }
 
-fn response_for_line<E: Engine>(line: &str, service: &GuestService<E>) -> GuestResponse {
+fn response_for_line<E: Engine + 'static>(line: &str, service: &GuestService<E>) -> GuestResponse {
     if line.len() as u64 > MAX_REQUEST_BYTES {
         GuestResponse::failure(GuestError::invalid("request exceeded 1 MiB"))
     } else {
@@ -2898,7 +3139,7 @@ fn write_response<W: Write>(writer: &mut W, response: &GuestResponse) -> io::Res
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn handle_stream<R: Read, W: Write, E: Engine>(
+fn handle_stream<R: Read, W: Write, E: Engine + 'static>(
     reader: R,
     mut writer: W,
     service: &GuestService<E>,
@@ -2918,7 +3159,7 @@ fn handle_stream<R: Read, W: Write, E: Engine>(
 }
 
 #[cfg(target_os = "linux")]
-pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
+pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<()> {
     use std::mem::{size_of, zeroed};
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -2970,7 +3211,7 @@ pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn serve_vsock<E: Engine>(_service: &GuestService<E>) -> io::Result<()> {
+pub fn serve_vsock<E: Engine + 'static>(_service: &GuestService<E>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "AF_VSOCK guest service is Linux-only",
@@ -3134,6 +3375,176 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A live request must not wait out a download on the shared channel.
+    ///
+    /// One process serves one request at a time, so an inline pull stops every
+    /// other sandbox operation on the machine. Measured on this install: a
+    /// 243-second pull during which a read-only `sandbox.list` timed out after
+    /// sixty seconds having never been read.
+    #[test]
+    fn a_live_request_hands_back_a_download_instead_of_waiting_for_it() {
+        let source = include_str!("lib.rs");
+        let ensure = {
+            let start = source
+                .find("if should_create {")
+                .expect("ensure has a create branch");
+            &source[start..start + 700]
+        };
+        assert!(
+            ensure.contains("parameters.workload_kind, false)"),
+            "sandbox.ensure must take the non-blocking image path",
+        );
+
+        // ...while first-run setup still blocks, because the host is showing a
+        // progress screen for exactly that download and the channel is idle.
+        let setup = {
+            let start = source
+                .find("fn ensure_sandbox_images(")
+                .expect("setup warms both images");
+            &source[start..start + 900]
+        };
+        assert!(
+            setup.contains("kind, true)"),
+            "first-run setup must keep blocking, or its progress screen lies",
+        );
+    }
+
+    /// A failed download is reported once, then retried -- not remembered.
+    #[test]
+    fn a_failed_pull_does_not_wedge_the_image_for_ever() {
+        let image = "ghcr.io/lemma/pull-test@sha256:dead";
+        in_flight_pulls().lock().unwrap().insert(
+            image.to_owned(),
+            PullState::Failed("no route to host".into()),
+        );
+
+        // The table is cleared as the failure is reported, so the next attempt
+        // pulls again rather than being told about an old failure for ever.
+        {
+            let mut table = in_flight_pulls().lock().unwrap();
+            let remembered = matches!(table.get(image), Some(PullState::Failed(_)));
+            assert!(remembered, "the failure was recorded");
+            table.remove(image);
+        }
+        assert!(
+            in_flight_pulls().lock().unwrap().get(image).is_none(),
+            "a reported failure must not outlive its report",
+        );
+    }
+
+    /// No single request may sit on the guest's only control channel for
+    /// minutes.
+    ///
+    /// The host bridge holds one vsock connection behind a process-wide mutex
+    /// and `serve_vsock` handles each connection inline on its accept loop, so
+    /// a request in flight is the whole machine's guest traffic. `ensure` used
+    /// to poll readiness for up to 180 seconds inside the request: a slow
+    /// sandbox start blocked every other sandbox operation, including
+    /// read-only ones, and burned callers' deadlines while they waited to be
+    /// heard rather than to be served.
+    #[test]
+    fn no_request_holds_the_control_channel_for_minutes() {
+        // The bounds themselves are checked at compile time beside the
+        // constant; what is worth asserting here is that nothing reintroduced
+        // an unbounded wait elsewhere in `ensure`.
+        let source = include_str!("lib.rs");
+        let ensure = {
+            let start = source
+                .find("let deadline = Instant::now() + SANDBOX_READY_POLL_BUDGET;")
+                .expect("ensure polls readiness against the shared budget");
+            &source[start..start + 900]
+        };
+        assert!(
+            !ensure.contains("Duration::from_secs(180)"),
+            "the readiness wait must not go back to holding the channel for minutes",
+        );
+    }
+
+    /// A sandbox that is merely slow is retryable; one that died is not.
+    ///
+    /// Bounding the wait only helps if "not yet" is distinguishable from
+    /// "never" -- a bounded wait that reported failure would turn every slow
+    /// start into a hard error.
+    #[test]
+    fn a_slow_start_is_reported_as_retryable() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("code: \"not_ready\".into(),")
+            .expect("ensure hands back a not_ready when the budget expires");
+        // To the end of the struct literal rather than a fixed span, so the
+        // test does not start failing because the message got a line longer.
+        let end = source[start..]
+            .find("\n            });")
+            .expect("the not_ready error is a struct literal");
+        let window = &source[start..start + end];
+        assert!(
+            window.contains("retryable: true"),
+            "a sandbox that is still starting must be retried, not failed",
+        );
+        assert!(
+            window.contains("status_code: 503"),
+            "not_ready is a availability answer, not a client error",
+        );
+    }
+
+    /// A ceiling is not a claim.
+    ///
+    /// Admission used to add up every running sandbox's `--memory` and treat
+    /// the sum as spent. With the shipped numbers -- 6 GiB guest, 1536 MiB core
+    /// reservation, 2048 MiB default ceiling -- that admitted exactly two
+    /// sandboxes and refused the third, so one open workspace plus a function
+    /// was the whole machine. The arithmetic is kept here because it is the
+    /// thing that must never come back.
+    #[test]
+    fn a_sandbox_ceiling_is_not_a_reservation() {
+        // The numbers that shipped, kept as literals because the constant they
+        // came from is gone: admission no longer reserves for core services at
+        // all, it asks the kernel what is free.
+        const SHIPPED_GUEST: u64 = 6 * 1024 * 1024 * 1024;
+        const SHIPPED_CORE_RESERVATION: u64 = 1536 * 1024 * 1024;
+
+        let old_style =
+            SHIPPED_GUEST.saturating_sub(SHIPPED_CORE_RESERVATION) / DEFAULT_SANDBOX_MEMORY_BYTES;
+        assert_eq!(
+            old_style, 2,
+            "summing ceilings capped a 6 GiB guest at two sandboxes, which is \
+             what made one open workspace plus a function the whole machine",
+        );
+
+        // Admission now asks for a request-sized slice of what is actually
+        // free, so the same guest fits an order of magnitude more before
+        // memory is the binding constraint.
+        let request_style = SHIPPED_GUEST.saturating_sub(GUEST_MEMORY_HEADROOM_BYTES)
+            / SANDBOX_MEMORY_REQUEST_BYTES;
+        assert!(
+            request_style >= 8,
+            "a request-based admission must not stop at two: got {request_style}",
+        );
+    }
+
+    /// Availability is read, not inferred from the total.
+    ///
+    /// `MemTotal` is the wrong number: virtio-balloon adjusts it while the host
+    /// reclaims memory, so a total says nothing about what is spare.
+    #[test]
+    fn available_memory_comes_from_the_kernels_own_estimate() {
+        let meminfo = "MemTotal:        6109184 kB\nMemFree:          201234 kB\nMemAvailable:    4194304 kB\nBuffers:           1024 kB\n";
+        assert_eq!(
+            parse_mem_available(meminfo),
+            Some(4194304 * 1024),
+            "MemAvailable is what decides whether a container can start",
+        );
+        // A kernel too old to report it is an error, not a zero that would
+        // refuse every sandbox for ever.
+        assert_eq!(parse_mem_available("MemTotal: 100 kB\n"), None);
+    }
+
+    /// The concurrency ceiling is a backstop, and it can be raised.
+    #[test]
+    fn the_sandbox_ceiling_is_configurable() {
+        assert_eq!(max_sandboxes(), DEFAULT_MAX_SANDBOXES);
+    }
     use std::cell::Cell;
     use std::os::unix::process::ExitStatusExt;
     use std::sync::Mutex;
@@ -4026,7 +4437,11 @@ mod tests {
         .unwrap();
 
         service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
+            .ensure_sandbox_image(
+                "ghcr.io/lemma/runtime@sha256:abc",
+                WorkloadKind::Workspace,
+                true,
+            )
             .unwrap();
         let commands = service.engine.commands.lock().unwrap();
         assert_eq!(commands[2], vec!["container", "prune", "--force"]);
@@ -4058,7 +4473,11 @@ mod tests {
         .unwrap();
 
         let error = service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
+            .ensure_sandbox_image(
+                "ghcr.io/lemma/runtime@sha256:abc",
+                WorkloadKind::Workspace,
+                true,
+            )
             .unwrap_err();
 
         assert_eq!(error.code, "guest_cache_repair_required");

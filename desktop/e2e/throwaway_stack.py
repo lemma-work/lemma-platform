@@ -31,15 +31,23 @@ guest.
 is already up; run `down` first.
 """
 
+# Runs under whatever `python3` is on PATH -- on macOS that is Xcode's 3.9, not
+# the backend's 3.14. So: no PEP 758 unparenthesised `except A, B:`, no match
+# statements, nothing newer than 3.9. Do not run `ruff format` over this file
+# with the backend's config; it targets 3.14 and rewrites the except clauses
+# into syntax this interpreter cannot parse.
+
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -127,9 +135,22 @@ def _supertokens_url(host: str) -> str:
         except (urllib.error.URLError, OSError):
             continue
     fail(
-        f"no SuperTokens core answered on {host}. Is the install past first-run "
-        "setup?"
+        f"no SuperTokens core answered on {host}. Is the install past first-run setup?"
     )
+
+
+def _is_guest_address(address):
+    """Is this the private address family the VZ guest lives on?
+
+    Loopback is explicitly not the guest: the install's backend reaches the VM
+    over its private network, and anything on 127.0.0.1 is something else on
+    this Mac.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return parsed.is_private and not parsed.is_loopback
 
 
 def _guest_address() -> str:
@@ -150,8 +171,18 @@ def _guest_address() -> str:
         fail(f"could not inspect sockets to find the guest: {error}")
     import re
 
+    # Must be the VZ guest, not merely something answering on those ports.
+    #
+    # `lsof` is machine-wide, and this repo's own docker-compose publishes
+    # Postgres on 5432, Redis on 6379 and SuperTokens on 3567 to 127.0.0.1. A
+    # developer with the dev stack up would otherwise have loopback discovered
+    # as "the guest", and the harness would then CREATE DATABASE and run the
+    # full migration set against the wrong server -- non-deterministically,
+    # since it depends on which connection `lsof` lists first.
     for match in re.finditer(r"->(\d+\.\d+\.\d+\.\d+):(?:5432|6379)\b", out):
-        return match.group(1)
+        address = match.group(1)
+        if _is_guest_address(address):
+            return address
     fail(
         "no connection to a guest postgres/redis was found. Is Lemma Desktop "
         "running and past its first-run setup?"
@@ -230,7 +261,9 @@ def render_environment(root: Path, pack: Path, release: Path) -> dict:
     bridge = INSTALLED_APP / "Contents" / "MacOS" / "lemma-runtime"
     for path in (vz, bridge):
         if not path.is_file():
-            fail(f"{path} is missing — this borrows the installed app's signed sidecars")
+            fail(
+                f"{path} is missing — this borrows the installed app's signed sidecars"
+            )
 
     locald_root = root / "locald"
     locald_root.mkdir(parents=True, exist_ok=True)
@@ -333,8 +366,9 @@ def drop_databases(host: str, password: str, suffix: str) -> None:
 # ── the backend ───────────────────────────────────────────────────────────────
 
 
-def backend_environment(manifest: dict, root: Path, infra: dict,
-                        app_db: str, data_db: str) -> dict:
+def backend_environment(
+    manifest: dict, root: Path, infra: dict, app_db: str, data_db: str
+) -> dict:
     """locald's own environment, with only borrowed infrastructure redirected.
 
     Everything this checkout's locald decided is kept exactly as rendered --
@@ -357,7 +391,9 @@ def backend_environment(manifest: dict, root: Path, infra: dict,
     # each other's consumer groups and steal each other's events, which would
     # make this harness break the very install it is borrowing from. A numbered
     # database is a full keyspace of its own, streams included.
-    env["REDIS_URL"] = f"redis://:{infra['redis_password']}@{host}:6379/{THROWAWAY_REDIS_DB}"
+    env["REDIS_URL"] = (
+        f"redis://:{infra['redis_password']}@{host}:6379/{THROWAWAY_REDIS_DB}"
+    )
     env["SUPERTOKENS_CORE_URL"] = infra["supertokens_url"]
 
     # Any other name for the same things, so a key added later cannot quietly
@@ -405,8 +441,7 @@ def run_migrations(pack: Path, env: dict, root: Path) -> None:
     (root / "migrations.log").write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         fail(
-            "migrations failed; see "
-            f"{root / 'migrations.log'}\n{result.stderr[-2000:]}"
+            f"migrations failed; see {root / 'migrations.log'}\n{result.stderr[-2000:]}"
         )
 
 
@@ -416,8 +451,16 @@ def start_backend(pack: Path, env: dict, root: Path, port: int) -> subprocess.Po
     output = (root / "backend.log").open("w")
     process = subprocess.Popen(
         [
-            str(python), "-m", "uvicorn", "local_app:app",
-            "--host", "127.0.0.1", "--port", str(port), "--ws", "websockets-sansio",
+            str(python),
+            "-m",
+            "uvicorn",
+            "local_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--ws",
+            "websockets-sansio",
         ],
         cwd=str(pack / "backend"),
         env={**env, "PATH": os.environ.get("PATH", "")},
@@ -429,7 +472,9 @@ def start_backend(pack: Path, env: dict, root: Path, port: int) -> subprocess.Po
     return process
 
 
-def wait_ready(url: str, process: subprocess.Popen, root: Path, seconds: int = 180) -> None:
+def wait_ready(
+    url: str, process: subprocess.Popen, root: Path, seconds: int = 180
+) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -443,6 +488,9 @@ def wait_ready(url: str, process: subprocess.Popen, root: Path, seconds: int = 1
                     log("backend is ready")
                     return
         except (urllib.error.URLError, OSError):
+            # Not yet listening, or listening and still starting up. That is the
+            # normal state for most of this loop, so it is waited out rather
+            # than reported; the deadline below is what turns it into a failure.
             pass
         time.sleep(1)
     fail(
@@ -454,6 +502,48 @@ def wait_ready(url: str, process: subprocess.Popen, root: Path, seconds: int = 1
 
 
 def command_up(root: Path) -> None:
+    """Stand the stack up, and leave nothing behind if it cannot be stood up.
+
+    ``stack.json`` is written last and ``down`` is keyed on it -- so a failure
+    before that point used to leave two databases inside the developer's real
+    install's Postgres with nothing that would ever look for them again. A
+    migration failure is the *likely* outcome in a lane whose whole purpose is
+    running uncommitted backend code, and Ctrl-C raises ``KeyboardInterrupt``,
+    which no ``except SystemExit`` catches.
+    """
+    created = {"root": root, "suffix": None, "host": None, "process": None}
+    try:
+        _command_up(root, created)
+    except BaseException:
+        _abandon(created)
+        raise
+
+
+def _abandon(created):
+    """Undo a half-built stack, quietly and completely."""
+    if created["process"] is not None:
+        _terminate(created["process"])
+    if created["suffix"] and created["host"]:
+        try:
+            secrets = json.loads(
+                (INSTALL_ROOT / "locald" / "infra.secrets.json").read_text()
+            )
+            drop_databases(
+                created["host"], secrets["postgres_password"], created["suffix"]
+            )
+        except (OSError, json.JSONDecodeError, KeyError, SystemExit) as error:
+            log("could not drop the throwaway databases: {}".format(error))
+    try:
+        _remove_throwaway_root(created["root"])
+    except SystemExit:
+        # The guard refused the path, which means there is nothing here this
+        # code is entitled to delete. Swallowed on purpose: this runs while
+        # another failure is already propagating, and replacing that failure
+        # with this one would hide the reason the stack could not start.
+        pass
+
+
+def _command_up(root: Path, created: dict) -> None:
     if (root / "stack.json").is_file():
         fail(f"{root} is already up — run `down` first")
     root.mkdir(parents=True, exist_ok=True)
@@ -470,18 +560,16 @@ def command_up(root: Path) -> None:
     port = int(env["API_URL"].rsplit(":", 1)[-1])
     app_base = env["APP_BASE_DOMAIN"]
 
+    created["host"] = host
+    created["suffix"] = suffix
     app_db, data_db = make_databases(host, password, suffix)
     backend_env = backend_environment(manifest, root, infra, app_db, data_db)
     run_migrations(pack, backend_env, root)
     process = start_backend(pack, backend_env, root, port)
+    created["process"] = process
 
     api_url = f"http://app.lemma.localhost:{port}"
-    try:
-        wait_ready(api_url, process, root)
-    except SystemExit:
-        _terminate(process)
-        drop_databases(host, password, suffix)
-        raise
+    wait_ready(api_url, process, root)
 
     stack = {
         "root": str(root),
@@ -539,11 +627,41 @@ def command_down(root: Path) -> None:
             "drop them by hand or re-run `down` once the guest is back."
         )
 
+    _remove_throwaway_root(root)
+
+
+def _remove_throwaway_root(root: Path) -> None:
+    """Delete the throwaway root, and refuse anything that is not one.
+
+    Both conditions, not either: under the system temp directory *and* named
+    for this harness. The first spelling of this guard was `not under /tmp and
+    not named ...`, which refuses only when both fail -- so it would have
+    removed any path under /tmp, or any directory whose name merely contained
+    the marker. It also compared against "/tmp" while macOS resolves that to
+    "/private/tmp", so the check that actually held was the loose one.
+
+    Paths are compared after `resolve()` so a symlink cannot point this
+    somewhere else.
+    """
     resolved = root.resolve()
-    if not str(resolved).startswith("/tmp/") and "lemma-desktop-e2e" not in resolved.name:
-        fail(f"refusing to remove {resolved}, which is not a throwaway root")
+    # Both spellings of "temporary" on macOS: `gettempdir()` follows $TMPDIR to
+    # a per-user folder, while /tmp is the conventional one this defaults to and
+    # resolves to /private/tmp. Checking only the first refuses this harness's
+    # own root.
+    temporary = {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()}
+    inside_temp = any(resolved.is_relative_to(candidate) for candidate in temporary)
+    named_for_us = resolved.name.startswith(DEFAULT_ROOT.name)
+    if not (inside_temp and named_for_us):
+        fail(
+            f"refusing to remove {resolved}: a throwaway root has to be under "
+            f"one of {sorted(str(t) for t in temporary)} and named "
+            f"{DEFAULT_ROOT.name}*"
+        )
     shutil.rmtree(resolved, ignore_errors=True)
-    log(f"removed {resolved}")
+    if resolved.exists():
+        log(f"warning: {resolved} could not be fully removed")
+    else:
+        log(f"removed {resolved}")
 
 
 def main() -> int:
