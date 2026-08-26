@@ -100,7 +100,7 @@ export default function LandingPage() {
               Shared Apps and Agents.
             </h1>
             <p className="lp-subhead">
-              Your team, your agents, one context layer — scoped to each
+              Your team, your agents, one context layer, scoped to each
               person.
             </p>
 
@@ -153,8 +153,8 @@ export default function LandingPage() {
                 <span>the same pod.</span>
               </h2>
               <p className="lp-section-subhead">
-                Nine surfaces, including ChatGPT and Claude. Each one knows who
-                is asking, and writes to the same records.
+                Every surface knows who is asking, and writes to the same
+                records.
               </p>
             </div>
 
@@ -207,7 +207,7 @@ export default function LandingPage() {
                 </ul>
 
                 <p className="lp-surface-effect-foot">
-                  A surface, not a copy. The records, workflows, permissions,
+                  A surface onto one system. The records, workflows, permissions,
                   and audit trail stay in one place.
                 </p>
               </aside>

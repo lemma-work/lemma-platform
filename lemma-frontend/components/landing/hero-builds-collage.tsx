@@ -38,7 +38,7 @@ const BUILD_TILES: BuildTile[] = [
   {
     key: "tools",
     title: "Internal tools",
-    philosophy: "The exact tool you need doesn\u2019t exist. Build it before lunch.",
+    philosophy: "Build the exact tool you need, before lunch.",
     examples: ["On-call board", "Release checklist", "Cost explorer"],
   },
   {
@@ -260,7 +260,7 @@ const TOOL_ROWS = [
   { name: "API reliability", status: "At risk", tone: "red", owner: "Jordan" },
   { name: "Data pipeline", status: "Healthy", tone: "green", owner: "Li" },
   { name: "Access review", status: "In progress", tone: "purple", owner: "Sam" },
-  { name: "Q2 planning", status: "Not started", tone: "grey", owner: "Riley" },
+  { name: "Q2 planning", status: "Queued", tone: "grey", owner: "Riley" },
 ] as const;
 
 function ToolsMock() {
