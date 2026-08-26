@@ -51,7 +51,14 @@
     border: 0;
     background: transparent;
     box-shadow: none;
-    padding: 0;
+    /* Two pixels of vertical room, and they are not decoration. With `padding:
+       0` the line box started flush against the content box, and a textarea's
+       caret is drawn from the top of that line box rather than aligned to the
+       font — so the caret's first rows sat exactly on the edge `overflow: auto`
+       clips at, and were shaved off. Every other field in the app has padding
+       and never showed it. `min-height` still fixes the box at 28px, so this
+       only lifts the text off the ceiling. */
+    padding: var(--space-0-5) 0;
     color: var(--text-primary);
     font-size: var(--text-sm);
     line-height: 1.6;
