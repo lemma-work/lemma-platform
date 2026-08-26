@@ -96,6 +96,9 @@ async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     context = _reply_context()
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
@@ -120,10 +123,47 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
+    """WhatsApp may put several messages in one delivery; the parser reads the
+    first. Each part now becomes its own job, and only the first keeps the bare
+    dedup id so an ordinary single-message delivery keys exactly as before."""
+    handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
+    handler.try_handle_interaction.return_value = False
+    handler.prepare_ingress.return_value = _reply_context()
+    handler.split_webhook_deliveries = lambda request: [request, request, request]
+    job_queue = AsyncMock()
+    uow_mock = AsyncMock()
+    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+
+    envelope = _webhook_envelope(source="whatsapp", payload={"entry": []})
+    event_id = envelope["event_id"]
+    await handlers.handle_surface_webhook(
+        envelope,
+        logging.getLogger("test"),
+        uow_factory=partial(_mock_uow_factory, uow_mock),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
+    )
+
+    assert job_queue.enqueue.await_count == 3
+    job_ids = [call.kwargs["_job_id"] for call in job_queue.enqueue.await_args_list]
+    assert job_ids == [
+        f"surface-event:{event_id}",
+        f"surface-event:{event_id}:1",
+        f"surface-event:{event_id}:2",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     monkeypatch,
 ):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = True
@@ -146,6 +186,9 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
 @pytest.mark.asyncio
 async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -169,6 +212,9 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -230,6 +276,9 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     ``RESEND`` is the platform on purpose: it is the one that actually happened.
     """
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
@@ -256,6 +305,9 @@ async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queu
     monkeypatch, has_context
 ):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     context = _reply_context() if has_context else None
     handler.prepare_ingress.return_value = context
     job_queue = AsyncMock()
@@ -298,6 +350,9 @@ async def test_surface_schedule_subscriber_ignores_lifecycle_events(monkeypatch)
     forever.
     """
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
@@ -367,6 +422,9 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     event with no message text would try to become a run.
     """
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = True
     job_queue = AsyncMock()

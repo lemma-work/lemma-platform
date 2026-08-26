@@ -185,6 +185,10 @@ class SurfaceAccountBindingPort(Protocol):
 class SurfacePlatformAdapterPort(Protocol):
     platform: str
 
+    def split_inbound_payloads(
+        self, payload: dict[str, Any]
+    ) -> list[dict[str, Any]]: ...
+
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None: ...
