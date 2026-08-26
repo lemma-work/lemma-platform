@@ -24,6 +24,13 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.infrastructure.existing_resources import (
+    _flow_exists,
+    _get_agent,
+    _get_function,
+    _get_schedule,
+    _get_table,
+)
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
@@ -253,33 +260,17 @@ class BundleApplier:
         await self._sync_memory_grant(agent, toolsets)
 
     async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
-        """Derive the `/memory` folder and grant that the MEMORY toolset implies.
+        """Derive the `/memory` folder and grant the MEMORY toolset implies.
 
-        `sync_memory_folder_grant` lived only in the agent HTTP controller, so
-        an agent created through the service directly -- which is what this
-        applier does -- got the toolset without the folder it needs or the grant
-        that makes it writable.
-
-        That was invisible until MEMORY became a default for new agents (#476).
-        After it, exporting a pod and importing it back failed outright: the
-        source agent held `folder:/memory`, the export recorded it, and applying
-        the bundle's grants against a pod where nothing had ever created that
-        folder raised `400: Unknown resource name(s): folder:/memory` -- which
-        the apply handler turned into "Apply failed due to a transient error."
-        The folder is created here, so the name resolves.
-
-        Called after `create_agent`/`update_agent` and again after the deferred
-        grants step, mirroring the controller: an inline grant list *replaces*
-        every grant the agent holds, so a derived one applied first is the first
-        thing wiped.
+        Why an imported agent needs this, and why it runs after the grants step
+        rather than before it, is on
+        `app.composition.pod_bundle_resources.sync_agent_memory_grant`.
         """
-        from app.modules.agent.services.agent_memory_grant import (
-            sync_memory_folder_grant,
-        )
+        from app.composition.pod_bundle_resources import sync_agent_memory_grant
 
         if agent is None or getattr(agent, "id", None) is None:
             return
-        await sync_memory_folder_grant(
+        await sync_agent_memory_grant(
             self._uow,
             pod_id=self._pod_id,
             agent_id=agent.id,
@@ -737,48 +728,6 @@ def _file_manifest_entry(files_root: Path, pod_path: str) -> dict[str, Any]:
         if isinstance(entry, dict) and str(entry.get("path") or "") == pod_path:
             return entry
     return {}
-
-
-async def _get_table(service, pod_id, name, ctx):
-    # get_table raises DatastoreTableNotFoundError when absent; treat as "create".
-    try:
-        return await service.get_table(pod_id, name, ctx)
-    except Exception:
-        return None
-
-
-async def _get_agent(service, pod_id, name, ctx):
-    try:
-        return await service.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
-    except Exception:
-        return None
-
-
-async def _get_function(service, pod_id, name, user_id, ctx):
-    try:
-        return await service.get_function_by_name(
-            pod_id, name, user_id, include_code=False, ctx=ctx
-        )
-    except Exception:
-        return None
-
-
-async def _get_schedule(service, pod_id, name, ctx):
-    # No get-by-name on the schedule service; list with a name filter.
-    try:
-        schedules, *_ = await service.list_schedules(pod_id=pod_id, name=name, ctx=ctx)
-        return schedules[0] if schedules else None
-    except Exception:
-        return None
-
-
-async def _flow_exists(service, pod_id, name, ctx) -> bool:
-    # get_workflow_by_name RETURNS None for a missing flow (it does not raise), so a
-    # bare try/except would treat "not found" as "exists" and skip the create.
-    try:
-        return await service.get_workflow_by_name(pod_id, name, ctx=ctx) is not None
-    except Exception:
-        return False
 
 
 def _read_csv(path: Path) -> list[dict[str, Any]]:
