@@ -49,6 +49,11 @@ APP_INDEX = """<!doctype html>
 # a background job; this is the point past which "not yet" is a real failure.
 INDEXING_PATIENCE_SECONDS = 120
 
+# How long a call may take when it has to start a sandbox first. Generous: the
+# guest pulls nothing at this point, but starting a container from a cold image
+# is seconds-to-a-minute, and a timeout here reads as "functions are broken".
+SANDBOX_COLD_START_SECONDS = 300.0
+
 APP_JS = "window.__E2E_APP_LOADED = true;\n"
 APP_CSS = "#root { color: rebeccapurple; }\n"
 
@@ -100,7 +105,15 @@ def client(install, account):
     """
     from lemma_sdk import Lemma
 
-    lemma = Lemma(base_url=install.api_url, token=account.access_token)
+    # Well above the SDK's 30s default. A function run starts a sandbox in the
+    # guest, and a cold one takes longer than that -- so the default made this
+    # lane pass or fail on whether a container happened to be warm, which is not
+    # what any of these tests are about.
+    lemma = Lemma(
+        base_url=install.api_url,
+        token=account.access_token,
+        timeout=SANDBOX_COLD_START_SECONDS,
+    )
     existing = lemma.orgs.list().items
     org = existing[0] if existing else lemma.orgs.create(name=f"e2e-{os.getpid()}")
     lemma.org_id = str(org.id)
