@@ -1087,6 +1087,19 @@ class Settings(BaseSettings):
             "app routing and is rejected at startup in development/production."
         ),
     )
+    app_api_via_app_origin: bool = Field(
+        default=False,
+        description=(
+            "Serve an app's API calls through the app's own origin (a reserved "
+            "/_lemma prefix) instead of the API host, and widen the refresh "
+            "cookie's path to match. Needed only where the app host and the API "
+            "host are different *sites* to a browser -- on desktop, where both "
+            "are under `.localhost` and no registrable domain can be derived, so "
+            "an app's cross-origin calls are third-party and carry no session. "
+            "Off elsewhere: on a real domain the two are same-site already, and "
+            "this would widen the refresh cookie for nothing."
+        ),
+    )
     app_branding_enabled: bool = Field(
         default=True,
         description=(

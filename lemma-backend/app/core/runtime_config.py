@@ -26,6 +26,30 @@ RUNTIME_CONFIG_SENTINEL = "data-lemma-runtime-config"
 SOCIAL_METADATA_SENTINEL = "data-lemma-social-metadata"
 APP_BRANDING_SENTINEL = "data-lemma-app-branding"
 
+# Where an app reaches the API: its own origin, under a reserved prefix that
+# ``AppHostRoutingMiddleware`` strips back off.
+#
+# Relative on purpose. The SDK resolves a non-absolute ``apiUrl`` against
+# ``window.location.origin`` (``resolveApiBase`` in the browser SDK's
+# supertokens module), so the app's calls are same-origin wherever it is served
+# and nothing here needs to know the request's Host. Same-origin is the point:
+# a browser only sends the session cookie first-party, and on desktop every
+# `.localhost` host is a separate site as far as WebKit is concerned, so an app
+# calling the API's real host got no cookie and loaded signed out.
+APP_ORIGIN_API_URL = "/_lemma"
+
+
+def app_api_url() -> str | None:
+    """The API an app should call, or None to use the API host as before.
+
+    Gated, because the problem it solves is not universal: on a real domain the
+    app subdomain and the API host share a registrable domain, so an app's
+    cross-origin calls are already same-site and carry the session. It is
+    `.localhost` that has no registrable domain, which is what makes desktop the
+    only place those calls are third-party.
+    """
+    return APP_ORIGIN_API_URL if settings.app_api_via_app_origin else None
+
 
 def build_runtime_app_identity(
     name: str,
@@ -54,16 +78,22 @@ def build_runtime_config(
     *,
     app: dict[str, str] | None = None,
     app_id: UUID | str | None = None,
+    api_url: str | None = None,
 ) -> dict[str, object]:
     """Pod context handed to the browser SDK at serve time.
 
     No-build pages bake nothing in; the SDK's resolveConfig prefers this
     ``window.__LEMMA_CONFIG__`` global over env, so the host is the single source
     of truth for which pod/api/auth a served page talks to.
+
+    ``api_url`` overrides the API the page talks to. Pages served on an app's
+    own origin pass ``APP_ORIGIN_API_URL`` so their calls stay first-party and
+    carry the session cookie; widgets are served from the API host itself and
+    take the default.
     """
     config: dict[str, object] = {
         "podId": str(pod_id),
-        "apiUrl": settings.api_url,
+        "apiUrl": api_url or settings.api_url,
         "authUrl": settings.auth_frontend_url,
     }
     if app_id:
@@ -221,9 +251,10 @@ def runtime_config_token(
     *,
     app: dict[str, str] | None = None,
     branding: dict[str, str] | None = None,
+    api_url: str | None = None,
 ) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
-    config = build_runtime_config(pod_id, app=app)
+    config = build_runtime_config(pod_id, app=app, api_url=api_url)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
     )
@@ -238,6 +269,7 @@ def inject_runtime_config(
     app: dict[str, str] | None = None,
     app_id: UUID | str | None = None,
     branding: dict[str, str] | None = None,
+    api_url: str | None = None,
 ) -> bytes:
     """Insert host runtime data and presentation into an HTML entrypoint.
 
@@ -256,7 +288,7 @@ def inject_runtime_config(
     injection = ""
     if RUNTIME_CONFIG_SENTINEL not in text:
         payload = json.dumps(
-            build_runtime_config(pod_id, app=app, app_id=app_id)
+            build_runtime_config(pod_id, app=app, app_id=app_id, api_url=api_url)
         ).replace("<", "\\u003c")
         injection += (
             f"<script {RUNTIME_CONFIG_SENTINEL}>"

@@ -438,6 +438,30 @@ fn build(
             "WORKSPACE_CALLBACK_API_URL",
             format!("http://host.lemma.internal:{backend_port}"),
         ),
+        // The same URL, for function sandboxes, which had none.
+        //
+        // `api_url` is `http://app.lemma.localhost:<port>`, and that name
+        // resolves only on the Mac: `*.localhost` is a host resolver
+        // convention, and a Linux container inside the VM has never heard of
+        // it. The function dispatcher falls back to `api_url` when this is
+        // unset, so every schema extraction and every function call reached
+        // `getaddrinfo` and stopped there --
+        //
+        // ```text
+        // ConnectError: [Errno -3] Temporary failure in name resolution
+        // ```
+        //
+        // -- which is reported as `FUNCTION_VALIDATION_ERROR: Function schema
+        // extraction failed`, and reads as a problem with the user's function
+        // rather than with the address we handed the sandbox.
+        //
+        // `host.lemma.internal` is what guestd `--add-host`es into every
+        // workload container, which is why the workspace line above works and
+        // is exactly what this needs.
+        (
+            "FUNCTION_RUNTIME_GATEWAY_URL",
+            format!("http://host.lemma.internal:{backend_port}"),
+        ),
         (
             "WORKSPACE_CALLBACK_AUTH_URL",
             format!("http://host.lemma.internal:{frontend_port}/auth"),
@@ -458,11 +482,39 @@ fn build(
         ("SUPERTOKENS_API_GATEWAY_PATH", "/st".to_owned()),
         ("SESSION_COOKIE_SECURE", "false".to_owned()),
         ("SESSION_COOKIE_SAME_SITE", "lax".to_owned()),
-        // Keep local auth cookies host-only on app.lemma.localhost. The
-        // frontend and API use this one hostname on separate ports so
-        // Safari/WKWebView accepts the HttpOnly cookies without widening them
-        // to user-authored app subdomains.
-        ("SESSION_COOKIE_DOMAIN", String::new()),
+        // Wide enough to cover the app subdomains, which is what makes a pod
+        // app a signed-in page instead of a 401.
+        //
+        // This used to be empty, keeping the cookie host-only on
+        // app.lemma.localhost, on the theory that Safari/WKWebView would then
+        // accept it without exposing it to user-authored app subdomains. The
+        // second half of that was true and the first half was not: `localhost`
+        // is not in the Public Suffix List, so WebKit cannot derive a
+        // registrable domain and treats `<slug>.apps.lemma.localhost` as a
+        // *different site* from `app.lemma.localhost`. Every request an app
+        // made to the API was third-party, ITP dropped the cookie, and every
+        // pod app loaded unauthenticated. Chromium sends it, and on lemma.work
+        // the two hosts really are same-site -- which is why this reproduced
+        // only in the shipping desktop app.
+        //
+        // Widening alone does not fix it: a cross-origin request from an app
+        // host is blocked whatever the cookie's Domain and SameSite say (all
+        // three combinations measured). It works because `build_runtime_config`
+        // points an app's SDK at its *own* origin, making those calls
+        // first-party, where this Domain is what puts the cookie in scope.
+        // Both halves are required; neither is sufficient.
+        //
+        // What that exposes: the cookie is HttpOnly, so app code cannot read
+        // it, and every *.lemma.localhost host is served by this install's own
+        // backend. An app acting as the signed-in user is the feature, and it
+        // is what already happens on the web build.
+        ("SESSION_COOKIE_DOMAIN", ".lemma.localhost".to_owned()),
+        // The other half, and only meaningful together with the domain above:
+        // apps call the API through their own origin so the request is
+        // first-party. Off by default in the backend, because on a real domain
+        // an app subdomain and the API host are already same-site and this
+        // would widen the refresh cookie for nothing.
+        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
         (
             "APP_BASE_DOMAIN",
             format!("apps.lemma.localhost:{backend_port}"),
@@ -545,7 +597,13 @@ fn build(
             "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI",
             format!("{frontend_origin}/"),
         ),
-        ("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN", String::new()),
+        // Matches SESSION_COOKIE_DOMAIN above, or the browser SDK writes a
+        // host-only front token beside the backend's domain-scoped one and the
+        // two disagree about whether a session exists.
+        (
+            "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN",
+            ".lemma.localhost".to_owned(),
+        ),
         (
             "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",
             "false".to_owned(),
@@ -1237,14 +1295,21 @@ mod tests {
             manifest["services"][0]["env"]["DESKTOP_AUTH_CREATE_LIMIT"],
             "0"
         );
-        assert_eq!(manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"], "");
+        // Wide enough to cover the app subdomains. Host-only here is what made
+        // every pod app load unauthenticated; see the note beside the value.
+        assert_eq!(
+            manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"],
+            ".lemma.localhost"
+        );
         assert_eq!(
             manifest["services"][0]["env"]["API_URL"],
             format!("http://app.lemma.localhost:{backend_port}")
         );
+        // The browser SDK has to agree with the backend about the scope, or the
+        // two write competing front tokens.
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
-            ""
+            ".lemma.localhost"
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
@@ -1286,6 +1351,147 @@ mod tests {
             runtime_instance
         );
         assert!(paths.root.join("host.secrets.json").is_file());
+    }
+
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
+    /// Functions had no gateway URL at all, so the dispatcher fell back to
+    /// `api_url` and every schema extraction died at `getaddrinfo` --
+    /// "Temporary failure in name resolution", reported as
+    /// `FUNCTION_VALIDATION_ERROR: Function schema extraction failed", which
+    /// reads as the user's function being wrong.
+    ///
+    /// The session cookie has to be in scope on the hosts apps are served from.
+    ///
+    /// Derived from `APP_BASE_DOMAIN` rather than restating `.lemma.localhost`,
+    /// so moving apps to another host without moving the cookie fails here
+    /// instead of shipping. That pairing is the whole fix: WebKit will not send
+    /// a cookie to a host it is not scoped for, and it will not send one
+    /// cross-site on `.localhost` at all -- so an app that is out of scope is an
+    /// app that loads permanently signed out.
+    #[test]
+    fn the_session_cookie_reaches_the_hosts_apps_are_served_from() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let cookie_domain = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
+        let app_host = app_base.split(':').next().unwrap();
+
+        assert!(
+            !cookie_domain.is_empty(),
+            "a host-only cookie never reaches {app_host}, which is what made \
+             every pod app load unauthenticated"
+        );
+        // A leading dot covers subdomains; the app is at <slug>.<app_base>.
+        let scope = cookie_domain.strip_prefix('.').unwrap_or(cookie_domain);
+        assert!(
+            app_host == scope || app_host.ends_with(&format!(".{scope}")),
+            "apps are served under {app_host} but the session cookie is scoped \
+             to {cookie_domain}, so it is never sent to them"
+        );
+        // The API has to be inside the same scope, or the app's own-origin
+        // calls are the only ones that work and the frontend signs out.
+        let api_host = env["API_URL"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap()
+            .to_owned();
+        assert!(
+            api_host == scope || api_host.ends_with(&format!(".{scope}")),
+            "the API at {api_host} is outside the cookie scope {cookie_domain}"
+        );
+
+        // Both halves or neither. A widened cookie with apps still calling the
+        // API host is measured *not* to work -- WebKit drops it as third-party
+        // whatever the Domain says -- so shipping one alone is shipping the bug
+        // plus a wider cookie.
+        assert_eq!(
+            env["APP_API_VIA_APP_ORIGIN"], "true",
+            "the cookie is scoped for the app hosts but apps are still pointed \
+             at the API host, where the request is cross-site and carries none"
+        );
+    }
+
+    /// Asserted over every callback variable at once rather than one by one,
+    /// because the bug was an *absent* entry: a test naming only the variables
+    /// that exist cannot fail for the one that does not.
+    #[test]
+    fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+
+        let env = &manifest["services"][0]["env"];
+        let object = env.as_object().expect("services carry an env map");
+
+        // Anything a *sandbox* uses to call back. The workspace pair was
+        // right; the function one did not exist.
+        let sandbox_facing: Vec<&String> = object
+            .keys()
+            .filter(|name| {
+                name.ends_with("_URL")
+                    && (name.contains("CALLBACK") || name.contains("RUNTIME_GATEWAY"))
+            })
+            .collect();
+        assert!(
+            sandbox_facing
+                .iter()
+                .any(|name| name.as_str() == "FUNCTION_RUNTIME_GATEWAY_URL"),
+            "functions get no gateway URL, so the dispatcher falls back to \
+             api_url and every call dies in DNS: {sandbox_facing:?}",
+        );
+
+        for name in sandbox_facing {
+            let value = env[name].as_str().unwrap_or_default();
+            assert!(
+                !value.contains(".localhost"),
+                "{name} is {value}, and .localhost resolves only on the host",
+            );
+            assert!(
+                value.is_empty() || value.contains("host.lemma.internal"),
+                "{name} is {value}; a sandbox can only reach the host through \
+                 host.lemma.internal",
+            );
+        }
     }
 
     #[test]
