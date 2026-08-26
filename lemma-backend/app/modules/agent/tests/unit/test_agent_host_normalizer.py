@@ -872,6 +872,30 @@ class TestTerminalMapping:
         out = n.finish_without_terminal(state=AgentHostRunState.SUCCEEDED)
         assert out[-1].type is AgentEventType.ERROR
 
+    def test_a_run_refused_before_it_started_ends_on_the_recorded_reason(
+        self,
+    ) -> None:
+        """The only sentence such a run ever produces, so it has to be the one.
+
+        The Agent Host fences a START_RUN naming a harness configuration the
+        machine has replaced, and it does so before journaling anything: no
+        ACCEPTED, no output, no terminal event. The lease terminalizes from the
+        rejection receipt alone, and this used to surface as "Agent Host
+        reached terminal checkpoint FAILED without its required terminal
+        event" -- which names neither the agent nor the cause.
+        """
+        n = _normalizer()
+        out = n.finish_without_terminal(
+            state=AgentHostRunState.FAILED,
+            detail=(
+                "That computer and Lemma disagree about how Claude Code is "
+                "configured; try sending again in a moment"
+            ),
+        )
+        assert out[-1].type is AgentEventType.ERROR
+        assert "Claude Code" in out[-1].data
+        assert "terminal event" not in out[-1].data
+
 
 class TestPermissionRequest:
     def test_permission_request_becomes_a_request_approval_call(self) -> None:

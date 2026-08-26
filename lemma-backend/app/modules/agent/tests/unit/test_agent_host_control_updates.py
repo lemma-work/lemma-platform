@@ -484,6 +484,24 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         assert command.state == AgentHostCommandState.ACKNOWLEDGED.value
         assert lease.state == AgentHostRunState.FAILED.value
 
+    async def test_the_run_dies_naming_the_agent_it_died_over(self) -> None:
+        """The lease's reason is the whole of what the user is shown.
+
+        A run refused before it starts journals no events, so nothing else
+        reaches the transcript: this sentence is not a detail beside the
+        failure, it *is* the failure. The host's own wording -- "harness
+        configuration revision changed" -- names neither the agent nor
+        anything to do about it.
+        """
+        session, _command, lease, rejection, host_id = self._stale(
+            harness_revision="rev-1"
+        )
+
+        await apply_rejection(session, host_id=host_id, rejection=rejection)
+
+        assert "Claude Code" in (lease.error_detail or "")
+        assert "revision" not in (lease.error_detail or "")
+
     async def test_other_rejection_codes_are_untouched(self) -> None:
         """Only the stale revision is answered; everything else is recorded."""
         session, command, lease, rejection, host_id = self._stale()
