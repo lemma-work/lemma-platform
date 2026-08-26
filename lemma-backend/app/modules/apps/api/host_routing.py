@@ -86,11 +86,21 @@ def _strip_app_api_prefix(path: str) -> str | None:
     else -- including ``/_lemmatron`` -- is an ordinary app path and is left
     alone, so the prefix cannot swallow a route that merely starts with the same
     letters.
+
+    Both shapes the prefix can arrive in. An ingress that rewrites app hosts
+    onto the asset endpoint delivers it already prefixed: ``nginx.conf``'s
+    ``proxy_pass .../public/apps$request_uri`` sends ``/public/apps/_lemma/...``,
+    because a ``proxy_pass`` whose URI contains a variable is passed through
+    verbatim. Matching only the bare spelling let that fall through to the asset
+    controller -- which answers an extension-less path with the app's own
+    ``index.html``, so every API call came back **200 with HTML** instead of an
+    error anyone would notice.
     """
-    if path == _APP_API_PREFIX:
-        return "/"
-    if path.startswith(f"{_APP_API_PREFIX}/"):
-        return path[len(_APP_API_PREFIX) :]
+    for prefix in (_APP_API_PREFIX, f"{_APP_PATH_PREFIX}{_APP_API_PREFIX}"):
+        if path == prefix:
+            return "/"
+        if path.startswith(f"{prefix}/"):
+            return path[len(prefix) :]
     return None
 
 
@@ -123,12 +133,22 @@ class AppHostRoutingMiddleware:
         # early-return, so the prefix means the same thing whether the slug was
         # resolved by nginx or derived from the Host here -- otherwise adopting
         # this on the cloud path would 404 on a rule that lives one branch away.
-        if proxied or app_slug_from_host(host) is not None:
+        # Gated on the same setting that hands apps the prefix in the first
+        # place. Ungated, any deployment whose app domain resolves straight to
+        # the backend got a same-origin alias of the whole API on the origin
+        # that renders user-authored HTML -- without ever opting in, and without
+        # the refresh-cookie half that makes it actually work.
+        if settings.app_api_via_app_origin and (
+            proxied or app_slug_from_host(host) is not None
+        ):
             api_path = _strip_app_api_prefix(path)
             if api_path is not None:
                 # No slug header added: this is an API call, not an app asset.
                 scope["path"] = api_path
-                scope["raw_path"] = api_path.encode("latin-1")
+                # utf-8, not latin-1: uvicorn hands us a decoded str, so an app
+                # shipping `图标.png` or an emoji-named asset raised
+                # UnicodeEncodeError here and 500ed with a traceback.
+                scope["raw_path"] = api_path.encode("utf-8")
                 await self.app(scope, receive, send)
                 return
 
@@ -158,6 +178,6 @@ class AppHostRoutingMiddleware:
         # apps product: 52 slow 404s and 21 slow 200s in a day, none of them
         # attributable to a route on any per-route dashboard.
         scope["path"] = new_path
-        scope["raw_path"] = new_path.encode("latin-1")
+        scope["raw_path"] = new_path.encode("utf-8")
         scope["headers"] = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]
         await self.app(scope, receive, send)
