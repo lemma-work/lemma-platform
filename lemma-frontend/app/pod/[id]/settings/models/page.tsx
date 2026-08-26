@@ -109,8 +109,7 @@ function PodModelsPageContent({ params }: { params: Promise<{ id: string }> }) {
                                 value={selectedRuntime}
                                 onChange={handleRuntimeCommit}
                                 disabled={!canUpdatePod}
-                                title="Pod default model"
-                                description="Agents with no model of their own, and every new conversation in this pod."
+                                ariaLabel="Pod default model"
                                 allowAuto={false}
                                 scopeHint="Pod default"
                             />

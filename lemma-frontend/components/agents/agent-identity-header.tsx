@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/dialog';
 import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { usePod } from '@/lib/hooks/use-pods';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { resolvePodDefaultRuntime } from '@/components/agents/agent-runtime-helpers';
 import { podModelsHref } from '@/lib/navigation/pod-settings';
 import { formatAgentName } from '@/lib/utils/agents';
 import type { Agent } from '@/lib/types';
@@ -54,10 +54,11 @@ export function AgentIdentityHeader({
     const [isPictureOpen, setIsPictureOpen] = useState(false);
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const defaultRuntime = resolveDefaultAgentRuntime(
-        runtimeCatalog,
-        pod?.config?.default_profile_id,
-    );
+    // The pod's *stored* default, not the legacy `default_profile_id` mirror:
+    // that mirror carries no model, so resolving through it named the profile's
+    // default model and this chip read "Currently <some other model>" for every
+    // agent inheriting a pod default that pinned anything else.
+    const defaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -150,8 +151,7 @@ export function AgentIdentityHeader({
                         onChange={(agentRuntime) => onUpdate({ agent_runtime: agentRuntime })}
                         disabled={!canEdit}
                         compact
-                        title="Agent model"
-                        description="The model this agent runs on, unless overridden in a conversation."
+                        ariaLabel="Agent model"
                         scopeHint="Default for this agent"
                         manageHref={podModelsHref(podId)}
                     />

@@ -41,10 +41,16 @@ const CommandInput = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div className="flex items-center border-b border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-3" cmdk-input-wrapper="">
     <Search className="mr-2 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+    {/* No vertical padding: `h-10` already sets the height, and `py-3` on top of
+        it shrank the content box to 16px around a 17px caret. An input clips at
+        `overflow: clip`, so the caret lost half a pixel top and bottom — and any
+        caller asking for a shorter bar lost more (`h-9` left 12px, cutting 2.5px
+        off each end). The text is centred by the input either way, so dropping
+        the padding moves nothing and only gives the caret its room back. */}
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-md bg-transparent py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-10 w-full rounded-md bg-transparent py-0 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
