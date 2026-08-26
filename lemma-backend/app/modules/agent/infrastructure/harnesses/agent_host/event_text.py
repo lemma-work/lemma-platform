@@ -20,6 +20,10 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
+    json_object,
+)
+from app.modules.usage.contracts import AgentRunUsage
 
 
 @dataclass(slots=True)
@@ -138,6 +142,47 @@ def narration_event(
             },
         ),
         agent_run_id=agent_run_id,
+    )
+
+
+def usage_event(
+    *,
+    agent_run_id: UUID,
+    model_name: str,
+    payload: JsonObject,
+    metadata: JsonObject,
+    sequence: int,
+) -> AgentEvent:
+    usage = json_object(payload.get("usage")) or payload
+    return AgentEvent(
+        type=AgentEventType.USAGE,
+        data=AgentRunUsage(
+            model_name=str(usage.get("model_name") or model_name),
+            input_tokens=integer(usage.get("input_tokens")),
+            output_tokens=integer(usage.get("output_tokens")),
+            request_count=integer(usage.get("request_count"), default=1),
+            tool_call_count=integer(usage.get("tool_call_count")),
+            units=number(usage.get("units")),
+            metadata=metadata,
+        ),
+        agent_run_id=agent_run_id,
+        sequence=sequence,
+    )
+
+
+def status_event(
+    *,
+    agent_run_id: UUID,
+    status: str,
+    payload: JsonObject,
+    metadata: JsonObject,
+    sequence: int,
+) -> AgentEvent:
+    return AgentEvent(
+        type=AgentEventType.STATUS,
+        data={"status": status, "detail": payload, **metadata},
+        agent_run_id=agent_run_id,
+        sequence=sequence,
     )
 
 

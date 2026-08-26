@@ -27,14 +27,14 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
     Segment,
-    integer,
-    number,
     error_event,
     event_text,
     is_terminal_event,
     narration_event,
     no_terminal_message,
+    status_event,
     terminal_event,
+    usage_event,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
@@ -46,7 +46,6 @@ from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
     bounded_tool_value,
     first_present,
-    json_object,
     tool_metadata,
     tool_name_from_payload,
     unwrap_mcp_content,
@@ -60,7 +59,6 @@ from app.modules.agent.tools.final_answer.final_answer_text import final_answer_
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_MARKER,
 )
-from app.modules.usage.contracts import AgentRunUsage
 
 # Re-exported: the harness imports the whole event vocabulary from this
 # module, and moving where a helper lives should not move where it is
@@ -165,7 +163,16 @@ class AgentHostEventNormalizer:
                 row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
             )
         if event_type is AgentHostEventType.USAGE_UPDATE:
-            return [*self._drain_tokens(), self._usage_update(row, payload, metadata)]
+            return [
+                *self._drain_tokens(),
+                usage_event(
+                    agent_run_id=self.agent_run_id,
+                    model_name=self.model_name,
+                    payload=payload,
+                    metadata=metadata,
+                    sequence=row.sequence,
+                ),
+            ]
         if event_type in {
             AgentHostEventType.RUN_STATE,
             AgentHostEventType.PLAN_UPSERT,
@@ -173,7 +180,13 @@ class AgentHostEventNormalizer:
         }:
             return [
                 *self._drain_tokens(),
-                self._status(row, event_type.value, payload, metadata),
+                status_event(
+                    agent_run_id=self.agent_run_id,
+                    status=event_type.value,
+                    payload=payload,
+                    metadata=metadata,
+                    sequence=row.sequence,
+                ),
             ]
         if event_type is AgentHostEventType.PERMISSION_REQUEST:
             return self._permission_request(row, payload, metadata)
@@ -469,42 +482,6 @@ class AgentHostEventNormalizer:
         ]
 
     # ---------------------------------------------------------------- other
-
-    def _usage_update(
-        self,
-        row: AgentHostEventEnvelope,
-        payload: JsonObject,
-        metadata: JsonObject,
-    ) -> AgentEvent:
-        usage = json_object(payload.get("usage")) or payload
-        return AgentEvent(
-            type=AgentEventType.USAGE,
-            data=AgentRunUsage(
-                model_name=str(usage.get("model_name") or self.model_name),
-                input_tokens=integer(usage.get("input_tokens")),
-                output_tokens=integer(usage.get("output_tokens")),
-                request_count=integer(usage.get("request_count"), default=1),
-                tool_call_count=integer(usage.get("tool_call_count")),
-                units=number(usage.get("units")),
-                metadata=metadata,
-            ),
-            agent_run_id=self.agent_run_id,
-            sequence=row.sequence,
-        )
-
-    def _status(
-        self,
-        row: AgentHostEventEnvelope,
-        status_value: str,
-        payload: JsonObject,
-        metadata: JsonObject,
-    ) -> AgentEvent:
-        return AgentEvent(
-            type=AgentEventType.STATUS,
-            data={"status": status_value, "detail": payload, **metadata},
-            agent_run_id=self.agent_run_id,
-            sequence=row.sequence,
-        )
 
     def _permission_request(
         self,
