@@ -71,28 +71,71 @@ offline release artifacts are intentionally removed.
 Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
 Python/uv, and the repository’s normal build toolchain.
 
-Run focused validation:
+### Before you push
+
+One command runs every desktop gate CI has, cheapest first:
 
 ```bash
-make desktop-test          # every crate in the desktop workspace
-make desktop-test-app      # just the app crate, for a fast loop
-make desktop-lint          # clippy, warnings are errors
+make desktop-check
+```
+
+It is `desktop-fmt`, `desktop-concepts-check`, `desktop-lint`, `desktop-test`,
+and `desktop-check-windows`. Run it rather than the individual targets. It is
+not a promise that CI will be green — bundling, codesigning, and the app crate's
+Windows paths have no local equivalent (see below) — but everything it does
+cover fails here in seconds instead of there in minutes. The
+pieces have always existed and nothing ran them together, so "I ran the desktop
+checks" meant whichever two you remembered — and the two most often forgotten
+are the two that fail slowest in CI:
+
+| Local step | CI job it stands in for | What only it catches |
+| --- | --- | --- |
+| `make desktop-fmt` | Desktop workspace → Check formatting | `cargo fmt` is **not** part of `desktop-lint`; clippy will not tell you |
+| `make desktop-concepts-check` | Desktop workspace → Verify baked splash concepts | `ui/concepts.gen.json` regenerated but not committed |
+| `make desktop-lint` | Desktop workspace → Lint, plus Memory balloon policy | clippy `-D warnings` across the workspace |
+| `make desktop-test` | Desktop workspace → Test, and Desktop contracts | the whole workspace, `--locked` |
+| `make desktop-check-windows` | Windows desktop build check, **in part** | the `cfg(windows)` paths in locald and the runtime manager — no other local step compiles them |
+
+The Windows one is worth the 15 seconds every time you touch `locald` or the
+runtime manager. Nothing else on a Mac compiles those `cfg` branches, and the
+job that does takes 90 minutes to tell you. A `#[cfg(unix)]` helper called from
+a function that is not gated compiles perfectly here and fails there.
+
+Faster loops, once you know what you are changing:
+
+```bash
+make desktop-test-app      # just the app crate
+make desktop-fmt-fix       # rewrite instead of check
 swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
 npx tsc --noEmit --project lemma-frontend/tsconfig.json
 ```
 
+**What `make desktop-check` cannot cover.** Bundling and codesigning need
+release certificates, so the DMG and NSIS steps of those CI jobs have no local
+equivalent — `make desktop-dmg` is the approximation. The **Guest daemon
+(Linux)** job is also only partly covered: `desktop-test` builds and tests
+`lemma-guestd` on macOS, but its vsock listener sits behind a Linux `cfg` that
+only a Linux build compiles, which is what `make desktop-guestd` does there.
+
 `lemma-guestd` is the Linux guest daemon: it reaches for `std::os::unix`
 unconditionally, so it builds and tests on macOS and Linux but not on Windows.
 Its vsock listener is behind a Linux `cfg` that only a Linux build compiles,
 which is why CI runs `make desktop-guestd` there as well.
 
-The `cfg(windows)` branches — most of the runtime manager, locald's job objects
-and named pipes, the Agent Host's npm shims — compile on no developer machine
-here. The msvc target cannot be cross-compiled from macOS because
-`libsqlite3-sys` needs a C toolchain, but the gnu target compiles the same
-branches, which is enough to lint them:
+The `cfg(windows)` branches are most of the runtime manager, locald's job
+objects and named pipes, and the Agent Host's npm shims.
+
+`make desktop-check-windows` covers locald and the runtime manager, using the
+msvc target directly — those two crates pull no C toolchain, so it needs
+nothing installed but the target and takes about fifteen seconds. That is the
+one to run habitually, and it is already part of `make desktop-check`.
+
+The **app crate** is the part that cannot be cross-compiled to msvc from macOS:
+`libsqlite3-sys` needs a C toolchain. The gnu target compiles the same `cfg`
+branches, so when you have changed the app crate's Windows paths, lint the whole
+workspace this way:
 
 ```bash
 brew install mingw-w64
@@ -110,8 +153,8 @@ CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
 rm -f binaries/*windows-gnu.exe
 ```
 
-The **Windows desktop build check** job in CI is the real gate; this is how to
-avoid learning about it from a red PR.
+The **Windows desktop build check** job in CI is the real gate for both; this is
+how to avoid learning about it from a red PR ninety minutes later.
 
 Build Desktop sidecars:
 

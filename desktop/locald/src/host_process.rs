@@ -3564,6 +3564,9 @@ mod tests {
     /// `manager_in` builds these without a supervisor (see
     /// `without_supervisor`), so nothing else is stepping the machine while
     /// this runs.
+    ///
+    /// Unix-gated because `process_status` is: it reaps, which needs waitpid.
+    #[cfg(unix)]
     fn reconcile_until(
         manager: &HostProcessManager,
         id: &str,
