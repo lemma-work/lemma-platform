@@ -16,11 +16,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
+    Message as MessageEntity,
     MessageRole,
 )
 from app.modules.agent.domain.value_objects import ACTIVE_AGENT_RUN_STATUSES
@@ -304,6 +305,73 @@ class ConversationRunQueriesMixin:
             )
         ).one()
         return bool(row.total) and not row.non_user
+
+    def _unclaimed_queued_messages(self, agent_run_id: UUID):
+        """Messages that arrived after this run started and nobody has read yet.
+
+        ``start`` stamps ``during_active_run`` on a message it appends to a run
+        already in flight, because that run loaded its history before the
+        message existed. ``steered_into_run`` is stamped back by whoever
+        delivered it into a model request, so the same predicate answers both
+        questions that matter: what to steer in next, and what is still owed an
+        answer once the run ends.
+
+        Compared as text rather than cast to boolean, because the column is free
+        JSONB -- a cast would raise on a row where something else wrote a
+        non-boolean under that key, and a miscount is the better failure.
+        """
+        return (
+            MessageModel.agent_run_id == agent_run_id,
+            MessageModel.role == MessageRole.USER.value,
+            MessageModel.message_metadata["during_active_run"].astext == "true",
+            MessageModel.message_metadata["steered_into_run"].astext.is_(None),
+        )
+
+    async def count_queued_user_messages(self, agent_run_id: UUID) -> int:
+        """How many of this run's queued messages are still unanswered.
+
+        Counted over ``ix_agent_message_run_sequence`` rather than loading the
+        run's messages, and asked once when a run ends -- so the answer is
+        normally zero and costs one indexed aggregate.
+        """
+        return int(
+            await self.session.scalar(
+                select(func.count()).where(
+                    *self._unclaimed_queued_messages(agent_run_id)
+                )
+            )
+            or 0
+        )
+
+    async def claim_queued_user_messages(
+        self, agent_run_id: UUID
+    ) -> list[MessageEntity]:
+        """Take the messages that arrived mid-run, and mark them taken.
+
+        Claimed and read in one statement so a message can be delivered into the
+        model exactly once. Whoever claims them owes the person an answer: if
+        the run then dies without replying, the row stays claimed and the
+        completion sweep will not pick it up either -- but the run is FAILED, so
+        the person is told, which is the recovery that was already there.
+
+        Returns them in the order they were appended, which the caller relies on
+        to keep several bubbles of one message in sequence.
+        """
+        stamped = MessageModel.message_metadata.op("||")(
+            func.jsonb_build_object("steered_into_run", str(agent_run_id))
+        )
+        rows = (
+            await self.session.execute(
+                update(MessageModel)
+                .where(*self._unclaimed_queued_messages(agent_run_id))
+                .values(message_metadata=stamped)
+                .returning(MessageModel)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        return sorted(
+            (row.to_entity() for row in rows), key=lambda message: message.sequence
+        )
 
     async def get_latest_agent_run_for_conversation(
         self,

@@ -36,6 +36,9 @@ from app.modules.agent.capabilities.instructed_toolset import (
 )
 from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
+from app.modules.agent.capabilities.pending_user_messages import (
+    PendingUserMessagesCapability,
+)
 from app.modules.agent.capabilities.open_notifications import (
     build_open_notifications_capability,
 )
@@ -238,6 +241,14 @@ async def _build_lemma_harness_tooling(
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     capabilities: list[object] = [_visible_capability(obj) for obj in core]
     capabilities.append(CurrentTimeCapability())
+
+    # Anything the person says while this run is working is steered into it
+    # rather than left for a run nobody starts. Appended first among the
+    # non-toolset capabilities because it contributes no instructions and so
+    # cannot disturb the cached prompt prefix below.
+    agent_run_id = getattr(ctx, "agent_run_id", None)
+    if agent_run_id is not None:
+        capabilities.append(PendingUserMessagesCapability(agent_run_id=agent_run_id))
 
     # Memory carries no toolset, so nothing above can have contributed its
     # contract; append it here from the flag the run-context builder resolved.

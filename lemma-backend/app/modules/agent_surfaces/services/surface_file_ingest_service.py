@@ -9,14 +9,16 @@ saved path via a NOTIFICATION message; to send a file back it uses the
 attach the bytes or send a link.
 
 The download itself is delegated to the platform adapter's ``download_attachment``
-(not an agent tool). Failures are isolated per file: a download/write error logs
-and is skipped — never blocking the agent run.
+(not an agent tool). Failures are isolated per file: a download/write error never
+blocks the agent run. It is still *reported* — one bad file comes back as an
+``AttachmentFailure`` rather than as nothing, because an agent told nothing
+answers as though the person had attached nothing.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,30 @@ class IngestedAttachment:
         )
 
 
+@dataclass(slots=True)
+class AttachmentFailure:
+    """An attachment the platform announced that never reached the datastore.
+
+    Kept rather than dropped because the agent is otherwise told nothing at all:
+    a photo whose download failed is indistinguishable, from inside the run,
+    from a message that had no photo on it -- so the agent answers as though the
+    person sent only text, and the person is left watching it ignore their file.
+    ``reason`` is written to be read by the agent, so it says what the person
+    can do about it rather than which call raised.
+    """
+
+    name: str
+    reason: str
+
+
+@dataclass(slots=True)
+class AttachmentIngest:
+    """What became of every attachment on one inbound message."""
+
+    saved: list[IngestedAttachment] = field(default_factory=list)
+    failed: list[AttachmentFailure] = field(default_factory=list)
+
+
 def _attachments_from_parsed(parsed: ParsedInboundSurfaceEvent) -> list[dict[str, Any]]:
     raw = (parsed.metadata or {}).get("attachments")
     if not isinstance(raw, list):
@@ -110,6 +136,16 @@ def _safe_file_name(name: str | None, mime: str | None = None) -> str:
 # handful of photos in a row is ordinary; a hundred identically-named ones is
 # not worth a hundred round trips.
 _NAME_ATTEMPTS = 25
+
+
+def _attachment_label(attachment: dict[str, Any]) -> str:
+    """What to call an attachment when telling someone it did not make it.
+
+    The parsed name, which on a chat surface is often only the type word
+    ("image", "photo") — that is still what the person sees in their own
+    transcript, so it is the name that identifies the file to them.
+    """
+    return str(attachment.get("name") or "").strip() or "the file"
 
 
 def _numbered(name: str, attempt: int) -> str:
@@ -146,22 +182,33 @@ class SurfaceFileIngestService:
         user_id: UUID,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
-    ) -> list[IngestedAttachment]:
+    ) -> AttachmentIngest:
         """Persist each inbound attachment to ``/me/{platform}``; return results.
 
         Runs in its own unit of work so file persistence is independent of the
-        conversation transaction. Returns one :class:`IngestedAttachment` per
-        saved file (best effort — failed files are skipped, not raised). Audio
-        files small enough to transcribe also carry their bytes so the caller can
-        transcribe without a re-download.
+        conversation transaction. Never raises for one bad file (best effort),
+        but a skipped file is now *reported* rather than dropped — see
+        :class:`AttachmentFailure`. Audio files small enough to transcribe also
+        carry their bytes so the caller can transcribe without a re-download.
         """
         attachments = _attachments_from_parsed(parsed)
         if not attachments:
-            return []
+            return AttachmentIngest()
         platform_key = platform.value if hasattr(platform, "value") else str(platform)
         adapter = self.adapter_registry.get(platform_key)
         if adapter is None:
-            return []
+            # Nothing can be downloaded without one, and the person still
+            # attached something — so this is every attachment failing, not
+            # nothing to do.
+            return AttachmentIngest(
+                failed=[
+                    AttachmentFailure(
+                        name=_attachment_label(item),
+                        reason="this surface cannot receive files",
+                    )
+                    for item in attachments
+                ]
+            )
 
         # Three phases, and the middle one is the reason for the shape: an
         # attachment is up to 50 MB over a 60s-timeout HTTP call, once per file.
@@ -174,7 +221,7 @@ class SurfaceFileIngestService:
             )
         token = set_current_context(auth_ctx)
         try:
-            saved = await self._ingest_all(
+            outcome = await self._ingest_all(
                 adapter=adapter,
                 pod_id=pod_id,
                 platform=platform_key,
@@ -186,7 +233,7 @@ class SurfaceFileIngestService:
             )
         finally:
             reset_current_context(token)
-        return saved
+        return outcome
 
     @staticmethod
     async def _store_in_own_transaction(
@@ -220,7 +267,7 @@ class SurfaceFileIngestService:
         ctx: Any,
         attachments: list[dict[str, Any]],
         store: StoreInTransaction,
-    ) -> list[IngestedAttachment]:
+    ) -> AttachmentIngest:
         """Core ingest loop — pure of DB/session setup so it is unit-testable
         with a fake adapter and file service.
 
@@ -232,7 +279,7 @@ class SurfaceFileIngestService:
         a boundary; it does not need to know what the boundary is.
         """
         directory = f"/me/{str(platform).lower()}"
-        saved: list[IngestedAttachment] = []
+        outcome = AttachmentIngest()
         for attachment in attachments:
             result = await self._ingest_one(
                 adapter=adapter,
@@ -245,9 +292,11 @@ class SurfaceFileIngestService:
                 attachment=attachment,
                 store=store,
             )
-            if result is not None:
-                saved.append(result)
-        return saved
+            if isinstance(result, IngestedAttachment):
+                outcome.saved.append(result)
+            else:
+                outcome.failed.append(result)
+        return outcome
 
     async def _ingest_one(
         self,
@@ -261,13 +310,20 @@ class SurfaceFileIngestService:
         directory: str,
         attachment: dict[str, Any],
         store: StoreInTransaction,
-    ) -> IngestedAttachment | None:
+    ) -> IngestedAttachment | AttachmentFailure:
+        label = _attachment_label(attachment)
         declared_size = attachment.get("size")
         if (
             isinstance(declared_size, int)
             and declared_size > INBOUND_ATTACHMENT_BYTE_CAP
         ):
-            return None
+            return AttachmentFailure(
+                name=label,
+                reason=(
+                    "it is larger than the "
+                    f"{INBOUND_ATTACHMENT_BYTE_CAP // (1024 * 1024)} MB limit"
+                ),
+            )
 
         # The download runs with no session open at all. It used to run inside
         # one that committed first to hand the connection back -- correct, but
@@ -288,7 +344,13 @@ class SurfaceFileIngestService:
                 platform=platform,
                 cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
             )
-            return None
+            return AttachmentFailure(
+                name=label,
+                reason=(
+                    "it is larger than the "
+                    f"{INBOUND_ATTACHMENT_BYTE_CAP // (1024 * 1024)} MB limit"
+                ),
+            )
         except Exception:
             # Skipping one attachment should not sink the whole message, so the
             # broad catch stays -- but it used to swallow the reason entirely
@@ -299,9 +361,9 @@ class SurfaceFileIngestService:
                 platform=platform,
                 exc_info=True,
             )
-            return None
+            return AttachmentFailure(name=label, reason="the download failed")
         if downloaded is None:
-            return None
+            return AttachmentFailure(name=label, reason="the download failed")
 
         content, name, mime = downloaded
         if len(content) > INBOUND_ATTACHMENT_BYTE_CAP:
@@ -314,7 +376,13 @@ class SurfaceFileIngestService:
                 size_bytes=len(content),
                 cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
             )
-            return None
+            return AttachmentFailure(
+                name=label,
+                reason=(
+                    "it is larger than the "
+                    f"{INBOUND_ATTACHMENT_BYTE_CAP // (1024 * 1024)} MB limit"
+                ),
+            )
 
         content_type = attachment.get("content_type")
         file_name = _safe_file_name(name, mime)
@@ -350,21 +418,24 @@ class SurfaceFileIngestService:
         try:
             for attempt in range(_NAME_ATTEMPTS):
                 try:
-                    return await store(_persist_as(_numbered(file_name, attempt)))
+                    stored = await store(_persist_as(_numbered(file_name, attempt)))
                 except DatastoreConflictError:
                     # That name is taken -- by an earlier photo from this same
                     # person, almost always. Try the next one.
                     continue
+                if stored is not None:
+                    return stored
+                break
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_name_unavailable.degraded",
                 platform=platform,
                 attempts=_NAME_ATTEMPTS,
             )
-            return None
+            return AttachmentFailure(name=label, reason="it could not be saved")
         except Exception:
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_store_failed.degraded",
                 platform=platform,
                 exc_info=True,
             )
-            return None
+            return AttachmentFailure(name=label, reason="it could not be saved")
