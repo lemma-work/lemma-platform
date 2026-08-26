@@ -21,7 +21,7 @@ from uuid import UUID
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.runtime_config import inject_runtime_config
+from app.core.runtime_config import app_api_url, inject_runtime_config
 from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
@@ -128,6 +128,9 @@ class AppStoragePhase:
                 app=inputs.app,
                 app_id=getattr(inputs, "app_id", None),
                 branding=inputs.branding,
+                # An app talks to the API through its own origin, so the
+                # session cookie is first-party. See APP_ORIGIN_API_URL.
+                api_url=app_api_url(),
             )
         return AppAssetDocument(
             content=content,

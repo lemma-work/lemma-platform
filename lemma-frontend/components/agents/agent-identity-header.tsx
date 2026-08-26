@@ -151,8 +151,7 @@ export function AgentIdentityHeader({
                         onChange={(agentRuntime) => onUpdate({ agent_runtime: agentRuntime })}
                         disabled={!canEdit}
                         compact
-                        title="Agent model"
-                        description="The model this agent runs on, unless overridden in a conversation."
+                        ariaLabel="Agent model"
                         scopeHint="Default for this agent"
                         manageHref={podModelsHref(podId)}
                     />
