@@ -14,6 +14,7 @@ from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
 from app.version import API_VERSION
+from app.core.api.session_cookie_scope import RefreshCookieScopeMiddleware
 from app.core.api.exception_handlers import register_exception_handlers
 from app.core.api.streaming_multipart import install_streaming_multipart_openapi
 from app.core.domain.errors import PayloadTooLargeError
@@ -688,6 +689,10 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "st-refresh-token",
         ],
     )
+
+    # Sits outside the auth routes so it sees their Set-Cookie headers. No-op
+    # unless apps call the API on their own origin; see the module docstring.
+    app.add_middleware(RefreshCookieScopeMiddleware)
 
     # Host-based app serving: rewrite `<slug>.<app_base_domain>` requests onto
     # the public app asset endpoint. Outermost so the slug is resolved before

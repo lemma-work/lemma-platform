@@ -2553,6 +2553,28 @@ fn should_preserve_inflight_phase(
         && !matches!(phase_key, "" | "boot" | "stopped" | "ready" | "error")
 }
 
+/// Drop out of the Dock, keeping the tray. macOS's "close means gone" contract.
+///
+/// `Accessory` also removes the app menu bar, which is correct: with no window
+/// on screen there is nothing for those menus to act on, and every verb they
+/// carry is in the tray menu too.
+#[cfg(target_os = "macos")]
+fn hide_from_dock(app: &AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
+/// Come back to the Dock. Called on every path that puts the window back on
+/// screen, because a visible window with no Dock icon cannot be ⌘-tabbed to and
+/// looks like a different app's stray panel.
+#[cfg(target_os = "macos")]
+fn restore_dock_presence(app: &AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+}
+
+/// No Dock to leave or return to off macOS; the tray behaviour is the same.
+#[cfg(not(target_os = "macos"))]
+fn restore_dock_presence(_app: &AppHandle) {}
+
 fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
     // Rebuilt rather than refused when it is missing. The window is destroyed
@@ -2572,6 +2594,9 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     window
         .navigate(target)
         .map_err(|error| format!("could not open {url}: {error}"))?;
+    // Before showing, so the icon and the window arrive together rather than
+    // the window appearing under a Dock that has not noticed yet.
+    restore_dock_presence(app);
     let _ = window.show();
     let _ = window.set_focus();
     Ok(())
@@ -2629,6 +2654,83 @@ fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     open_app_window(app, url)
 }
 
+/// The window label pod apps open into.
+///
+/// One label, reused: clicking "open in new window" five times should raise the
+/// same window five times, not leave five identical ones behind.
+const POD_APP_WINDOW: &str = "pod-app";
+
+/// Open a published pod app in its own window.
+///
+/// It used to navigate the *main* window, which replaced the whole Lemma UI
+/// with the app and left no way back -- no tab, no back button, nothing but
+/// quitting. A real window can be closed, moved and ⌘-tabbed, and Lemma is
+/// still there underneath when it goes.
+///
+/// Deliberately not covered by any file in `desktop/capabilities/`, which are
+/// scoped by webview label: this window runs user-authored code, so it gets no
+/// Tauri command surface at all. Adding a capability for this label would hand
+/// every pod app the IPC bridge.
+fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
+    if let Some(existing) = app.get_webview_window(POD_APP_WINDOW) {
+        existing
+            .navigate(target)
+            .map_err(|error| format!("could not open {url}: {error}"))?;
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    // Named from the host rather than the path: the slug is the app's identity
+    // and the path is wherever the user happens to be inside it.
+    let title = target
+        .host_str()
+        .and_then(|host| host.split('.').next())
+        .filter(|label| !label.is_empty())
+        .map(|label| label.replace('-', " "))
+        .unwrap_or_else(|| "Lemma app".to_owned());
+
+    WebviewWindowBuilder::new(app, POD_APP_WINDOW, WebviewUrl::External(target))
+        .title(title)
+        .inner_size(1180.0, 800.0)
+        .min_inner_size(420.0, 400.0)
+        .background_color(CANVAS_LIGHT)
+        .on_navigation({
+            let handle = app.clone();
+            move |url| {
+                // Held to the same gate as anywhere else, so an app cannot walk
+                // this window somewhere the main one would have refused.
+                let (mode, app_base, api_base) = navigation_context(&handle);
+                match navigation_disposition(url, &mode, &app_base, &api_base) {
+                    NavigationDisposition::Allow => true,
+                    NavigationDisposition::OpenExternal => {
+                        open_external(url.as_str());
+                        false
+                    }
+                    NavigationDisposition::Deny => false,
+                }
+            }
+        })
+        .on_new_window({
+            let handle = app.clone();
+            move |url, _features| {
+                // A popup from inside an app leaves the app: send it to the
+                // browser rather than growing a tree of chromeless windows.
+                let (mode, app_base, api_base) = navigation_context(&handle);
+                if navigation_disposition(&url, &mode, &app_base, &api_base)
+                    != NavigationDisposition::Deny
+                {
+                    open_external(url.as_str());
+                }
+                NewWindowResponse::Deny
+            }
+        })
+        .build()
+        .map_err(|error| format!("could not open the app window: {error}"))?;
+    Ok(())
+}
+
 fn show_splash(app: &AppHandle) {
     let _ = open_app_window(app, &native_asset_url("index.html"));
 }
@@ -2681,6 +2783,7 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
     }
     if let Some(webview) = app.get_webview("control") {
         if let Some(main) = app.get_webview_window("main") {
+            restore_dock_presence(app);
             let _ = main.show();
             let _ = main.set_focus();
         }
@@ -2713,6 +2816,7 @@ fn create_control_child(app: &AppHandle, page: &str) -> Result<(), String> {
     let main = app
         .get_webview_window("main")
         .ok_or("main window is not available")?;
+    restore_dock_presence(app);
     main.show().map_err(|error| error.to_string())?;
     let initial_script = format!(
         "{}window.__LEMMA_CONTROL_PAGE__={};",
@@ -4777,6 +4881,9 @@ fn build_main_window_at(
                     NewWindowDisposition::NavigateInApp => {
                         let _ = navigate_app_window(&handle, url.as_str());
                     }
+                    NewWindowDisposition::OpenAppWindow => {
+                        let _ = open_pod_app_window(&handle, url.as_str());
+                    }
                     NewWindowDisposition::OpenExternal => {
                         open_external(url.as_str());
                     }
@@ -5170,6 +5277,9 @@ enum NavigationDisposition {
 #[derive(Debug, PartialEq, Eq)]
 enum NewWindowDisposition {
     NavigateInApp,
+    /// A published pod app, which gets a window of its own rather than taking
+    /// over the one Lemma is running in.
+    OpenAppWindow,
     OpenExternal,
     Deny,
 }
@@ -5335,10 +5445,14 @@ fn new_window_disposition(
     } else if is_desktop_browser_auth_url(url) {
         NewWindowDisposition::OpenExternal
     } else if navigation_disposition(url, mode, app_base, api_base) == NavigationDisposition::Allow
-        && (url.scheme() == "tauri"
-            || same_origin(url, app_base)
-            || same_origin(url, api_base)
-            || owned_published_app(url, api_base))
+        && owned_published_app(url, api_base)
+    {
+        // Tested before the in-app branch, which used to claim these: an app
+        // opened "in a new window" replaced the workspace in the only window
+        // there was, and the user's way back was to quit.
+        NewWindowDisposition::OpenAppWindow
+    } else if navigation_disposition(url, mode, app_base, api_base) == NavigationDisposition::Allow
+        && (url.scheme() == "tauri" || same_origin(url, app_base) || same_origin(url, api_base))
     {
         NewWindowDisposition::NavigateInApp
     } else if navigation_disposition(url, mode, app_base, api_base) == NavigationDisposition::Allow
@@ -6739,16 +6853,44 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Hide to tray; services keep running. Record where the user
-                // was on the way out — closing the window is the most common
-                // way a session ends, and it is the last chance to read the
-                // route off a live webview.
-                // Hidden first. The route is still readable from a hidden
-                // webview, and the user asked for the window to go away now.
-                api.prevent_close();
-                let _ = window.hide();
-                remember_workspace_route(window.app_handle());
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // Only the window Lemma runs in hides to the tray. This
+                    // handler is registered on the builder, so it sees *every*
+                    // window: without the guard, closing a pod app window
+                    // prevented its own close and hid it, leaving an app the
+                    // user could neither see nor get rid of.
+                    if window.label() != "main" {
+                        return;
+                    }
+                    // Hide to tray; services keep running. Record where the user
+                    // was on the way out — closing the window is the most common
+                    // way a session ends, and it is the last chance to read the
+                    // route off a live webview.
+                    // Hidden first. The route is still readable from a hidden
+                    // webview, and the user asked for the window to go away now.
+                    api.prevent_close();
+                    let _ = window.hide();
+                    remember_workspace_route(window.app_handle());
+                    // ...and leave the Dock, which is the half that makes this
+                    // read as "closed" rather than "still open but blank".
+                    // A hidden window under a live Dock icon is what makes
+                    // people reach for Force Quit -- the icon says the app is
+                    // running and clicking it appears to do nothing. Docker
+                    // Desktop drops to the menu bar here and so do we; the tray
+                    // keeps an "Open Lemma" item, so there is still a way back.
+                    #[cfg(target_os = "macos")]
+                    hide_from_dock(window.app_handle());
+                }
+                // Belt and braces for the Dock icon. Every deliberate way back
+                // calls `restore_dock_presence`, but a window that has focus
+                // and no Dock icon is a state nothing should be able to reach,
+                // and this costs one idempotent call to guarantee it.
+                #[cfg(target_os = "macos")]
+                tauri::WindowEvent::Focused(true) if window.label() == "main" => {
+                    restore_dock_presence(window.app_handle());
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())
@@ -6765,6 +6907,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 if let Some(window) = app.get_webview_window("main") {
+                    restore_dock_presence(app);
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -8441,8 +8584,13 @@ mod tests {
         // handler lives inside the builder chain, so "the next fn" is hundreds
         // of lines of unrelated code that trivially satisfies any assertion.
         let close = {
+            // The handler comes before this test in the file, so the first
+            // match is the real one and not the copy of the needle sitting in
+            // this assertion. That is load-bearing: when this needle last went
+            // stale it matched *itself*, sliced a region of test source, and
+            // failed on an assertion about code it had never looked at.
             let start = source
-                .find("if let tauri::WindowEvent::CloseRequested { api, .. } = event {")
+                .find("tauri::WindowEvent::CloseRequested { api, .. } => {")
                 .expect("the close handler exists");
             let end = source[start..]
                 .find("\n        })")
@@ -8457,6 +8605,20 @@ mod tests {
         assert!(
             !close.contains("leave_nothing_running") && !close.contains("stop_impl"),
             "closing the window must leave the services running",
+        );
+        // Only the main window. This handler is registered on the builder, so
+        // it sees every window -- ungated, it hid pod app windows and refused
+        // to let them close, which is an app the user cannot get rid of.
+        assert!(
+            close.contains("window.label() != \"main\""),
+            "only the main window hides to the tray",
+        );
+        // And the Dock icon goes with it. A hidden window under a live Dock
+        // icon is what sends people to Force Quit: the icon says the app is
+        // running, and clicking it looks like it does nothing.
+        assert!(
+            close.contains("hide_from_dock"),
+            "closing leaves the Dock, keeping only the tray",
         );
 
         // Every exit does the opposite.
@@ -9365,6 +9527,61 @@ mod tests {
             new_window_disposition(&blank, "hosted", app_base, ""),
             NewWindowDisposition::Deny
         );
+    }
+
+    /// "Open in new window" on a pod app must not eat the window Lemma is in.
+    ///
+    /// It used to answer `NavigateInApp`, which pointed the *main* webview at
+    /// the app: the workspace, the sidebar and every tab were replaced by
+    /// somebody's dashboard, and nothing on screen led back. The only exit was
+    /// quitting the app.
+    #[test]
+    fn a_pod_app_opens_beside_lemma_rather_than_on_top_of_it() {
+        let api_base = "http://app.lemma.localhost:8711";
+        let app_base = "http://app.lemma.localhost:3000";
+        let pod_app = tauri::Url::parse("http://study-lab.apps.lemma.localhost:8711/").unwrap();
+
+        assert_eq!(
+            new_window_disposition(&pod_app, "local", app_base, api_base),
+            NewWindowDisposition::OpenAppWindow
+        );
+
+        // The workspace itself still belongs in the main window -- this is a
+        // rule about apps, not a general retreat from in-app navigation.
+        let workspace = tauri::Url::parse("http://app.lemma.localhost:3000/pods").unwrap();
+        assert_eq!(
+            new_window_disposition(&workspace, "local", app_base, api_base),
+            NewWindowDisposition::NavigateInApp
+        );
+
+        // And an app on a port that is not the API's is not our app: it must
+        // not inherit a window that skips the browser policy.
+        let impostor = tauri::Url::parse("http://study-lab.apps.lemma.localhost:9999/").unwrap();
+        assert_ne!(
+            new_window_disposition(&impostor, "local", app_base, api_base),
+            NewWindowDisposition::OpenAppWindow
+        );
+    }
+
+    /// The app window is deliberately outside every capability file.
+    ///
+    /// Capabilities are scoped by webview label, so a label with no entry gets
+    /// no Tauri command surface at all. That is the whole reason a pod app can
+    /// have a window: it runs user-authored code, and an entry here would hand
+    /// it the IPC bridge.
+    #[test]
+    fn the_pod_app_window_is_granted_no_commands() {
+        for (name, source) in [
+            ("main", include_str!("../capabilities/main.json")),
+            ("control", include_str!("../capabilities/control.json")),
+            ("workspace", include_str!("../capabilities/workspace.json")),
+        ] {
+            assert!(
+                !source.contains(POD_APP_WINDOW),
+                "{name}.json names the pod-app window, which would give \
+                 user-authored app code a command surface"
+            );
+        }
     }
 
     #[test]
