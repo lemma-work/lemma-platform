@@ -2553,14 +2553,27 @@ fn should_preserve_inflight_phase(
         && !matches!(phase_key, "" | "boot" | "stopped" | "ready" | "error")
 }
 
-/// Drop out of the Dock, keeping the tray. macOS's "close means gone" contract.
+/// Match the Dock icon to whether anything is actually on screen.
 ///
-/// `Accessory` also removes the app menu bar, which is correct: with no window
-/// on screen there is nothing for those menus to act on, and every verb they
-/// carry is in the tray menu too.
+/// `Accessory` removes the Dock tile and the app menu bar, which is right when
+/// the last window has gone: there is nothing for those menus to act on, and
+/// every verb they carry is in the tray menu too.
+///
+/// Conditional on *every* window, not just the main one. A pod app opens in a
+/// window of its own, so closing the workspace while an app is still up used to
+/// drop the Dock tile out from under a window that was still visible -- leaving
+/// it unreachable by ⌘-tab and belonging to an app the Dock said was not there.
 #[cfg(target_os = "macos")]
-fn hide_from_dock(app: &AppHandle) {
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+fn settle_dock_presence(app: &AppHandle) {
+    let anything_on_screen = app
+        .webview_windows()
+        .values()
+        .any(|window| window.is_visible().unwrap_or(false));
+    let _ = app.set_activation_policy(if anything_on_screen {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    });
 }
 
 /// Come back to the Dock. Called on every path that puts the window back on
@@ -2724,6 +2737,21 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
                     open_external(url.as_str());
                 }
                 NewWindowResponse::Deny
+            }
+        })
+        .on_download({
+            let handle = app.clone();
+            move |_webview, event| match event {
+                // Registering a policy at all is what makes downloads work:
+                // with no handler the webview cancels the navigation outright
+                // and says nothing, which is how Download buttons came to do
+                // nothing on macOS. An app that exports a CSV is an ordinary
+                // app, so this window needs the same policy the workspace has.
+                DownloadEvent::Requested { url, .. } => {
+                    let (mode, app_base, api_base) = navigation_context(&handle);
+                    download_disposition(&url, &mode, &app_base, &api_base)
+                }
+                _ => true,
             }
         })
         .build()
@@ -6880,7 +6908,14 @@ fn main() {
                     // Desktop drops to the menu bar here and so do we; the tray
                     // keeps an "Open Lemma" item, so there is still a way back.
                     #[cfg(target_os = "macos")]
-                    hide_from_dock(window.app_handle());
+                    settle_dock_presence(window.app_handle());
+                }
+                // A pod app window going away can be the last thing on screen,
+                // and closing it is an ordinary close -- so the Dock is settled
+                // here too rather than only when the workspace hides.
+                #[cfg(target_os = "macos")]
+                tauri::WindowEvent::Destroyed => {
+                    settle_dock_presence(window.app_handle());
                 }
                 // Belt and braces for the Dock icon. Every deliberate way back
                 // calls `restore_dock_presence`, but a window that has focus
@@ -8617,7 +8652,7 @@ mod tests {
         // icon is what sends people to Force Quit: the icon says the app is
         // running, and clicking it looks like it does nothing.
         assert!(
-            close.contains("hide_from_dock"),
+            close.contains("settle_dock_presence"),
             "closing leaves the Dock, keeping only the tray",
         );
 
@@ -9560,6 +9595,60 @@ mod tests {
         assert_ne!(
             new_window_disposition(&impostor, "local", app_base, api_base),
             NewWindowDisposition::OpenAppWindow
+        );
+    }
+
+    /// A pod app window is a window, not a viewer: it can download.
+    ///
+    /// Tauri cancels a download outright when a webview registers no policy,
+    /// silently -- the failure this repo already hit once, where every Download
+    /// button on macOS did nothing and said nothing. An app that exports a CSV
+    /// is an ordinary app, and it opens in this window now.
+    #[test]
+    fn the_pod_app_window_can_download_what_an_app_offers() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn open_pod_app_window(")
+            .expect("the app window builder exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        let builder = &source[start..end];
+        assert!(
+            builder.contains(".on_download("),
+            "the app window registers no download policy, so downloads from an \
+             app are cancelled with no error",
+        );
+        assert!(
+            builder.contains("download_disposition"),
+            "the app window must be held to the same download policy as the \
+             workspace, not a looser one of its own",
+        );
+    }
+
+    /// Closing the workspace must not strand a pod app window.
+    ///
+    /// Dropping to `Accessory` removes the Dock tile for the whole application,
+    /// so doing it while an app window is still on screen leaves that window
+    /// visible, un-⌘-tabbable, and owned by an app the Dock says is not running.
+    #[test]
+    fn the_dock_follows_what_is_actually_on_screen() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn settle_dock_presence(")
+            .expect("the dock helper exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        let helper = &source[start..end];
+        assert!(
+            helper.contains("webview_windows()") && helper.contains("is_visible"),
+            "dock presence must be decided by what is visible, not by the \
+             workspace window alone",
+        );
+        assert!(
+            helper.contains("ActivationPolicy::Regular"),
+            "something on screen has to put the Dock icon back",
         );
     }
 

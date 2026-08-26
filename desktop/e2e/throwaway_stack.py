@@ -31,6 +31,12 @@ guest.
 is already up; run `down` first.
 """
 
+# Runs under whatever `python3` is on PATH -- on macOS that is Xcode's 3.9, not
+# the backend's 3.14. So: no PEP 758 unparenthesised `except A, B:`, no match
+# statements, nothing newer than 3.9. Do not run `ruff format` over this file
+# with the backend's config; it targets 3.14 and rewrites the except clauses
+# into syntax this interpreter cannot parse.
+
 from __future__ import annotations
 
 import argparse
@@ -40,6 +46,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -127,8 +134,7 @@ def _supertokens_url(host: str) -> str:
         except (urllib.error.URLError, OSError):
             continue
     fail(
-        f"no SuperTokens core answered on {host}. Is the install past first-run "
-        "setup?"
+        f"no SuperTokens core answered on {host}. Is the install past first-run setup?"
     )
 
 
@@ -230,7 +236,9 @@ def render_environment(root: Path, pack: Path, release: Path) -> dict:
     bridge = INSTALLED_APP / "Contents" / "MacOS" / "lemma-runtime"
     for path in (vz, bridge):
         if not path.is_file():
-            fail(f"{path} is missing — this borrows the installed app's signed sidecars")
+            fail(
+                f"{path} is missing — this borrows the installed app's signed sidecars"
+            )
 
     locald_root = root / "locald"
     locald_root.mkdir(parents=True, exist_ok=True)
@@ -333,8 +341,9 @@ def drop_databases(host: str, password: str, suffix: str) -> None:
 # ── the backend ───────────────────────────────────────────────────────────────
 
 
-def backend_environment(manifest: dict, root: Path, infra: dict,
-                        app_db: str, data_db: str) -> dict:
+def backend_environment(
+    manifest: dict, root: Path, infra: dict, app_db: str, data_db: str
+) -> dict:
     """locald's own environment, with only borrowed infrastructure redirected.
 
     Everything this checkout's locald decided is kept exactly as rendered --
@@ -357,7 +366,9 @@ def backend_environment(manifest: dict, root: Path, infra: dict,
     # each other's consumer groups and steal each other's events, which would
     # make this harness break the very install it is borrowing from. A numbered
     # database is a full keyspace of its own, streams included.
-    env["REDIS_URL"] = f"redis://:{infra['redis_password']}@{host}:6379/{THROWAWAY_REDIS_DB}"
+    env["REDIS_URL"] = (
+        f"redis://:{infra['redis_password']}@{host}:6379/{THROWAWAY_REDIS_DB}"
+    )
     env["SUPERTOKENS_CORE_URL"] = infra["supertokens_url"]
 
     # Any other name for the same things, so a key added later cannot quietly
@@ -405,8 +416,7 @@ def run_migrations(pack: Path, env: dict, root: Path) -> None:
     (root / "migrations.log").write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         fail(
-            "migrations failed; see "
-            f"{root / 'migrations.log'}\n{result.stderr[-2000:]}"
+            f"migrations failed; see {root / 'migrations.log'}\n{result.stderr[-2000:]}"
         )
 
 
@@ -416,8 +426,16 @@ def start_backend(pack: Path, env: dict, root: Path, port: int) -> subprocess.Po
     output = (root / "backend.log").open("w")
     process = subprocess.Popen(
         [
-            str(python), "-m", "uvicorn", "local_app:app",
-            "--host", "127.0.0.1", "--port", str(port), "--ws", "websockets-sansio",
+            str(python),
+            "-m",
+            "uvicorn",
+            "local_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--ws",
+            "websockets-sansio",
         ],
         cwd=str(pack / "backend"),
         env={**env, "PATH": os.environ.get("PATH", "")},
@@ -429,7 +447,9 @@ def start_backend(pack: Path, env: dict, root: Path, port: int) -> subprocess.Po
     return process
 
 
-def wait_ready(url: str, process: subprocess.Popen, root: Path, seconds: int = 180) -> None:
+def wait_ready(
+    url: str, process: subprocess.Popen, root: Path, seconds: int = 180
+) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -539,11 +559,41 @@ def command_down(root: Path) -> None:
             "drop them by hand or re-run `down` once the guest is back."
         )
 
+    _remove_throwaway_root(root)
+
+
+def _remove_throwaway_root(root: Path) -> None:
+    """Delete the throwaway root, and refuse anything that is not one.
+
+    Both conditions, not either: under the system temp directory *and* named
+    for this harness. The first spelling of this guard was `not under /tmp and
+    not named ...`, which refuses only when both fail -- so it would have
+    removed any path under /tmp, or any directory whose name merely contained
+    the marker. It also compared against "/tmp" while macOS resolves that to
+    "/private/tmp", so the check that actually held was the loose one.
+
+    Paths are compared after `resolve()` so a symlink cannot point this
+    somewhere else.
+    """
     resolved = root.resolve()
-    if not str(resolved).startswith("/tmp/") and "lemma-desktop-e2e" not in resolved.name:
-        fail(f"refusing to remove {resolved}, which is not a throwaway root")
+    # Both spellings of "temporary" on macOS: `gettempdir()` follows $TMPDIR to
+    # a per-user folder, while /tmp is the conventional one this defaults to and
+    # resolves to /private/tmp. Checking only the first refuses this harness's
+    # own root.
+    temporary = {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()}
+    inside_temp = any(resolved.is_relative_to(candidate) for candidate in temporary)
+    named_for_us = resolved.name.startswith(DEFAULT_ROOT.name)
+    if not (inside_temp and named_for_us):
+        fail(
+            f"refusing to remove {resolved}: a throwaway root has to be under "
+            f"one of {sorted(str(t) for t in temporary)} and named "
+            f"{DEFAULT_ROOT.name}*"
+        )
     shutil.rmtree(resolved, ignore_errors=True)
-    log(f"removed {resolved}")
+    if resolved.exists():
+        log(f"warning: {resolved} could not be fully removed")
+    else:
+        log(f"removed {resolved}")
 
 
 def main() -> int:
