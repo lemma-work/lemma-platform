@@ -306,6 +306,10 @@ def _user_prompt_text(msg: object) -> str:
         _quoted_message_block(metadata),
         _channel_context_block(metadata),
         *_shared_files_blocks(metadata, platform),
+        # Its own piece rather than part of the block above, because the two are
+        # not alternatives: a message can carry three photos of which one
+        # arrived, and the saved-paths block returns early once it has any.
+        _failed_files_block(metadata),
         _email_reply_block(platform),
     ]
     if "state" in metadata:
@@ -399,6 +403,33 @@ def _transcribed_voice_paths(metadata: dict) -> set[str]:
         for item in provenance
         if isinstance(item, dict) and item.get("path") and not item.get("failed")
     }
+
+
+def _failed_files_block(metadata: dict) -> str | None:
+    """What the person attached that never reached us, and why.
+
+    Without this the run cannot tell an unattached message from one whose photo
+    failed to download, so it answers the text alone and reads as though it
+    ignored the file. Stated as fact, not as an instruction: whether to ask for
+    a resend depends on whether the file mattered, which the agent can see and
+    this layer cannot.
+    """
+    failed = metadata.get("failed_files")
+    if not isinstance(failed, list) or not failed:
+        return None
+    lines = []
+    for item in failed:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "a file").strip()
+        reason = str(item.get("reason") or "it could not be received").strip()
+        lines.append(f"- {name} — {reason}")
+    if not lines:
+        return None
+    return (
+        "The person attached the following, and it did NOT reach you. You "
+        "cannot open or read it:\n" + "\n".join(lines)
+    )
 
 
 def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:

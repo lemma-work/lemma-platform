@@ -19,6 +19,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.adapter import (
 )
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppMessageParser,
+    split_whatsapp_deliveries,
 )
 from app.modules.agent_surfaces.platforms.whatsapp import (
     client as whatsapp_client_module,
@@ -73,6 +74,127 @@ def _whatsapp_text_payload() -> dict:
             }
         ],
     }
+
+
+def _whatsapp_message_payload(message: dict) -> dict:
+    payload = _whatsapp_text_payload()
+    payload["entry"][0]["changes"][0]["value"]["messages"] = [message]
+    return payload
+
+
+def test_a_batched_whatsapp_delivery_yields_every_message():
+    """``entry``/``changes``/``messages`` are all arrays, and the parser reads
+    index 0 of each. A delivery of three used to become one, silently."""
+    payload = _whatsapp_text_payload()
+    payload["entry"][0]["changes"][0]["value"]["messages"] = [
+        {"from": "15550555555", "id": "w1", "type": "text", "text": {"body": "one"}},
+        {"from": "15550555555", "id": "w2", "type": "image", "image": {"id": "m1"}},
+        {"from": "15550555555", "id": "w3", "type": "text", "text": {"body": "three"}},
+    ]
+
+    parts = split_whatsapp_deliveries(payload)
+    parser = WhatsAppMessageParser()
+    events = [parser.parse(part) for part in parts]
+
+    assert [event.external_message_id for event in events] == ["w1", "w2", "w3"]
+    assert [event.message_text for event in events] == ["one", "image", "three"]
+    # Each part keeps the envelope, so every one routes exactly as a
+    # single-message delivery would.
+    assert {event.external_channel_id for event in events} == {"1234567890"}
+    assert all(event.sender_display_name == "Test User" for event in events)
+
+
+def test_an_ordinary_single_message_delivery_is_handed_back_untouched():
+    payload = _whatsapp_text_payload()
+    parts = split_whatsapp_deliveries(payload)
+
+    assert len(parts) == 1
+    assert parts[0] is payload  # not a rebuilt copy
+
+
+def test_a_delivery_carrying_no_message_still_reaches_the_parser():
+    """A status callback has no ``messages``; the parser answers None for it,
+    and returning nothing here would be a different behaviour, not a smaller
+    one."""
+    payload = {
+        "entry": [
+            {"id": "waba-001", "changes": [{"value": {"statuses": [{"id": "x"}]}}]}
+        ]
+    }
+
+    assert split_whatsapp_deliveries(payload) == [payload]
+    assert WhatsAppMessageParser().parse(payload) is None
+
+
+def test_whatsapp_undeliverable_message_is_not_read_as_the_persons_words():
+    """WhatsApp answers what it cannot hand over with ``type: unsupported``.
+
+    Parsed as ordinary media that produced the bare word "unsupported" as the
+    message text, and the agent answered it as though the person had typed it.
+    """
+    parser = WhatsAppMessageParser()
+    event = parser.parse(
+        _whatsapp_message_payload(
+            {
+                "from": "15550555555",
+                "id": "wamid-test-002",
+                "type": "unsupported",
+                "errors": [
+                    {
+                        "code": 131051,
+                        "title": "Message type is not currently supported",
+                    }
+                ],
+                "timestamp": "1700000000",
+            }
+        )
+    )
+
+    assert event is not None
+    assert event.message_text != "unsupported"
+    assert "System notice" in event.message_text
+    assert "Message type is not currently supported" in event.message_text
+    # Nothing to download: there is no media id behind an error report.
+    assert event.metadata["attachments"] == []
+    assert event.metadata["undeliverable"] is True
+
+
+def test_whatsapp_undeliverable_message_without_a_stated_reason():
+    parser = WhatsAppMessageParser()
+    event = parser.parse(
+        _whatsapp_message_payload(
+            {
+                "from": "15550555555",
+                "id": "wamid-test-003",
+                "type": "unsupported",
+                "timestamp": "1700000000",
+            }
+        )
+    )
+
+    assert event is not None
+    assert "could not deliver" in event.message_text
+
+
+def test_whatsapp_captioned_photo_is_still_read_as_content():
+    """The type-name fallback stays for media genuinely sent without a caption."""
+    parser = WhatsAppMessageParser()
+    event = parser.parse(
+        _whatsapp_message_payload(
+            {
+                "from": "15550555555",
+                "id": "wamid-test-004",
+                "type": "image",
+                "image": {"id": "media-1", "mime_type": "image/jpeg"},
+                "timestamp": "1700000000",
+            }
+        )
+    )
+
+    assert event is not None
+    assert event.message_text == "image"
+    assert event.metadata["undeliverable"] is False
+    assert event.metadata["attachments"][0]["id"] == "media-1"
 
 
 def test_whatsapp_parse_text_message():
