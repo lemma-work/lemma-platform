@@ -23,6 +23,7 @@ import {
     isDiscoveringHarnesses,
     HARNESS_DISCOVERY_WINDOW_MS,
     resolveDefaultAgentRuntime,
+    resolvePodDefaultRuntime,
     resolveRuntimeModelName,
     runtimeAvailabilityLabel,
 } from './agent-runtime-helpers';
@@ -129,6 +130,43 @@ describe('resolveDefaultAgentRuntime', () => {
 
     it('resolves nothing while the catalog is still loading', () => {
         expect(resolveDefaultAgentRuntime(undefined, 'system:lemma')).toBeNull();
+    });
+});
+
+describe('resolvePodDefaultRuntime', () => {
+    // The regression: the pod default is written as a full `default_runtime`
+    // and mirrored into `default_profile_id` *without* the model, so a reader
+    // that only saw the mirror named the profile's default model instead of the
+    // one the pod is actually set to. The agent page's model chip did exactly
+    // that, and every agent inheriting the pod default read "Currently GPT-5.1"
+    // while its runs went to gpt-5.1-mini.
+    it('keeps the model the pod pinned, not the profile default', () => {
+        expect(resolvePodDefaultRuntime(
+            {
+                default_runtime: { profile_id: 'system:lemma', model_name: 'openai/gpt-5.1-mini' },
+                default_profile_id: 'system:lemma',
+            },
+            catalog,
+        )).toEqual({ profile_id: 'system:lemma', model_name: 'openai/gpt-5.1-mini' });
+    });
+
+    it('names the model behind a stored runtime that pins only a profile', () => {
+        expect(resolvePodDefaultRuntime(
+            { default_runtime: { profile_id: 'org:byo' }, default_profile_id: 'org:byo' },
+            catalog,
+        )).toEqual({ profile_id: 'org:byo', model_name: 'claude-sonnet-5' });
+    });
+
+    it('falls back to the legacy mirror when there is no stored runtime', () => {
+        expect(resolvePodDefaultRuntime({ default_profile_id: 'org:byo' }, catalog))
+            .toEqual({ profile_id: 'org:byo', model_name: 'claude-sonnet-5' });
+    });
+
+    it('falls back to the catalog default for a pod that set nothing', () => {
+        expect(resolvePodDefaultRuntime(undefined, catalog))
+            .toEqual({ profile_id: 'system:lemma', model_name: 'openai/gpt-5.1' });
+        expect(resolvePodDefaultRuntime({}, catalog))
+            .toEqual({ profile_id: 'system:lemma', model_name: 'openai/gpt-5.1' });
     });
 });
 

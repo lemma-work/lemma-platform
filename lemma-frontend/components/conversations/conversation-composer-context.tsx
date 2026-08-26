@@ -118,8 +118,7 @@ export function ConversationComposerContext({
                 className="min-w-0 [&>button]:max-w-28 sm:[&>button]:max-w-52"
                 triggerClassName="text-xs font-normal"
                 triggerLabelClassName="text-xs font-normal"
-                title="Choose a conversation model"
-                description="Pick the model before this conversation starts."
+                ariaLabel="Conversation model"
             />
 
             {canWrite ? (

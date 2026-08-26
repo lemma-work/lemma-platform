@@ -10,7 +10,7 @@ import {
 } from '@/lib/seo/structured-data';
 
 export const metadata: Metadata = {
-    title: 'Lemma — the runtime for agent-built software',
+    title: 'Lemma, the runtime for agent-built software',
     description: SITE_DESCRIPTION,
     robots: {
         index: true,

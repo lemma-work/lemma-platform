@@ -9,17 +9,17 @@ export const surfaceModes = [
     logos: [{ src: "/landing-page/app-logos/slack.svg", label: "Slack" }],
     headlineLead: "The decision happens",
     headlineTail: "in the channel.",
-    body: "The pod posts what needs a call, with the evidence attached. Someone answers in #sales, and that answer is the state change — the lead routes, the record updates, the decision is logged.",
+    body: "The pod posts what needs a call, with the evidence attached. Someone answers in #sales, and that answer is the state change: the lead routes, the record updates, the decision is logged.",
   },
   {
     key: "chatgpt",
-    effect: ["refunds · 5 rows read", "refund.approve · blocked, needs a person", "nothing written it lacked rights to"],
+    effect: ["refunds · 5 rows read", "refund.approve · blocked, needs a person", "writes · inside its grants"],
     label: "ChatGPT",
     caption: "Ask your pod",
     logos: [{ src: "/landing-page/app-logos/chatgpt.svg", label: "ChatGPT" }],
     headlineLead: "Your pod,",
     headlineTail: "inside ChatGPT.",
-    body: "Connect the pod and ChatGPT can query your real tables, run your workflows, and act through your connectors — under the same permissions as everyone else. It cannot read what it was not granted.",
+    body: "Connect the pod and ChatGPT can query your real tables, run your workflows, and act through your connectors, under the same permissions as everyone else. It reads exactly what you granted it.",
   },
   {
     key: "claude",
@@ -29,7 +29,7 @@ export const surfaceModes = [
     logos: [{ src: "/landing-page/app-logos/claude.svg", label: "Claude" }],
     headlineLead: "Claude works",
     headlineTail: "the same pod.",
-    body: "Not a copy of your data in a chat window. Claude reads and writes the pod's records directly, and stops at the approval gates you set — the same ones that apply to your team.",
+    body: "Claude reads and writes the pod's records directly, and stops at the approval gates you set, the same ones that apply to your team.",
   },
   {
     key: "telegram",
@@ -39,7 +39,7 @@ export const surfaceModes = [
     logos: [{ src: "/landing-page/app-logos/telegram.svg", label: "Telegram" }],
     headlineLead: "Send a message,",
     headlineTail: "get a state change.",
-    body: "A note, a photo, a voice message. It lands as a structured record, the workflow picks it up, and you get back the exact thing that changed — not just an acknowledgement.",
+    body: "A note, a photo, a voice message. It lands as a structured record, the workflow picks it up, and you get back the exact thing that changed.",
   },
   {
     key: "whatsapp",
@@ -48,28 +48,21 @@ export const surfaceModes = [
     caption: "Field updates",
     logos: [{ src: "/landing-page/app-logos/whatsapp.svg", label: "WhatsApp" }],
     headlineLead: "Work from the field,",
-    headlineTail: "without losing the thread.",
+    headlineTail: "and the record keeps up.",
     body: "Updates, handoffs, and confirmations from a phone. Ownership, history, and records stay clean in the pod while the conversation stays where your people already are.",
   },
   {
     key: "email",
     effect: ["tickets · draft written", "customers · history read", "send · waiting on you"],
-    label: "Gmail",
+    label: "Email",
     caption: "Inbox as input",
-    logos: [{ src: "/landing-page/app-logos/gmail.svg", label: "Gmail" }],
+    logos: [
+      { src: "/landing-page/app-logos/gmail.svg", label: "Gmail" },
+      { src: "/landing-page/app-logos/outlook.svg", label: "Outlook" },
+    ],
     headlineLead: "Your inbox",
     headlineTail: "becomes an input.",
-    body: "Mail arrives and the pod reads it: classify the request, pull the customer's history, draft the reply. It waits for you before sending, and the record is current either way.",
-  },
-  {
-    key: "outlook",
-    effect: ["requests · classified", "policy · checked", "owner · notified for sign-off"],
-    label: "Outlook",
-    caption: "Mailbox triage",
-    logos: [{ src: "/landing-page/app-logos/outlook.svg", label: "Outlook" }],
-    headlineLead: "Mailbox threads,",
-    headlineTail: "turned into work.",
-    body: "Every thread becomes something reviewable: what was asked, what the policy says, what the answer should be, and who has to sign off before it goes out.",
+    body: "Mail arrives and the pod reads it: classify the request, pull the customer's history, check the policy, draft the reply. It waits for a person before sending, and the record is current either way.",
   },
   {
     key: "teams",
@@ -91,7 +84,7 @@ export const surfaceModes = [
     logos: [{ src: "/landing-page/app-logos/api.svg", label: "API" }],
     headlineLead: "Your own front end,",
     headlineTail: "same system underneath.",
-    body: "Your UI, a webhook, or a backend call as the entry point. The same agents, workflows, records, and approvals run behind it — no glue code to maintain.",
+    body: "Your UI, a webhook, or a backend call as the entry point. The same agents, workflows, records, and approvals run behind it, with the permissions already enforced.",
   },
 ] as const;
 
@@ -101,8 +94,8 @@ export const githubUrl = GITHUB_REPO_URL;
 
 export const terminalScript = [
   { command: "uv tool install lemma-terminal", output: [] },
-  { command: "lemma pods create support-ops", output: [] },
-  { command: "lemma pods import ./support-inbox", output: [] },
+  { command: "lemma pod create support-ops", output: [] },
+  { command: "lemma pod import ./support-inbox", output: [] },
   {
     command: "lemma apps deploy support-ops",
     output: [
