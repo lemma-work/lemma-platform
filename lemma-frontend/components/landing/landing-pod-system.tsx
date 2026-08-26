@@ -95,7 +95,8 @@ function DataDetail() {
         </div>
         <footer className="lp-pd-note">
           Full-text searchable, permission-scoped, and read by agents alongside
-          the tables — this is where policy lives, not in a prompt.
+          the tables. This is where policy lives: versioned, editable, and read
+          at run time.
         </footer>
       </div>
     </div>
@@ -128,12 +129,12 @@ function FunctionsDetail() {
 
       <div className="lp-pd-panel">
         <header>
-          <strong>Why not let the agent decide?</strong>
+          <strong>The predictable half</strong>
         </header>
         <ul className="lp-pd-list">
           <li>
             <i className="is-blue" />
-            Same input, same output — every time, with no model in the path.
+            Same input, same output, every time. Plain code, end to end.
           </li>
           <li>
             <i className="is-blue" />
@@ -198,7 +199,7 @@ function AgentsDetail() {
         </div>
         <footer className="lp-pd-note">
           It pauses at <b>approve</b>{" "}
-          and resumes on a person&apos;s decision — days later if that is how
+          and resumes on a person&apos;s decision, days later if that is how
           long it takes. Triggered by a table event, schedule, webhook, message,
           or the API.
         </footer>
@@ -237,8 +238,8 @@ function AppsDetail() {
           </div>
         </div>
         <footer className="lp-pd-note">
-          Built on the same APIs the agents use — so the app is never showing a
-          stale copy of what an agent just did.
+          Built on the same APIs the agents use. An agent writes, and the app
+          is already showing it.
         </footer>
       </div>
 
@@ -262,8 +263,8 @@ function AppsDetail() {
           ))}
         </div>
         <footer className="lp-pd-note">
-          Each one resolves who is asking and what they may ask for. None of
-          them holds the data.
+          Each one resolves who is asking and what they may ask for. The pod
+          holds the data.
         </footer>
       </div>
     </div>
@@ -323,8 +324,8 @@ function BaseDetail() {
           </p>
         </div>
         <footer className="lp-pd-note">
-          Every connection shows the account, its access, and what uses it — so
-          &quot;the agent can email customers&quot; is a setting, not a hope.
+          Every connection shows the account, its access, and what uses it, so
+          &quot;the agent can email customers&quot; is a setting you can see.
         </footer>
       </div>
     </div>
