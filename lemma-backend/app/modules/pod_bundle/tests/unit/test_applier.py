@@ -303,6 +303,20 @@ def _patch_grant_layer(monkeypatch) -> dict:
     monkeypatch.setattr(
         "app.core.authorization.grants.replace_grantee_resource_grants", _replace
     )
+
+    # The `/memory` folder and grant the MEMORY toolset implies. A separate
+    # collaborator with its own datastore call, recorded here rather than run:
+    # the stubs above hand back sentinel strings, and the real one reads
+    # `.resource_id` off what `normalize` returns.
+    async def _sync_memory(uow, *, pod_id, agent_id, toolsets, ctx, created_by_user_id):
+        calls.setdefault("memory_sync", []).append(
+            {"agent_id": agent_id, "toolsets": list(toolsets or [])}
+        )
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.agent_memory_grant.sync_memory_folder_grant",
+        _sync_memory,
+    )
     return calls
 
 
@@ -413,6 +427,94 @@ class FakeFunctionService:
         self, pod_id, name, user_id, *, include_code=True, ctx=None, **kwargs
     ):
         return self._Function()
+
+
+async def test_an_imported_agent_gets_the_memory_folder_its_toolset_needs(
+    tmp_path, monkeypatch
+):
+    """Creating an agent derives the `/memory` grant, as the controller does.
+
+    `sync_memory_folder_grant` used to be called from the agent HTTP controller
+    and nowhere else, so an agent created straight through the service -- which
+    is what this applier does -- got MEMORY in its toolsets and no folder to
+    write to.
+
+    Silent until MEMORY became a default for new agents (#476), and then fatal:
+    exporting a pod and importing it back died on
+    `400: Unknown resource name(s): folder:/memory`, reported only as "Apply
+    failed due to a transient error." The e2e that caught it is `workspace`
+    marked and runs in the protected lane, i.e. weekly; this asserts the same
+    thing on every pull request.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "reporter" / "reporter.json",
+        {"name": "reporter", "instruction": "Report.", "toolsets": ["MEMORY"]},
+    )
+
+    class _CreatingAgentService:
+        """A pod that does not have this agent yet -- an import's own case."""
+
+        async def get_agent_by_name(self, *, pod_id, name, ctx=None):
+            return None
+
+        async def create_agent(self, **kwargs):
+            return FakeAgentService._Agent()
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources.get_agent_service",
+        lambda uow: _CreatingAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT, "reporter", action=StepAction.CREATE)
+    )
+
+    assert calls.get("memory_sync"), "the agent step never derived the memory grant"
+    assert calls["memory_sync"][-1]["toolsets"] == ["MEMORY"]
+
+
+async def test_the_grants_step_puts_the_derived_memory_grant_back(
+    tmp_path, monkeypatch
+):
+    """The bundle's grant list replaces every grant the agent holds.
+
+    So a derived grant applied at create time is the first thing the deferred
+    step wipes. The controller has the same ordering problem on its permissions
+    endpoint and solves it the same way -- re-derive afterwards, from the agent
+    as saved rather than from the request.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "function",
+                        "resource_name": "triage",
+                        "permission_ids": ["function.execute"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    assert calls["replace"]["grants"] == ["NORMALIZED"]
+    assert calls.get("memory_sync"), (
+        "the grants step replaced every grant without re-deriving memory's"
+    )
 
 
 async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):

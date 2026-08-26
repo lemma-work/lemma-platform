@@ -153,18 +153,31 @@ async def _process_surface_webhook(
         if await handler.try_handle_interaction(ingress_request):
             return
 
-        context = await handler.prepare_ingress(ingress_request)
+        # One delivery can carry more than one message on a platform that
+        # batches; every other platform hands back the request unchanged.
+        contexts = [
+            (index, await handler.prepare_ingress(part))
+            for index, part in enumerate(
+                handler.split_webhook_deliveries(ingress_request)
+            )
+        ]
 
-    if not context:
-        return
-
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-            mode="json"
-        ),
-        _job_id=f"surface-event:{event.event_id}",
-    )
+    for index, context in contexts:
+        if not context:
+            continue
+        await job_queue.enqueue(
+            "process_surface_message",
+            payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+                mode="json"
+            ),
+            # The first part keeps the bare id, so the dedup key for an ordinary
+            # single-message delivery is byte-identical to what it was.
+            _job_id=(
+                f"surface-event:{event.event_id}"
+                if index == 0
+                else f"surface-event:{event.event_id}:{index}"
+            ),
+        )
 
 
 @reliable_redis_stream_subscriber(

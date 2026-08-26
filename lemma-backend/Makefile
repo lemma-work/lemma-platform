@@ -57,7 +57,9 @@ BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 # key and immutable profile IDs are read from lemma-backend/.env or the
 # environment.
 FUNCTION_BENCH_CONCURRENCY ?= 5
-FUNCTION_BENCH_INVOCATIONS ?= 5
+# 20, not 5: `_percentile` puts p95 at `(n - 1) * 0.95`, so five samples make
+# the "p95" budgets the slowest of five. See load_tests/function_execution.py.
+FUNCTION_BENCH_INVOCATIONS ?= 20
 FUNCTION_BENCH_BATCH_ROWS ?= 1000
 FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
