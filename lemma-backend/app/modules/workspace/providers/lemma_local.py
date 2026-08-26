@@ -260,6 +260,11 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         wait out. Only ever reached for a *running* instance -- a stopped one
         is rebuilt by the service, because nothing here could start it.
         """
+        # Imported here rather than at module scope, matching the workspace
+        # branch below: `sandbox_runtime.errors` pulls in the in-sandbox runtime
+        # package, which must not be a hard import of the provider.
+        from sandbox_runtime.errors import SandboxUnavailable
+
         if kind is not SandboxKind.WORKSPACE:
             # A function sandbox is confirmed through the guest's own view.
             #
@@ -297,8 +302,6 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         # ensure takes the identical branch -- which is why a stopped container
         # produced four byte-identical failures in a row instead of being
         # rebuilt on the second.
-        from sandbox_runtime.errors import SandboxUnavailable
-
         try:
             client = await self._runtime_client(
                 instance.provider_id, deadline_at=deadline_at
