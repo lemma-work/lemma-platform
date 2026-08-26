@@ -261,6 +261,32 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         is rebuilt by the service, because nothing here could start it.
         """
         if kind is not SandboxKind.WORKSPACE:
+            # A function sandbox is confirmed through the guest's own view.
+            #
+            # This used to return here, which made `verify_ready=True` from the
+            # function resolver verify nothing at all: a sandbox that had been
+            # created but was not yet serving was reported ready, and the
+            # failure surfaced later as a runtime endpoint that never answered.
+            # Nothing caught it, because none of the real-guest tests exercise a
+            # FUNCTION sandbox -- they are all workspaces.
+            #
+            # Checked through `inspect`, which is a short status call, rather
+            # than by holding the guest's single control channel open: that
+            # channel serves one request at a time, and a long wait on it stalls
+            # every other sandbox operation on the machine.
+            snapshot = await self._find(instance.provider_id, deadline_at=deadline_at)
+            if snapshot is None:
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} disappeared before "
+                    "it was ready"
+                )
+            status = snapshot.get("status")
+            serving = bool(status.get("ready")) if isinstance(status, dict) else False
+            if not serving:
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} is not serving yet "
+                    f"(state {_state_of(snapshot)})"
+                )
             return
         # Converted here, not only in `runtime_scope`. `SandboxUnavailable` is
         # how this codebase spells "worth another go", and every retry the
@@ -556,6 +582,14 @@ def _app(name: str, port: int, startup: str, exposure: str) -> dict[str, object]
             else "manager_api_key"
         ),
     }
+
+
+def _state_of(snapshot: dict[str, Any]) -> str:
+    """The guest's own word for what this sandbox is doing, for error text."""
+    status = snapshot.get("status")
+    if isinstance(status, dict):
+        return str(status.get("state") or status.get("status") or "unknown")
+    return str(snapshot.get("state", "unknown"))
 
 
 def _is_running(snapshot: dict[str, Any]) -> bool:

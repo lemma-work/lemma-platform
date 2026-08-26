@@ -39,6 +39,35 @@ const POSTGRES_DATA_DIR: &str = "/var/lib/postgresql/data";
 const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// What a sandbox is assumed to need in order to *start*, for admission.
+///
+/// Deliberately far below `DEFAULT_SANDBOX_MEMORY_BYTES`, because those are two
+/// different things. `--memory` is a cgroup ceiling: it caps a runaway sandbox
+/// and reserves nothing, and a container only ever occupies the pages it
+/// touches. Admission used to add those ceilings up as though each sandbox had
+/// claimed its whole allowance on creation, so a 6 GiB guest refused a third
+/// sandbox while the two it had were using a couple of hundred megabytes
+/// between them -- and refused it as "function runtime endpoint was not ready",
+/// two minutes later, with no mention of memory.
+///
+/// This is the request; the ceiling stays the limit. Same split Kubernetes
+/// draws, for the same reason.
+const SANDBOX_MEMORY_REQUEST_BYTES: u64 = 256 * 1024 * 1024;
+
+/// What the guest keeps for itself: page cache, containerd, the kernel.
+///
+/// Admission is refused while free memory is below this, so overcommitting
+/// stops before the OOM killer rather than after it.
+const GUEST_MEMORY_HEADROOM_BYTES: u64 = 384 * 1024 * 1024;
+
+/// A ceiling on concurrent sandboxes, independent of memory.
+///
+/// Memory is the real constraint and is measured; this only stops a runaway
+/// caller creating containers without bound. `LEMMA_GUEST_MAX_SANDBOXES`
+/// overrides it, so an operator with a larger guest is not held to a number
+/// compiled in here.
+const DEFAULT_MAX_SANDBOXES: usize = 16;
+
 /// How far the guest clock may sit from the host's before it is stepped.
 ///
 /// A step is not free -- it moves wall time under every process in the guest --
@@ -809,53 +838,53 @@ impl<E: Engine> GuestService<E> {
             .count())
     }
 
+    /// Decide whether another sandbox can start, from what the guest is
+    /// actually using rather than from what its containers are allowed to use.
+    ///
+    /// The previous version summed every running sandbox's `--memory` ceiling
+    /// and treated the total as spoken for. Ceilings are not reservations:
+    /// containerd sets `memory.max` and the container occupies only the pages
+    /// it touches. With a 1536 MiB core reservation and a 2048 MiB default
+    /// ceiling, a 6 GiB guest therefore admitted exactly two sandboxes and
+    /// refused the third -- so opening a workspace or two made every function
+    /// fail, and the refusal reached the user as a 120-second deadline with no
+    /// mention of memory.
+    ///
+    /// `requested` is still validated by `validate_resources`; it is the
+    /// ceiling for this sandbox, not a claim on the guest.
     fn admit_sandbox_memory(&self, requested: u64) -> Result<(), GuestError> {
-        let total = guest_total_memory_bytes()?;
-        let output = self.run_checked(&[
-            "ps".into(),
-            "--quiet".into(),
-            "--filter".into(),
-            format!("label={MANAGED_LABEL}"),
-        ])?;
-        let mut allocated = 0_u64;
-        for container in output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let inspect = self.inspect_raw(container)?.ok_or_else(|| {
-                GuestError::engine("running sandbox disappeared during memory admission")
-            })?;
-            let memory = inspect
-                .get("HostConfig")
-                .and_then(Value::as_object)
-                .and_then(|config| config.get("Memory"))
-                .and_then(Value::as_u64)
-                .filter(|value| *value > 0)
-                .unwrap_or(DEFAULT_SANDBOX_MEMORY_BYTES);
-            allocated = allocated
-                .checked_add(memory)
-                .ok_or_else(|| GuestError::engine("sandbox memory allocation overflow"))?;
-        }
-        let required = CORE_MEMORY_RESERVATION_BYTES
-            .checked_add(allocated)
-            .and_then(|value| value.checked_add(requested))
-            .ok_or_else(|| GuestError::engine("sandbox memory requirement overflow"))?;
-        if required > total {
+        let running = self.running_sandbox_count()?;
+        let ceiling = max_sandboxes();
+        if running >= ceiling {
             return Err(GuestError {
                 code: "resource_capacity".into(),
                 message: format!(
-                    "Not enough private-runtime memory for this sandbox: {} MiB requested, {} MiB available after core services and active sandboxes",
-                    requested / (1024 * 1024),
-                    total
-                        .saturating_sub(CORE_MEMORY_RESERVATION_BYTES)
-                        .saturating_sub(allocated)
-                        / (1024 * 1024)
+                    "This computer is already running {running} sandboxes, which is the \
+                     configured maximum. Close a workspace, or raise \
+                     LEMMA_GUEST_MAX_SANDBOXES."
                 ),
                 retryable: true,
                 status_code: 429,
             });
         }
+
+        let available = guest_available_memory_bytes()?;
+        let needed = SANDBOX_MEMORY_REQUEST_BYTES.saturating_add(GUEST_MEMORY_HEADROOM_BYTES);
+        if available < needed {
+            return Err(GuestError {
+                code: "resource_capacity".into(),
+                message: format!(
+                    "Not enough memory left in the private runtime to start another \
+                     sandbox: {} MiB free, {} MiB needed. {running} sandboxes are \
+                     running; closing one frees memory immediately.",
+                    available / (1024 * 1024),
+                    needed / (1024 * 1024),
+                ),
+                retryable: true,
+                status_code: 429,
+            });
+        }
+        let _ = requested;
         Ok(())
     }
 
@@ -2629,6 +2658,39 @@ fn parse_memory_bytes(value: &str) -> Result<u64, GuestError> {
         .ok_or_else(|| GuestError::invalid("sandbox memory size overflow"))
 }
 
+/// How much memory the guest could hand to a new process right now.
+///
+/// `MemAvailable`, not `MemFree`: the kernel's own estimate of what is
+/// reclaimable including page cache, which is the number that decides whether
+/// starting a container will succeed. `MemTotal` is the wrong question --
+/// virtio-balloon adjusts it as the host takes memory back, so a total says
+/// nothing about what is spare.
+fn guest_available_memory_bytes() -> Result<u64, GuestError> {
+    let meminfo = fs::read_to_string("/proc/meminfo")
+        .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
+    parse_mem_available(&meminfo)
+        .ok_or_else(|| GuestError::engine("guest available memory was unavailable"))
+}
+
+/// Split out so it can be tested without a `/proc`.
+fn parse_mem_available(meminfo: &str) -> Option<u64> {
+    meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemAvailable:"))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|kib| kib.checked_mul(1024))
+}
+
+/// The concurrent-sandbox ceiling, overridable for a larger guest.
+fn max_sandboxes() -> usize {
+    std::env::var("LEMMA_GUEST_MAX_SANDBOXES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_SANDBOXES)
+}
+
 fn guest_total_memory_bytes() -> Result<u64, GuestError> {
     let meminfo = fs::read_to_string("/proc/meminfo")
         .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
@@ -3134,6 +3196,67 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ceiling is not a claim.
+    ///
+    /// Admission used to add up every running sandbox's `--memory` and treat
+    /// the sum as spent. With the shipped numbers -- 6 GiB guest, 1536 MiB core
+    /// reservation, 2048 MiB default ceiling -- that admitted exactly two
+    /// sandboxes and refused the third, so one open workspace plus a function
+    /// was the whole machine. The arithmetic is kept here because it is the
+    /// thing that must never come back.
+    #[test]
+    fn a_sandbox_ceiling_is_not_a_reservation() {
+        let guest = 6 * 1024 * 1024 * 1024_u64;
+        let old_style_allowance =
+            guest.saturating_sub(CORE_MEMORY_RESERVATION_BYTES) / DEFAULT_SANDBOX_MEMORY_BYTES;
+        assert_eq!(
+            old_style_allowance, 2,
+            "summing ceilings caps a 6 GiB guest at two sandboxes",
+        );
+
+        // Admission now asks for a request-sized slice, so the same guest fits
+        // an order of magnitude more before memory is the binding constraint.
+        let request_style_allowance = guest
+            .saturating_sub(CORE_MEMORY_RESERVATION_BYTES)
+            .saturating_sub(GUEST_MEMORY_HEADROOM_BYTES)
+            / SANDBOX_MEMORY_REQUEST_BYTES;
+        assert!(
+            request_style_allowance >= 8,
+            "a request-based admission must not stop at two: got {request_style_allowance}",
+        );
+        assert!(
+            SANDBOX_MEMORY_REQUEST_BYTES < DEFAULT_SANDBOX_MEMORY_BYTES,
+            "the request has to be smaller than the ceiling or nothing changed",
+        );
+    }
+
+    /// Availability is read, not inferred from the total.
+    ///
+    /// `MemTotal` is the wrong number: virtio-balloon adjusts it while the host
+    /// reclaims memory, so a total says nothing about what is spare.
+    #[test]
+    fn available_memory_comes_from_the_kernels_own_estimate() {
+        let meminfo = "MemTotal:        6109184 kB\nMemFree:          201234 kB\nMemAvailable:    4194304 kB\nBuffers:           1024 kB\n";
+        assert_eq!(
+            parse_mem_available(meminfo),
+            Some(4194304 * 1024),
+            "MemAvailable is what decides whether a container can start",
+        );
+        // A kernel too old to report it is an error, not a zero that would
+        // refuse every sandbox for ever.
+        assert_eq!(parse_mem_available("MemTotal: 100 kB\n"), None);
+    }
+
+    /// The concurrency ceiling is a backstop, and it can be raised.
+    #[test]
+    fn the_sandbox_ceiling_is_configurable() {
+        assert_eq!(max_sandboxes(), DEFAULT_MAX_SANDBOXES);
+        assert!(
+            DEFAULT_MAX_SANDBOXES > 2,
+            "the default must not reimpose the limit this change removes",
+        );
+    }
     use std::cell::Cell;
     use std::os::unix::process::ExitStatusExt;
     use std::sync::Mutex;
