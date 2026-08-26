@@ -30,6 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import {
   harnessLogo,
+  hydrateRuntimeModel,
   isLocalAgentKind,
   profileHarnessKey,
   resolveRuntimeModelName,
@@ -625,6 +626,12 @@ export function RuntimeModelPicker({
   allowAuto,
 }: RuntimeModelPickerProps) {
   const options = useMemo(() => runtimeCatalogToModelOptions(catalog), [catalog]);
+  // A stored selection can pin a profile and leave the model open — a bundle,
+  // the CLI and the API all accept `{ profile_id }` on its own. Name that model
+  // the way the backend picks it, or the trigger falls through to the *default's*
+  // label and an explicitly pinned agent reads as one inheriting a model it does
+  // not run, with no row checked inside the picker to contradict it.
+  const selected = useMemo(() => hydrateRuntimeModel(value ?? null, catalog), [value, catalog]);
   // The default usually pins only a profile, so ask the catalog which model that
   // profile will actually run rather than showing a nameless "Default". Printed
   // dim beside the Auto row, where it reads as what the default resolves to
@@ -638,8 +645,8 @@ export function RuntimeModelPicker({
       className={className}
       triggerClassName={triggerClassName}
       triggerLabelClassName={triggerLabelClassName}
-      value={value?.model_name ?? null}
-      runtime={value ?? null}
+      value={selected?.model_name ?? null}
+      runtime={selected}
       options={options}
       onChange={(_, runtime) => onChange(runtime ?? null)}
       ariaLabel={ariaLabel}

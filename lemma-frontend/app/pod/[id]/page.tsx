@@ -10,7 +10,7 @@ import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { resolvePodDefaultRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
@@ -162,8 +162,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
     const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
-    const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
+    const podDefaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const isLoadingHomeState =
         isLoadingHomeAgents ||

@@ -5,6 +5,7 @@ import type {
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
     AvailableModelInfo,
+    PodConfig,
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
 import { humanizeName } from '@/lib/utils/display-name';
@@ -181,6 +182,28 @@ export function resolveDefaultAgentRuntime(
         : undefined;
     return defaultAgentRuntimeFromProfile(profile)
         ?? hydrateRuntimeModel(catalog?.default_runtime, catalog);
+}
+
+/**
+ * What a pod runs on when nothing more specific is configured.
+ *
+ * Mirrors `PodConfig.resolved_default_runtime()` in the backend
+ * (pod/domain/pod_entities.py), which is what actually dispatches a run: the
+ * stored `default_runtime` — profile *and* model — wins, and
+ * `default_profile_id` is only the legacy provider-only mirror to fall back on.
+ *
+ * Reading that mirror on its own is the bug this exists to prevent. It is
+ * written from `default_runtime.profile_id` and never carries a model, so
+ * resolving through it names the *profile's* default model — which is a
+ * different model from the one the pod is set to whenever someone picked
+ * anything other than the profile default.
+ */
+export function resolvePodDefaultRuntime(
+    config?: Pick<PodConfig, 'default_runtime' | 'default_profile_id'> | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): AgentRuntimeConfig | null {
+    if (config?.default_runtime) return hydrateRuntimeModel(config.default_runtime, catalog);
+    return resolveDefaultAgentRuntime(catalog, config?.default_profile_id);
 }
 
 export function formatAgentRuntime(
