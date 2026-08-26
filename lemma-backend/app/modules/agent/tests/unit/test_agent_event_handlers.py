@@ -13,7 +13,7 @@ from app.modules.agent.domain.events import (
 from app.modules.agent.events.handlers import conversation_title_job_id
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.events import handlers
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import StaleAgentRunRef
 from app.modules.test_support.fakes import PassthroughEventInbox
 
 

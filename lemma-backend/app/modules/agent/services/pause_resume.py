@@ -27,6 +27,11 @@ from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.ports import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     MessageDraft,
@@ -52,9 +57,9 @@ class PauseResume:
 
     def __init__(
         self,
-        uow: object,
-        conversation_repository: object,
-        agent_repository: object,
+        uow: SqlAlchemyUnitOfWork,
+        conversation_repository: ConversationRepository,
+        agent_repository: AgentRepository,
     ) -> None:
         self.uow = uow
         self.conversation_repository = conversation_repository

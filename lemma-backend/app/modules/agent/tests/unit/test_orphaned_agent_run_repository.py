@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import StaleAgentRunRef
 
 
 class _Result:

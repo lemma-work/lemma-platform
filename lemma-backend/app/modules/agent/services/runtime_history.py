@@ -159,7 +159,7 @@ def select_runtime_history(
                 conversation_id=run.conversation_id,
                 sequence=messages[0].sequence,
                 agent_run_id=run.id,
-                role=MessageRole.SYSTEM.value,
+                role=MessageRole.SYSTEM,
                 kind=MessageKind.NOTIFICATION,
                 text=(
                     "Earlier agent run summarized: "

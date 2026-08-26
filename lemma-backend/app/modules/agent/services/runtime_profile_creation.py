@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from pydantic import HttpUrl
+from pydantic import HttpUrl, SecretStr
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.domain.agent_host import (
@@ -45,6 +45,9 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostHarnessModel,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -232,12 +235,12 @@ class RuntimeProfileCreation:
             default_model_name=selected_default_model,
             model_catalog=catalog,
             config=OpenAICompatibleRuntimeConfig(
-                base_url=base_url,
+                base_url=HttpUrl(base_url),
                 headers=normalized_headers,
                 model_settings=model_settings or {},
             ),
             credentials=(
-                ApiKeyRuntimeCredentials(api_key=api_key.strip())
+                ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip()))
                 if api_key and api_key.strip()
                 else None
             ),
@@ -298,11 +301,11 @@ class RuntimeProfileCreation:
             default_model_name=selected_default_model,
             model_catalog=catalog,
             config=AnthropicCompatibleRuntimeConfig(
-                base_url=base_url,
+                base_url=HttpUrl(base_url) if base_url is not None else None,
                 headers=normalized_headers,
                 model_settings=model_settings or {},
             ),
-            credentials=ApiKeyRuntimeCredentials(api_key=api_key.strip()),
+            credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "anthropic_compatible",
@@ -319,7 +322,7 @@ class RuntimeProfileCreation:
         user_id: UUID,
         scope: RuntimeProfileScope,
         require_owner: bool = True,
-    ):
+    ) -> AgentHostHarnessModel:
         assert self.host_repository is not None
         harness = await self.host_repository.get_harness(harness_id=harness_id)
         if harness is None:

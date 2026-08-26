@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from pydantic import HttpUrl, SecretStr
 
 from app.core.config import reveal_secret, settings
 from app.modules.agent.domain.runtime_profiles import (
@@ -169,10 +170,11 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
         default_model_name=default_model_name or model_catalog[0].name,
         model_catalog=model_catalog,
         config=OpenAICompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
-            or settings.lemma_openai_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_OPENAI_BASE_URL") or settings.lemma_openai_base_url
+            ),
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -215,10 +217,12 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
             for model_name in model_names
         ],
         config=AnthropicCompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_ANTHROPIC_BASE_URL")
-            or settings.lemma_anthropic_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_ANTHROPIC_BASE_URL")
+                or settings.lemma_anthropic_base_url
+            ),
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -228,7 +232,7 @@ def system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
     return None
 
 
-def _env_or_setting(env_name: str, setting_value: object | None) -> str | None:
+def _env_or_setting(env_name: str, setting_value: SecretStr | str | None) -> str | None:
     value = os.getenv(env_name) or reveal_secret(setting_value)
     if value is None:
         return None

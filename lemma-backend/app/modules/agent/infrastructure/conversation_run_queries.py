@@ -28,7 +28,7 @@ from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import StaleAgentRunRef
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
 

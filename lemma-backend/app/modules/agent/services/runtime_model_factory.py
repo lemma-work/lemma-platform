@@ -254,7 +254,15 @@ def pydantic_ai_model_from_runtime_profile(
             # Connection reuse, split timeouts and transport-level retries all
             # come from the shared client; the SDK's own retry layer would only
             # duplicate it.
-            http_client=get_provider_http_client(
+            #
+            # Ignored, not cast: openai 3.x annotates this against `httpx2`,
+            # while the shared client is `httpx` -- which is not a preference,
+            # it is what pydantic-ai's `AsyncTenacityTransport` (the retry layer
+            # above) is built on, and the Anthropic SDK still wants. The two are
+            # duck-compatible for everything the SDK calls, so this works; it is
+            # marked rather than hidden because the day it stops working, this
+            # line is where to look.
+            http_client=get_provider_http_client(  # type: ignore[arg-type]
                 protocol="openai",
                 base_url=base_url,
                 api_key=api_key,

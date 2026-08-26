@@ -73,12 +73,19 @@ def status_payload(
 
 
 def message_payload(
-    agent_run_id: UUID,
+    agent_run_id: UUID | None,
     message: dict[str, object],
 ) -> dict[str, object]:
+    """A message frame. Optional run id, unlike the run-scoped frames below.
+
+    A message can exist without a run -- a tool return closed by the MCP bridge
+    outside one, a superseded return replayed from an older turn. Frames are
+    routed by conversation, so those still belong on the stream; the field just
+    has nothing to say, and used to say the string ``"None"``.
+    """
     return {
         "type": "message",
-        "agent_run_id": str(agent_run_id),
+        "agent_run_id": str(agent_run_id) if agent_run_id is not None else None,
         "data": message,
     }
 

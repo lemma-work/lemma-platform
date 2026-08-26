@@ -18,11 +18,12 @@ from supertokens_python.recipe.session.asyncio import (
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
-from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
@@ -326,8 +327,8 @@ class ConversationMCPService:
     async def _resolved_runtime_profile(
         self,
         *,
-        run: object | None,
-        uow: object,
+        run: AgentRun | None,
+        uow: SqlAlchemyUnitOfWork,
         organization_id: UUID | None,
         user_id: UUID,
     ) -> JsonObject | None:

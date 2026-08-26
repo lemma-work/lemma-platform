@@ -301,6 +301,11 @@ lint-connectors:
 test-connectors:
 	uv run pytest lemma-connectors/tests -q
 
+# `app/modules/agent/api/dependencies.py` is in the list for one line it holds:
+# it hands the concrete `ConversationRepository` to a parameter typed as the
+# port, which is the only place basedpyright checks the two against each other.
+# Without it the port can drift *ahead* of its implementation and nothing fails
+# -- the mirror image of the drift the services directory now catches.
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \
@@ -308,6 +313,9 @@ typecheck-critical:
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
 		app/core/infrastructure/events \
+		app/modules/agent/api/dependencies.py \
+		app/modules/agent/domain/ports.py \
+		app/modules/agent/services \
 		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \

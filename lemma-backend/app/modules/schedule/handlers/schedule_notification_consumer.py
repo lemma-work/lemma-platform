@@ -9,12 +9,10 @@ own subscriber without touching the breaker.
 
 from __future__ import annotations
 
-from typing import cast
 from uuid import UUID
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -47,9 +45,7 @@ logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
-    return SessionUnitOfWorkFactory(
-        cast(async_sessionmaker[AsyncSession], async_session_maker)
-    )
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 def render_schedule_paused_email(

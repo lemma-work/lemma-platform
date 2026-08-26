@@ -51,7 +51,7 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             # should be hung off it.
             info["lemma_uow"] = self
 
-    def after_commit(self, callback: Callable[[], Awaitable[None]]) -> None:
+    def after_commit(self, callback: Callable[[], Awaitable[object]]) -> None:
         """Run ``callback`` once the transaction has actually committed.
 
         For work that must not happen inside the transaction — cache

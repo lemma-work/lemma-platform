@@ -37,6 +37,7 @@ def get_conversation_service(
 
 def get_agent_service(uow: UoWDep) -> AgentService:
     return AgentService(
+        uow=uow,
         agent_repository=AgentRepository(uow),
         authorization_service=create_authorization_service(uow),
     )

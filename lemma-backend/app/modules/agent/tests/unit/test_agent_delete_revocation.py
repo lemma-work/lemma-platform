@@ -17,7 +17,10 @@ from app.modules.agent.services.agent_service import AgentService
 async def test_delete_agent_revokes_delegation(monkeypatch):
     agent = SimpleNamespace(id=uuid4(), user_id=uuid4())
     repo = AsyncMock()
-    service = AgentService(agent_repository=repo, authorization_service=AsyncMock())
+    uow = AsyncMock()
+    service = AgentService(
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
+    )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     revoke_spy = AsyncMock()
     monkeypatch.setattr(agent_service_module, "revoke_delegation", revoke_spy)
@@ -46,7 +49,10 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
     """
     pod_id, agent = uuid4(), SimpleNamespace(id=uuid4(), user_id=uuid4())
     repo = AsyncMock()
-    service = AgentService(agent_repository=repo, authorization_service=AsyncMock())
+    uow = AsyncMock()
+    service = AgentService(
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
+    )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_service_module, "revoke_delegation", AsyncMock())
     teardown = AsyncMock(return_value=1)
@@ -54,7 +60,7 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
 
     await service.delete_agent(pod_id=pod_id, name="reporter")
 
-    teardown.assert_awaited_once_with(repo.uow, pod_id=pod_id, agent_id=agent.id)
+    teardown.assert_awaited_once_with(uow, pod_id=pod_id, agent_id=agent.id)
 
 
 @pytest.mark.asyncio
@@ -67,7 +73,10 @@ async def test_the_surfaces_go_before_the_agent_row_does(monkeypatch):
     """
     agent = SimpleNamespace(id=uuid4(), user_id=uuid4())
     repo = AsyncMock()
-    service = AgentService(agent_repository=repo, authorization_service=AsyncMock())
+    uow = AsyncMock()
+    service = AgentService(
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
+    )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_service_module, "revoke_delegation", AsyncMock())
 
