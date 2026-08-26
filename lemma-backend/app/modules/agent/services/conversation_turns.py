@@ -274,7 +274,7 @@ class TurnCoordinator:
             or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
         )
         # Continuing an unanswered message is still a run someone pays for.
-        await self._assert_usage_preflight_allowed(
+        await self.assert_usage_preflight_allowed(
             organization_id=conversation.organization_id,
             user_id=conversation.user_id,
             agent_runtime=agent_runtime,
