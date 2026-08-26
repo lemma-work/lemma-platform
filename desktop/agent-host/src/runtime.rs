@@ -2878,13 +2878,17 @@ mod target_worker_tests {
         // Exactly what a run task does the moment it journals an event.
         harness.worker.events_ready.notify_one();
 
+        // Both halves waited for, not one waited for and the other asserted.
+        // The journal is cleared *after* the server accepts, so "accepted == 3"
+        // is reached first and a bare assert on `pending` races the flusher
+        // finishing its own bookkeeping -- which is what failed here, at the
+        // second of these two sites, roughly one run in a hundred and fifty.
         within(
             Duration::from_secs(5),
-            "the run's events to reach Lemma",
-            || harness.accepted().get(&run_id) == Some(&3),
+            "the run's events to reach Lemma and leave the journal",
+            || harness.accepted().get(&run_id) == Some(&3) && harness.pending(run_id).is_empty(),
         )
         .await;
-        assert!(harness.pending(run_id).is_empty());
 
         // And it keeps serving. A run streams for its whole turn, so delivering
         // the first batch and then going quiet until the poll came back is the
@@ -2906,11 +2910,10 @@ mod target_worker_tests {
 
         within(
             Duration::from_secs(5),
-            "later events to reach Lemma",
-            || harness.accepted().get(&run_id) == Some(&7),
+            "later events to reach Lemma and leave the journal",
+            || harness.accepted().get(&run_id) == Some(&7) && harness.pending(run_id).is_empty(),
         )
         .await;
-        assert!(harness.pending(run_id).is_empty());
 
         delivery.abort();
     }

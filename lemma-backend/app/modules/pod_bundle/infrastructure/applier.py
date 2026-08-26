@@ -24,6 +24,13 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.infrastructure.existing_resources import (
+    _flow_exists,
+    _get_agent,
+    _get_function,
+    _get_schedule,
+    _get_table,
+)
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
@@ -220,7 +227,7 @@ class BundleApplier:
         toolsets = _agent_toolsets(payload)
         existing = await _get_agent(service, self._pod_id, step.name, self._ctx)
         if existing is None:
-            await service.create_agent(
+            agent = await service.create_agent(
                 pod_id=self._pod_id,
                 user_id=self._user_id,
                 name=step.name,
@@ -236,7 +243,7 @@ class BundleApplier:
                 ctx=self._ctx,
             )
         else:
-            await service.update_agent(
+            agent = await service.update_agent(
                 pod_id=self._pod_id,
                 name=step.name,
                 instruction=payload.get("instruction"),
@@ -250,6 +257,27 @@ class BundleApplier:
                 requester_user_id=self._user_id,
                 ctx=self._ctx,
             )
+        await self._sync_memory_grant(agent, toolsets)
+
+    async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
+        """Derive the `/memory` folder and grant the MEMORY toolset implies.
+
+        Why an imported agent needs this, and why it runs after the grants step
+        rather than before it, is on
+        `app.composition.pod_bundle_resources.sync_agent_memory_grant`.
+        """
+        from app.composition.pod_bundle_resources import sync_agent_memory_grant
+
+        if agent is None or getattr(agent, "id", None) is None:
+            return
+        await sync_agent_memory_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            toolsets=toolsets,
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
@@ -308,6 +336,10 @@ class BundleApplier:
         await self._apply_grants(
             grantee_type="AGENT", grantee_id=agent.id, grants=grants
         )
+        # Replace semantics: whatever the bundle listed is now the whole set, so
+        # the toolset-derived grant has to be put back. From the agent as saved,
+        # not from the bundle -- the same rule the permissions endpoint follows.
+        await self._sync_memory_grant(agent, getattr(agent, "toolsets", None))
 
     # --- grants ----------------------------------------------------------
 
@@ -696,48 +728,6 @@ def _file_manifest_entry(files_root: Path, pod_path: str) -> dict[str, Any]:
         if isinstance(entry, dict) and str(entry.get("path") or "") == pod_path:
             return entry
     return {}
-
-
-async def _get_table(service, pod_id, name, ctx):
-    # get_table raises DatastoreTableNotFoundError when absent; treat as "create".
-    try:
-        return await service.get_table(pod_id, name, ctx)
-    except Exception:
-        return None
-
-
-async def _get_agent(service, pod_id, name, ctx):
-    try:
-        return await service.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
-    except Exception:
-        return None
-
-
-async def _get_function(service, pod_id, name, user_id, ctx):
-    try:
-        return await service.get_function_by_name(
-            pod_id, name, user_id, include_code=False, ctx=ctx
-        )
-    except Exception:
-        return None
-
-
-async def _get_schedule(service, pod_id, name, ctx):
-    # No get-by-name on the schedule service; list with a name filter.
-    try:
-        schedules, *_ = await service.list_schedules(pod_id=pod_id, name=name, ctx=ctx)
-        return schedules[0] if schedules else None
-    except Exception:
-        return None
-
-
-async def _flow_exists(service, pod_id, name, ctx) -> bool:
-    # get_workflow_by_name RETURNS None for a missing flow (it does not raise), so a
-    # bare try/except would treat "not found" as "exists" and skip the create.
-    try:
-        return await service.get_workflow_by_name(pod_id, name, ctx=ctx) is not None
-    except Exception:
-        return False
 
 
 def _read_csv(path: Path) -> list[dict[str, Any]]:
