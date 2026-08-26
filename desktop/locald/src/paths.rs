@@ -251,9 +251,60 @@ pub fn installation_has_data(root: &Path) -> bool {
         return true;
     }
     // Files and object storage live on the host side, outside the disk.
-    ["data/files", "data/object-storage", "data/workspaces"]
+    HOST_SIDE_DATA
         .iter()
         .any(|relative| populated(root.join(relative)))
+}
+
+/// Everything of the user's that lives on the Mac rather than inside the guest.
+///
+/// Named once because two things have to agree about it and did not: this is
+/// what `installation_has_data` looks at to decide an install has been used,
+/// and it is what a data reset has to remove. A reset that clears the guest and
+/// leaves these behind erases the rows and keeps the bytes -- so the files a
+/// user reset specifically to destroy survive, no disk comes back, and the
+/// install still reports itself as having data.
+pub const HOST_SIDE_DATA: [&str; 3] =
+    ["data/files", "data/object-storage", "data/workspaces"];
+
+/// Remove the host-side user data, leaving the empty tree behind it.
+///
+/// Returns the bytes reclaimed, for the same reason the disk path reports them:
+/// "reset" with no number next to it reads as though nothing happened.
+///
+/// Directories are recreated so the next start writes into the layout the host
+/// pack was rendered against, rather than having to discover it is missing.
+pub fn discard_host_side_data(root: &Path) -> io::Result<u64> {
+    let mut reclaimed = 0u64;
+    for relative in HOST_SIDE_DATA {
+        let directory = root.join(relative);
+        reclaimed += directory_size(&directory);
+        match std::fs::remove_dir_all(&directory) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        std::fs::create_dir_all(&directory)?;
+    }
+    Ok(reclaimed)
+}
+
+/// Bytes actually on disk under `path`, best effort.
+///
+/// A failure to measure is reported as zero rather than aborting the reset:
+/// the number is for the sentence shown to the user, and losing it is not a
+/// reason to leave their data in place.
+fn directory_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => directory_size(&entry.path()),
+            Ok(kind) if kind.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Forget the marker. Only a completed data reset may call this.
@@ -430,5 +481,53 @@ mod tests {
             locald_pipe_name(Path::new(r"C:\Users\Example\AppData\Local\Lemma\locald")),
             locald_pipe_name(Path::new(r"c:/users/example/appdata/local/lemma/locald/"))
         );
+    }
+}
+
+#[cfg(test)]
+mod host_side_data_tests {
+    use super::*;
+
+    /// A reset has to clear exactly what makes an install look used.
+    ///
+    /// These two read the same list for a reason: the reset cleared the guest
+    /// and left the host alone, so files a user reset specifically to destroy
+    /// survived, no disk came back, and `installation_has_data` still answered
+    /// yes afterwards -- an install that reported itself as used with an empty
+    /// database behind it.
+    #[test]
+    fn discarding_host_data_leaves_an_installation_looking_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        for relative in HOST_SIDE_DATA {
+            std::fs::create_dir_all(root.join(relative)).unwrap();
+        }
+        std::fs::write(root.join("data/files/report.pdf"), vec![7u8; 2048]).unwrap();
+        std::fs::create_dir_all(root.join("data/object-storage/pods/a")).unwrap();
+        std::fs::write(root.join("data/object-storage/pods/a/blob"), vec![1u8; 512]).unwrap();
+
+        assert!(
+            installation_has_data(root),
+            "files on the host are what make this install used",
+        );
+
+        let reclaimed = discard_host_side_data(root).unwrap();
+        assert_eq!(reclaimed, 2048 + 512, "the reclaimed number is reported");
+        assert!(
+            !installation_has_data(root),
+            "after a reset nothing of the user's may be left on the host",
+        );
+        // The tree survives, so the next start writes into the layout the host
+        // pack was rendered against rather than discovering it is missing.
+        for relative in HOST_SIDE_DATA {
+            assert!(root.join(relative).is_dir(), "{relative} must still exist");
+        }
+    }
+
+    /// Running it on a fresh install is not an error.
+    #[test]
+    fn discarding_nothing_is_fine() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(discard_host_side_data(root.path()).unwrap(), 0);
     }
 }

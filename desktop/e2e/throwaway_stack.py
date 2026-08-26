@@ -40,6 +40,7 @@ is already up; run `down` first.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -138,6 +139,20 @@ def _supertokens_url(host: str) -> str:
     )
 
 
+def _is_guest_address(address):
+    """Is this the private address family the VZ guest lives on?
+
+    Loopback is explicitly not the guest: the install's backend reaches the VM
+    over its private network, and anything on 127.0.0.1 is something else on
+    this Mac.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return parsed.is_private and not parsed.is_loopback
+
+
 def _guest_address() -> str:
     """Ask the OS which guest the install's backend is actually talking to.
 
@@ -156,8 +171,18 @@ def _guest_address() -> str:
         fail(f"could not inspect sockets to find the guest: {error}")
     import re
 
+    # Must be the VZ guest, not merely something answering on those ports.
+    #
+    # `lsof` is machine-wide, and this repo's own docker-compose publishes
+    # Postgres on 5432, Redis on 6379 and SuperTokens on 3567 to 127.0.0.1. A
+    # developer with the dev stack up would otherwise have loopback discovered
+    # as "the guest", and the harness would then CREATE DATABASE and run the
+    # full migration set against the wrong server -- non-deterministically,
+    # since it depends on which connection `lsof` lists first.
     for match in re.finditer(r"->(\d+\.\d+\.\d+\.\d+):(?:5432|6379)\b", out):
-        return match.group(1)
+        address = match.group(1)
+        if _is_guest_address(address):
+            return address
     fail(
         "no connection to a guest postgres/redis was found. Is Lemma Desktop "
         "running and past its first-run setup?"
@@ -474,6 +499,44 @@ def wait_ready(
 
 
 def command_up(root: Path) -> None:
+    """Stand the stack up, and leave nothing behind if it cannot be stood up.
+
+    ``stack.json`` is written last and ``down`` is keyed on it -- so a failure
+    before that point used to leave two databases inside the developer's real
+    install's Postgres with nothing that would ever look for them again. A
+    migration failure is the *likely* outcome in a lane whose whole purpose is
+    running uncommitted backend code, and Ctrl-C raises ``KeyboardInterrupt``,
+    which no ``except SystemExit`` catches.
+    """
+    created = {"root": root, "suffix": None, "host": None, "process": None}
+    try:
+        _command_up(root, created)
+    except BaseException:
+        _abandon(created)
+        raise
+
+
+def _abandon(created):
+    """Undo a half-built stack, quietly and completely."""
+    if created["process"] is not None:
+        _terminate(created["process"])
+    if created["suffix"] and created["host"]:
+        try:
+            secrets = json.loads(
+                (INSTALL_ROOT / "locald" / "infra.secrets.json").read_text()
+            )
+            drop_databases(
+                created["host"], secrets["postgres_password"], created["suffix"]
+            )
+        except (OSError, json.JSONDecodeError, KeyError, SystemExit) as error:
+            log("could not drop the throwaway databases: {}".format(error))
+    try:
+        _remove_throwaway_root(created["root"])
+    except SystemExit:
+        pass
+
+
+def _command_up(root: Path, created: dict) -> None:
     if (root / "stack.json").is_file():
         fail(f"{root} is already up — run `down` first")
     root.mkdir(parents=True, exist_ok=True)
@@ -490,18 +553,16 @@ def command_up(root: Path) -> None:
     port = int(env["API_URL"].rsplit(":", 1)[-1])
     app_base = env["APP_BASE_DOMAIN"]
 
+    created["host"] = host
+    created["suffix"] = suffix
     app_db, data_db = make_databases(host, password, suffix)
     backend_env = backend_environment(manifest, root, infra, app_db, data_db)
     run_migrations(pack, backend_env, root)
     process = start_backend(pack, backend_env, root, port)
+    created["process"] = process
 
     api_url = f"http://app.lemma.localhost:{port}"
-    try:
-        wait_ready(api_url, process, root)
-    except SystemExit:
-        _terminate(process)
-        drop_databases(host, password, suffix)
-        raise
+    wait_ready(api_url, process, root)
 
     stack = {
         "root": str(root),

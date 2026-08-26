@@ -227,6 +227,15 @@ struct Shell {
     /// -- including Local settings' heartbeat -- for the whole install.
     runtime_install: Mutex<()>,
     quit_after_stop: AtomicBool,
+    /// Whether the shutdown work has already been done, off the main thread.
+    ///
+    /// `RunEvent::Exit` is delivered on the main thread with the window already
+    /// gone, so anything slow there is a beachball and then a process macOS
+    /// reports as "not responding". Every path now does that work on a worker
+    /// first and sets this; the handler on the main thread is a safety net for
+    /// the paths that never get one -- a system logout or restart -- not the
+    /// normal route.
+    teardown_done: AtomicBool,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
     /// The tray's Agent Host line. A label, never a control: the toggle beside
@@ -280,6 +289,7 @@ impl Shell {
             locald_connect: Mutex::new(()),
             runtime_install: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
+            teardown_done: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
             agent_host_status: Mutex::new(None),
@@ -2565,10 +2575,14 @@ fn should_preserve_inflight_phase(
 /// it unreachable by ⌘-tab and belonging to an app the Dock said was not there.
 #[cfg(target_os = "macos")]
 fn settle_dock_presence(app: &AppHandle) {
-    let anything_on_screen = app
-        .webview_windows()
-        .values()
-        .any(|window| window.is_visible().unwrap_or(false));
+    // Minimised counts. `is_visible()` is `[NSWindow isVisible]`, which is NO
+    // for a miniaturised window -- so minimising a pod app and then closing the
+    // workspace dropped the Dock tile while that app was still there, sitting
+    // in the Dock as a window belonging to an application the Dock no longer
+    // showed, with no way to ⌘-tab back to it.
+    let anything_on_screen = app.webview_windows().values().any(|window| {
+        window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false)
+    });
     let _ = app.set_activation_policy(if anything_on_screen {
         tauri::ActivationPolicy::Regular
     } else {
@@ -2684,31 +2698,63 @@ const POD_APP_WINDOW: &str = "pod-app";
 /// scoped by webview label: this window runs user-authored code, so it gets no
 /// Tauri command surface at all. Adding a capability for this label would hand
 /// every pod app the IPC bridge.
-fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
-    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
-    if let Some(existing) = app.get_webview_window(POD_APP_WINDOW) {
-        existing
-            .navigate(target)
-            .map_err(|error| format!("could not open {url}: {error}"))?;
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-
-    // Named from the host rather than the path: the slug is the app's identity
-    // and the path is wherever the user happens to be inside it.
-    let title = target
+/// What to call an app's window: its public slug, made readable.
+///
+/// From the host, not the path -- the slug identifies the app and the path is
+/// wherever the user happens to be inside it, so a window would otherwise be
+/// renamed by navigation.
+fn pod_app_window_title(target: &tauri::Url) -> String {
+    target
         .host_str()
         .and_then(|host| host.split('.').next())
         .filter(|label| !label.is_empty())
         .map(|label| label.replace('-', " "))
-        .unwrap_or_else(|| "Lemma app".to_owned());
+        .unwrap_or_else(|| "Lemma app".to_owned())
+}
 
-    WebviewWindowBuilder::new(app, POD_APP_WINDOW, WebviewUrl::External(target))
+fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
+
+    // Named from the host rather than the path: the slug is the app's identity
+    // and the path is wherever the user happens to be inside it.
+    let title = pod_app_window_title(&target);
+
+    if let Some(existing) = app.get_webview_window(POD_APP_WINDOW) {
+        existing
+            .navigate(target)
+            .map_err(|error| format!("could not open {url}: {error}"))?;
+        // Retitled, because the window is reused. Opening a second app left the
+        // first one's name on the title bar, the Window menu and ⌘-tab, so the
+        // window said "study lab" while rendering payroll.
+        let _ = existing.set_title(&title);
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        restore_dock_presence(app);
+        return Ok(());
+    }
+
+    let mode = current_mode(app);
+    let builder = WebviewWindowBuilder::new(app, POD_APP_WINDOW, WebviewUrl::External(target))
         .title(title)
         .inner_size(1180.0, 800.0)
         .min_inner_size(420.0, 400.0)
-        .background_color(CANVAS_LIGHT)
+        .background_color(CANVAS_LIGHT);
+
+    // The same cookie jar the workspace uses, or the app has no session.
+    //
+    // A webview with no explicit store gets WebKit's default one, and the main
+    // window is deliberately *not* on that -- it is partitioned per server so
+    // signing into Local and Cloud are separate sessions. So an app window
+    // without this line opens on an empty jar: the page renders, because assets
+    // are served unauthenticated, and then every SDK call 401s. That is exactly
+    // the bug this whole window exists downstream of, reintroduced one window
+    // over, and it is invisible to a test that drives its own WKWebView.
+    #[cfg(target_os = "macos")]
+    let builder = builder.data_store_identifier(session_partition_id(&mode));
+    #[cfg(target_os = "windows")]
+    let builder = builder.data_directory(session_partition_dir(&mode));
+
+    builder
         .on_navigation({
             let handle = app.clone();
             move |url| {
@@ -2728,13 +2774,29 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
         .on_new_window({
             let handle = app.clone();
             move |url, _features| {
-                // A popup from inside an app leaves the app: send it to the
-                // browser rather than growing a tree of chromeless windows.
+                // The same decision the workspace makes, not a looser one.
+                //
+                // This used to ask `navigation_disposition`, which answers a
+                // different question: it admits `about:blank` and our own
+                // bundled `tauri://` pages because subframes need them. Routed
+                // through here that meant `window.open('about:blank')` from app
+                // code reached `open_external` and launched the user's browser,
+                // and a plain link back to the workspace opened Lemma in Safari
+                // -- where there is no session at all.
                 let (mode, app_base, api_base) = navigation_context(&handle);
-                if navigation_disposition(&url, &mode, &app_base, &api_base)
-                    != NavigationDisposition::Deny
-                {
-                    open_external(url.as_str());
+                match new_window_disposition(&url, &mode, &app_base, &api_base) {
+                    // A link to another app belongs in this window, which is
+                    // the one the user is already looking at an app in.
+                    NewWindowDisposition::OpenAppWindow
+                    | NewWindowDisposition::NavigateInApp => {
+                        if let Err(error) = open_pod_app_window(&handle, url.as_str()) {
+                            append_install_log(&format!(
+                                "could not follow a link out of a pod app: {error}"
+                            ));
+                        }
+                    }
+                    NewWindowDisposition::OpenExternal => open_external(url.as_str()),
+                    NewWindowDisposition::Deny => {}
                 }
                 NewWindowResponse::Deny
             }
@@ -4910,7 +4972,15 @@ fn build_main_window_at(
                         let _ = navigate_app_window(&handle, url.as_str());
                     }
                     NewWindowDisposition::OpenAppWindow => {
-                        let _ = open_pod_app_window(&handle, url.as_str());
+                        // Logged rather than discarded: every failure here ends
+                        // with the user clicking "open in new window" and
+                        // nothing happening at all, which is indistinguishable
+                        // from a dead button.
+                        if let Err(error) = open_pod_app_window(&handle, url.as_str()) {
+                            append_install_log(&format!(
+                                "could not open a pod app window: {error}"
+                            ));
+                        }
                     }
                     NewWindowDisposition::OpenExternal => {
                         open_external(url.as_str());
@@ -5218,6 +5288,20 @@ fn wait_until_label_released(
 /// previous store shows the right server with the wrong cookie jar, which is
 /// the behaviour that shipped before this existed. Refusing to switch servers
 /// at all would be worse.
+/// Close any pod app window, because what it is showing no longer exists.
+///
+/// An app window holds an absolute URL on the local backend's port. Switching
+/// servers, or locald reallocating ports, leaves it pointed at something that
+/// is gone -- and its navigation gate re-reads the mode live, so a window
+/// opened under the local policy would start answering to the hosted one, where
+/// every http(s) destination is allowed. Closing it is the honest option: it is
+/// a view of a pod on a server this app is no longer connected to.
+fn close_pod_app_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POD_APP_WINDOW) {
+        let _ = window.destroy();
+    }
+}
+
 fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     let Some(existing) = app.get_webview_window("main") else {
         // Nothing built yet -- `setup` will create it against the right store.
@@ -5227,6 +5311,9 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     // deliberate rather than `close`: the app hides to tray on CloseRequested,
     // so `close` would leave the old window alive on the old store and no new
     // one would ever be built.
+    // Before the swap flag, so a pod app window cannot be mistaken for the
+    // "no windows left" state the flag exists to cover.
+    close_pod_app_window(app);
     let shell: State<Shell> = app.state();
     shell.swapping_window.store(true, Ordering::Release);
     let _reset = ExitGuard(app.clone());
@@ -6436,7 +6523,7 @@ fn finish_quit(app: &AppHandle) {
     // including the one showing "Winding down." -- for as long as the wait.
     let worker = app.clone();
     std::thread::spawn(move || {
-        leave_nothing_running(&worker);
+        shut_down_gracefully(&worker);
         worker.exit(0);
     });
     let backstop = app.clone();
@@ -6474,6 +6561,28 @@ const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
 /// path an app update uses -- the forced arm re-authenticates and matches the
 /// packaged executable before it signals anything, so it can never reach a
 /// daemon this app does not own.
+/// Everything a quit owes the machine, done once and off the main thread.
+///
+/// Ordered: close any LAN/public exposure first, because that is the part the
+/// daemon cannot infer from its own shutdown, then stop the daemon itself.
+///
+/// Idempotent by flag, not by luck. The confirmed path runs this on a worker
+/// and then calls `app.exit(0)`, which lands on `RunEvent::Exit` -- and doing
+/// it again there would put the whole wait back on the main thread, which is
+/// the thing that made quitting hang.
+fn shut_down_gracefully(app: &AppHandle) {
+    let shell: State<Shell> = app.state();
+    if shell.teardown_done.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if current_mode(app) == "local" {
+        if let Err(error) = release_before_exit() {
+            append_install_log(&format!("[quit] sharing could not be closed: {error}"));
+        }
+    }
+    leave_nothing_running(app);
+}
+
 fn leave_nothing_running(app: &AppHandle) {
     // Drop this client first. The daemon broadcasts to connected clients while
     // it shuts down, and a writer belonging to a window that is going away is
@@ -6966,7 +7075,15 @@ fn main() {
                     return;
                 }
                 if quit_impact(app).is_empty() {
-                    shell.quit_confirmed.store(true, Ordering::Release);
+                    // Nothing to warn about, but still something to do: the
+                    // daemon outlives the app deliberately, so quitting has to
+                    // stop it. Letting the exit through here ran that on the
+                    // main thread from `RunEvent::Exit` -- which is why Dock ->
+                    // Quit sat "not responding" for several seconds before the
+                    // window went away. `finish_quit` does the same work on a
+                    // worker and exits when it is done.
+                    api.prevent_exit();
+                    finish_quit(app);
                     return;
                 }
                 api.prevent_exit();
@@ -6978,11 +7095,11 @@ fn main() {
                 // Off screen first: everything below blocks this thread, and a
                 // visible window with no live webview behind it renders black.
                 hide_windows_for_exit(app);
-                if current_mode(app) == "local" {
-                    if let Err(error) = release_before_exit() {
-                        eprintln!("[desktop-release-exit] {error}");
-                    }
-                }
+                // Normally already done, on a worker, by `finish_quit` --
+                // in which case `shut_down_gracefully` returns immediately and
+                // this thread is not held at all. What remains here is the
+                // paths that never reach `ExitRequested` with a chance to
+                // prevent it: a system logout or restart.
                 // Not just `disconnect_locald`. This is the exit every path
                 // ends at, including the ones that never touch `request_quit`:
                 // Dock -> Quit, `osascript quit`, and a system logout or
@@ -6992,10 +7109,7 @@ fn main() {
                 // here having stopped nothing, and left a supervisor with no
                 // interface behind. See `leave_nothing_running`.
                 //
-                // Safe to reach twice: the confirmed path calls it and then
-                // `app.exit(0)`, which arrives here. The second call finds no
-                // daemon to connect to and says so in the log.
-                leave_nothing_running(app);
+                shut_down_gracefully(app);
             }
             _ => {}
         });
@@ -8658,8 +8772,34 @@ mod tests {
 
         // Every exit does the opposite.
         assert!(
-            body_of("fn finish_quit(").contains("leave_nothing_running(&worker)"),
+            body_of("fn finish_quit(").contains("shut_down_gracefully(&worker)"),
             "the plain quit path has to stop the daemon",
+        );
+
+        // ...and the OS-driven one is given a worker rather than being allowed
+        // through to the main-thread handler. Letting that branch return is
+        // what made Dock -> Quit sit "not responding" for several seconds: the
+        // whole teardown ran on the thread macOS was waiting on.
+        let requested = {
+            let start = source
+                .find("tauri::RunEvent::ExitRequested { api, .. } => {")
+                .expect("the exit-requested handler exists");
+            let end = source[start..]
+                .find("\n            tauri::RunEvent::Exit => {")
+                .expect("the exit handler follows it");
+            &source[start..start + end]
+        };
+        let empty_impact = {
+            let start = requested
+                .find("if quit_impact(app).is_empty() {")
+                .expect("the no-impact branch exists");
+            &requested[start..]
+        };
+        assert!(
+            empty_impact.contains("api.prevent_exit();")
+                && empty_impact.contains("finish_quit(app);"),
+            "a quit with nothing to warn about still has a daemon to stop, and \
+             it must not be stopped on the main thread",
         );
 
         // Including the ones that never reach `request_quit` at all. Dock ->
@@ -8679,13 +8819,29 @@ mod tests {
             &source[start..start + end]
         };
         assert!(
-            exit.contains("leave_nothing_running(app)"),
+            exit.contains("shut_down_gracefully(app)"),
             "an OS-issued exit has to stop the daemon too",
         );
         let after_stop = body_of("fn handle_locald_event(");
         assert!(
             after_stop.contains("leave_nothing_running(app);\n        app.exit(0);"),
             "the stop-then-quit path reaches the same exit",
+        );
+
+        // Done once. The confirmed path runs it on a worker and then calls
+        // `app.exit(0)`, which lands on the main-thread handler -- and without
+        // the guard that handler would do the whole wait again, on the thread
+        // the beachball is measuring.
+        let graceful = body_of("fn shut_down_gracefully(");
+        assert!(
+            graceful.contains("teardown_done.swap(true"),
+            "the teardown has to be once-only, or the exit repeats it on the \
+             main thread",
+        );
+        assert!(
+            graceful.contains("release_before_exit()")
+                && graceful.contains("leave_nothing_running(app)"),
+            "a graceful shutdown closes sharing and stops the daemon",
         );
 
         // And it uses the identity-verified path, not a signal at a PID.
