@@ -73,9 +73,9 @@ way a scenario says, do not edit the scenario.
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
-| Scenarios (live) | `make scenarios-live` | Nightly and before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
+| Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | — | Weekly, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go. |
-| Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. In CI on request only, via `backend-real-llm-e2e.yml`. |
+| Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. Not in CI. |
 
 The real-LLM lane is worth one paragraph, because its absence used to be
 invisible. Every `@pytest.mark.real_llm` test ran in **no** lane at all: the
@@ -84,11 +84,23 @@ sets `E2E_REAL=1` *together with* `E2E_LLM_MODE=mock` — and `conftest.py` read
 the explicit mode first, so they skipped there too. A test that runs nowhere
 still looks like coverage in a listing.
 
-It is `workflow_dispatch` only, with no schedule and above all no
-`pull_request`: this repository is public, so a fork must never be able to reach
-the credential. Its results deliberately do not feed `e2e-union.json` either — a
-coverage floor has to be reproducible from a pull request, and a number that
-moved because somebody spent money on a manual run is not.
+It runs locally only. There was a `workflow_dispatch` workflow for it, and in
+its whole life nobody dispatched it once — a lane that costs money per run and
+needs a person to decide to spend it does not get used by being available. The
+live scenario and E2B conformance crons went with it for a nearer reason: they
+ran on a schedule against credentials this deployment does not hold, so they
+reported green having executed nothing (`8 skipped in 84.85s`), which is worse
+than not running at all, because a listing counts them.
+
+None of the tests were deleted. `make test-e2e-real-llm`, `make scenarios-live`,
+and the E2B conformance files are all still here and still run on a machine that
+holds the credentials. What is gone is the pretence that CI was running them.
+
+Nothing in CI should reach a real provider anyway: this repository is public, so
+a fork must never be able to reach a credential, which is why none of these ever
+ran on `pull_request`. Their results also deliberately never fed
+`e2e-union.json` — a coverage floor has to be reproducible from a pull request,
+and a number that moved because somebody spent money on a manual run is not.
 
 ### What may run in front of the merge button
 
