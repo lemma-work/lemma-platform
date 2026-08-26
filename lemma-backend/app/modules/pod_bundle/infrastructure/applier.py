@@ -220,7 +220,7 @@ class BundleApplier:
         toolsets = _agent_toolsets(payload)
         existing = await _get_agent(service, self._pod_id, step.name, self._ctx)
         if existing is None:
-            await service.create_agent(
+            agent = await service.create_agent(
                 pod_id=self._pod_id,
                 user_id=self._user_id,
                 name=step.name,
@@ -236,7 +236,7 @@ class BundleApplier:
                 ctx=self._ctx,
             )
         else:
-            await service.update_agent(
+            agent = await service.update_agent(
                 pod_id=self._pod_id,
                 name=step.name,
                 instruction=payload.get("instruction"),
@@ -250,6 +250,43 @@ class BundleApplier:
                 requester_user_id=self._user_id,
                 ctx=self._ctx,
             )
+        await self._sync_memory_grant(agent, toolsets)
+
+    async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
+        """Derive the `/memory` folder and grant that the MEMORY toolset implies.
+
+        `sync_memory_folder_grant` lived only in the agent HTTP controller, so
+        an agent created through the service directly -- which is what this
+        applier does -- got the toolset without the folder it needs or the grant
+        that makes it writable.
+
+        That was invisible until MEMORY became a default for new agents (#476).
+        After it, exporting a pod and importing it back failed outright: the
+        source agent held `folder:/memory`, the export recorded it, and applying
+        the bundle's grants against a pod where nothing had ever created that
+        folder raised `400: Unknown resource name(s): folder:/memory` -- which
+        the apply handler turned into "Apply failed due to a transient error."
+        The folder is created here, so the name resolves.
+
+        Called after `create_agent`/`update_agent` and again after the deferred
+        grants step, mirroring the controller: an inline grant list *replaces*
+        every grant the agent holds, so a derived one applied first is the first
+        thing wiped.
+        """
+        from app.modules.agent.services.agent_memory_grant import (
+            sync_memory_folder_grant,
+        )
+
+        if agent is None or getattr(agent, "id", None) is None:
+            return
+        await sync_memory_folder_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            toolsets=toolsets,
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
@@ -308,6 +345,10 @@ class BundleApplier:
         await self._apply_grants(
             grantee_type="AGENT", grantee_id=agent.id, grants=grants
         )
+        # Replace semantics: whatever the bundle listed is now the whole set, so
+        # the toolset-derived grant has to be put back. From the agent as saved,
+        # not from the bundle -- the same rule the permissions endpoint follows.
+        await self._sync_memory_grant(agent, getattr(agent, "toolsets", None))
 
     # --- grants ----------------------------------------------------------
 

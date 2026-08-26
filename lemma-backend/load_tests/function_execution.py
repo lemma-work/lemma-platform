@@ -137,7 +137,24 @@ class LatencyBudget:
 class BenchmarkConfig:
     provider: str
     concurrency: int = 5
-    invocations: int = 5
+    # Enough samples for the p95 budgets to be a p95.
+    #
+    # This was 5, and `_percentile` interpolates at `(n - 1) * 0.95`, which for
+    # n=5 is position 3.8 -- four fifths of the way to the maximum. So the
+    # "p95 platform overhead" gate was the slowest of five invocations wearing
+    # a percentile's name, and one scheduling hiccup on a shared runner failed
+    # it: `job_write_batch platform overhead p95 2.742s exceeds 2.000s`, from a
+    # single 3.37s sample whose siblings were all near 0.2s.
+    #
+    # At n=20 the same outlier lands at position 18.05, between the two largest
+    # samples, and one hiccup no longer decides the number -- which is the whole
+    # point of gating on a percentile instead of a maximum. Tail regressions
+    # still fail it, because several slow samples still move it.
+    #
+    # Costs four waves of the steady phase per case instead of one. The gate it
+    # protects blocks every Desktop release, so a benchmark that takes two
+    # minutes longer and means something beats one that is quick and random.
+    invocations: int = 20
     batch_rows: int = 1_000
     # JOB completion is observed out of band. Poll slowly enough that the
     # observer does not become the workload under test, especially at higher
