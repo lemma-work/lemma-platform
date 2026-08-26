@@ -438,6 +438,30 @@ fn build(
             "WORKSPACE_CALLBACK_API_URL",
             format!("http://host.lemma.internal:{backend_port}"),
         ),
+        // The same URL, for function sandboxes, which had none.
+        //
+        // `api_url` is `http://app.lemma.localhost:<port>`, and that name
+        // resolves only on the Mac: `*.localhost` is a host resolver
+        // convention, and a Linux container inside the VM has never heard of
+        // it. The function dispatcher falls back to `api_url` when this is
+        // unset, so every schema extraction and every function call reached
+        // `getaddrinfo` and stopped there --
+        //
+        // ```text
+        // ConnectError: [Errno -3] Temporary failure in name resolution
+        // ```
+        //
+        // -- which is reported as `FUNCTION_VALIDATION_ERROR: Function schema
+        // extraction failed`, and reads as a problem with the user's function
+        // rather than with the address we handed the sandbox.
+        //
+        // `host.lemma.internal` is what guestd `--add-host`es into every
+        // workload container, which is why the workspace line above works and
+        // is exactly what this needs.
+        (
+            "FUNCTION_RUNTIME_GATEWAY_URL",
+            format!("http://host.lemma.internal:{backend_port}"),
+        ),
         (
             "WORKSPACE_CALLBACK_AUTH_URL",
             format!("http://host.lemma.internal:{frontend_port}/auth"),
@@ -1286,6 +1310,76 @@ mod tests {
             runtime_instance
         );
         assert!(paths.root.join("host.secrets.json").is_file());
+    }
+
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
+    /// Functions had no gateway URL at all, so the dispatcher fell back to
+    /// `api_url` and every schema extraction died at `getaddrinfo` --
+    /// "Temporary failure in name resolution", reported as
+    /// `FUNCTION_VALIDATION_ERROR: Function schema extraction failed", which
+    /// reads as the user's function being wrong.
+    ///
+    /// Asserted over every callback variable at once rather than one by one,
+    /// because the bug was an *absent* entry: a test naming only the variables
+    /// that exist cannot fail for the one that does not.
+    #[test]
+    fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+
+        let env = &manifest["services"][0]["env"];
+        let object = env.as_object().expect("services carry an env map");
+
+        // Anything a *sandbox* uses to call back. The workspace pair was
+        // right; the function one did not exist.
+        let sandbox_facing: Vec<&String> = object
+            .keys()
+            .filter(|name| {
+                name.ends_with("_URL")
+                    && (name.contains("CALLBACK") || name.contains("RUNTIME_GATEWAY"))
+            })
+            .collect();
+        assert!(
+            sandbox_facing
+                .iter()
+                .any(|name| name.as_str() == "FUNCTION_RUNTIME_GATEWAY_URL"),
+            "functions get no gateway URL, so the dispatcher falls back to \
+             api_url and every call dies in DNS: {sandbox_facing:?}",
+        );
+
+        for name in sandbox_facing {
+            let value = env[name].as_str().unwrap_or_default();
+            assert!(
+                !value.contains(".localhost"),
+                "{name} is {value}, and .localhost resolves only on the host",
+            );
+            assert!(
+                value.is_empty() || value.contains("host.lemma.internal"),
+                "{name} is {value}; a sandbox can only reach the host through \
+                 host.lemma.internal",
+            );
+        }
     }
 
     #[test]
