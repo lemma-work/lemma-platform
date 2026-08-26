@@ -37,6 +37,13 @@ from uuid import UUID
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.lemma_local_snapshot import (
+    guest_id_of as _guest_id_of,
+    is_running as _is_running,
+    is_serving as _is_serving,
+    sandbox_id_from_guest_id as _sandbox_id_from_guest_id,
+    state_of as _state_of,
+)
 from app.modules.workspace.providers.base import (
     ProviderCreateAmbiguous,
     ProviderCreateSpec,
@@ -285,9 +292,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                     f"function sandbox {instance.provider_id} disappeared before "
                     "it was ready"
                 )
-            status = snapshot.get("status")
-            serving = bool(status.get("ready")) if isinstance(status, dict) else False
-            if not serving:
+            if not _is_serving(snapshot):
                 raise SandboxUnavailable(
                     f"function sandbox {instance.provider_id} is not serving yet "
                     f"(state {_state_of(snapshot)})"
@@ -585,49 +590,3 @@ def _app(name: str, port: int, startup: str, exposure: str) -> dict[str, object]
             else "manager_api_key"
         ),
     }
-
-
-def _state_of(snapshot: dict[str, Any]) -> str:
-    """The guest's own word for what this sandbox is doing, for error text."""
-    status = snapshot.get("status")
-    if isinstance(status, dict):
-        return str(status.get("state") or status.get("status") or "unknown")
-    return str(snapshot.get("state", "unknown"))
-
-
-def _is_running(snapshot: dict[str, Any]) -> bool:
-    status = snapshot.get("status")
-    if isinstance(status, dict):
-        state = status.get("state") or status.get("status")
-        return str(state).lower() in {"running", "ready"}
-    return str(snapshot.get("state", "")).lower() in {"running", "ready"}
-
-
-def _guest_id_of(entry: dict[str, Any]) -> str | None:
-    """The guest id of one `sandbox.list` entry.
-
-    A list entry wraps the snapshot: the id lives at ``status.id``, while
-    ``sandbox.status`` returns that snapshot unwrapped. Both shapes are read
-    here so a caller never has to know which call produced the dict.
-    """
-
-    status = entry.get("status")
-    if isinstance(status, dict):
-        nested = status.get("id")
-        if isinstance(nested, str) and nested:
-            return nested
-    for key in ("sandbox_id", "id"):
-        value = entry.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _sandbox_id_from_guest_id(guest_id: str) -> UUID | None:
-    prefix, _, raw = guest_id.partition("-")
-    if prefix not in {"w", "f"}:
-        return None
-    try:
-        return UUID(hex=raw)
-    except ValueError:
-        return None
