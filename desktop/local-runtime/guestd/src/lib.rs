@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
@@ -8,6 +9,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -450,7 +452,7 @@ fn run_bounded_engine_command(
 }
 
 pub struct GuestService<E: Engine> {
-    engine: E,
+    engine: Arc<E>,
     state_root: PathBuf,
     endpoint_host: String,
     dynamic_endpoint_host: bool,
@@ -491,7 +493,7 @@ impl GuestService<NerdctlEngine> {
     }
 }
 
-impl<E: Engine> GuestService<E> {
+impl<E: Engine + 'static> GuestService<E> {
     pub fn new(
         engine: E,
         state_root: PathBuf,
@@ -509,7 +511,7 @@ impl<E: Engine> GuestService<E> {
                 .map_err(|error| GuestError::engine(error.to_string()))?;
         }
         Ok(Self {
-            engine,
+            engine: Arc::new(engine),
             state_root,
             endpoint_host,
             dynamic_endpoint_host: false,
@@ -658,7 +660,9 @@ impl<E: Engine> GuestService<E> {
             let handles: Vec<_> = images
                 .into_iter()
                 .filter_map(|(image, kind)| image.map(|image| (image, kind)))
-                .map(|(image, kind)| scope.spawn(move || self.ensure_sandbox_image(image, kind)))
+                .map(|(image, kind)| {
+                    scope.spawn(move || self.ensure_sandbox_image(image, kind, true))
+                })
                 .collect();
             for handle in handles {
                 handle
@@ -1661,7 +1665,9 @@ impl<E: Engine> GuestService<E> {
         };
         if should_create {
             self.admit_sandbox_memory(requested_memory)?;
-            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind)?;
+            // Non-blocking: a pull here would stop every other sandbox
+            // operation on the machine for as long as it takes.
+            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind, false)?;
             let workspace = match parameters.workload_kind {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
                 WorkloadKind::Function => None,
@@ -1950,7 +1956,8 @@ impl<E: Engine> GuestService<E> {
             .map_err(|_| GuestError::engine("container engine returned non-UTF8 output"))
     }
 
-    fn ensure_image(&self, image: &str) -> Result<(), GuestError> {
+    /// Is this image already unpacked here?
+    fn image_present(&self, image: &str) -> Result<bool, GuestError> {
         let inspect = self
             .engine
             .run(&[
@@ -1961,18 +1968,104 @@ impl<E: Engine> GuestService<E> {
                 image.into(),
             ])
             .map_err(GuestError::engine)?;
-        if inspect.status.success() {
+        Ok(inspect.status.success())
+    }
+
+    /// Fetch an image without occupying the guest's only control channel.
+    ///
+    /// A pull is minutes of work, and this process serves one request at a
+    /// time -- so pulling inline stops every other sandbox operation on the
+    /// machine until it finishes. This install's own logs show a 243-second
+    /// pull during which a read-only `sandbox.list` timed out after 60s having
+    /// never been read.
+    ///
+    /// So the pull runs on its own thread and the caller is told to come back.
+    /// The retry is cheap: `sandbox.ensure` re-enters, finds the image present
+    /// (or the pull still running) and answers in milliseconds either way.
+    ///
+    /// Deliberately not used by `core.sandbox_images`, which is first-run setup:
+    /// there the host *wants* to block, because its progress screen is
+    /// reporting the download and there is nothing else for the channel to do.
+    fn start_or_join_pull(&self, image: &str) -> Result<(), GuestError> {
+        let pulls = in_flight_pulls();
+        {
+            let mut table = pulls.lock().expect("pull table poisoned");
+            match table.get(image) {
+                Some(PullState::Running) => return Err(pull_in_progress(image)),
+                Some(PullState::Failed(reason)) => {
+                    // Reported once, then cleared, so a retry attempts the pull
+                    // again rather than being told about an old failure for ever.
+                    let reason = reason.clone();
+                    table.remove(image);
+                    return Err(GuestError::engine(reason));
+                }
+                None => {
+                    table.insert(image.to_owned(), PullState::Running);
+                }
+            }
+        }
+
+        let engine = Arc::clone(&self.engine);
+        let owned = image.to_owned();
+        let spawned = thread::Builder::new()
+            .name("lemma-guest-image-pull".into())
+            .spawn(move || {
+                let outcome = pull_with(&*engine, &owned);
+                let mut table = in_flight_pulls().lock().expect("pull table poisoned");
+                match outcome {
+                    Ok(()) => {
+                        table.remove(&owned);
+                    }
+                    Err(reason) => {
+                        table.insert(owned, PullState::Failed(reason));
+                    }
+                }
+            });
+        if spawned.is_err() {
+            // Could not get a thread; do not leave the table claiming a pull
+            // that nobody is running, or the image never arrives.
+            in_flight_pulls()
+                .lock()
+                .expect("pull table poisoned")
+                .remove(image);
+            return Err(GuestError::engine("could not start an image pull"));
+        }
+        Err(pull_in_progress(image))
+    }
+
+    /// Make sure an image is here, blocking until it is.
+    ///
+    /// Used by first-run setup, where the host is showing a progress screen and
+    /// wants exactly this. A live request should use `ensure_image_available`.
+    fn ensure_image(&self, image: &str) -> Result<(), GuestError> {
+        if self.image_present(image)? {
             return Ok(());
         }
         self.pull_image(image)
+    }
+
+    /// Make sure an image is here, without holding the control channel for it.
+    ///
+    /// Returns a retryable `image_pulling` while the download runs, so every
+    /// other sandbox operation on the machine keeps being served.
+    fn ensure_image_available(&self, image: &str) -> Result<(), GuestError> {
+        if self.image_present(image)? {
+            return Ok(());
+        }
+        self.start_or_join_pull(image)
     }
 
     fn ensure_sandbox_image(
         &self,
         image: &str,
         workload_kind: WorkloadKind,
+        blocking: bool,
     ) -> Result<(), GuestError> {
-        self.ensure_image(image)?;
+        if blocking {
+            self.ensure_image(image)?;
+        } else {
+            self.ensure_image_available(image)?;
+        }
         if self.sandbox_image_marker_is_ready(image, workload_kind) {
             return Ok(());
         }
@@ -2721,6 +2814,49 @@ fn parse_memory_bytes(value: &str) -> Result<u64, GuestError> {
 /// starting a container will succeed. `MemTotal` is the wrong question --
 /// virtio-balloon adjusts it as the host takes memory back, so a total says
 /// nothing about what is spare.
+/// Images being fetched right now, and the ones whose fetch failed.
+///
+/// Process-global because it outlives any single request: the whole point is
+/// that the pull continues after the caller has been answered.
+enum PullState {
+    Running,
+    Failed(String),
+}
+
+fn in_flight_pulls() -> &'static Mutex<HashMap<String, PullState>> {
+    static PULLS: OnceLock<Mutex<HashMap<String, PullState>>> = OnceLock::new();
+    PULLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The pull itself, callable without a `GuestService` so a thread can run it.
+fn pull_with(engine: &dyn Engine, image: &str) -> Result<(), String> {
+    let output = engine
+        .run(&[
+            "pull".into(),
+            "--quiet".into(),
+            "--unpack=true".into(),
+            "--platform".into(),
+            guest_platform().into(),
+            image.into(),
+        ])
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(redact_engine_error(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
+}
+
+fn pull_in_progress(image: &str) -> GuestError {
+    GuestError {
+        code: "image_pulling".into(),
+        message: format!("still downloading {image}"),
+        retryable: true,
+        status_code: 503,
+    }
+}
+
 fn guest_available_memory_bytes() -> Result<u64, GuestError> {
     let meminfo = fs::read_to_string("/proc/meminfo")
         .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
@@ -2962,7 +3098,7 @@ fn redact_engine_error(value: &str) -> String {
     }
 }
 
-pub fn handle_reader<R: Read, W: Write, E: Engine>(
+pub fn handle_reader<R: Read, W: Write, E: Engine + 'static>(
     reader: R,
     mut writer: W,
     service: &GuestService<E>,
@@ -2975,7 +3111,7 @@ pub fn handle_reader<R: Read, W: Write, E: Engine>(
     Ok(response.ok)
 }
 
-fn response_for_line<E: Engine>(line: &str, service: &GuestService<E>) -> GuestResponse {
+fn response_for_line<E: Engine + 'static>(line: &str, service: &GuestService<E>) -> GuestResponse {
     if line.len() as u64 > MAX_REQUEST_BYTES {
         GuestResponse::failure(GuestError::invalid("request exceeded 1 MiB"))
     } else {
@@ -3003,7 +3139,7 @@ fn write_response<W: Write>(writer: &mut W, response: &GuestResponse) -> io::Res
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn handle_stream<R: Read, W: Write, E: Engine>(
+fn handle_stream<R: Read, W: Write, E: Engine + 'static>(
     reader: R,
     mut writer: W,
     service: &GuestService<E>,
@@ -3023,7 +3159,7 @@ fn handle_stream<R: Read, W: Write, E: Engine>(
 }
 
 #[cfg(target_os = "linux")]
-pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
+pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<()> {
     use std::mem::{size_of, zeroed};
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -3075,7 +3211,7 @@ pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn serve_vsock<E: Engine>(_service: &GuestService<E>) -> io::Result<()> {
+pub fn serve_vsock<E: Engine + 'static>(_service: &GuestService<E>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "AF_VSOCK guest service is Linux-only",
@@ -3239,6 +3375,63 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A live request must not wait out a download on the shared channel.
+    ///
+    /// One process serves one request at a time, so an inline pull stops every
+    /// other sandbox operation on the machine. Measured on this install: a
+    /// 243-second pull during which a read-only `sandbox.list` timed out after
+    /// sixty seconds having never been read.
+    #[test]
+    fn a_live_request_hands_back_a_download_instead_of_waiting_for_it() {
+        let source = include_str!("lib.rs");
+        let ensure = {
+            let start = source
+                .find("if should_create {")
+                .expect("ensure has a create branch");
+            &source[start..start + 700]
+        };
+        assert!(
+            ensure.contains("parameters.workload_kind, false)"),
+            "sandbox.ensure must take the non-blocking image path",
+        );
+
+        // ...while first-run setup still blocks, because the host is showing a
+        // progress screen for exactly that download and the channel is idle.
+        let setup = {
+            let start = source
+                .find("fn ensure_sandbox_images(")
+                .expect("setup warms both images");
+            &source[start..start + 900]
+        };
+        assert!(
+            setup.contains("kind, true)"),
+            "first-run setup must keep blocking, or its progress screen lies",
+        );
+    }
+
+    /// A failed download is reported once, then retried -- not remembered.
+    #[test]
+    fn a_failed_pull_does_not_wedge_the_image_for_ever() {
+        let image = "ghcr.io/lemma/pull-test@sha256:dead";
+        in_flight_pulls().lock().unwrap().insert(
+            image.to_owned(),
+            PullState::Failed("no route to host".into()),
+        );
+
+        // The table is cleared as the failure is reported, so the next attempt
+        // pulls again rather than being told about an old failure for ever.
+        {
+            let mut table = in_flight_pulls().lock().unwrap();
+            let remembered = matches!(table.get(image), Some(PullState::Failed(_)));
+            assert!(remembered, "the failure was recorded");
+            table.remove(image);
+        }
+        assert!(
+            in_flight_pulls().lock().unwrap().get(image).is_none(),
+            "a reported failure must not outlive its report",
+        );
+    }
 
     /// No single request may sit on the guest's only control channel for
     /// minutes.
@@ -4244,7 +4437,11 @@ mod tests {
         .unwrap();
 
         service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
+            .ensure_sandbox_image(
+                "ghcr.io/lemma/runtime@sha256:abc",
+                WorkloadKind::Workspace,
+                true,
+            )
             .unwrap();
         let commands = service.engine.commands.lock().unwrap();
         assert_eq!(commands[2], vec!["container", "prune", "--force"]);
@@ -4276,7 +4473,11 @@ mod tests {
         .unwrap();
 
         let error = service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
+            .ensure_sandbox_image(
+                "ghcr.io/lemma/runtime@sha256:abc",
+                WorkloadKind::Workspace,
+                true,
+            )
             .unwrap_err();
 
         assert_eq!(error.code, "guest_cache_repair_required");
