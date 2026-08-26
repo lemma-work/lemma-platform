@@ -497,6 +497,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                         onChange={handleCommandRuntimeChange}
                                         disabled={!canWriteConversations}
                                         compact
+                                        ariaLabel="Conversation model"
                                         triggerLabelClassName="hidden sm:block"
                                         scopeHint="Just for this chat"
                                         manageHref={podModelsHref(podId)}

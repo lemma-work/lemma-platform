@@ -224,22 +224,12 @@ export function shortModelName(modelName: string): string {
 /**
  * The model name as a person reads it: the short name, humanised.
  *
- * Kept separate from `shortModelName` on purpose — that one is also fed to
- * `modelPathHint`, which does string surgery against the raw value, and to the
- * picker's search haystack. Humanising in there would break both.
+ * Kept separate from `shortModelName` on purpose — that one also feeds the
+ * picker's search haystack, which matches against the raw model name.
+ * Humanising in there would break it.
  */
 export function humanizeModelName(modelName: string): string {
     return humanizeName(shortModelName(modelName));
-}
-
-export function modelPathHint(modelName: string): string | null {
-    const shortName = shortModelName(modelName);
-    if (shortName === modelName) return null;
-    return modelName.replace(new RegExp(`/?${escapeRegExp(shortName)}$`), '').replace(/\/$/, '') || modelName;
-}
-
-export function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // A paired Agent Host reports each harness's health from its own probe, so
