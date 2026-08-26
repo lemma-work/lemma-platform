@@ -597,13 +597,23 @@ fn build(
             "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI",
             format!("{frontend_origin}/"),
         ),
-        // Matches SESSION_COOKIE_DOMAIN above, or the browser SDK writes a
-        // host-only front token beside the backend's domain-scoped one and the
-        // two disagree about whether a session exists.
-        (
-            "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN",
-            ".lemma.localhost".to_owned(),
-        ),
+        // Deliberately NOT widened to match SESSION_COOKIE_DOMAIN.
+        //
+        // This is the domain the *browser* SDK writes its own cookies to, and
+        // those are written with `document.cookie` -- so `sFrontToken`,
+        // `sAntiCsrf` and `st-last-access-token-update` are readable and
+        // writable by any script on any host in scope. Widening it put them on
+        // `.lemma.localhost`, where a pod app -- user-authored code on a
+        // sibling host -- could overwrite the workspace's copies at the same
+        // name, domain and path. Clearing `sFrontToken` signs the user out of
+        // Lemma itself; setting its expiry far ahead stops the workspace ever
+        // refreshing, so every screen 401s with no way back.
+        //
+        // Host-only is also simply correct: each origin's SDK keeps its own
+        // copy from its own responses, and the cookies that actually have to
+        // be shared -- the HttpOnly session pair -- are shared by
+        // SESSION_COOKIE_DOMAIN, which app code cannot read or write.
+        ("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN", String::new()),
         (
             "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",
             "false".to_owned(),
@@ -1305,11 +1315,12 @@ mod tests {
             manifest["services"][0]["env"]["API_URL"],
             format!("http://app.lemma.localhost:{backend_port}")
         );
-        // The browser SDK has to agree with the backend about the scope, or the
-        // two write competing front tokens.
+        // And the browser-visible one is NOT widened with it. These cookies are
+        // written by `document.cookie`, so a shared domain lets a pod app
+        // overwrite the workspace's session state and sign the user out.
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
-            ".lemma.localhost"
+            ""
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],

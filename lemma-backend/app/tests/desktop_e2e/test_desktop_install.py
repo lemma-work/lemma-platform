@@ -28,6 +28,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from lemma_sdk.errors import LemmaTimeoutError
 
 pytestmark = [pytest.mark.desktop_e2e, pytest.mark.asyncio]
 
@@ -47,6 +48,11 @@ APP_INDEX = """<!doctype html>
 # How long a freshly written file may take to become searchable. Indexing is
 # a background job; this is the point past which "not yet" is a real failure.
 INDEXING_PATIENCE_SECONDS = 120
+
+# How long a call may take when it has to start a sandbox first. Generous: the
+# guest pulls nothing at this point, but starting a container from a cold image
+# is seconds-to-a-minute, and a timeout here reads as "functions are broken".
+SANDBOX_COLD_START_SECONDS = 300.0
 
 APP_JS = "window.__E2E_APP_LOADED = true;\n"
 APP_CSS = "#root { color: rebeccapurple; }\n"
@@ -99,7 +105,15 @@ def client(install, account):
     """
     from lemma_sdk import Lemma
 
-    lemma = Lemma(base_url=install.api_url, token=account.access_token)
+    # Well above the SDK's 30s default. A function run starts a sandbox in the
+    # guest, and a cold one takes longer than that -- so the default made this
+    # lane pass or fail on whether a container happened to be warm, which is not
+    # what any of these tests are about.
+    lemma = Lemma(
+        base_url=install.api_url,
+        token=account.access_token,
+        timeout=SANDBOX_COLD_START_SECONDS,
+    )
     existing = lemma.orgs.list().items
     org = existing[0] if existing else lemma.orgs.create(name=f"e2e-{os.getpid()}")
     lemma.org_id = str(org.id)
@@ -320,14 +334,27 @@ async def test_a_file_survives_upload_search_and_download(pod):
         # real regression gets waved through.
         deadline = time.monotonic() + INDEXING_PATIENCE_SECONDS
         names: list[str] = []
+        last_error: Exception | None = None
         while time.monotonic() < deadline:
-            names = [item.path for item in pod.files.search("quick brown fox").items]
+            try:
+                names = [
+                    item.path for item in pod.files.search("quick brown fox").items
+                ]
+            except LemmaTimeoutError as error:
+                # The first search on a cold stack can exceed the SDK's own
+                # timeout while the index warms up. That is the condition this
+                # loop exists to wait out, so it is not a result -- retrying
+                # until the deadline is. A genuinely broken search still fails,
+                # because `names` never comes to contain the file.
+                last_error = error
+                continue
             if path in names:
                 break
             time.sleep(2)
         assert path in names, (
             f"{path} never became searchable within {INDEXING_PATIENCE_SECONDS}s; "
             f"last answer: {names[:10]}"
+            + (f"; last error: {last_error}" if last_error else "")
         )
     finally:
         try:
