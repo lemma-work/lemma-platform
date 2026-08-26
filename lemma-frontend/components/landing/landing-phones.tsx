@@ -39,7 +39,7 @@ function TelegramPhone() {
 
         <div className="lp-tg2-in">
           <p>
-            Refund request from <b>Northwind</b> — $420, above the $250
+            Refund request from <b>Northwind</b>. $420, above the $250
             threshold.
           </p>
           <span className="lp-tg2-time">09:12</span>
@@ -111,7 +111,7 @@ function WhatsAppPhone() {
 
         <div className="lp-wa2-in">
           <p>
-            Logged against <b>job_214</b> — status set to <b>complete</b>, photo
+            Logged against <b>job_214</b>. Status set to <b>complete</b>, photo
             attached to the record.
           </p>
           <span className="lp-wa2-meta">14:06</span>

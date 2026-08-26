@@ -240,6 +240,13 @@ class SandboxService(SandboxVolumeMixin):
                     "workspace.sandbox_service.ensure_retrying",
                     sandbox_id=str(sandbox_id),
                     attempt=attempt,
+                    # Why, not just how many times. Without this a sandbox that
+                    # never comes up produces dozens of identical lines and no
+                    # indication of the cause -- the caller sees only "endpoint
+                    # was not ready before the deadline", and the one process
+                    # that knew the reason threw it away.
+                    reason=str(exc) or type(exc).__name__,
+                    retry_after_ms=exc.retry_after_ms,
                 )
                 await asyncio.sleep(delay)
                 attempt += 1

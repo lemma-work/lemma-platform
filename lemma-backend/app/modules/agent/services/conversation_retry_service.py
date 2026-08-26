@@ -11,6 +11,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
 )
+from app.modules.agent.services.conversation_access import authorized_conversation
 from app.modules.agent.services.conversation_service import ConversationService
 
 
@@ -25,7 +26,9 @@ class ConversationRetryService(ConversationService):
         pod_id: UUID,
         agent_name: str | None = None,
     ) -> AgentRunStartResult:
-        conversation = await self._authorized_conversation(
+        conversation = await authorized_conversation(
+            self.conversation_repository,
+            self.agent_repository,
             conversation_id=conversation_id,
             user_id=user_id,
             pod_id=pod_id,
@@ -61,7 +64,7 @@ class ConversationRetryService(ConversationService):
         ):
             raise ConversationStateError("The failed run cannot be retried safely")
 
-        await self._assert_usage_preflight_allowed(
+        await self.turns.assert_usage_preflight_allowed(
             organization_id=conversation.organization_id,
             user_id=user_id,
             agent_runtime=failed_run.agent_runtime,

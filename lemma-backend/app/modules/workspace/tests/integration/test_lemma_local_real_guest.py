@@ -160,14 +160,22 @@ async def _remove(provider, sandbox_id, *names: str) -> None:
         raise failures[0]
 
 
-def _spec(sandbox_id, *, name: str, volume_name: str) -> ProviderCreateSpec:
+def _spec(
+    sandbox_id,
+    *,
+    name: str,
+    volume_name: str,
+    kind: SandboxKind = SandboxKind.WORKSPACE,
+) -> ProviderCreateSpec:
     return ProviderCreateSpec(
         sandbox_id=sandbox_id,
-        kind=SandboxKind.WORKSPACE,
+        kind=kind,
         epoch=1,
         name=name,
-        image=os.environ["WORKSPACE_IMAGE"],
-        profile_name="workspace",
+        image=os.environ[
+            "WORKSPACE_IMAGE" if kind is SandboxKind.WORKSPACE else "FUNCTION_IMAGE"
+        ],
+        profile_name="workspace" if kind is SandboxKind.WORKSPACE else "function",
         profile_digest="sha256:" + "a" * 64,
         deadline_at=_deadline(),
         volume_name=volume_name,
@@ -825,3 +833,49 @@ def _session_ref(session_id):
         session_id: object
 
     return _Ref(session_id=session_id)
+
+
+@pytest.mark.local_guest
+@pytest.mark.asyncio
+async def test_a_function_sandbox_reaches_ready_in_the_real_guest(
+    guest_provider,
+) -> None:
+    """The other half of the guest, which nothing here used to touch.
+
+    Every other test in this file is a WORKSPACE sandbox. A function runs a
+    different image, a different profile and a different readiness path -- and
+    `wait_ready` returned immediately for it, so "the sandbox is ready" was a
+    claim nobody checked. Functions failing on desktop looked like a function
+    bug for exactly as long as this gap existed.
+    """
+    sandbox_id = uuid4()
+    # The real convention, not an invented string: `destroy` resolves a name
+    # back to a guest id through `naming.parse_container_name`, so an arbitrary
+    # one is silently unresolvable and the teardown leaks the container.
+    name = naming.container_name(sandbox_id, SandboxKind.FUNCTION, 1)
+    spec = _spec(
+        sandbox_id,
+        name=name,
+        volume_name=naming.volume_name(sandbox_id, 1),
+        kind=SandboxKind.FUNCTION,
+    )
+    instance = await guest_provider.create(spec)
+    try:
+        # The assertion is that this *verifies* rather than returning blind.
+        await guest_provider.wait_ready(
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+        )
+        # Addressed by the guest's own id, which is what the provider handed
+        # back -- `inspect` resolves a *name* and a function's is not derivable
+        # from the one this test chose.
+        snapshot = await guest_provider._find(
+            instance.provider_id, deadline_at=_deadline()
+        )
+        assert snapshot is not None, "a function sandbox that was just created is gone"
+        status = snapshot.get("status") or {}
+        assert status.get("ready") is True, (
+            "wait_ready returned for a function sandbox the guest does not call "
+            f"ready: {status.get('state') or status.get('status')}"
+        )
+    finally:
+        await _remove(guest_provider, sandbox_id, name)

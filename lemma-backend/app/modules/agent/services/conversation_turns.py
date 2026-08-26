@@ -134,7 +134,7 @@ class TurnCoordinator:
                     self.uow, pod_id=conversation.pod_id
                 )
             )
-            await self._assert_usage_preflight_allowed(
+            await self.assert_usage_preflight_allowed(
                 organization_id=conversation.organization_id,
                 user_id=user_id,
                 agent_runtime=selected_agent_runtime,
@@ -402,13 +402,21 @@ class TurnCoordinator:
         if wait.external_ref:
             await cancel_snooze_wake(wait.external_ref)
 
-    async def _assert_usage_preflight_allowed(
+    async def assert_usage_preflight_allowed(
         self,
         *,
         organization_id: UUID | None,
         user_id: UUID,
         agent_runtime: AgentRuntimeConfig,
     ) -> None:
+        """Refuse to start a run the account has no headroom for.
+
+        Public because starting a turn is not the only way a run begins:
+        `ConversationRetryService.retry_failed_run` starts one too, and a retry
+        that skipped this would be a free way past a limit the first attempt
+        was held to. Reached through `ConversationService.turns`, like `start`
+        and `stop_conversation`.
+        """
         if self.usage_service is None:
             return
         if not agent_runtime.profile_id.startswith("system:"):

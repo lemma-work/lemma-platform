@@ -75,6 +75,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     credential_refresh_due,
     expiry_message,
     failure_events,
+    lease_terminal_detail,
     terminal_checkpoint_state,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import (
@@ -310,7 +311,8 @@ class RemoteHarness:
                     self.uow_factory, normalizer, agent_run_id=agent_run_id
                 )
                 for event in normalizer.finish_without_terminal(
-                    state=outcome.terminal_state
+                    state=outcome.terminal_state,
+                    detail=outcome.terminal_detail,
                 ):
                     yield event
                 return
@@ -344,7 +346,11 @@ class RemoteHarness:
             grace_seconds=self.terminal_event_grace_seconds,
         )
         if terminal_state is not None:
-            return LeaseOutcome(seen_at=seen_at, terminal_state=terminal_state)
+            return LeaseOutcome(
+                seen_at=seen_at,
+                terminal_state=terminal_state,
+                terminal_detail=lease_terminal_detail(lease),
+            )
 
         expired_state = await self._expire_if_unaccepted(
             lease=lease,

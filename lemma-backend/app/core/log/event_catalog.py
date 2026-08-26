@@ -665,7 +665,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'error_type', 'kind', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
     'workspace.provider_factory.metadata_namespace_derived': EventSpec('info', frozenset({'environment', 'namespace'})),
-    'workspace.sandbox_service.ensure_retrying': EventSpec('info', frozenset({'attempt', 'sandbox_id'})),
+    'workspace.sandbox_service.ensure_retrying': EventSpec('info', frozenset({'attempt', 'reason', 'retry_after_ms', 'sandbox_id'})),
     'workspace.sandbox_service.provisioning_claim_expired': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.sandbox_service.workspace_storage_recreated': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.sandbox_session.output_cursor_read_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
