@@ -8,21 +8,21 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/seo/site-copy';
  * data landing-page.tsx renders) in a shape an agent can read in one pass.
  */
 export function homepageMarkdown(): string {
-    const surfaces = surfaceModes.map((surface) => `- **${surface.label}** — ${surface.body}`).join('\n');
+    const surfaces = surfaceModes.map((surface) => `- **${surface.label}**: ${surface.body}`).join('\n');
 
     return `# Lemma
 
 > ${SITE_TITLE} ${SITE_DESCRIPTION}
 
 Lemma is an open-source runtime for agent-built software. A coding agent
-writes the app; Lemma gives it a pod — durable tables, files, functions,
-agents, workflows, permissions, and apps — so what the agent built keeps
-running and your team can actually use it, instead of living only in a chat
-transcript.
+writes the app; Lemma gives it a pod: durable tables, files, functions,
+agents, workflows, permissions, and apps. What the agent built keeps running,
+and your whole team can use it at a URL or from the tools they already have
+open.
 
 ## What a pod looks like from outside
 
-Nine surfaces read and write the same pod, under the same permissions:
+Every surface reads and writes the same pod, under the same permissions:
 
 ${surfaces}
 
