@@ -63,6 +63,9 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.events.queued_followup import (
+    start_followup_run_for_queued_messages,
+)
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
@@ -208,6 +211,9 @@ async def _process_agent_control_event(
             context={"conversation_id": str(parsed.conversation_id)},
             _job_id=conversation_title_job_id(parsed.conversation_id),
         )
+        # Anything the person sent while that run was busy has been sitting
+        # unanswered: the run it joined had already read its history.
+        await start_followup_run_for_queued_messages(parsed, uow_factory=uow_factory)
         return
     if isinstance(parsed, AgentRunStopRequestedEvent):
         job_id = agent_run_job_id(parsed.agent_run_id)

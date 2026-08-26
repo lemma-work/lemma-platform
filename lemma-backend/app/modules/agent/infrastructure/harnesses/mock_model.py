@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 import httpx
@@ -34,6 +34,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -43,7 +44,12 @@ from pydantic_ai.exceptions import (
     UnexpectedModelBehavior,
     UsageLimitExceeded,
 )
-from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+from pydantic_ai.models.function import (
+    AgentInfo,
+    DeltaThinkingPart,
+    DeltaToolCall,
+    FunctionModel,
+)
 
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -192,8 +198,15 @@ def _resolve_turn(
     info: AgentInfo,
     script: list[dict[str, Any]] | None,
     drop_counts: dict[int, int] | None = None,
-) -> tuple[str | None, list[dict[str, Any]]]:
-    """Return ``(text, tool_calls)`` for the current model request."""
+) -> tuple[str | None, list[dict[str, Any]], str | None]:
+    """Return ``(text, tool_calls, thinking)`` for the current model request.
+
+    ``thinking`` is the reasoning a scripted turn declares, delivered the way a
+    reasoning model delivers it -- as its own part, not inside the text. A test
+    that wants the *other* shape, reasoning inlined in the answer as tags, just
+    puts the tags in ``text``: the delta size below straddles them exactly as a
+    real provider does, which is the whole difficulty.
+    """
     turn_index = _current_run_turn_index(messages)
     if script is not None:
         if turn_index < len(script):
@@ -205,10 +218,10 @@ def _resolve_turn(
                 {**call, "args": _resolve_references(call.get("args") or {}, messages)}
                 for call in (turn.get("tool_calls") or [])
             ]
-            return turn.get("text"), tool_calls
+            return turn.get("text"), tool_calls, turn.get("thinking")
         # Script exhausted (e.g. an extra request after the last tool round) —
         # close out the run with a final answer.
-        return "[mock] done", []
+        return "[mock] done", [], None
 
     # Unscripted default.
     if not info.allow_text_output and info.output_tools:
@@ -217,17 +230,21 @@ def _resolve_turn(
         # should script it.
         output_tool = info.output_tools[0]
         logger.debug("agent.mock_model.mock_llm_structured_output_required.diagnostic")
-        return None, [
-            {
-                "tool_name": output_tool.name,
-                "args": _minimal_valid_args(
-                    getattr(output_tool, "parameters_json_schema", None)
-                ),
-                "tool_call_id": "mock-output",
-            }
-        ]
+        return (
+            None,
+            [
+                {
+                    "tool_name": output_tool.name,
+                    "args": _minimal_valid_args(
+                        getattr(output_tool, "parameters_json_schema", None)
+                    ),
+                    "tool_call_id": "mock-output",
+                }
+            ],
+            None,
+        )
     user_text = _last_user_text(messages)
-    return (f"[mock] {user_text}" if user_text else "[mock] ok"), []
+    return (f"[mock] {user_text}" if user_text else "[mock] ok"), [], None
 
 
 # Called, not stored: a shared `[]` would be handed to every caller to mutate.
@@ -347,6 +364,66 @@ def _drop_after_turns(error: object) -> int:
         return 1
 
 
+def _response_parts(
+    thinking: str | None,
+    text: str | None,
+    tool_calls: list[dict[str, Any]],
+) -> list[Any]:
+    """One scripted turn as whole parts, for the non-streaming path."""
+    parts: list[Any] = []
+    if thinking:
+        parts.append(ThinkingPart(content=thinking))
+    if text:
+        parts.append(TextPart(content=text))
+    for index, call in enumerate(tool_calls):
+        parts.append(
+            ToolCallPart(
+                tool_name=str(call["tool_name"]),
+                args=call.get("args") or {},
+                tool_call_id=str(call.get("tool_call_id") or f"mock-{index}"),
+            )
+        )
+    return parts or [TextPart(content="[mock] (empty)")]
+
+
+def _chunks(text: str) -> Iterator[str]:
+    """Small deltas, the way a provider actually sends them.
+
+    Yielding a whole answer in one chunk made the mock unable to tell
+    incremental streaming apart from a harness that buffers the entire response
+    and flushes it at the end -- which is what `test_sse_streaming_e2e` exists to
+    catch. It also matters for reasoning: a `<think>` tag written into the text
+    only straddles a delta boundary because the deltas are this small, and
+    straddling is precisely what the tag handling has to survive.
+    """
+    for start in range(0, len(text), _STREAM_DELTA_CHARS):
+        yield text[start : start + _STREAM_DELTA_CHARS]
+
+
+def _streamed_deltas(
+    thinking: str | None,
+    text: str | None,
+    tool_calls: list[dict[str, Any]],
+) -> Iterator[str | dict[int, Any]]:
+    """One scripted turn as a delta stream, in the order a provider sends it."""
+    if thinking:
+        for chunk in _chunks(thinking):
+            yield {0: DeltaThinkingPart(content=chunk)}
+    if text:
+        yield from _chunks(text)
+    if tool_calls:
+        yield {
+            index: DeltaToolCall(
+                name=str(call["tool_name"]),
+                json_args=json.dumps(call.get("args") or {}),
+                tool_call_id=str(call.get("tool_call_id") or f"mock-{index}"),
+            )
+            for index, call in enumerate(tool_calls)
+        }
+    if not thinking and not text and not tool_calls:
+        yield "[mock] (empty)"
+
+
 def build_mock_model(conversation: Any) -> FunctionModel:
     """Build a deterministic FunctionModel (text + tool calls) for one run."""
     script = _extract_script(conversation)
@@ -356,45 +433,17 @@ def build_mock_model(conversation: Any) -> FunctionModel:
 
     async def _fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         await _emulate_model_latency()
-        text, tool_calls = _resolve_turn(messages, info, script, drop_counts)
-        parts: list[Any] = []
-        if text:
-            parts.append(TextPart(content=text))
-        for j, call in enumerate(tool_calls):
-            parts.append(
-                ToolCallPart(
-                    tool_name=str(call["tool_name"]),
-                    args=call.get("args") or {},
-                    tool_call_id=str(call.get("tool_call_id") or f"mock-{j}"),
-                )
-            )
-        if not parts:
-            parts.append(TextPart(content="[mock] (empty)"))
-        return ModelResponse(parts=parts, model_name="mock")
+        text, tool_calls, thinking = _resolve_turn(messages, info, script, drop_counts)
+        return ModelResponse(
+            parts=_response_parts(thinking, text, tool_calls), model_name="mock"
+        )
 
     async def _stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
         await _emulate_model_latency()
-        text, tool_calls = _resolve_turn(messages, info, script, drop_counts)
-        if text:
-            # Emitted in small deltas, the way a provider actually sends them.
-            # Yielding the whole answer in one chunk made the mock unable to
-            # tell incremental streaming apart from a harness that buffers the
-            # entire response and flushes it at the end — which is exactly the
-            # regression `test_sse_streaming_e2e` exists to catch.
-            for start in range(0, len(text), _STREAM_DELTA_CHARS):
-                yield text[start : start + _STREAM_DELTA_CHARS]
-        if tool_calls:
-            yield {
-                j: DeltaToolCall(
-                    name=str(call["tool_name"]),
-                    json_args=json.dumps(call.get("args") or {}),
-                    tool_call_id=str(call.get("tool_call_id") or f"mock-{j}"),
-                )
-                for j, call in enumerate(tool_calls)
-            }
-        if not text and not tool_calls:
-            yield "[mock] (empty)"
+        text, tool_calls, thinking = _resolve_turn(messages, info, script, drop_counts)
+        for delta in _streamed_deltas(thinking, text, tool_calls):
+            yield delta
 
     return FunctionModel(_fn, stream_function=_stream_fn, model_name="mock")
