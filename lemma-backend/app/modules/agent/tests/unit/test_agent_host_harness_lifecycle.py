@@ -16,7 +16,7 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostEventType
+from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     StreamBatch,
@@ -88,6 +88,9 @@ def _uow_factory():
 
         async def __aexit__(self, *exc):
             return False
+
+        async def commit(self) -> None:
+            return None
 
     return _Uow()
 
@@ -233,6 +236,93 @@ class _TerminalStream:
 
     async def delete(self, *, run_id) -> None:
         self.deleted.append(run_id)
+
+
+class TestARunRefusedBeforeItStarted:
+    """The Agent Host can refuse a START_RUN before journaling anything.
+
+    Its harness fence rejects a command naming a configuration the machine has
+    replaced, and it does so ahead of ``accept_start`` -- so the run has no
+    events at all, and the only thing that ever terminalizes it is the
+    rejection receipt, which ``apply_rejection`` writes onto the lease as
+    ``error_detail``.
+
+    Lemma read the lease's *state* and ignored its reason, so every one of
+    these surfaced as "Agent Host reached terminal checkpoint FAILED without
+    its required terminal event" -- a sentence about Lemma's own plumbing,
+    naming neither the agent nor the cause, shown to the person who pressed
+    send.
+    """
+
+    @staticmethod
+    def _refused_repository(detail: str | None):
+        class _Repository:
+            def __init__(self, _uow) -> None:
+                pass
+
+            async def reconcile_expired_run(self, *, run_id):
+                del run_id
+                return None
+
+            async def get_run_lease(self, *, run_id):
+                del run_id
+                return SimpleNamespace(
+                    state=AgentHostRunState.FAILED.value,
+                    error_code="CONFIG_REVISION_STALE",
+                    error_detail=detail,
+                )
+
+        return _Repository
+
+    async def _last_event(
+        self, monkeypatch: pytest.MonkeyPatch, *, detail: str | None
+    ) -> AgentEvent:
+        agent_run_id = uuid7()
+        harness = _harness(
+            _RecordingStream(),
+            uow_factory=_uow_factory,
+            event_timeout_seconds=30.0,
+            lease_check_seconds=0.0,
+            stream_block_ms=1,
+            terminal_event_grace_seconds=0.0,
+        )
+        _stub_dispatch(harness, monkeypatch)
+        monkeypatch.setattr(
+            harness_module,
+            "AgentHostDispatchRepository",
+            self._refused_repository(detail),
+        )
+
+        events = [event async for event in await _drive(harness, agent_run_id)]
+        return events[-1]
+
+    async def test_the_reason_the_lease_recorded_is_what_the_user_reads(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        last = await self._last_event(
+            monkeypatch,
+            detail=(
+                "That computer and Lemma disagree about how Claude Code is "
+                "configured; try sending again in a moment"
+            ),
+        )
+
+        assert last.type is AgentEventType.ERROR
+        assert "Claude Code" in last.data
+        assert "terminal event" not in last.data
+
+    async def test_a_lease_with_no_recorded_reason_still_says_something(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fallback keeps the case it was written for.
+
+        A run that really did stop reporting has no recorded reason to prefer,
+        and saying so is better than ending on silence.
+        """
+        last = await self._last_event(monkeypatch, detail=None)
+
+        assert last.type is AgentEventType.ERROR
+        assert "without its required terminal event" in last.data
 
 
 class TestATurnEndedForASleepingAgent:

@@ -33,6 +33,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
     event_text,
     is_terminal_event,
     narration_event,
+    no_terminal_message,
     terminal_event,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
@@ -583,13 +584,16 @@ class AgentHostEventNormalizer:
         self,
         *,
         state: AgentHostRunState,
+        detail: str | None = None,
     ) -> list[AgentEvent]:
+        """End a run whose lease terminalized without a terminal event.
+
+        ``detail`` is what the lease recorded, and it wins: a run the Agent
+        Host refused before it started journals nothing at all, so that one
+        sentence is the whole of what reaches the person who pressed send.
+        """
         events = self._flush_messages(final=True)
-        terminal = error_event(
-            self.agent_run_id,
-            "Agent Host reached terminal checkpoint "
-            f"{state.value} without its required terminal event",
-        )
+        terminal = error_event(self.agent_run_id, detail or no_terminal_message(state))
         events.extend(self.close_outstanding(terminal))
         events.append(terminal)
         return events

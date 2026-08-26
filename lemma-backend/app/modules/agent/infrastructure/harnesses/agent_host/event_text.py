@@ -181,6 +181,24 @@ def terminal_event(
     )
 
 
+def no_terminal_message(state: AgentHostRunState) -> str:
+    """What to say about a run whose lease ended without a terminal event.
+
+    Deliberately the *last* resort. It describes Lemma's plumbing rather than
+    what happened to the run, so it is only ever right when the lease recorded
+    no reason of its own -- a run that genuinely stopped reporting. Anything
+    that was refused, expired or recovered has a sentence about itself, and
+    ``finish_without_terminal`` prefers it.
+
+    Kept here beside ``expiry_message``'s siblings so the wordings a person
+    reads are all in one file, and so the normalizer holds no prose.
+    """
+    return (
+        f"Agent Host reached terminal checkpoint {state.value} "
+        "without its required terminal event"
+    )
+
+
 def is_terminal_event(event: AgentEvent) -> bool:
     return event.type in {
         AgentEventType.COMPLETED,
