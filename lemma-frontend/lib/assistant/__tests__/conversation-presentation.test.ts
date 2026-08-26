@@ -96,6 +96,19 @@ describe('conversation presentation routes', () => {
         )).toBe('ledger');
     });
 
+    it('canonicalizes a link that names the app rather than its page', () => {
+        // Links reach the stage from outside the workspace — a chat surface, an
+        // agent's own deep link — carrying the app's resource name. The index
+        // slugs its pages, so a name is normalized to the slug it maps to
+        // instead of missing the page and reporting the app unavailable.
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=Expense%20Tracker', 'p1'))
+            .toBe('expense-tracker');
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=Expense+Tracker', 'p1'))
+            .toBe('expense-tracker');
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=Quote_Desk', 'p1'))
+            .toBe('quote-desk');
+    });
+
     it('only treats a same-pod app view with a slug as an app', () => {
         // The apps index, and a view route that lost its slug, are pages of their
         // own — framing them is still correct, so they must not read as an app.

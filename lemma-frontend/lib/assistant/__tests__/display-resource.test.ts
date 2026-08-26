@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
+import { createUniqueAppPageSlug } from '@/lib/utils/app-page-slugs';
+
 import {
     buildDisplayResourceHref,
     extractDisplayResourceRequest,
@@ -67,5 +69,31 @@ describe('buildDisplayResourceHref — WIDGET variants', () => {
             request: { type: 'WIDGET', path: '/KB/w.html', loadingMessages: [] },
         });
         expect(href).toBeNull();
+    });
+});
+
+describe('buildDisplayResourceHref — APP', () => {
+    // An agent knows an app by its pod resource name; the app index addresses
+    // its page by the slug of that name. Linking the name verbatim pointed at a
+    // page no entry has, and the workspace called the app it had just built
+    // "App unavailable".
+    it('addresses the app page by slug, not by the name the agent used', () => {
+        const href = buildDisplayResourceHref({
+            podId: 'p1',
+            request: { type: 'APP', name: 'Expense Tracker', loadingMessages: [] },
+        });
+
+        const slug = new URL(href!, 'https://lemma.work').searchParams.get('page');
+        expect(slug).toBe('expense-tracker');
+        expect(slug).toBe(createUniqueAppPageSlug({
+            title: 'Expense Tracker',
+            preferredSlug: 'Expense Tracker',
+            existingSlugs: [],
+        }));
+    });
+
+    it('sends an unnamed app to the apps index', () => {
+        expect(buildDisplayResourceHref({ podId: 'p1', request: { type: 'APP', loadingMessages: [] } }))
+            .toBe('/pod/p1/app/pages');
     });
 });
