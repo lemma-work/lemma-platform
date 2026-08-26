@@ -264,8 +264,7 @@ pub fn installation_has_data(root: &Path) -> bool {
 /// leaves these behind erases the rows and keeps the bytes -- so the files a
 /// user reset specifically to destroy survive, no disk comes back, and the
 /// install still reports itself as having data.
-pub const HOST_SIDE_DATA: [&str; 3] =
-    ["data/files", "data/object-storage", "data/workspaces"];
+pub const HOST_SIDE_DATA: [&str; 3] = ["data/files", "data/object-storage", "data/workspaces"];
 
 /// Remove the host-side user data, leaving the empty tree behind it.
 ///

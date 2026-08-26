@@ -2787,8 +2787,7 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
                 match new_window_disposition(&url, &mode, &app_base, &api_base) {
                     // A link to another app belongs in this window, which is
                     // the one the user is already looking at an app in.
-                    NewWindowDisposition::OpenAppWindow
-                    | NewWindowDisposition::NavigateInApp => {
+                    NewWindowDisposition::OpenAppWindow | NewWindowDisposition::NavigateInApp => {
                         if let Err(error) = open_pod_app_window(&handle, url.as_str()) {
                             append_install_log(&format!(
                                 "could not follow a link out of a pod app: {error}"
