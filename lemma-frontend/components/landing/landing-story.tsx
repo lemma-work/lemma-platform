@@ -25,16 +25,19 @@ import {
  * page that proves "shared" meant running.
  */
 
-const NOT_THIS = [
-  "Not a prompt to paste.",
-  "Not a skill to install.",
-  "Not a copy to keep in sync.",
+/* Positive rungs, on purpose: naming what Lemma is *not* reprinted the
+   share-a-copy model in the reader's head at the exact moment this section
+   exists to displace it. Three things that happen, then the payoff. */
+const SHARE_STEPS = [
+  "Send someone the link.",
+  "They open the same running agent.",
+  "Their work lands in the same records.",
 ] as const;
 
 const RIGHTS = [
   { who: "Priya", tag: null, can: "Approves refunds, any amount" },
-  { who: "Marco", tag: null, can: "His own jobs, no refunds" },
-  { who: "Classifier", tag: "agent", can: "Reads tickets, writes nothing" },
+  { who: "Marco", tag: null, can: "His own jobs; refunds route to Priya" },
+  { who: "Classifier", tag: "agent", can: "Reads tickets; read-only" },
 ] as const;
 
 export function SharedSection() {
@@ -51,14 +54,14 @@ export function SharedSection() {
             One of it, <span>however many of you.</span>
           </h2>
           <p className="lp-section-subhead">
-            You share the agent itself, already running — so there is one of it
+            You share the agent itself, already running, so there is one of it
             to fix, one of it to improve, and one set of records underneath.
           </p>
         </div>
 
         <div className="lp-shared-stage lp-reveal">
           <ul className="lp-ladder">
-            {NOT_THIS.map((line) => (
+            {SHARE_STEPS.map((line) => (
               <li key={line}>{line}</li>
             ))}
             <li className="is-it">
@@ -67,7 +70,7 @@ export function SharedSection() {
           </ul>
 
           <div>
-            <p className="lp-rights-label">And not the same for everyone</p>
+            <p className="lp-rights-label">And scoped to each person</p>
             <ul className="lp-rights">
               {RIGHTS.map((row) => (
                 <li key={row.who}>
@@ -80,8 +83,8 @@ export function SharedSection() {
               ))}
             </ul>
             <p className="lp-shared-foot">
-              Same system, different rights —{" "}
-              <b>and nobody working from their own version of it.</b>
+              Same system, different rights.{" "}
+              <b>One version of it, for everyone.</b>
             </p>
           </div>
         </div>
@@ -165,7 +168,7 @@ function ClaudeCodeTerminal() {
         </ul>
 
         <p className="lp-term-out">
-          Ran <b>refund-review</b> with a $420 test ticket — paused at{" "}
+          Ran <b>refund-review</b> with a $420 test ticket. Paused at{" "}
           <b>approve</b>, as expected.
         </p>
       </div>
@@ -272,7 +275,7 @@ The finished Lemma pod should include:
 - agents with scoped access
 - explicit human decisions where they matter
 
-Work from the current repository, reuse its conventions, and verify the real app in the browser. The result should feel like finished software for this job, not a generic dashboard.`,
+Work from the current repository, reuse its conventions, and verify the real app in the browser. The result should feel like finished software for this job.`,
 } as const;
 
 type PromptTarget = keyof typeof buildPrompts;
@@ -305,7 +308,7 @@ export function BuildSection() {
           <span>the whole system.</span>
         </h2>
         <p className="lp-section-subhead">
-          Not just the frontend. Tables, agents, workflows and permissions,
+          The app, the tables, the agents, the workflows and the permissions. All
           written as files and checked by the same agent that wrote them.
         </p>
 
@@ -467,8 +470,8 @@ export function ExamplesSection() {
           Complete pods, running. <span>Install one and make it yours.</span>
         </h2>
         <p className="lp-section-subhead">
-          Whole working systems, not starters — and every one of them open
-          source. Open it, see how it was built, make it yours.
+          Whole working systems, open source and running. Open one, see how it
+          was built, make it yours.
         </p>
 
         <div className="lp-examples-grid">

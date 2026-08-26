@@ -4,7 +4,7 @@ import { AssistantSurface } from "./landing-assistants";
 import { PhoneSurface } from "./landing-phones";
 
 export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
-  const isMail = surface.key === "email" || surface.key === "outlook";
+  const isMail = surface.key === "email";
   const isPhone = surface.key === "telegram" || surface.key === "whatsapp";
   const isWorkspace = surface.key === "slack" || surface.key === "teams";
   const isAssistant = surface.key === "chatgpt" || surface.key === "claude";
@@ -188,7 +188,7 @@ export function SurfaceChatContent({ surface }: { surface: SurfaceMode }) {
           <strong>Lemma</strong>{" "}
           {isTeams
             ? "Checked spend, goals, and permissions. One pause needs approval."
-            : "One approval. Northwind crossed the ICP threshold — Quill scored it 87."}
+            : "One approval. Northwind crossed the ICP threshold. Quill scored it 87."}
         </p>
       </div>
       <article className="lp-surface-approval is-sequence-3">
@@ -232,7 +232,7 @@ export function SurfaceChatContent({ surface }: { surface: SurfaceMode }) {
           <strong>Lemma</strong>{" "}
           {isTeams
             ? "Done. Spend paused, finance notified, log updated."
-            : "Done. Northwind routed, owner assigned, record updated — same state everywhere."}
+            : "Done. Northwind routed, owner assigned, record updated. Same state everywhere."}
         </p>
       </div>
     </div>
@@ -240,14 +240,10 @@ export function SurfaceChatContent({ surface }: { surface: SurfaceMode }) {
 }
 
 export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
-  const isOutlook = surface.key === "outlook";
-
   return (
-    <div
-      className={isOutlook ? "lp-email-surface is-outlook" : "lp-email-surface"}
-    >
+    <div className="lp-email-surface">
       <nav className="lp-email-rail" aria-hidden="true">
-        {(isOutlook ? ["M", "C", "P", "T"] : ["G", "C", "D", "M"]).map(
+        {["G", "C", "D", "M"].map(
           (item, index) => (
             <span className={index === 0 ? "is-active" : ""} key={item}>
               {item}
@@ -256,20 +252,18 @@ export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
         )}
       </nav>
       <div className="lp-email-list" aria-hidden="true">
-        <strong>{isOutlook ? "Focused" : "Primary"}</strong>
+        <strong>Primary</strong>
         {[
           [
-            isOutlook ? "Alex Morgan" : "Support escalation",
-            isOutlook
-              ? "Invoice #AC-4482 needs exception review"
-              : "Refund exception request",
+            "Support escalation",
+            "Refund exception request",
             "Needs approval",
           ],
           ["Operations", "Customer record changed after reply", "Synced"],
           ["Finance Team", "Friday reminder queued for owner", "Scheduled"],
           [
-            isOutlook ? "Vendor Mgmt" : "Customer Success",
-            isOutlook ? "Payment policy note" : "Implementation follow-up",
+            "Customer Success",
+            "Implementation follow-up",
             "Logged",
           ],
         ].map(([from, subject, status], index) => (
@@ -285,20 +279,15 @@ export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
       <div className="lp-email-reading-pane">
         <article className="lp-email-card">
           <div>
-            <span className="lp-email-avatar">{isOutlook ? "AM" : "CS"}</span>
+            <span className="lp-email-avatar">CS</span>
             <span>
-              <strong>
-                {isOutlook
-                  ? "Invoice exception review"
-                  : "Refund exception request"}
-              </strong>
+              <strong>Refund exception request</strong>
               <small>Received 9:15 AM</small>
             </span>
           </div>
           <p>
-            {isOutlook
-              ? "Please check the attached invoice against our payment policy and flag anything that needs approval."
-              : "Priority customer is asking for a one-time exception after unresolved implementation issues."}
+            Priority customer is asking for a one-time exception after a run of
+            implementation issues.
           </p>
         </article>
         <div className="lp-surface-compose">
@@ -307,19 +296,16 @@ export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
             <strong>Lemma draft ready</strong>
           </div>
           <p>
-            {isOutlook
-              ? "I found one policy exception, drafted the approval note, and added it to Finance Review."
-              : "The exception can be approved once, with a follow-up task opened for the implementation issue."}
+            The exception can be approved once, with a follow-up task opened for
+            the implementation issue.
           </p>
-          <span>
-            {isOutlook ? "Send reply in Outlook" : "Send reply in Gmail"}
-          </span>
+          <span>Send the reply</span>
         </div>
         <div className="lp-email-sync-list" aria-hidden="true">
           {[
             ["approval.status", "waiting"],
             ["customer.record", "ready to update"],
-            ["follow_up.owner", isOutlook ? "Finance" : "CSM"],
+            ["follow_up.owner", "CSM"],
           ].map(([label, value]) => (
             <div key={label}>
               <span>{label}</span>
