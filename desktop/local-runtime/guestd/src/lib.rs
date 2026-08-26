@@ -20,6 +20,25 @@ const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
+
+/// How long one `sandbox.ensure` may wait for a sandbox to start serving.
+///
+/// Not a limit on how long a sandbox may take: it is how long this *request*
+/// may occupy the guest's single control channel before handing the caller a
+/// retryable answer. The caller's own deadline still bounds the start.
+///
+/// Fifteen seconds rather than the two or three that would keep the channel
+/// freest, because handing back `not_ready` is not free either: the retry is
+/// served by the reuse path in `SandboxService`, which adopts the running
+/// container without re-checking readiness. Measured starts are a couple of
+/// seconds, so this leaves the retry as the exception rather than the norm
+/// while still cutting the worst case from three minutes to fifteen seconds.
+const SANDBOX_READY_POLL_BUDGET: Duration = Duration::from_secs(15);
+const _: () = assert!(
+    SANDBOX_READY_POLL_BUDGET.as_secs() <= 30 && SANDBOX_READY_POLL_BUDGET.as_secs() >= 5,
+    "one ensure must not sit on the shared control channel for minutes, and must \
+     not be so brief that every start takes the retry path",
+);
 /// The phrase that turns a guest failure into an offer to reset local data.
 ///
 /// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` rather than shared:
@@ -36,7 +55,6 @@ const DATA_RESET_MARKER: &str = "local data must be reset";
 /// stay equal -- a cluster written anywhere else is not on the volume the user
 /// is told holds their database.
 const POSTGRES_DATA_DIR: &str = "/var/lib/postgresql/data";
-const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
 const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// What a sandbox is assumed to need in order to *start*, for admission.
@@ -67,6 +85,17 @@ const GUEST_MEMORY_HEADROOM_BYTES: u64 = 384 * 1024 * 1024;
 /// overrides it, so an operator with a larger guest is not held to a number
 /// compiled in here.
 const DEFAULT_MAX_SANDBOXES: usize = 16;
+
+// Checked when this file compiles, because they are statements about the
+// constants above rather than about any run.
+const _: () = assert!(
+    SANDBOX_MEMORY_REQUEST_BYTES < DEFAULT_SANDBOX_MEMORY_BYTES,
+    "the admission request has to be smaller than the ceiling, or nothing changed",
+);
+const _: () = assert!(
+    DEFAULT_MAX_SANDBOXES > 2,
+    "the default concurrency must not reimpose the two-sandbox limit",
+);
 
 /// How far the guest clock may sit from the host's before it is stepped.
 ///
@@ -1654,7 +1683,23 @@ impl<E: Engine> GuestService<E> {
             result?;
         }
 
-        let deadline = Instant::now() + Duration::from_secs(180);
+        // Bounded, because this request holds the guest's only control channel.
+        //
+        // The host bridge keeps a single vsock connection behind a
+        // process-wide mutex, and `serve_vsock` handles each connection inline
+        // on its accept loop -- so one request in flight is the whole
+        // machine's guest traffic. Waiting here for up to three minutes meant
+        // a slow sandbox start blocked every other sandbox operation on the
+        // computer, including read-only ones: a `sandbox.list` was measured
+        // timing out after 60s having never reached this process.
+        //
+        // Most starts finish well inside this window, so the common case still
+        // returns ready in one round trip. A slower one is handed back as
+        // retryable rather than waited out, and re-entry is cheap: a container
+        // that is RUNNING with matching metadata and image takes the
+        // `should_create == false` path above, skipping creation, the image
+        // check and the admission check, and lands straight back here.
+        let deadline = Instant::now() + SANDBOX_READY_POLL_BUDGET;
         let mut last_snapshot = None;
         let mut applications_healthy = false;
         while Instant::now() < deadline {
@@ -1684,9 +1729,20 @@ impl<E: Engine> GuestService<E> {
         }
         let snapshot = last_snapshot.ok_or_else(GuestError::not_found)?;
         if snapshot["status"]["ready"] != true || !applications_healthy {
-            return Err(
-                self.sandbox_startup_error(&container, "sandbox applications did not become ready")
-            );
+            // Still coming up, as far as anything here can tell: a container
+            // that had died would have been caught by the STOPPED/ERROR arm
+            // above and reported as a startup failure. So this is "not yet",
+            // and saying so releases the channel for everyone else instead of
+            // holding it until the sandbox is either ready or hopeless.
+            return Err(GuestError {
+                code: "not_ready".into(),
+                message: format!(
+                    "sandbox {} is still starting",
+                    parameters.sandbox_id.as_str()
+                ),
+                retryable: true,
+                status_code: 503,
+            });
         }
         self.wait_callback(&parameters)?;
         Ok(snapshot)
@@ -2691,19 +2747,6 @@ fn max_sandboxes() -> usize {
         .unwrap_or(DEFAULT_MAX_SANDBOXES)
 }
 
-fn guest_total_memory_bytes() -> Result<u64, GuestError> {
-    let meminfo = fs::read_to_string("/proc/meminfo")
-        .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
-    let kib = meminfo
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))
-        .and_then(|value| value.split_whitespace().next())
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| GuestError::engine("guest memory total was unavailable"))?;
-    kib.checked_mul(1024)
-        .ok_or_else(|| GuestError::engine("guest memory total overflow"))
-}
-
 fn validate_image(image: &str) -> Result<(), GuestError> {
     if image.is_empty()
         || image.len() > 512
@@ -3197,6 +3240,61 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 mod tests {
     use super::*;
 
+    /// No single request may sit on the guest's only control channel for
+    /// minutes.
+    ///
+    /// The host bridge holds one vsock connection behind a process-wide mutex
+    /// and `serve_vsock` handles each connection inline on its accept loop, so
+    /// a request in flight is the whole machine's guest traffic. `ensure` used
+    /// to poll readiness for up to 180 seconds inside the request: a slow
+    /// sandbox start blocked every other sandbox operation, including
+    /// read-only ones, and burned callers' deadlines while they waited to be
+    /// heard rather than to be served.
+    #[test]
+    fn no_request_holds_the_control_channel_for_minutes() {
+        // The bounds themselves are checked at compile time beside the
+        // constant; what is worth asserting here is that nothing reintroduced
+        // an unbounded wait elsewhere in `ensure`.
+        let source = include_str!("lib.rs");
+        let ensure = {
+            let start = source
+                .find("let deadline = Instant::now() + SANDBOX_READY_POLL_BUDGET;")
+                .expect("ensure polls readiness against the shared budget");
+            &source[start..start + 900]
+        };
+        assert!(
+            !ensure.contains("Duration::from_secs(180)"),
+            "the readiness wait must not go back to holding the channel for minutes",
+        );
+    }
+
+    /// A sandbox that is merely slow is retryable; one that died is not.
+    ///
+    /// Bounding the wait only helps if "not yet" is distinguishable from
+    /// "never" -- a bounded wait that reported failure would turn every slow
+    /// start into a hard error.
+    #[test]
+    fn a_slow_start_is_reported_as_retryable() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("code: \"not_ready\".into(),")
+            .expect("ensure hands back a not_ready when the budget expires");
+        // To the end of the struct literal rather than a fixed span, so the
+        // test does not start failing because the message got a line longer.
+        let end = source[start..]
+            .find("\n            });")
+            .expect("the not_ready error is a struct literal");
+        let window = &source[start..start + end];
+        assert!(
+            window.contains("retryable: true"),
+            "a sandbox that is still starting must be retried, not failed",
+        );
+        assert!(
+            window.contains("status_code: 503"),
+            "not_ready is a availability answer, not a client error",
+        );
+    }
+
     /// A ceiling is not a claim.
     ///
     /// Admission used to add up every running sandbox's `--memory` and treat
@@ -3207,27 +3305,28 @@ mod tests {
     /// thing that must never come back.
     #[test]
     fn a_sandbox_ceiling_is_not_a_reservation() {
-        let guest = 6 * 1024 * 1024 * 1024_u64;
-        let old_style_allowance =
-            guest.saturating_sub(CORE_MEMORY_RESERVATION_BYTES) / DEFAULT_SANDBOX_MEMORY_BYTES;
+        // The numbers that shipped, kept as literals because the constant they
+        // came from is gone: admission no longer reserves for core services at
+        // all, it asks the kernel what is free.
+        const SHIPPED_GUEST: u64 = 6 * 1024 * 1024 * 1024;
+        const SHIPPED_CORE_RESERVATION: u64 = 1536 * 1024 * 1024;
+
+        let old_style =
+            SHIPPED_GUEST.saturating_sub(SHIPPED_CORE_RESERVATION) / DEFAULT_SANDBOX_MEMORY_BYTES;
         assert_eq!(
-            old_style_allowance, 2,
-            "summing ceilings caps a 6 GiB guest at two sandboxes",
+            old_style, 2,
+            "summing ceilings capped a 6 GiB guest at two sandboxes, which is \
+             what made one open workspace plus a function the whole machine",
         );
 
-        // Admission now asks for a request-sized slice, so the same guest fits
-        // an order of magnitude more before memory is the binding constraint.
-        let request_style_allowance = guest
-            .saturating_sub(CORE_MEMORY_RESERVATION_BYTES)
-            .saturating_sub(GUEST_MEMORY_HEADROOM_BYTES)
+        // Admission now asks for a request-sized slice of what is actually
+        // free, so the same guest fits an order of magnitude more before
+        // memory is the binding constraint.
+        let request_style = SHIPPED_GUEST.saturating_sub(GUEST_MEMORY_HEADROOM_BYTES)
             / SANDBOX_MEMORY_REQUEST_BYTES;
         assert!(
-            request_style_allowance >= 8,
-            "a request-based admission must not stop at two: got {request_style_allowance}",
-        );
-        assert!(
-            SANDBOX_MEMORY_REQUEST_BYTES < DEFAULT_SANDBOX_MEMORY_BYTES,
-            "the request has to be smaller than the ceiling or nothing changed",
+            request_style >= 8,
+            "a request-based admission must not stop at two: got {request_style}",
         );
     }
 
@@ -3252,10 +3351,6 @@ mod tests {
     #[test]
     fn the_sandbox_ceiling_is_configurable() {
         assert_eq!(max_sandboxes(), DEFAULT_MAX_SANDBOXES);
-        assert!(
-            DEFAULT_MAX_SANDBOXES > 2,
-            "the default must not reimpose the limit this change removes",
-        );
     }
     use std::cell::Cell;
     use std::os::unix::process::ExitStatusExt;
