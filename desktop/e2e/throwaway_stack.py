@@ -488,6 +488,9 @@ def wait_ready(
                     log("backend is ready")
                     return
         except (urllib.error.URLError, OSError):
+            # Not yet listening, or listening and still starting up. That is the
+            # normal state for most of this loop, so it is waited out rather
+            # than reported; the deadline below is what turns it into a failure.
             pass
         time.sleep(1)
     fail(
@@ -533,6 +536,10 @@ def _abandon(created):
     try:
         _remove_throwaway_root(created["root"])
     except SystemExit:
+        # The guard refused the path, which means there is nothing here this
+        # code is entitled to delete. Swallowed on purpose: this runs while
+        # another failure is already propagating, and replacing that failure
+        # with this one would hide the reason the stack could not start.
         pass
 
 

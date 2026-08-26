@@ -28,6 +28,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from lemma_sdk.errors import LemmaTimeoutError
 
 pytestmark = [pytest.mark.desktop_e2e, pytest.mark.asyncio]
 
@@ -320,14 +321,27 @@ async def test_a_file_survives_upload_search_and_download(pod):
         # real regression gets waved through.
         deadline = time.monotonic() + INDEXING_PATIENCE_SECONDS
         names: list[str] = []
+        last_error: Exception | None = None
         while time.monotonic() < deadline:
-            names = [item.path for item in pod.files.search("quick brown fox").items]
+            try:
+                names = [
+                    item.path for item in pod.files.search("quick brown fox").items
+                ]
+            except LemmaTimeoutError as error:
+                # The first search on a cold stack can exceed the SDK's own
+                # timeout while the index warms up. That is the condition this
+                # loop exists to wait out, so it is not a result -- retrying
+                # until the deadline is. A genuinely broken search still fails,
+                # because `names` never comes to contain the file.
+                last_error = error
+                continue
             if path in names:
                 break
             time.sleep(2)
         assert path in names, (
             f"{path} never became searchable within {INDEXING_PATIENCE_SECONDS}s; "
             f"last answer: {names[:10]}"
+            + (f"; last error: {last_error}" if last_error else "")
         )
     finally:
         try:
