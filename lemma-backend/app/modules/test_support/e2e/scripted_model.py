@@ -17,6 +17,35 @@ def script_text(text: str) -> ScriptTurn:
     return {"text": text, "tool_calls": []}
 
 
+def script_thinking(thinking: str, text: str) -> ScriptTurn:
+    """A turn that reasons and then answers, the way a reasoning model does.
+
+    The thought is delivered as its own part. For the *other* shape -- a model
+    that writes its reasoning into the answer as ``<think>`` tags -- use
+    ``script_inline_reasoning``: the two are different failure surfaces and a
+    test that means one should not accidentally get the other.
+    """
+    return {"thinking": thinking, "text": text, "tool_calls": []}
+
+
+def script_inline_reasoning(reasoning: str, answer: str = "") -> ScriptTurn:
+    """A turn whose *answer* has reasoning inlined in it as tags.
+
+    What Fireworks-class models do once a conversation has taught them to, and
+    the shape that reached users as an ordinary assistant message. Built from
+    ordinals so the tags survive tooling that reads source as markup, and left
+    for the mock to chunk so the opening tag straddles a delta boundary exactly
+    as it does in production -- which is the specific reason pydantic-ai's own
+    tag handling misses it.
+
+    Pass ``answer=""`` for the case with no answer at all behind the reasoning.
+    """
+    open_tag = chr(60) + "think" + chr(62)
+    close_tag = chr(60) + "/think" + chr(62)
+    body = f"{open_tag}\n{reasoning}\n{close_tag}"
+    return script_text(f"{body}\n\n{answer}" if answer else body)
+
+
 def script_tool_result_ref(tool_call_id: str, path: str) -> str:
     """Refer to a field of an earlier tool call's result.
 
@@ -190,10 +219,12 @@ __all__ = [
     "script_ask_user",
     "script_display_resource",
     "script_email_reply",
+    "script_inline_reasoning",
     "script_model_error",
     "script_progress",
     "script_request_approval",
     "script_say",
     "script_text",
+    "script_thinking",
     "script_tool_call",
 ]

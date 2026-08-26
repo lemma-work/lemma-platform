@@ -125,6 +125,9 @@ it happens.
   has stalled.
 - When a watcher connects to a run already in progress, the system shall give
   them what has happened so far and then continue live.
+- The system shall record an agent's reasoning as reasoning, and shall never
+  present it as the agent's answer or return it as a run's result — however the
+  model chose to write it.
 - When a run ends, the system shall close the stream.
 
 **Contracts:** `agent.conversation.stream`, `agent.conversation.get`
