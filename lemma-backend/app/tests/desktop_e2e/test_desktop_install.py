@@ -251,7 +251,7 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
 # --- functions -----------------------------------------------------------------
 
 
-async def test_a_function_runs_in_the_guest_and_returns_its_result(pod):
+async def test_a_function_runs_in_the_guest_and_returns_its_result(pod, install):
     """Guards the sandbox's address as much as the function itself.
 
     Functions had no gateway URL at all on desktop, so the dispatcher fell back
@@ -259,6 +259,13 @@ async def test_a_function_runs_in_the_guest_and_returns_its_result(pod):
     ``getaddrinfo`` — surfaced to the user as ``FUNCTION_VALIDATION_ERROR``,
     which reads as their code being wrong.
     """
+    if not install.provisions_sandboxes:
+        pytest.skip(
+            "this stack has no locald, so nothing dispatches a function into a "
+            "guest sandbox. Run `make desktop-e2e` against a packaged install "
+            "for this lane."
+        )
+
     from lemma_sdk.openapi_client.models import (
         CreateFunctionRequest,
         FunctionRunStatus,

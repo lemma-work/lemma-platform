@@ -41,9 +41,35 @@ class Install:
     api_url: str
     frontend_url: str
     app_base_domain: str
+    # A throwaway stack borrows the guest but runs no locald, so nothing
+    # dispatches functions into a sandbox. A packaged install does.
+    provisions_sandboxes: bool = True
 
     def app_url(self, slug: str) -> str:
         return f"http://{slug}.{self.app_base_domain}/"
+
+
+def _read_throwaway_stack() -> Install | None:
+    """A stack stood up by ``desktop/e2e/throwaway_stack.py``, if there is one.
+
+    Preferred over a packaged install when present, because that is the lane
+    where a change in the working tree can be seen working *before* it becomes
+    a DMG. It records its own addresses, including the fact that it runs no
+    separate frontend.
+    """
+    stack_file = locald_root().parent / "stack.json"
+    if not stack_file.is_file():
+        return None
+    try:
+        stack = json.loads(stack_file.read_text())
+        return Install(
+            api_url=stack["api_url"],
+            frontend_url=stack["frontend_url"],
+            app_base_domain=stack["app_base_domain"],
+            provisions_sandboxes=bool(stack.get("provisions_sandboxes", True)),
+        )
+    except OSError, json.JSONDecodeError, KeyError:
+        return None
 
 
 def _read_install() -> Install | None:
@@ -54,6 +80,10 @@ def _read_install() -> Install | None:
     inferred from the other, because ``APP_BASE_DOMAIN`` carries the port and
     getting that wrong produces a 404 that looks like a missing app.
     """
+    throwaway = _read_throwaway_stack()
+    if throwaway is not None:
+        return throwaway
+
     root = locald_root()
     try:
         ports = json.loads((root / "network.json").read_text())

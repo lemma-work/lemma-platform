@@ -21,7 +21,7 @@ from app.modules.apps.domain.errors import (
 )
 from app.core.runtime_config import (
     APP_BRANDING_SENTINEL,
-    APP_ORIGIN_API_URL,
+    app_api_url,
     build_app_branding,
     runtime_config_token,
 )
@@ -413,7 +413,7 @@ async def test_get_app_asset_reads_release_contents():
     expected_token = runtime_config_token(
         app.pod_id,
         app={"name": app.name, "description": app.description},
-        api_url=APP_ORIGIN_API_URL,
+        api_url=app_api_url(),
     )
     assert asset.etag == f'"version.{expected_token}"'
     assert asset.is_entrypoint is True
@@ -463,7 +463,7 @@ async def test_public_app_entrypoint_includes_share_metadata(monkeypatch):
             "url": "https://research-desk.apps.lemma.work",
         },
         branding=branding,
-        api_url=APP_ORIGIN_API_URL,
+        api_url=app_api_url(),
     )
     assert asset.etag == f'"version.{expected_token}"'
 
@@ -692,7 +692,7 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
     config_token = runtime_config_token(
-        app.pod_id, app={"name": app.name}, api_url=APP_ORIGIN_API_URL
+        app.pod_id, app={"name": app.name}, api_url=app_api_url()
     )
     asset = await _get_app_asset(
         service,

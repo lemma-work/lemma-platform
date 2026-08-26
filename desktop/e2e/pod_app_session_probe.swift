@@ -67,7 +67,16 @@ let signInScript = """
     const response = await fetch(\(jsonString(config.apiUrl)) + "/st/auth/signin", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", "rid": "emailpassword" },
+      // st-auth-mode: cookie is what the browser SDK sends, and it is what
+      // decides whether the server replies with Set-Cookie or with header
+      // tokens. Without it SuperTokens defaults to header transfer, the browser
+      // stores no session, and the app's call below returns 401 -- which looks
+      // exactly like the bug this probe exists to detect.
+      headers: {
+        "Content-Type": "application/json",
+        "rid": "emailpassword",
+        "st-auth-mode": "cookie",
+      },
       body: JSON.stringify({ formFields: [
         { id: "email", value: \(jsonString(config.email)) },
         { id: "password", value: \(jsonString(config.password)) },

@@ -509,6 +509,12 @@ fn build(
         // backend. An app acting as the signed-in user is the feature, and it
         // is what already happens on the web build.
         ("SESSION_COOKIE_DOMAIN", ".lemma.localhost".to_owned()),
+        // The other half, and only meaningful together with the domain above:
+        // apps call the API through their own origin so the request is
+        // first-party. Off by default in the backend, because on a real domain
+        // an app subdomain and the API host are already same-site and this
+        // would widen the refresh cookie for nothing.
+        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
         (
             "APP_BASE_DOMAIN",
             format!("apps.lemma.localhost:{backend_port}"),
@@ -1418,6 +1424,16 @@ mod tests {
         assert!(
             api_host == scope || api_host.ends_with(&format!(".{scope}")),
             "the API at {api_host} is outside the cookie scope {cookie_domain}"
+        );
+
+        // Both halves or neither. A widened cookie with apps still calling the
+        // API host is measured *not* to work -- WebKit drops it as third-party
+        // whatever the Domain says -- so shipping one alone is shipping the bug
+        // plus a wider cookie.
+        assert_eq!(
+            env["APP_API_VIA_APP_ORIGIN"], "true",
+            "the cookie is scoped for the app hosts but apps are still pointed \
+             at the API host, where the request is cross-site and carries none"
         );
     }
 

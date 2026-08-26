@@ -39,6 +39,18 @@ APP_BRANDING_SENTINEL = "data-lemma-app-branding"
 APP_ORIGIN_API_URL = "/_lemma"
 
 
+def app_api_url() -> str | None:
+    """The API an app should call, or None to use the API host as before.
+
+    Gated, because the problem it solves is not universal: on a real domain the
+    app subdomain and the API host share a registrable domain, so an app's
+    cross-origin calls are already same-site and carry the session. It is
+    `.localhost` that has no registrable domain, which is what makes desktop the
+    only place those calls are third-party.
+    """
+    return APP_ORIGIN_API_URL if settings.app_api_via_app_origin else None
+
+
 def build_runtime_app_identity(
     name: str,
     description: str | None = None,
