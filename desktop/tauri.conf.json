@@ -21,7 +21,7 @@
       }
     },
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQyM0VENTkxRDBFNTkzMUYKUldRZmsrWFFrZFUrUXRYL2hhUmRhcTZKNzhyWjBHTjR3NlR2WkVYTWRKVStCSldESmVHdFlpTkIK",
       "endpoints": [
         "https://github.com/lemma-work/lemma-platform/releases/latest/download/latest.json"
       ]

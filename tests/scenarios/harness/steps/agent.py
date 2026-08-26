@@ -182,8 +182,34 @@ class AgentSteps:
             await self.says(saying, in_conversation=conversation, in_pod=in_pod)
         return conversation
 
-    async def conversations_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/conversations"))
+    async def conversations_in(self, pod: JSON, *, pages: int = 20) -> list[JSON]:
+        """Every conversation in the pod, following the pages.
+
+        Asking once returns twenty, ordered by id descending — and ids are
+        time-ordered, so that is newest first. On a pod that stands between runs
+        this buries anything an earlier run opened under everything opened
+        since, and a scenario looking for it concluded the product had lost the
+        message. The same shape as the agent list capped at 100: a default page
+        size read as "all of them".
+
+        `pages` is a bound rather than a limit anyone should hit — twenty pages
+        of a hundred is two thousand conversations. It exists so a bug in the
+        cursor cannot spin here forever.
+        """
+        found: list[JSON] = []
+        token: str | None = None
+        for _ in range(pages):
+            params: JSON = {"limit": 100}
+            if token:
+                params["page_token"] = token
+            answered = await self.api.get(
+                f"/pods/{pod['id']}/conversations", params=params
+            )
+            found.extend(items_of(answered))
+            token = (answered or {}).get("next_page_token")
+            if not token:
+                break
+        return found
 
     async def opens_conversation(self, conversation: JSON, *, in_pod: JSON) -> JSON:
         return await self.api.get(

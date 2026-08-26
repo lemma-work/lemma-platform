@@ -149,12 +149,18 @@ class AppAssetResolver:
             public_url=public_url,
             is_entrypoint=is_entrypoint,
         )
-        etag = (
-            f"{release.version}."
-            f"{runtime_config.runtime_config_token(app.pod_id, app=app_identity, branding=branding)}"
-            if is_entrypoint
-            else release.version
-        )
+        if is_entrypoint:
+            config_token = runtime_config.runtime_config_token(
+                app.pod_id,
+                app=app_identity,
+                branding=branding,
+                # Must match what the storage phase injects, or a cached page
+                # keeps an apiUrl the served config no longer agrees with.
+                api_url=runtime_config.app_api_url(),
+            )
+            etag = f"{release.version}.{config_token}"
+        else:
+            etag = release.version
         quoted_etag = self._quote_etag(etag)
         if self._etag_matches(etag, request_etag):
             return AppAssetDocument(

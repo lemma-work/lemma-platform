@@ -108,6 +108,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Only to decode the committed updater public key and check it is a real
+# minisign key rather than a placeholder. A dev dependency, so it is not
+# linked into the shipped app.
+base64 = "0.22"
 
 # A workspace ignores [profile] in anything but the root manifest — with a
 # warning that is easy to miss — so every member's release profile lives here.

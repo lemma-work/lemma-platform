@@ -95,6 +95,61 @@ pub(crate) fn join_before<T>(
 }
 
 #[cfg(test)]
+mod doc_comment_policy {
+    /// An indented block in a doc comment is a *Rust* code block.
+    ///
+    /// rustdoc treats four spaces after `///` as code and tries to compile it,
+    /// so quoting a log line that way turns prose into a doctest that cannot
+    /// parse. One did: quoting PostgreSQL's refusal failed three CI jobs with
+    /// "expected one of `!` or `::`, found `around`", and not one of those
+    /// three names a doc comment.
+    ///
+    /// The fix is always a fenced text block. This finds the shape here,
+    /// where it costs seconds, rather than on a push.
+    #[test]
+    fn no_doc_comment_quotes_prose_as_an_indented_code_block() {
+        const SOURCES: [(&str, &str); 4] = [
+            ("locald/src/lib.rs", include_str!("lib.rs")),
+            ("locald/src/daemon.rs", include_str!("daemon.rs")),
+            (
+                "locald/src/host_process.rs",
+                include_str!("host_process.rs"),
+            ),
+            (
+                "local-runtime/guestd/src/lib.rs",
+                include_str!("../../local-runtime/guestd/src/lib.rs"),
+            ),
+        ];
+
+        let mut offenders = Vec::new();
+        for (name, source) in SOURCES {
+            let mut fenced = false;
+            for (number, line) in source.replace("\r\n", "\n").lines().enumerate() {
+                let Some(doc) = line.trim_start().strip_prefix("///") else {
+                    continue;
+                };
+                if doc.trim_start().starts_with("```") {
+                    fenced = !fenced;
+                    continue;
+                }
+                if fenced || doc.trim().is_empty() {
+                    continue;
+                }
+                if doc.starts_with("    ") {
+                    offenders.push(format!("{name}:{}: {}", number + 1, line.trim()));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these are compiled as doctests; fence them as a text block instead:\n{}",
+            offenders.join("\n"),
+        );
+    }
+}
+
+#[cfg(test)]
 mod join_within_policy {
     /// The helper fails instead of hanging, and does not slow a healthy join.
     ///

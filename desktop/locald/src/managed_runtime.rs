@@ -968,6 +968,26 @@ fn load_or_create_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<I
             }
         }
     }
+    // Missing, rather than unreadable. Same consequence: the password baked
+    // into the Postgres volume at `initdb` does not change because this file
+    // was recreated, so the new one opens nothing. Only a genuine first run may
+    // mint quietly, and a first run has no data.
+    else if path
+        .parent()
+        .is_some_and(crate::paths::installation_has_data)
+    {
+        let root = path.parent().expect("checked just above");
+        crate::paths::require_data_reset(
+            root,
+            "the private infrastructure passwords are missing, and the existing workspace \
+             database was created with the previous ones",
+        )?;
+        healed.push(
+            "the infrastructure passwords were missing while local data was still present; \
+             new ones were created and the existing database cannot be opened with them"
+                .to_owned(),
+        );
+    }
     let secrets = InfraSecrets {
         postgres_password: random_hex()?,
         redis_password: random_hex()?,
