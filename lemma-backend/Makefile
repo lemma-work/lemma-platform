@@ -26,7 +26,7 @@ E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 # one excluded `local_guest`, this one did not, so the fix went in where CI
 # could not see it. `scripts/check_pytest_census.py` reads both and fails if
 # they differ again.
-UNIT_MARKERS ?= not e2e and not local_guest and not provider
+UNIT_MARKERS ?= not e2e and not local_guest and not desktop_e2e and not provider
 
 # The marker filter a CI shard runs under. Defaults to the standard fast-lane
 # exclusions (matches test-e2e-fast); a shard whose module structurally needs
