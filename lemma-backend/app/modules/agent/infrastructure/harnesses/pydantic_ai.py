@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
@@ -296,7 +296,9 @@ class PydanticAIHarness:
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
         with run_phase("history_convert") as history_span:
-            history, user_prompt = self._history_and_prompt(messages)
+            history, user_prompt = self._history_and_prompt(
+                messages, protocol=_runtime_profile_protocol(options)
+            )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
@@ -499,8 +501,10 @@ class PydanticAIHarness:
     def _history_and_prompt(
         self,
         messages: Sequence[Message],
+        *,
+        protocol: str | None = None,
     ) -> tuple[list[ModelMessage], str | None]:
-        return history_and_prompt(messages)
+        return history_and_prompt(messages, protocol=protocol)
 
     def _final_output_message(
         self,
@@ -552,6 +556,21 @@ class PydanticAIHarness:
         # Shared with the Agent Host normalizer so identical structured output
         # reads identically on a surface, whichever harness produced it.
         return final_answer_text(data, fallback=fallback)
+
+
+def _runtime_profile_protocol(options: HarnessOptions) -> str | None:
+    """Which provider family this run's model belongs to, if it says.
+
+    Read for one reason: whether a stored thought can be replayed to it. See
+    `pydantic_ai_thinking.thinking_part_from_message` -- Anthropic and the
+    OpenAI-compatible providers want different credentials, so "can this be
+    replayed" has no answer until the target is known.
+    """
+    runtime_profile = options.extra.get("runtime_profile")
+    if not isinstance(runtime_profile, Mapping):
+        return None
+    protocol = runtime_profile.get("protocol")
+    return protocol if isinstance(protocol, str) and protocol else None
 
 
 def _runtime_profile_model(options: HarnessOptions):
