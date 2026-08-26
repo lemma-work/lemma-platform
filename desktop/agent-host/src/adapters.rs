@@ -1112,10 +1112,10 @@ mod tests {
         // in forty on a saturated machine, which is exactly the rate this was
         // costing CI. The budget grows per attempt, so a slow machine converges
         // on one it can meet instead of retrying at a number it cannot.
-        for attempt in 1..=4 {
+        for attempt in 1u32..=4 {
             let directory = tempfile::tempdir().unwrap();
-            let budget = Duration::from_millis(1500 * attempt);
-            let executable = slow_agent(directory.path(), 3 * attempt as u32);
+            let budget = Duration::from_millis(1500 * u64::from(attempt));
+            let executable = slow_agent(directory.path(), 3 * attempt);
 
             let outcome = probe_version_within(&executable, &[], budget);
             assert_eq!(outcome, Err(VersionUnknown::TimedOut));
