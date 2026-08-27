@@ -2,7 +2,10 @@
 
 import pytest
 
-from app.core.api.session_cookie_scope import widen_refresh_cookie_path
+from app.core.api.session_cookie_scope import (
+    refresh_cookie_set_headers,
+    widen_refresh_cookie_path,
+)
 from app.core.config import settings
 from app.core.runtime_config import APP_ORIGIN_API_URL, app_api_url
 
@@ -113,3 +116,47 @@ def test_a_live_refresh_cookie_is_still_widened():
     # refreshes at `/_lemma/st/auth/session/refresh`, which the narrow path
     # does not cover.
     assert "Path=/;" in widen_refresh_cookie_path(REFRESH)
+
+
+# Sign-out, which clears the cookie but still carries the deployment's Domain.
+# Distinct from the migration clear above, which carries none -- and the
+# difference is the whole bug below.
+SIGNOUT = (
+    'sRefreshToken=""; Domain=.lemma.localhost; '
+    "expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; "
+    "Path=/st/auth/session/refresh; SameSite=lax"
+)
+
+
+def test_signing_out_clears_the_refresh_cookie_this_middleware_widened():
+    """The regression that skipping the widen on a clear introduced.
+
+    Every live refresh cookie is at `Path=/`, because this middleware puts it
+    there. Removal is an exact name+domain+path match, so a clear emitted at
+    SuperTokens' narrow `refresh_token_path` reaches nothing -- and sign-out
+    left a long-lived HttpOnly refresh token in the browser, still sent to every
+    host under the cookie domain, including the origins that serve
+    user-authored pod apps.
+
+    Widening the clear instead is not the answer either: the migration clear
+    that ends the duplicate-cookie loop has to stay narrow, because the stale
+    v0.7.0 cookie it targets lives there. Both go out.
+    """
+    paths = [
+        value.split("Path=")[1].split(";")[0]
+        for value in refresh_cookie_set_headers(SIGNOUT)
+    ]
+    assert "/" in paths, "the live cookie survives sign-out"
+    assert "/st/auth/session/refresh" in paths, "a legacy cookie survives sign-out"
+
+
+def test_the_migration_clear_still_reaches_the_stale_narrow_cookie():
+    assert "/st/auth/session/refresh" in [
+        value.split("Path=")[1].split(";")[0]
+        for value in refresh_cookie_set_headers(CLEARING)
+    ]
+
+
+def test_an_ordinary_cookie_is_still_one_header():
+    assert refresh_cookie_set_headers(ACCESS) == [ACCESS]
+    assert refresh_cookie_set_headers(REFRESH) == [widen_refresh_cookie_path(REFRESH)]

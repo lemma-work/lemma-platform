@@ -79,7 +79,6 @@ async def validate_account_binding(
             code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
         )
     await _validate_account_kind(
-        uow,
         service=service,
         account=account,
         expected_kind=expected_kind,
@@ -89,7 +88,6 @@ async def validate_account_binding(
 
 
 async def _validate_account_kind(
-    uow,
     *,
     service,
     account,

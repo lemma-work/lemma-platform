@@ -63,4 +63,14 @@ async def derive_agent_memory_grant(
     except Exception:  # noqa: BLE001
         # The agent is the thing the caller asked for; the folder is a
         # convenience the next save re-derives.
-        logger.warning("agent.memory.derivation_failed.degraded")
+        #
+        # With the traceback, because "the next save re-derives it" is only
+        # true of a transient failure. A deterministic one -- a schema change,
+        # a permission the role never had -- repeats every save, and without
+        # the cause this line cannot be told apart from a datastore blip.
+        #
+        # Note this *is* a behaviour change for the bundle applier, which used
+        # to call the sync unguarded and fail the import step. It now
+        # continues, and for an agent carrying MEMORY with no grants block the
+        # deferred re-sync does not run either, so the log is the only signal.
+        logger.warning("agent.memory.derivation_failed.degraded", exc_info=True)

@@ -1384,19 +1384,6 @@ mod tests {
         assert!(paths.root.join("host.secrets.json").is_file());
     }
 
-    /// Every URL a sandbox is given resolves inside a sandbox.
-    ///
-    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
-    /// is a host resolver convention, and a Linux container in the VM has never
-    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
-    /// every workload container.
-    ///
-    /// Functions had no gateway URL at all, so the dispatcher fell back to
-    /// `api_url` and every schema extraction died at `getaddrinfo` --
-    /// "Temporary failure in name resolution", reported as
-    /// `FUNCTION_VALIDATION_ERROR: Function schema extraction failed", which
-    /// reads as the user's function being wrong.
-    ///
     /// Changing the cookie domain has to say what it replaced.
     ///
     /// A widened `SESSION_COOKIE_DOMAIN` does not replace the cookies a browser
@@ -1520,6 +1507,13 @@ mod tests {
         );
     }
 
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
     /// Asserted over every callback variable at once rather than one by one,
     /// because the bug was an *absent* entry: a test naming only the variables
     /// that exist cannot fail for the one that does not.

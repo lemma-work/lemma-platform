@@ -526,21 +526,22 @@ async def test_the_grants_step_puts_the_derived_memory_grant_back(
 async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
     tmp_path, monkeypatch
 ):
-    """An unresolvable grant must reach a worker as a `DomainError`.
+    """The applier propagates a grant failure rather than swallowing it.
 
-    This is the classification the pod bundle handlers branch on: `DomainError`
-    marks the import FAILED with the real reason and stops, while anything else
-    is called transient, re-raised, and retried by streaq.
+    Scoped deliberately, and narrower than it first looks. The grant layer is
+    stubbed here, so this does **not** cover the type the raise site now uses --
+    that is asserted against the real functions in
+    `pod/tests/unit/test_core_authorization_permissions.py`, which fails if
+    `resolve_resource_ids_by_names` goes back to `fastapi.HTTPException`.
 
-    Grant resolution used to raise `fastapi.HTTPException(400)`, which is just
-    an `Exception` to a worker. So an import naming a folder the target pod did
-    not have -- `Unknown resource name(s): folder:/memory`, the export/import
-    round trip -- was retried against inputs that could never change, and
-    reported as "Apply failed due to a transient error" with the reason logged
-    at DEBUG and never shown.
-
-    Asserted here rather than only at the raise site, because it is the
-    *applier* propagating the right type that decides whether the retry happens.
+    What this covers is the applier's own half: that whatever grant resolution
+    raises reaches the caller with its message intact. Both halves are needed.
+    The pod bundle handlers branch on `DomainError` to mark an import FAILED
+    with the real reason; anything else is called transient, re-raised, and
+    retried by streaq against inputs that cannot change -- which is how an
+    import naming a folder the target pod did not have came back as "Apply
+    failed due to a transient error", with `Unknown resource name(s):
+    folder:/memory` logged at DEBUG and never shown.
     """
     root = tmp_path / "bundle"
     _write(

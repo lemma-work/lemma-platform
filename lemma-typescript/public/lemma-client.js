@@ -9231,10 +9231,19 @@ var LemmaClient = (() => {
            * forever when a browser holds two session cookies from a
            * cookie-domain change, and at ten attempts per request across the
            * queries a workspace screen makes, one install logged 30 refusals and
-           * 17 500s before anyone looked. Two is enough to ride out an access
-           * token that expired between being read and being sent.
+           * 17 500s before anyone looked.
+           *
+           * Three rather than two, and the extra one is not slack. An install
+           * migrating off duplicate cookies spends both: the first refresh comes
+           * back carrying only the clearing cookies and no new tokens, and the
+           * second does the real refresh. At two, anything that consumes a third
+           * -- a second tab racing the refresh lock, an access token expiring in
+           * flight -- hits the ceiling, which the frontend reads as an
+           * unrepairable session and signs the user out. The ceiling exists to
+           * stop a session that cannot be repaired being hammered, not to fail
+           * the one case it was raised for.
            */
-          maxRetryAttemptsForSessionRefresh: 2,
+          maxRetryAttemptsForSessionRefresh: 3,
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());

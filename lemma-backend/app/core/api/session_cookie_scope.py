@@ -47,18 +47,14 @@ def widen_refresh_cookie_path(value: str) -> str:
     that somehow carries no Path -- absent means "the current directory" to a
     browser, which is not something to paper over silently here.
 
-    A cookie being *deleted* is also returned unchanged, and that exception is
-    load-bearing. Removing a cookie requires an exact name+domain+path match, so
-    the clearing cookie has to go out at the path the doomed cookie actually
-    lives at. `older_cookie_domain` emits exactly that, at SuperTokens' own
-    narrow `refresh_token_path` -- and widening it to `/` made it match nothing,
-    so the stale cookie survived every refresh for ever.
-
-    That is not a hypothetical. An install upgraded across the host-only ->
-    `.lemma.localhost` change holds two refresh cookies; SuperTokens answers the
-    pair with a 500 and the SDK retries per query. Widening the clearing cookie
-    turns that loud failure into a permanent quiet one: the refresh starts
-    answering 200 with no `front-token`, and the loop simply stops saying why.
+    A cookie being *deleted* keeps its path, and is paired with a widened copy
+    by :func:`refresh_cookie_set_headers` rather than being rewritten here.
+    Removing a cookie is an exact name+domain+path match, and after this
+    middleware has been running there are two refresh cookies a clear might
+    need to reach: the live one at ``/``, because this function put it there,
+    and a legacy one at SuperTokens' own narrow ``refresh_token_path``.
+    Rewriting the clear to ``/`` reaches only the first; leaving it narrow
+    reaches only the second. Both have to go out.
     """
     if not value.lstrip().startswith(_REFRESH_COOKIE):
         return value
@@ -67,6 +63,33 @@ def widen_refresh_cookie_path(value: str) -> str:
     if not _PATH_ATTRIBUTE.search(value):
         return value
     return _PATH_ATTRIBUTE.sub("; Path=/", value, count=1)
+
+
+def refresh_cookie_set_headers(value: str) -> list[str]:
+    """Every ``Set-Cookie`` one outgoing cookie should become.
+
+    One value for anything ordinary. Two for a refresh cookie being deleted,
+    because a clear has to match the path the doomed cookie actually lives at
+    and there are two candidates:
+
+    * ``Path=/`` -- where :func:`widen_refresh_cookie_path` puts every live
+      refresh cookie. Sign-out and session revocation have to reach this one,
+      and clearing only the narrow path silently left a long-lived HttpOnly
+      refresh token in the browser, still sent to every host under the cookie
+      domain -- including the origins that serve user-authored pod apps.
+    * SuperTokens' own narrow ``refresh_token_path`` -- where a cookie minted
+      before this middleware existed still lives. That is the one
+      ``older_cookie_domain`` clears to end the duplicate-cookie refresh loop.
+
+    Emitting both is what makes sign-out and the migration correct at the same
+    time; either alone breaks the other.
+    """
+    if not value.lstrip().startswith(_REFRESH_COOKIE):
+        return [value]
+    if not _CLEARING_COOKIE.match(value):
+        return [widen_refresh_cookie_path(value)]
+    widened = _PATH_ATTRIBUTE.sub("; Path=/", value, count=1)
+    return [value] if widened == value else [value, widened]
 
 
 class RefreshCookieScopeMiddleware:
@@ -82,17 +105,20 @@ class RefreshCookieScopeMiddleware:
 
         async def rewrite(message: Message) -> None:
             if message["type"] == "http.response.start":
-                message["headers"] = [
-                    (
-                        key,
-                        widen_refresh_cookie_path(value.decode("latin-1")).encode(
-                            "latin-1"
-                        ),
+                headers: list[tuple[bytes, bytes]] = []
+                for key, value in message["headers"]:
+                    if key.lower() != b"set-cookie":
+                        headers.append((key, value))
+                        continue
+                    # One header in, possibly two out -- see
+                    # `refresh_cookie_set_headers`.
+                    headers.extend(
+                        (key, rewritten.encode("latin-1"))
+                        for rewritten in refresh_cookie_set_headers(
+                            value.decode("latin-1")
+                        )
                     )
-                    if key.lower() == b"set-cookie"
-                    else (key, value)
-                    for key, value in message["headers"]
-                ]
+                message["headers"] = headers
             await send(message)
 
         await self.app(scope, receive, rewrite)

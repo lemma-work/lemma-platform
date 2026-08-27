@@ -199,7 +199,7 @@ export function AppFrame({
             ) : null}
 
             <div className="embedded-canvas relative min-h-0 flex-1 overflow-hidden">
-                {!frameLoaded && !frameFailed ? (
+                {embeddable && !frameLoaded && !frameFailed ? (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-canvas)]">
                         <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
                             <RefreshCw className="h-4 w-4 lemma-spin" />
