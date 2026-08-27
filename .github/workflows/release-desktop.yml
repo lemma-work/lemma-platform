@@ -576,8 +576,9 @@ jobs:
           import json, os, sys, urllib.request
           feed = json.load(sys.stdin)
           version = os.environ["VERSION"]
-          if feed["version"] != version:
-              raise SystemExit(f"feed names {feed[\'version\']}, expected {version}")
+          feed_version = feed["version"]
+          if feed_version != version:
+              raise SystemExit(f"feed names {feed_version}, expected {version}")
           entry = feed["platforms"]["darwin-aarch64"]
           if not entry["signature"].strip():
               raise SystemExit("the feed carries an empty signature")
