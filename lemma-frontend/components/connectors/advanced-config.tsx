@@ -11,6 +11,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 import type { Connector } from '@/lib/types';
+import { suggestInstallName } from '@/lib/connectors/naming';
 import { CreateSlackAppButton } from './create-slack-app-button';
 import { SchemaFields } from './schema-fields';
 import {
@@ -91,11 +92,19 @@ export function AdvancedConfigDialog({
     isEnabling,
     onOpenChange,
     onEnable,
+    existingNames = [],
+    initialMode,
 }: {
     app: Connector | null;
     isEnabling: boolean;
     onOpenChange: (open: boolean) => void;
     onEnable: (payload: AdvancedEnablePayload) => void;
+    /** Names already taken by this org's active installs. */
+    existingNames?: string[];
+    /** Open straight on one mode. Set when the caller already knows which the
+     * person came for — arriving from "I made my own app" means the managed
+     * option is not what they are here to read. */
+    initialMode?: AuthConfigMode;
 }) {
     const [kind, setKind] = useState<string>('package');
     const [mode, setMode] = useState<AuthConfigMode>('MANAGED');
@@ -108,10 +117,12 @@ export function AdvancedConfigDialog({
         const initialKind = getPrimaryKind(app);
         const capability = getKindSpec(app, initialKind);
         setKind(initialKind);
-        setMode(hasSystemDefault(capability) ? 'MANAGED' : 'CUSTOM');
-        setShowCustomForm(!hasSystemDefault(capability) && supportsCustomConfig(capability));
+        const resolvedMode =
+            initialMode ?? (hasSystemDefault(capability) ? 'MANAGED' : 'CUSTOM');
+        setMode(resolvedMode);
+        setShowCustomForm(resolvedMode === 'CUSTOM' && supportsCustomConfig(capability));
         setValues(buildSchemaFormValues(getConfigSchema(capability)));
-        setCustomName('');
+        setCustomName(suggestInstallName(app.id, existingNames));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [app?.id]);
 
@@ -129,7 +140,7 @@ export function AdvancedConfigDialog({
         setMode(hasDefault ? 'MANAGED' : 'CUSTOM');
         setShowCustomForm(!hasDefault && supportsCustomConfig(nextCapability));
         setValues(buildSchemaFormValues(getConfigSchema(nextCapability)));
-        setCustomName('');
+        setCustomName(suggestInstallName(app?.id, existingNames));
     };
 
     const canEnable = Boolean(

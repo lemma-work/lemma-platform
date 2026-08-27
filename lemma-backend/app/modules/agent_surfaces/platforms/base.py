@@ -265,10 +265,12 @@ class BaseSurfaceAdapter:
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
+        offers_dm_agent_choice: bool = True,
     ) -> bool:
         """Render the app's home tab. Default: the platform has no home tab."""
         del credentials, user_id, pod_name, dm_agent_name, channel_routes
         del agents, apps, workspace_url, logo_url, surface_choices, access_message
+        del offers_dm_agent_choice
         return False
 
     async def send_channel_setup_prompt(

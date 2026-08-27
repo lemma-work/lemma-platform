@@ -14912,14 +14912,22 @@ var LemmaClient = (() => {
      *
      * Signed-in access is the only gate, and that is enough: every value in here
      * is already public — this deployment's URLs and the scopes its own code
-     * asks for. It carries no credential and reveals nothing about a pod.
+     * asks for. It carries no credential and reveals nothing about a pod: the
+     * agent name is supplied by the caller and echoed back, never read from one.
+     * @param agentName Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.
      * @returns any Successful Response
      * @throws ApiError
      */
-    static agentSurfaceSlackManifest() {
+    static agentSurfaceSlackManifest(agentName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/surface-setup/slack/manifest"
+        url: "/surface-setup/slack/manifest",
+        query: {
+          "agent_name": agentName
+        },
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
   };
@@ -15014,10 +15022,14 @@ var LemmaClient = (() => {
      * Takes no pod: it describes the deployment, and it is what you need before
      * you have anything to scope it to — the app it creates is what issues the
      * client id that connects the account a surface is built on.
+     *
+     * `agentName` names the app after one agent, for a bot that answers as that
+     * agent alone. One Slack app is one bot user, so this is the only chance to
+     * set the name without a person editing it in Slack afterwards.
      */
-    slackManifest() {
+    slackManifest(agentName) {
       return this.client.request(
-        () => AgentSurfacesService.agentSurfaceSlackManifest()
+        () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
       );
     }
   };
