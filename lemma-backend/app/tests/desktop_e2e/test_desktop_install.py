@@ -295,8 +295,9 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
     cookie in exactly this arrangement, so a Playwright or httpx test passes
     against the broken build. This is the only lane that can tell the two apart.
     """
-    answer = _run_probe(published_app=published_app, install=install,
-                        account=account, mode="toplevel")
+    answer = _run_probe(
+        published_app=published_app, install=install, account=account, mode="toplevel"
+    )
     assert answer["status"] == 200
     assert answer["email"] == account.email
 
@@ -320,8 +321,9 @@ async def test_a_pod_app_is_signed_in_when_the_workspace_embeds_it(
 
     Testing only the top-level case is how this shipped broken twice.
     """
-    answer = _run_probe(published_app=published_app, install=install,
-                        account=account, mode="embedded")
+    answer = _run_probe(
+        published_app=published_app, install=install, account=account, mode="embedded"
+    )
     assert answer["status"] == 200, (
         "the workspace framed the app and the app had no session. On "
         "*.localhost every host is its own site to WebKit, so the frame is "
