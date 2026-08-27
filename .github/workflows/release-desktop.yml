@@ -340,45 +340,106 @@ jobs:
 
       - name: Verify Developer ID signatures and notarization staples
         shell: bash
+        # Every check here used to be a bare `test`/`codesign` line under
+        # `set -e`: silent on success, and silent on failure too -- a run that
+        # failed gave no indication of which assertion tripped, on a bundle
+        # that had already been built, signed and notarized. `check` below
+        # prints a result for every assertion, runs all of them instead of
+        # stopping at the first failure (so one run reports every problem, not
+        # just the first), and raises a `::error::` annotation GitHub surfaces
+        # on the job itself. A step that fails must say why.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
           vz="${app}/Contents/Resources/lemma-vz"
+          dmg="desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
 
-          # Temporary tracing: this step was failing with none of the assertions
-          # below printing anything (they're all silent on success or failure),
-          # so there was no way to tell which one tripped. Remove once the
-          # 0.7.1 desktop release ships clean.
-          echo "--- Contents/MacOS ---"; ls -la "${app}/Contents/MacOS/" || true
-          echo "--- Contents/Resources ---"; ls -la "${app}/Contents/Resources/" || true
+          failed=0
+          check() {
+            local description="$1"
+            shift
+            if "$@" >/tmp/check-output 2>&1; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- failed: $*"
+              sed 's/^/    /' /tmp/check-output
+              failed=1
+            fi
+          }
+          check_grep() {
+            local description="$1" pattern="$2"
+            shift 2
+            local output
+            if output="$("$@" 2>&1)" && grep -qF "${pattern}" <<<"${output}"; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- expected to find '${pattern}' in: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            fi
+          }
+          # Exact whole-line match, for values (like an identifier) where a
+          # substring match would also accept "work.lemma.locald.staging".
+          check_grep_exact() {
+            local description="$1" pattern="$2"
+            shift 2
+            local output
+            if output="$("$@" 2>&1)" && grep -qFx "${pattern}" <<<"${output}"; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- expected a line exactly matching '${pattern}' in: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            fi
+          }
+
+          echo "--- Contents/MacOS ---"
+          ls -la "${app}/Contents/MacOS/" || true
+          echo "--- Contents/Resources ---"
+          ls -la "${app}/Contents/Resources/" || true
+
+          check "locald is executable" test -x "${locald}"
+          check "runtime bridge is executable" test -x "${runtime_bridge}"
+          check "vz helper is executable" test -x "${vz}"
+          check "vz is not also an externalBin copy in Contents/MacOS" test ! -e "${app}/Contents/MacOS/lemma-vz"
+          check "no legacy lemma-supervisor binary" test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          check "no legacy bundled uv binary" test ! -e "${app}/Contents/MacOS/uv"
+
           app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          echo "app_bytes=${app_bytes} (limit $((25 * 1024 * 1024)))"
-          set -x
+          limit=$((25 * 1024 * 1024))
+          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 25 MiB)"
+          if [[ "${app_bytes}" -gt "${limit}" ]]; then
+            echo "::error::online app bundle is ${app_bytes} bytes, over the 25 MiB budget by $((app_bytes - limit)) bytes"
+            failed=1
+          fi
 
-          test -x "${locald}"
-          test -x "${runtime_bridge}"
-          test -x "${vz}"
-          test ! -e "${app}/Contents/MacOS/lemma-vz"
-          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
-          test ! -e "${app}/Contents/MacOS/uv"
-          test "${app_bytes}" -le "$((25 * 1024 * 1024))"
-          codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign --verify --strict --verbose=2 "${locald}"
-          codesign --verify --strict --verbose=2 "${runtime_bridge}"
-          codesign --verify --strict --verbose=2 "${vz}"
-          codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          check "app bundle codesign verifies" codesign --verify --deep --strict --verbose=2 "${app}"
+          check "locald codesign verifies" codesign --verify --strict --verbose=2 "${locald}"
+          check "runtime bridge codesign verifies" codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          check "vz codesign verifies" codesign --verify --strict --verbose=2 "${vz}"
+
+          check_grep "app is signed with a Developer ID Application identity" \
+            "Authority=Developer ID Application:" codesign -dvvv "${app}"
           # The daemon's keychain access is keyed to this identifier, and Tauri
           # re-signs sidecars without one of its own -- so this asserts the
           # embedded Info.plist survived bundling. If it ever does not, the app
           # still ships and still works, and every user is asked to re-authorise
           # access to their own secrets on the first launch of each release.
-          codesign -dvvv "${locald}" 2>&1 | grep -Fx "Identifier=work.lemma.locald"
-          codesign -d --entitlements :- "${vz}" 2>/dev/null | grep -F "com.apple.security.virtualization"
-          xcrun stapler validate "${app}"
-          xcrun stapler validate \
-            "desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
+          check_grep_exact "locald kept its embedded Info.plist identifier" \
+            "Identifier=work.lemma.locald" codesign -dvvv "${locald}"
+          check_grep "vz helper has the virtualization entitlement" \
+            "com.apple.security.virtualization" codesign -d --entitlements :- "${vz}"
+
+          check "app passes stapler validation" xcrun stapler validate "${app}"
+          check "dmg passes stapler validation" xcrun stapler validate "${dmg}"
+
+          if [[ "${failed}" -ne 0 ]]; then
+            echo "::error::Desktop bundle verification failed -- see the errors above"
+            exit 1
+          fi
+          echo "All Desktop bundle verification checks passed."
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
