@@ -347,13 +347,22 @@ jobs:
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
           vz="${app}/Contents/Resources/lemma-vz"
 
+          # Temporary tracing: this step was failing with none of the assertions
+          # below printing anything (they're all silent on success or failure),
+          # so there was no way to tell which one tripped. Remove once the
+          # 0.7.1 desktop release ships clean.
+          echo "--- Contents/MacOS ---"; ls -la "${app}/Contents/MacOS/" || true
+          echo "--- Contents/Resources ---"; ls -la "${app}/Contents/Resources/" || true
+          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
+          echo "app_bytes=${app_bytes} (limit $((25 * 1024 * 1024)))"
+          set -x
+
           test -x "${locald}"
           test -x "${runtime_bridge}"
           test -x "${vz}"
           test ! -e "${app}/Contents/MacOS/lemma-vz"
           test ! -e "${app}/Contents/MacOS/lemma-supervisor"
           test ! -e "${app}/Contents/MacOS/uv"
-          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
           test "${app_bytes}" -le "$((25 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${locald}"
