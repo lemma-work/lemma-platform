@@ -56,6 +56,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.infrastructure.agent_host_event_stream.delete_failed': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.infrastructure.agent_host_event_stream.entry_dropped': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.mcp_pausing_calls.recorded': EventSpec('debug', frozenset({'conversation_id', 'tool_name'})),
+    'agent.memory.derivation_failed.degraded': EventSpec('warning', frozenset()),
     'agent.memory.folder_provisioning_denied.observed': EventSpec('warning', frozenset()),
     'agent.message_replies.delivered': EventSpec('debug', frozenset({'conversation_id', 'started_new_run'})),
     'agent.mock_model.mock_llm_structured_output_required.diagnostic': EventSpec('debug', frozenset()),

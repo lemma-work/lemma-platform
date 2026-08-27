@@ -144,7 +144,35 @@ class AgentService:
             agent_id=agent.id,
             agent_name=agent.name,
         )
+        await self._derive_memory_grant(agent, pod_id=pod_id, ctx=ctx, user_id=user_id)
         return agent
+
+    async def _derive_memory_grant(
+        self, agent, *, pod_id: UUID, ctx: Context | None, user_id: UUID | None
+    ) -> None:
+        """The `/memory` folder the MEMORY toolset implies, for every caller.
+
+        This used to be the agent controller's job alone, so an agent created
+        straight through this service -- which is what the pod bundle applier
+        does -- got the toolset and no folder to write to. See
+        `app.composition.agent_memory` for what that cost.
+
+        A floor, not the whole story: an inline `permissions` list replaces
+        every grant a grantee holds, so the callers that do one still have to
+        re-derive afterwards.
+        """
+        if ctx is None:
+            return
+        from app.composition.agent_memory import derive_agent_memory_grant
+
+        await derive_agent_memory_grant(
+            self.agent_repository.uow,
+            pod_id=pod_id,
+            agent_id=agent.id,
+            toolsets=agent.toolsets,
+            ctx=ctx,
+            created_by_user_id=user_id or agent.user_id,
+        )
 
     async def list_agents(
         self,
@@ -249,7 +277,13 @@ class AgentService:
                 name=name,
                 ctx=ctx,
             )
-            return refreshed or updated
+            saved = refreshed or updated
+            # From the agent as saved, never from the request: a PATCH that
+            # omits `toolsets` is not the same thing as one turning memory off.
+            await self._derive_memory_grant(
+                saved, pod_id=pod_id, ctx=ctx, user_id=requester_user_id
+            )
+            return saved
         return updated
 
     async def delete_agent(
