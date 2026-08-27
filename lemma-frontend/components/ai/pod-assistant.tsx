@@ -162,6 +162,7 @@ function buildControllerView(
     streamingTool: transcript.streamingTool,
     selectConversation: assistant.selectConversation,
     sendMessage: assistant.sendMessage,
+    steerMessage: assistant.steerMessage,
     retryFailedMessage: assistant.retryFailedMessage,
     uploadFiles: assistant.uploadFiles,
     removePendingFile: assistant.removePendingFile,

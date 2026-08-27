@@ -83,6 +83,8 @@ interface AIAssistantContextType {
     error: string | null;
     canRetryFailedMessage: boolean;
     sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
+    /** Append a follow-up to a conversation that already has a run in flight. */
+    steerMessage: (content: string) => Promise<void>;
     retryFailedMessage: () => Promise<void>;
     uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
     isUploadingFiles: boolean;
@@ -619,6 +621,18 @@ export function AIAssistantProvider({
         }
     }, [isProviderEnabled]);
 
+    const steerMessage = useCallback(async (content: string) => {
+        const trimmed = content.trim();
+        if (!trimmed || !isProviderEnabled) {
+            return;
+        }
+
+        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, controllerRef.current.messages);
+        allowAutoNavigationRef.current = true;
+
+        await controllerRef.current.steerMessage(trimmed);
+    }, [isProviderEnabled]);
+
     const retryFailedMessage = useCallback(async () => {
         markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, controllerRef.current.messages);
         allowAutoNavigationRef.current = true;
@@ -669,6 +683,7 @@ export function AIAssistantProvider({
         error: controller.error,
         canRetryFailedMessage: controller.canRetryFailedMessage,
         sendMessage,
+        steerMessage,
         retryFailedMessage,
         uploadFiles: controller.uploadFiles,
         isUploadingFiles: controller.isUploadingFiles,
@@ -727,6 +742,7 @@ export function AIAssistantProvider({
         retryFailedMessage,
         selectConversation,
         sendMessage,
+        steerMessage,
         toggleAssistant,
     ]);
 

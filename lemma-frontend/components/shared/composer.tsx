@@ -97,7 +97,10 @@ export function Composer({
     };
 
     const hasDraft = draft.trim().length > 0;
-    const canSend = (hasDraft || hasAttachments) && !disabled && !isBusy;
+    // Busy no longer blocks sending: a run in flight can still take a
+    // follow-up message (steered into it, or queued for the next one), so
+    // this only gates on disablement, not on whether something is running.
+    const canSend = (hasDraft || hasAttachments) && !disabled;
     const showStop = isBusy && Boolean(onStop);
 
     return (

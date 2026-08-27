@@ -195,4 +195,96 @@ describe("assistant session stream recovery", () => {
     );
     expect(get).toHaveBeenCalled();
   });
+
+  it("force bypasses the resume dedup key for a conversation whose status never changed", async () => {
+    // Regression for the Agent Host approval-resume bug: an Agent Host
+    // permission wait never leaves RUNNING, so the ordinary dedup key looks
+    // identical to one already "consumed" by a subscription that has since
+    // died. `force` is what a caller (resolveUserApproval) uses to demand a
+    // fresh reconnect anyway.
+    //
+    // The first resumeStream() call below returns a stream that never
+    // produces an event on its own -- it only ends when the request's
+    // AbortSignal fires -- so it stands in for a connection that silently
+    // died mid-wait (no terminal SSE frame, status left at RUNNING) rather
+    // than a run that actually finished, which is the only way status stays
+    // RUNNING long enough for a second resume attempt's dedup key to collide
+    // with the first.
+    const resumeStream = vi.fn();
+    resumeStream.mockImplementationOnce(async (_id: string, options?: { signal?: AbortSignal }) => (
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const signal = options?.signal;
+          if (signal?.aborted) {
+            controller.error(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          signal?.addEventListener("abort", () => {
+            controller.error(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        },
+      })
+    ));
+    resumeStream.mockImplementation(async () => completedStream("run-2"));
+
+    const conversations = {
+      create: async () => ({ id: "conv-1", status: "RUNNING", pod_id: "pod-1" }),
+      get: vi.fn(),
+      list: async () => ({ items: [], limit: 20, next_page_token: null }),
+      messages: {
+        list: async () => ({ items: [], limit: 100, next_page_token: null }),
+      },
+      resumeStream,
+      stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
+    };
+    const client = {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      conversations,
+    } as unknown as LemmaClient;
+    const session = captureHookResult<UseAssistantSessionResult>();
+
+    function Harness() {
+      session.set(useAssistantSession({ client, podId: "pod-1", autoLoad: false }));
+      return null;
+    }
+
+    const knownConversation = { id: "conv-1", pod_id: "pod-1", status: "RUNNING" };
+
+    await render(createElement(Harness));
+    await act(async () => {
+      await session.get().createConversation();
+    });
+
+    let firstResume!: Promise<boolean>;
+    await act(async () => {
+      firstResume = session.get().resumeIfRunning("conv-1", { knownConversation, expectRun: true });
+      // Let the mocked stream's `start()` register its abort listener before
+      // the connection "dies".
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      session.get().cancel();
+      await firstResume;
+    });
+    expect(resumeStream).toHaveBeenCalledTimes(1);
+    expect(session.get().status).toBe("RUNNING");
+
+    // Same status, no force: the dedup key matches the one just consumed, so
+    // this is a no-op -- this is the bug as observed (approve succeeds, but
+    // nothing reconnects).
+    await act(async () => {
+      await session.get().resumeIfRunning("conv-1", { knownConversation, expectRun: true });
+    });
+    expect(resumeStream).toHaveBeenCalledTimes(1);
+
+    // force: true bypasses the dedup key and reconnects anyway.
+    await act(async () => {
+      await session.get().resumeIfRunning("conv-1", { knownConversation, expectRun: true, force: true });
+    });
+    expect(resumeStream).toHaveBeenCalledTimes(2);
+  });
 });

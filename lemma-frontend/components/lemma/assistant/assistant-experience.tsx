@@ -261,6 +261,7 @@ export function AssistantExperienceView({
   const isConversationEmpty = controllerMessages.length === 0 && !isConversationBusy && !isInitialMessageLoading;
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
+  const steerMessage = controller.steerMessage;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -431,19 +432,34 @@ export function AssistantExperienceView({
   const liveRunStatus = statusPlacement === "inline" ? runStatusModel : null;
 
   const handleSubmit = useCallback(async () => {
-    if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy || interactionPending) return;
+    if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
+    // A run already in flight takes a follow-up as a steer: no file uploads
+    // (the append endpoint is text-only), no clearing the busy gate — it
+    // joins the active run instead of starting a new one.
+    if (isConversationBusy) {
+      if (hasPendingFileUploads || !draft.trim()) return;
+      const message = draft.trim();
+      setDraft("");
+      scrollToBottom("smooth");
+      await steerMessage(message);
+      return;
+    }
     const message = draft.trim();
     setDraft("");
     scrollToBottom("smooth");
     await sendMessage(message);
-  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, setDraft]);
+  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
-    if (!message || isConversationBusy) return;
+    if (!message || interactionPending) return;
     scrollToBottom("smooth");
+    if (isConversationBusy) {
+      await steerMessage(message);
+      return;
+    }
     await sendMessage(message);
-  }, [isConversationBusy, scrollToBottom, sendMessage]);
+  }, [interactionPending, isConversationBusy, scrollToBottom, sendMessage, steerMessage]);
 
   // Stable identities for the memoized transcript: an inline lambda here would
   // be a new prop every render and defeat the memo.

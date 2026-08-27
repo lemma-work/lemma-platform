@@ -118,6 +118,15 @@ export interface UseAssistantControllerResult {
   selectConversation: (conversationId: string | null) => void;
   setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
   sendMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
+  /**
+   * Append a follow-up message to a conversation that already has a run in
+   * flight, instead of starting a new one. Unlike `sendMessage`, this never
+   * opens its own SSE stream — it persists the message and reattaches
+   * whatever stream should be watching the conversation, relying on that
+   * stream (or the harness's own follow-up-run backstop) to surface the
+   * result. Requires an already-open/active conversation.
+   */
+  steerMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
   retryFailedMessage: () => Promise<void>;
   uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
   removePendingFile: (fileKey: string) => void;
@@ -1837,6 +1846,58 @@ export function useAssistantController({
     updatePendingFileUpload,
   ]);
 
+  // Sibling to `sendMessage` for the "a run is already active" case. It
+  // deliberately does not touch `isStreaming`/`sessionIsStreaming` or call
+  // `consume()`: calling `sendMessage` again mid-stream would open a second
+  // SSE subscription for the same run (genuine event duplication) and race
+  // `sendMessage`'s own shared abort ref. The backend endpoint this calls
+  // persists the message immediately either way -- joining the active run if
+  // there is one -- so no second stream is needed here.
+  const steerMessage = useCallback(async (
+    content: string,
+    options: SendAssistantControllerMessageOptions = {},
+  ) => {
+    const trimmed = content.trim();
+    const conversationId = activeConversationIdRef.current;
+    if (!enabled || !trimmed || !conversationId) return;
+
+    setLocalError(null);
+    appendOptimisticUserMessage(trimmed, { conversationId });
+
+    const knownConversation = conversationsRef.current.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    const resolvedPodId = knownConversation?.pod_id ?? scope.podId;
+
+    try {
+      await client.conversations.appendMessage(
+        conversationId,
+        { content: trimmed, metadata: options.metadata ?? undefined },
+        { pod_id: resolvedPodId ?? undefined },
+      );
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+      // Reattach whatever stream should be watching this conversation --
+      // this is what turns the persisted message into something the user
+      // actually sees arrive, whether that's the still-open stream from the
+      // turn this joined or a reconnect after it had died. Same pattern
+      // `resolveUserApproval` uses after an action that (re)starts a run.
+      void sessionResumeIfRunning(conversationId, { expectRun: true }).catch(() => {});
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      setLocalError(err instanceof Error ? err.message : "Failed to send this message");
+      throw err;
+    }
+  }, [
+    appendOptimisticUserMessage,
+    client,
+    enabled,
+    scope.podId,
+    sessionResumeIfRunning,
+    touchConversation,
+  ]);
+
   const retryFailedMessage = useCallback(async () => {
     const conversationId = activeConversationIdRef.current;
     if (!enabled || !conversationId || isStreaming || sessionIsStreaming) return;
@@ -1908,7 +1969,12 @@ export function useAssistantController({
       // WAITING for a moment after this returns — and a single read landing
       // there is how the answer to a question you just answered ended up
       // needing a reload to see.
-      void sessionResumeIfRunning(conversationId, { expectRun: true }).catch((error) => {
+      // force: true because an Agent Host permission wait never leaves
+      // RUNNING (see resumeIfRunning's `force` option), so the ordinary
+      // dedup key looks identical whether or not the earlier subscription
+      // is still alive. Right after an explicit approval a fresh reconnect
+      // attempt is always warranted.
+      void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch((error) => {
         setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
       });
     } catch (err) {
@@ -1919,7 +1985,7 @@ export function useAssistantController({
       const items = await loadConversationMessages(conversationId);
       if (approvalResultPresent(items, approvalId)) {
         // The decision did land, so a run is still coming — same race.
-        void sessionResumeIfRunning(conversationId, { expectRun: true }).catch(() => {});
+        void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch(() => {});
         return;
       }
       setLocalError(err instanceof Error ? err.message : "Failed to resolve approval");
@@ -1995,6 +2061,7 @@ export function useAssistantController({
     selectConversation,
     setConversationModel,
     sendMessage,
+    steerMessage,
     retryFailedMessage,
     uploadFiles,
     removePendingFile,
@@ -2037,6 +2104,7 @@ export function useAssistantController({
     retryFailedMessage,
     selectConversation,
     sendMessage,
+    steerMessage,
     sessionStreamingTool,
     setConversationModel,
     stop,

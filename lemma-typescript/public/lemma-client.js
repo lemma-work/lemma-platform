@@ -11500,6 +11500,17 @@ var LemmaClient = (() => {
         }
       });
     }
+    appendMessage(conversationId, payload, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/messages/append`,
+        {
+          body: payload,
+          signal: options.signal
+        }
+      );
+    }
     retryFailedRun(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request(
