@@ -208,40 +208,27 @@ export function AppFrame({
                     </div>
                 ) : null}
 
-                {frameFailed ? (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg-canvas)] p-4">
-                        <section className="w-full max-w-md rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-5 shadow-[var(--shadow-sm)]">
-                            <p className="text-sm font-semibold text-[var(--text-primary)]">This app cannot be shown here yet.</p>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                The app may be blocking embedded views. Open it in a tab while we tune the framing policy.
-                            </p>
-                            <Button variant="primary" asChild className="mt-4 gap-2">
-                                <a href={url} target="_blank" rel="noreferrer">
-                                    <ExternalLink className="h-4 w-4" />
-                                    Open app
-                                </a>
-                            </Button>
-                        </section>
-                    </div>
-                ) : null}
-
-                {!embeddable ? (
-                    // The app cannot hold a session in here, so do not pretend.
+                {!embeddable || frameFailed ? (
+                    // One panel for the two ways an app cannot render here.
                     //
-                    // On macOS this frame is cross-site (see
-                    // `crossSiteFramesCarryCookies`) and WebKit blocks its
-                    // storage outright, so the app would render permanently
-                    // signed out while its SDK refreshed for ever trying to fix
-                    // it. The same URL in its own window is first-party and
-                    // works -- which is what this anchor gets, because the shell
-                    // already routes an owned app URL opened in a new window to
-                    // `open_pod_app_window`.
+                    // `!embeddable` is the certain one: on macOS this frame is
+                    // cross-site (see `crossSiteFramesCarryCookies`) and WebKit
+                    // blocks its storage outright, so the app would load
+                    // permanently signed out while its SDK refreshed for ever
+                    // trying to fix it. `frameFailed` is the app refusing to be
+                    // embedded at all. Both end the same way, and the anchor is
+                    // what fixes them: the shell already routes an owned app URL
+                    // opened in a new window to `open_pod_app_window`, and
+                    // top-level is first-party, where the session works.
                     <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg-canvas)] p-4">
                         <section className="w-full max-w-md rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-5 shadow-[var(--shadow-sm)]">
-                            <p className="text-sm font-semibold text-[var(--text-primary)]">This app opens in its own window.</p>
+                            <p className="text-sm font-semibold text-[var(--text-primary)]">
+                                {embeddable ? 'This app cannot be shown here yet.' : 'This app opens in its own window.'}
+                            </p>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Apps run on their own address, and macOS will not give an
-                                embedded one your session. Its own window signs in normally.
+                                {embeddable
+                                    ? 'The app may be blocking embedded views. Open it in a tab while we tune the framing policy.'
+                                    : 'Apps run on their own address, and macOS will not give an embedded one your session. Its own window signs in normally.'}
                             </p>
                             <Button
                                 variant="primary"

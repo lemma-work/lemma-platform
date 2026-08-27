@@ -9217,6 +9217,24 @@ var LemmaClient = (() => {
       recipeList: [
         import_session.default.init({
           tokenTransferMethod: "cookie",
+          /**
+           * How many times one request may be refreshed-and-retried before the
+           * session is called unusable. The library default is 10.
+           *
+           * This is the init the workspace and every pod app actually run --
+           * `LemmaAuth` constructs it -- while the ceiling that was set to 2 sits
+           * on the auth portal's own `SuperTokens.init`, which only the `/auth`
+           * routes reach. So the pages that make the most requests were the ones
+           * still retrying ten times each.
+           *
+           * That is the amplifier, not the cause: a refresh can answer 500
+           * forever when a browser holds two session cookies from a
+           * cookie-domain change, and at ten attempts per request across the
+           * queries a workspace screen makes, one install logged 30 refusals and
+           * 17 500s before anyone looked. Two is enough to ride out an access
+           * token that expired between being read and being sent.
+           */
+          maxRetryAttemptsForSessionRefresh: 2,
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
