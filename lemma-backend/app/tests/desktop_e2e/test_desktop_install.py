@@ -54,7 +54,39 @@ INDEXING_PATIENCE_SECONDS = 120
 # is seconds-to-a-minute, and a timeout here reads as "functions are broken".
 SANDBOX_COLD_START_SECONDS = 300.0
 
-APP_JS = "window.__E2E_APP_LOADED = true;\n"
+# The app reports its own session, because when it is framed nobody else can.
+#
+# A cross-origin frame is opaque to its embedder by design, so the probe on the
+# outside cannot read whether this call succeeded -- only the app can say. Which
+# is also how a real app behaves: it calls the API through its own origin on
+# load, and either it is signed in or it renders signed out.
+APP_JS = """window.__E2E_APP_LOADED = true;
+(async () => {
+  const injected = window.__LEMMA_CONFIG__ || {};
+  const report = (payload) => {
+    window.__E2E_SESSION = payload;
+    if (window.parent !== window) {
+      window.parent.postMessage({ kind: "lemma-e2e-session", ...payload }, "*");
+    }
+  };
+  if (!injected.apiUrl) {
+    report({ error: "the served page carries no __LEMMA_CONFIG__.apiUrl" });
+    return;
+  }
+  try {
+    const response = await fetch(injected.apiUrl + "/users/me", {
+      credentials: "include",
+    });
+    let email = null;
+    if (response.ok) {
+      email = (await response.json()).email || null;
+    }
+    report({ status: response.status, email: email, origin: location.origin });
+  } catch (error) {
+    report({ error: String(error) });
+  }
+})();
+"""
 APP_CSS = "#root { color: rebeccapurple; }\n"
 
 # Deliberately arithmetic and not an LLM call: this lane is about whether a
@@ -218,15 +250,8 @@ async def test_the_app_is_told_to_call_the_api_on_its_own_origin(
     )
 
 
-async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
-    published_app, install, account
-):
-    """The regression test for apps loading signed out.
-
-    Driven through **WKWebView**, which is not a detail: Chromium sends the
-    cookie in exactly this arrangement, so a Playwright or httpx test passes
-    against the broken build. This is the only lane that can tell the two apart.
-    """
+def _run_probe(install, published_app, account, *, mode: str) -> dict:
+    """Drive the WKWebView probe and return what it reported."""
     assert PROBE.is_file(), f"the WKWebView probe is missing at {PROBE}"
 
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as config_file:
@@ -237,6 +262,7 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
                 "appUrl": install.app_url(published_app),
                 "email": account.email,
                 "password": account.password,
+                "mode": mode,
             },
             config_file,
         )
@@ -254,11 +280,53 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
 
     report = (result.stdout or "").strip()
     assert result.returncode == 0, (
-        "a pod app loaded without a session in WKWebView — the engine the "
+        f"a pod app ({mode}) had no session in WKWebView -- the engine the "
         f"desktop app actually ships.\n{report}\n{result.stderr[-2000:]}"
     )
-    answer = json.loads(report)
+    return json.loads(report)
+
+
+async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
+    published_app, install, account
+):
+    """The regression test for apps loading signed out, opened top-level.
+
+    Driven through **WKWebView**, which is not a detail: Chromium sends the
+    cookie in exactly this arrangement, so a Playwright or httpx test passes
+    against the broken build. This is the only lane that can tell the two apart.
+    """
+    answer = _run_probe(published_app=published_app, install=install,
+                        account=account, mode="toplevel")
     assert answer["status"] == 200
+    assert answer["email"] == account.email
+
+
+async def test_a_pod_app_is_signed_in_when_the_workspace_embeds_it(
+    published_app, install, account
+):
+    """The same app, framed by the workspace -- which is how people open one.
+
+    This is a different failure from the one above and they do not move
+    together. Top-level, the app's origin is first-party and the session is
+    sent. Framed, the app is third-party to the workspace and WebKit gives it
+    no storage at all: the server's Set-Cookie is not kept, `document.cookie`
+    reads empty, and a credentialed call answers 401. Third-party is decided
+    against the *top* frame, so neither the cookie's attributes nor the app's
+    own-origin API prefix can change it.
+
+    Only the app can report this, because a cross-origin frame is opaque to its
+    embedder -- so the published test app posts its own `/users/me` result out
+    to the parent.
+
+    Testing only the top-level case is how this shipped broken twice.
+    """
+    answer = _run_probe(published_app=published_app, install=install,
+                        account=account, mode="embedded")
+    assert answer["status"] == 200, (
+        "the workspace framed the app and the app had no session. On "
+        "*.localhost every host is its own site to WebKit, so the frame is "
+        "third-party and storage-blocked."
+    )
     assert answer["email"] == account.email
 
 
