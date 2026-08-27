@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.errors import BadRequestError, DomainError
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
 from app.modules.pod_bundle.infrastructure.applier import (
     BundleApplier,
@@ -515,6 +516,67 @@ async def test_the_grants_step_puts_the_derived_memory_grant_back(
     assert calls.get("memory_sync"), (
         "the grants step replaced every grant without re-deriving memory's"
     )
+
+
+async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
+    tmp_path, monkeypatch
+):
+    """An unresolvable grant must reach a worker as a `DomainError`.
+
+    This is the classification the pod bundle handlers branch on: `DomainError`
+    marks the import FAILED with the real reason and stops, while anything else
+    is called transient, re-raised, and retried by streaq.
+
+    Grant resolution used to raise `fastapi.HTTPException(400)`, which is just
+    an `Exception` to a worker. So an import naming a folder the target pod did
+    not have -- `Unknown resource name(s): folder:/memory`, the export/import
+    round trip -- was retried against inputs that could never change, and
+    reported as "Apply failed due to a transient error" with the reason logged
+    at DEBUG and never shown.
+
+    Asserted here rather than only at the raise site, because it is the
+    *applier* propagating the right type that decides whether the retry happens.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": "/memory",
+                        "permission_ids": ["folder.write"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    async def _unresolvable(session, *, pod_id, grants):
+        raise BadRequestError(
+            "Unknown resource name(s): folder:/memory",
+            code="UNKNOWN_RESOURCE_NAME",
+        )
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.normalize_pod_resource_grants", _unresolvable
+    )
+
+    with pytest.raises(DomainError) as raised:
+        await _grant_applier(root).apply_step(
+            _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+        )
+
+    # The reason has to survive, or the import reports nothing usable.
+    assert "folder:/memory" in str(raised.value)
+    assert raised.value.status_code == 400
 
 
 async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):

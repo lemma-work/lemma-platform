@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from fastapi import HTTPException
 
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.grants import (
@@ -29,7 +28,7 @@ from app.core.authorization.grants import (
     replace_resource_grantee_grant,
 )
 from app.core.authorization.permissions import Permissions
-from app.core.domain.errors import DomainError
+from app.core.domain.errors import BadRequestError, DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.composition.agent_datastore import build_file_service
@@ -136,9 +135,17 @@ async def _memory_folder_id(
         normalized = await normalize_pod_resource_grants(
             uow.session, pod_id=pod_id, grants=[_FolderGrant(MEMORY_FOLDER_PATH)]
         )
-    except HTTPException:
-        # Raised as a 400 for a name it cannot resolve. Here that only means the
-        # folder does not exist, which is not the caller's mistake and must not
-        # fail their request.
+    except BadRequestError:
+        # Raised for a name it cannot resolve. Here that only means the folder
+        # does not exist, which is not the caller's mistake and must not fail
+        # their request.
+        #
+        # `BadRequestError` since these stopped being `HTTPException`s: they are
+        # raised in workers as well as handlers, and a worker cannot tell a 400
+        # from a dropped connection when both are just `Exception`.
+        #
+        # Deliberately narrow. `DomainError` would also swallow a real
+        # authorization failure from further in and hand the agent a silent
+        # missing grant instead.
         return None
     return normalized[0].resource_id if normalized else None
