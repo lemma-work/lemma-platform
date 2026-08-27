@@ -227,7 +227,7 @@ class BundleApplier:
         toolsets = _agent_toolsets(payload)
         existing = await _get_agent(service, self._pod_id, step.name, self._ctx)
         if existing is None:
-            agent = await service.create_agent(
+            await service.create_agent(
                 pod_id=self._pod_id,
                 user_id=self._user_id,
                 name=step.name,
@@ -243,7 +243,7 @@ class BundleApplier:
                 ctx=self._ctx,
             )
         else:
-            agent = await service.update_agent(
+            await service.update_agent(
                 pod_id=self._pod_id,
                 name=step.name,
                 instruction=payload.get("instruction"),
@@ -257,7 +257,6 @@ class BundleApplier:
                 requester_user_id=self._user_id,
                 ctx=self._ctx,
             )
-        await self._sync_memory_grant(agent, toolsets)
 
     async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
         """Derive the `/memory` folder and grant the MEMORY toolset implies.
