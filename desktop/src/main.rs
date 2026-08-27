@@ -5440,7 +5440,7 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     same_origin(&api, app_base)
         && api.path() == "/_lemma/api"
         && matches!(app.scheme(), "http" | "https")
-        && (app.scheme() == "https" || local_destination(&app))
+        && (app.scheme() == "https" || local_destination(&app, api_base))
 }
 
 fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
@@ -5457,13 +5457,45 @@ fn navigation_context(app: &AppHandle) -> (String, String, String) {
     (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 
-fn local_destination(url: &tauri::Url) -> bool {
+/// The domain this installation is served under, from the API base it was given.
+///
+/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// than compiled in, because the shell does not link locald -- it launches it --
+/// so the hostname arrives at runtime in the `ready` event and this is the only
+/// honest source for it.
+fn local_base_domain(api_base: &str) -> Option<String> {
+    let host = tauri::Url::parse(api_base)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    let (_first, rest) = host.split_once('.')?;
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
+    }
+    // The domain this installation serves itself under is a local destination
+    // whatever it resolves through.
+    //
+    // This is the security-relevant half of moving off `*.localhost`. In local
+    // mode the gate below *allows* anything that is not a local destination, on
+    // the reasoning that an ordinary internet site is not a way to reach this
+    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
+    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
+    // could be navigated to an attacker-chosen name and reach any port on the
+    // user's machine -- a hole that does not exist today, because
+    // `*.lemma.localhost` matches the check above and is denied unless it is
+    // ours.
+    if let Some(base) = local_base_domain(api_base) {
+        if host == base || host.ends_with(&format!(".{base}")) {
+            return true;
+        }
     }
     let Ok(address) = host.parse::<IpAddr>() else {
         return false;
@@ -5540,7 +5572,7 @@ fn navigation_disposition(
         || same_origin(url, app_base)
         || same_origin(url, api_base)
         || owned_published_app(url, api_base)
-        || !local_destination(url)
+        || !local_destination(url, api_base)
     {
         NavigationDisposition::Allow
     } else {
