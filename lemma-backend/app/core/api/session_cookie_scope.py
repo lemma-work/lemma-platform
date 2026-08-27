@@ -35,6 +35,9 @@ from app.core.config import settings
 # anything else here would be widening cookies nobody asked about.
 _REFRESH_COOKIE = "sRefreshToken="
 _PATH_ATTRIBUTE = re.compile(r";\s*Path=[^;]*", re.IGNORECASE)
+# A cookie being deleted: SuperTokens clears one by re-sending it with an empty
+# value and an expiry in 1970.
+_CLEARING_COOKIE = re.compile(rf'^\s*{_REFRESH_COOKIE}("")?\s*;', re.IGNORECASE)
 
 
 def widen_refresh_cookie_path(value: str) -> str:
@@ -43,8 +46,23 @@ def widen_refresh_cookie_path(value: str) -> str:
     Returns the value unchanged for every other cookie, and for a refresh cookie
     that somehow carries no Path -- absent means "the current directory" to a
     browser, which is not something to paper over silently here.
+
+    A cookie being *deleted* is also returned unchanged, and that exception is
+    load-bearing. Removing a cookie requires an exact name+domain+path match, so
+    the clearing cookie has to go out at the path the doomed cookie actually
+    lives at. `older_cookie_domain` emits exactly that, at SuperTokens' own
+    narrow `refresh_token_path` -- and widening it to `/` made it match nothing,
+    so the stale cookie survived every refresh for ever.
+
+    That is not a hypothetical. An install upgraded across the host-only ->
+    `.lemma.localhost` change holds two refresh cookies; SuperTokens answers the
+    pair with a 500 and the SDK retries per query. Widening the clearing cookie
+    turns that loud failure into a permanent quiet one: the refresh starts
+    answering 200 with no `front-token`, and the loop simply stops saying why.
     """
     if not value.lstrip().startswith(_REFRESH_COOKIE):
+        return value
+    if _CLEARING_COOKIE.match(value):
         return value
     if not _PATH_ATTRIBUTE.search(value):
         return value
