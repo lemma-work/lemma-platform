@@ -6,6 +6,8 @@ const DESKTOP_PENDING_STORAGE_KEY = "lemma.desktop-auth.pending";
 export type LemmaDesktopContext = {
   version: string;
   mode: "local" | "hosted" | "undecided";
+  /** `std::env::consts::OS` from the shell. Unlike `mode`, it cannot go stale. */
+  platform?: string;
 };
 
 export type PendingDesktopAuth = {
