@@ -10,15 +10,27 @@ none: one AST pass over 1,128 non-test files turned up a single hit, and that on
 was ``asyncio.run`` under ``if __name__ == "__main__"``. Module-level
 ``re.compile`` is correct and is not what this is about.
 
-The cost is breadth, and most of it is not ours to move. 63% of the time is
-third-party, and the largest items arrive transitively through ``pydantic_ai``,
-which the agent runtime requires: ``openai`` is 781 modules and 1.45 s, ``mcp``
-and ``fastmcp`` another 239 modules, and none of them can be deferred by editing
-our own import lines because ``pydantic_ai.providers.openai`` imports them for
-us. ``supertokens_python`` (367 modules) is needed before the first authenticated
-request. So this gate does not ask anyone to shrink the graph. It asks that
-growth be a decision somebody made rather than something a new dependency did
-quietly.
+The cost is breadth. Some of it is genuinely not ours to move --
+``supertokens_python`` (367 modules) is needed before the first authenticated
+request, and fastapi and sqlalchemy are needed to answer anything at all. So
+this gate does not ask anyone to shrink the graph. It asks that growth be a
+decision somebody made rather than something a new dependency did quietly.
+
+**But do not read that as "nothing here is movable".** This docstring used to
+say ``openai``, ``mcp`` and ``fastmcp`` arrived transitively through
+``pydantic_ai`` and therefore "cannot be deferred by editing our own import
+lines". Measured again in August 2026, that was wrong: ``openai`` arrived
+through ``composio``, which arrived from a single module-scope line in
+``connectors/services/auth/composio_auth_provider.py`` -- ours, and reached
+from ``app.app`` through the connector router on every start. Deferring that one
+line into the method that uses it removed **993 modules**, and cut the packed
+import from 3.42s to 2.17s.
+
+The lesson is not about composio. It is that a graph this wide hides its own
+causes: the library that shows up in a profile is rarely the one that imported
+it, and a note in a gate asserting something is immovable will be believed by
+the next person instead of re-measured. Use ``python -X importtime`` and walk
+the parent chain before concluding anything is structural.
 
 Module count, not wall time. Count is deterministic across machines; import time
 on a CI runner varies by more than the thing being measured, and a gate that
