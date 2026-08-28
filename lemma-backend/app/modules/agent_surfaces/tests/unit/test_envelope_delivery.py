@@ -342,3 +342,35 @@ async def test_a_resource_only_described_in_words_is_not_reported_as_native() ->
     assert receipt.parts["resources"] is PartDelivery.DEGRADED
     assert receipt.degraded == ["resources"]
     assert "Orders" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_an_envelope_that_reached_nobody_raises_rather_than_returning() -> None:
+    """The end of every ladder. The caller has to be able to tell.
+
+    `_deliver_envelope` turns this into a False and an error log; what it cannot
+    do is mistake it for a delivery, which is what an ordinary return would be.
+    """
+    adapter = _Adapter(
+        send_message=AsyncMock(side_effect=httpx.ConnectError("no route"))
+    )
+    with pytest.raises(AgentSurfacePlatformError):
+        await _deliver(adapter, SurfaceEnvelope(text="the question nobody saw"))
+
+
+def test_a_delivery_that_reached_nobody_is_an_error_not_a_warning() -> None:
+    """A run left WAITING on a prompt nobody saw is not a degradation.
+
+    main raised exactly this outcome from `warning` to `error` with a traceback,
+    on the two ask_user/request_approval call sites the envelope replaced —
+    `"the run is now stuck on an approval nobody saw"`. Routing both through one
+    seam is only an improvement if the seam is at least as loud, and nothing
+    else would fail if it quietly went back to a warning.
+    """
+    from app.core.log.event_catalog import EVENT_CATALOG
+
+    spec = EVENT_CATALOG.get("agent_surfaces.egress.envelope_reached_nobody.failed")
+    assert spec is not None, (
+        "the envelope-level delivery failure is not in the event catalog; it was "
+        "renamed or downgraded"
+    )
+    assert spec.level == "error"
