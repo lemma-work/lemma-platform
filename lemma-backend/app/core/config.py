@@ -1002,6 +1002,14 @@ class Settings(BaseSettings):
         default=None,
         description="Optional cookie domain for sharing auth sessions across subdomains",
     )
+    session_cookie_older_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "The cookie domain this deployment is migrating away from. Set it "
+            "for one release after changing session_cookie_domain so the old "
+            "cookies are cleared instead of colliding with the new ones."
+        ),
+    )
     session_cookie_secure: Optional[bool] = Field(
         default=None,
         description="Override the secure flag for auth session cookies",
@@ -1011,6 +1019,12 @@ class Settings(BaseSettings):
         description="Override SameSite for auth session cookies",
     )
 
+    # Deliberately NOT including `session_cookie_older_domain`: an empty string
+    # is a meaningful value there. SuperTokens reads `older_cookie_domain=""`
+    # as "the previous cookies were host-only, clear those", which is exactly
+    # the migration desktop is making (v0.7.0 rendered SESSION_COOKIE_DOMAIN=""
+    # and main renders `.lemma.localhost`). Folding blank to None would turn the
+    # one setting that fixes that install into no setting at all.
     @field_validator(
         "session_cookie_domain",
         "cli_api_url",

@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator
 
 
 from app.core.log.log import get_logger
+from app.core.text.thinking_tags import ThinkingStreamSplitter
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -25,7 +26,9 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
     JsonValue,
+    MessageDraft,
 )
+from app.modules.agent.services.run_message_writer import split_reasoning_drafts
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.realtime import (
     message_payload,
@@ -40,6 +43,10 @@ from app.modules.agent.services.run_finalizer import (
 )
 
 logger = get_logger(__name__)
+
+#: The retry path's "discard what you have" signal, sent as a token with no
+#: payload (`PydanticAIHarness._stream_reset_event`).
+_STREAM_RESET_KIND = "stream_reset"
 
 
 @dataclass(slots=True)
@@ -70,6 +77,11 @@ class RunEventPump:
     def __init__(self, message_writer: Any, finalizer: Any) -> None:
         self.message_writer = message_writer
         self.finalizer = finalizer
+        # One run's worth of state. A `<think>` tag can straddle two deltas, so
+        # classifying the live stream means remembering where it is; the pump is
+        # constructed per run (`handlers.process_agent_run`), so this needs no
+        # keying by run id.
+        self._token_splitter = ThinkingStreamSplitter()
 
     async def handle(
         self,
@@ -79,6 +91,13 @@ class RunEventPump:
         outcome: RunOutcome,
     ) -> bool:
         """True when this event was terminal and the run has been finalized."""
+        if event.type != AgentEventType.TOKEN:
+            # Anything that is not a token ends the text stream that was being
+            # classified, so whatever the splitter was holding back is now
+            # decided. Draining here mirrors how the harnesses drain their own
+            # character buffers at a part boundary.
+            await self._drain_tokens(run)
+
         if event.type == AgentEventType.TOKEN:
             token_kind = "text"
             token_data = event.data
@@ -87,10 +106,11 @@ class RunEventPump:
                 if raw_kind is not None:
                     token_kind = str(raw_kind)
                 token_data = event.data.get("data", "")
-            await publish_conversation_event(
-                run.conversation_id,
-                token_payload(run.agent_run_id, str(token_data), kind=token_kind),
-            )
+            for kind, chunk in self._classify_token(token_kind, str(token_data)):
+                await publish_conversation_event(
+                    run.conversation_id,
+                    token_payload(run.agent_run_id, chunk, kind=kind),
+                )
             return False
 
         if event.type == AgentEventType.MESSAGE:
@@ -187,18 +207,64 @@ class RunEventPump:
         caller unwinding through an exception still sees everything that had
         been produced up to that point.
         """
-        async for event in events:
+        async for raw_event in events:
             if outcome.terminal_seen:
                 continue
-            await notify_event(observer, event, conversation, ctx, run.agent_run_id)
-            if event.type == AgentEventType.USAGE:
-                outcome.usage_data = _usage_from_event(event) or outcome.usage_data
-                continue
-            should_stop = await self.handle(event=event, run=run, outcome=outcome)
-            if event.type == AgentEventType.MESSAGE:
-                self._absorb_message(event, outcome)
+            # Split before anything sees the event, not just before persistence.
+            # `_absorb_message` reads the draft to decide the run's output, and
+            # observers read it to decide what a surface shows -- so a split
+            # applied only at the database would still hand the model's
+            # reasoning back as the run's answer.
+            should_stop = False
+            for event in _split_message_event(raw_event):
+                await notify_event(observer, event, conversation, ctx, run.agent_run_id)
+                if event.type == AgentEventType.USAGE:
+                    outcome.usage_data = _usage_from_event(event) or outcome.usage_data
+                    continue
+                should_stop = await self.handle(event=event, run=run, outcome=outcome)
+                if event.type == AgentEventType.MESSAGE:
+                    self._absorb_message(event, outcome)
+                if should_stop:
+                    break
             if should_stop:
                 outcome.terminal_seen = True
+
+    def _classify_token(self, kind: str, text: str) -> list[tuple[str, str]]:
+        """Re-tag reasoning a model wrote into the text stream.
+
+        Only the text lane is examined. A token the harness already called
+        thinking or tool is not text, and running it through the splitter would
+        be looking for a convention in a channel that does not use it.
+
+        This is the live half of the rule ``split_reasoning_drafts`` applies to
+        the durable message. Without it a reader watches the reasoning type
+        itself out inside the answer bubble and only sees it move once the
+        message lands, which is worse than either outcome on its own.
+
+        Every non-text kind passes through **including an empty one**: the
+        retry path signals "discard the partial bubble" as a `stream_reset`
+        token with no payload, so dropping empty frames as uninteresting
+        silently removes a control frame and leaves the abandoned answer on
+        screen with the retried one glued after it.
+        """
+        if kind == _STREAM_RESET_KIND:
+            # The response so far is being abandoned and re-streamed from the
+            # start. Whatever the splitter was mid-way through belongs to text
+            # the client is about to throw away -- carried into the retry it
+            # would classify the replacement answer as a continuation of a
+            # thought that no longer exists.
+            self._token_splitter = ThinkingStreamSplitter()
+            return [(kind, text)]
+        if kind != "text":
+            return [(kind, text)]
+        return list(self._token_splitter.feed(text))
+
+    async def _drain_tokens(self, run: RunIdentity) -> None:
+        for kind, chunk in self._token_splitter.flush():
+            await publish_conversation_event(
+                run.conversation_id,
+                token_payload(run.agent_run_id, chunk, kind=kind),
+            )
 
     def _absorb_message(self, event: AgentEvent, outcome: RunOutcome) -> None:
         """Carry forward what a message event says about the run's ending.
@@ -216,6 +282,23 @@ class RunEventPump:
             outcome.final_status = final_status
         if final_error:
             outcome.final_error = final_error
+
+
+def _split_message_event(event: AgentEvent) -> list[AgentEvent]:
+    """One message event, split into the messages it should actually become.
+
+    Identity for everything that is not an assistant message carrying reasoning
+    in its text, which is all but a handful of events -- the list is returned
+    unchanged rather than rebuilt so the common path allocates nothing.
+    """
+    if event.type is not AgentEventType.MESSAGE or not isinstance(
+        event.data, MessageDraft
+    ):
+        return [event]
+    drafts = split_reasoning_drafts(event.data)
+    if len(drafts) == 1 and drafts[0] is event.data:
+        return [event]
+    return [event.model_copy(update={"data": draft}) for draft in drafts]
 
 
 def _usage_from_event(event: AgentEvent) -> AgentRunUsage | None:

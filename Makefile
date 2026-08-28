@@ -21,7 +21,7 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-check-windows \
+        desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
@@ -322,6 +322,7 @@ help:
 	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation (CI-safe, no dashboards)"
 	@echo ""
 	@echo "  Desktop (one cargo workspace: app, locald, Agent Host, runtime helpers)"
+	@echo "    make desktop-check      every desktop gate that runs locally — before pushing"
 	@echo "    make desktop-dev        run Desktop from this checkout (macOS; CONTROL=1 opens Local settings)"
 	@echo "    make desktop-test       Rust tests across the whole desktop workspace"
 	@echo "    make desktop-test-app   desktop crate tests only (fast loop)"
@@ -1017,6 +1018,28 @@ desktop-host-pack-check:
 #
 # The runtime half -- a POSIX binary that is simply not there -- is not a
 # compile error, and is caught by the source lint in `host_process.rs` instead.
+# The desktop gates that can run on a developer machine, cheapest first.
+#
+# Not all of CI: bundling and codesigning need release certificates, and the app
+# crate cannot cross-compile to msvc from macOS (libsqlite3-sys wants a C
+# toolchain), so `desktop-check-windows` covers locald and the runtime manager
+# only. desktop/README.md has the gnu-target recipe for the rest.
+#
+# The pieces already existed; nothing ran them together, so "I ran the desktop
+# checks" meant whichever two someone remembered. Both halves of that bit this
+# repo in one afternoon: `desktop-lint` does not run rustfmt, so a formatting
+# diff reached CI green-locally, and `desktop-check-windows` is the only thing
+# that compiles the Windows cfg paths, so a `#[cfg(unix)]` helper called from an
+# ungated one failed a 90-minute Windows job that a 15-second local check would
+# have caught.
+#
+# Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
+# They need release certificates, so they cannot run on a contributor's machine
+# -- `make desktop-dmg` is the local approximation.
+desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+	@echo ""
+	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \

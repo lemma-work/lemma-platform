@@ -21,6 +21,10 @@ function assistantText(id: string, text: string) {
   return { id, role: "assistant", kind: "TEXT", text, created_at: at(), conversation_id: "c1" } as never;
 }
 
+function assistantThinking(id: string, text: string) {
+  return { id, role: "assistant", kind: "THINKING", text, created_at: at(), conversation_id: "c1" } as never;
+}
+
 function toolCall(id: string, toolCallId: string, toolName: string, args: Record<string, unknown>) {
   return {
     id,
@@ -144,5 +148,50 @@ describe("mapConversationMessages", () => {
     ]);
 
     expect(allInvocations(mapped)[0].toolName).toBe("pod_tables");
+  });
+});
+
+describe("reasoning is mapped as reasoning", () => {
+  // The server guarantees a thought is stored as THINKING and an answer as
+  // TEXT; these pin the client half of that contract. They are assertions about
+  // *absence* — that the thought contributes nothing to the answer's text —
+  // because the bug they descend from was reasoning rendering as a normal
+  // assistant bubble, which every count-based assertion in the suite passed
+  // straight through.
+  it("a THINKING message becomes a reasoning part and no answer text", () => {
+    const [thought] = mapConversationMessages([
+      assistantThinking("m1", "Weighing the options carefully."),
+    ]);
+
+    expect(thought.parts).toEqual([
+      expect.objectContaining({ type: "reasoning", text: "Weighing the options carefully." }),
+    ]);
+    expect(thought.content).toBe("");
+    expect(thought.parts?.some((part) => part.type === "text")).toBe(false);
+  });
+
+  it("an answer becomes text and never a reasoning part", () => {
+    const [answer] = mapConversationMessages([assistantText("m1", "Paris.")]);
+
+    expect(answer.parts).toEqual([expect.objectContaining({ type: "text", text: "Paris." })]);
+    expect(answer.parts?.some((part) => part.type === "reasoning")).toBe(false);
+  });
+
+  it("a thought never leaks into the answer beside it", () => {
+    const mapped = mapConversationMessages([
+      userText("m1", "capital of France?"),
+      assistantThinking("m2", "General knowledge. Answer directly."),
+      assistantText("m3", "Paris."),
+    ]);
+
+    const answerText = mapped
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => message.parts ?? [])
+      .filter((part) => part.type === "text")
+      .map((part) => (part as { text: string }).text)
+      .join(" ");
+
+    expect(answerText).toBe("Paris.");
+    expect(answerText).not.toContain("Answer directly");
   });
 });

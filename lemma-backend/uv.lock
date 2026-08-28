@@ -1823,7 +1823,7 @@ wheels = [
 
 [[package]]
 name = "lemma-backend"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1989,7 +1989,7 @@ dev = [
 
 [[package]]
 name = "lemma-connectors"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "lemma-connectors" }
 dependencies = [
     { name = "attrs" },
@@ -2016,12 +2016,12 @@ dev = [
 
 [[package]]
 name = "lemma-pod-bundle"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "../lemma-pod-bundle" }
 
 [[package]]
 name = "lemma-sdk"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "../lemma-python" }
 dependencies = [
     { name = "attrs" },

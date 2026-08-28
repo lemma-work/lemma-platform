@@ -509,6 +509,26 @@ fn build(
         // backend. An app acting as the signed-in user is the feature, and it
         // is what already happens on the web build.
         ("SESSION_COOKIE_DOMAIN", ".lemma.localhost".to_owned()),
+        // Empty, and deliberately not absent: it names the scheme the line
+        // above replaced.
+        //
+        // Widening the cookie domain does not replace the cookies a browser
+        // already holds, it mints a second set beside them. An install that
+        // signed in on v0.7.0 -- which rendered `SESSION_COOKIE_DOMAIN` empty,
+        // so host-only on app.lemma.localhost -- then upgraded to this, sends
+        // both, and SuperTokens refuses the pair with `The request contains
+        // multiple session cookies`, a 500. The SDK treats a 500 as retryable
+        // and asks again per query, so the console fills and the workspace
+        // never settles. One install logged 30 of those refusals and 17 500s.
+        //
+        // SuperTokens reads the empty string as "the previous cookies were
+        // host-only" and clears them on the next refresh, which is precisely
+        // the migration being made here. `None` would mean "there was no
+        // previous scheme" and clear nothing, so the backend setting keeps a
+        // blank string rather than folding it to None like its neighbours.
+        //
+        // Removable once no install can still be carrying v0.7.0 cookies.
+        ("SESSION_COOKIE_OLDER_DOMAIN", String::new()),
         // The other half, and only meaningful together with the domain above:
         // apps call the API through their own origin so the request is
         // first-party. Off by default in the backend, because on a real domain
@@ -1364,19 +1384,58 @@ mod tests {
         assert!(paths.root.join("host.secrets.json").is_file());
     }
 
-    /// Every URL a sandbox is given resolves inside a sandbox.
+    /// Changing the cookie domain has to say what it replaced.
     ///
-    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
-    /// is a host resolver convention, and a Linux container in the VM has never
-    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
-    /// every workload container.
+    /// A widened `SESSION_COOKIE_DOMAIN` does not replace the cookies a browser
+    /// already holds; it mints a second set beside them, and SuperTokens
+    /// refuses the pair on refresh with a 500 that the SDK retries for ever.
+    /// `SESSION_COOKIE_OLDER_DOMAIN` is what clears the old one, so the two
+    /// settings are only correct together -- asserted here rather than left to
+    /// whoever next edits the domain.
     ///
-    /// Functions had no gateway URL at all, so the dispatcher fell back to
-    /// `api_url` and every schema extraction died at `getaddrinfo` --
-    /// "Temporary failure in name resolution", reported as
-    /// `FUNCTION_VALIDATION_ERROR: Function schema extraction failed", which
-    /// reads as the user's function being wrong.
-    ///
+    /// Empty is the value, not a missing one: it is how SuperTokens spells
+    /// "the previous cookies were host-only", which is what v0.7.0 rendered.
+    #[test]
+    fn a_widened_cookie_domain_declares_the_scheme_it_replaced() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let domain = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        assert!(
+            !domain.is_empty(),
+            "a host-only cookie does not reach the app subdomains"
+        );
+        let older = env["SESSION_COOKIE_OLDER_DOMAIN"]
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!(
+                    "SESSION_COOKIE_DOMAIN is {domain}, so the scheme it replaced \
+                 has to be declared or an upgraded install carries both"
+                )
+            });
+        assert_eq!(
+            older, "",
+            "v0.7.0 rendered a host-only cookie, which SuperTokens spells as \
+             the empty string"
+        );
+    }
+
     /// The session cookie has to be in scope on the hosts apps are served from.
     ///
     /// Derived from `APP_BASE_DOMAIN` rather than restating `.lemma.localhost`,
@@ -1448,6 +1507,13 @@ mod tests {
         );
     }
 
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
     /// Asserted over every callback variable at once rather than one by one,
     /// because the bug was an *absent* entry: a test naming only the variables
     /// that exist cannot fail for the one that does not.

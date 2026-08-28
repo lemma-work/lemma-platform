@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.errors import BadRequestError, DomainError
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
 from app.modules.pod_bundle.infrastructure.applier import (
     BundleApplier,
@@ -303,6 +305,20 @@ def _patch_grant_layer(monkeypatch) -> dict:
     monkeypatch.setattr(
         "app.core.authorization.grants.replace_grantee_resource_grants", _replace
     )
+
+    # The `/memory` folder and grant the MEMORY toolset implies. A separate
+    # collaborator with its own datastore call, recorded here rather than run:
+    # the stubs above hand back sentinel strings, and the real one reads
+    # `.resource_id` off what `normalize` returns.
+    async def _sync_memory(uow, *, pod_id, agent_id, toolsets, ctx, created_by_user_id):
+        calls.setdefault("memory_sync", []).append(
+            {"agent_id": agent_id, "toolsets": list(toolsets or [])}
+        )
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.agent_memory_grant.sync_memory_folder_grant",
+        _sync_memory,
+    )
     return calls
 
 
@@ -413,6 +429,160 @@ class FakeFunctionService:
         self, pod_id, name, user_id, *, include_code=True, ctx=None, **kwargs
     ):
         return self._Function()
+
+
+async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
+    tmp_path, monkeypatch
+):
+    """The applier hands the service the toolsets; the service derives from them.
+
+    The `/memory` derivation used to live only in the agent HTTP controller, so
+    an agent created straight through the service -- which is what this applier
+    does -- got MEMORY in its toolsets and no folder to write to. Dormant until
+    MEMORY became a default for new agents (#476), and then fatal: exporting a
+    pod and importing it back died on `Unknown resource name(s): folder:/memory`.
+
+    The floor now lives in `AgentService.create_agent` (see
+    `app.composition.agent_memory`), so what is left for the applier to get
+    right is passing the toolsets through at all -- without them the service has
+    nothing to derive from and the same bug returns by a different route.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "reporter" / "reporter.json",
+        {"name": "reporter", "instruction": "Report.", "toolsets": ["MEMORY"]},
+    )
+    seen: dict = {}
+
+    class _CreatingAgentService:
+        """A pod that does not have this agent yet -- an import's own case."""
+
+        async def get_agent_by_name(self, *, pod_id, name, ctx=None):
+            return None
+
+        async def create_agent(self, **kwargs):
+            seen.update(kwargs)
+            return FakeAgentService._Agent()
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources.get_agent_service",
+        lambda uow: _CreatingAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT, "reporter", action=StepAction.CREATE)
+    )
+
+    assert [str(toolset) for toolset in (seen.get("toolsets") or [])] == [
+        str(AgentToolset.MEMORY)
+    ]
+    # ...and a ctx, without which the service skips the derivation entirely.
+    assert seen.get("ctx") is not None
+
+
+async def test_the_grants_step_puts_the_derived_memory_grant_back(
+    tmp_path, monkeypatch
+):
+    """The bundle's grant list replaces every grant the agent holds.
+
+    So a derived grant applied at create time is the first thing the deferred
+    step wipes. The controller has the same ordering problem on its permissions
+    endpoint and solves it the same way -- re-derive afterwards, from the agent
+    as saved rather than from the request.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "function",
+                        "resource_name": "triage",
+                        "permission_ids": ["function.execute"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    assert calls["replace"]["grants"] == ["NORMALIZED"]
+    assert calls.get("memory_sync"), (
+        "the grants step replaced every grant without re-deriving memory's"
+    )
+
+
+async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
+    tmp_path, monkeypatch
+):
+    """The applier propagates a grant failure rather than swallowing it.
+
+    Scoped deliberately, and narrower than it first looks. The grant layer is
+    stubbed here, so this does **not** cover the type the raise site now uses --
+    that is asserted against the real functions in
+    `pod/tests/unit/test_core_authorization_permissions.py`, which fails if
+    `resolve_resource_ids_by_names` goes back to `fastapi.HTTPException`.
+
+    What this covers is the applier's own half: that whatever grant resolution
+    raises reaches the caller with its message intact. Both halves are needed.
+    The pod bundle handlers branch on `DomainError` to mark an import FAILED
+    with the real reason; anything else is called transient, re-raised, and
+    retried by streaq against inputs that cannot change -- which is how an
+    import naming a folder the target pod did not have came back as "Apply
+    failed due to a transient error", with `Unknown resource name(s):
+    folder:/memory` logged at DEBUG and never shown.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": "/memory",
+                        "permission_ids": ["folder.write"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    async def _unresolvable(session, *, pod_id, grants):
+        raise BadRequestError(
+            "Unknown resource name(s): folder:/memory",
+            code="UNKNOWN_RESOURCE_NAME",
+        )
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.normalize_pod_resource_grants", _unresolvable
+    )
+
+    with pytest.raises(DomainError) as raised:
+        await _grant_applier(root).apply_step(
+            _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+        )
+
+    # The reason has to survive, or the import reports nothing usable.
+    assert "folder:/memory" in str(raised.value)
+    assert raised.value.status_code == 400
 
 
 async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):

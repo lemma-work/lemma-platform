@@ -9217,6 +9217,33 @@ var LemmaClient = (() => {
       recipeList: [
         import_session.default.init({
           tokenTransferMethod: "cookie",
+          /**
+           * How many times one request may be refreshed-and-retried before the
+           * session is called unusable. The library default is 10.
+           *
+           * This is the init the workspace and every pod app actually run --
+           * `LemmaAuth` constructs it -- while the ceiling that was set to 2 sits
+           * on the auth portal's own `SuperTokens.init`, which only the `/auth`
+           * routes reach. So the pages that make the most requests were the ones
+           * still retrying ten times each.
+           *
+           * That is the amplifier, not the cause: a refresh can answer 500
+           * forever when a browser holds two session cookies from a
+           * cookie-domain change, and at ten attempts per request across the
+           * queries a workspace screen makes, one install logged 30 refusals and
+           * 17 500s before anyone looked.
+           *
+           * Three rather than two, and the extra one is not slack. An install
+           * migrating off duplicate cookies spends both: the first refresh comes
+           * back carrying only the clearing cookies and no new tokens, and the
+           * second does the real refresh. At two, anything that consumes a third
+           * -- a second tab racing the refresh lock, an access token expiring in
+           * flight -- hits the ceiling, which the frontend reads as an
+           * unrepairable session and signs the user out. The ceiling exists to
+           * stop a session that cannot be repaired being hammered, not to fail
+           * the one case it was raised for.
+           */
+          maxRetryAttemptsForSessionRefresh: 3,
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -9850,7 +9877,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.0";
+  var SDK_VERSION = "0.7.1";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
@@ -10277,7 +10304,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.0",
+    VERSION: "0.7.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,

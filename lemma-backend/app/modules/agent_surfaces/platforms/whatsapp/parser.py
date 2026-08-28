@@ -34,6 +34,104 @@ class _WhatsAppEnvelope:
     message: dict[str, Any]
 
 
+def split_whatsapp_deliveries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """One webhook body, as one payload per message it carries.
+
+    ``entry``, ``changes`` and ``messages`` are all arrays, and the parser reads
+    ``entry[0].changes[0].value.messages[0]`` -- correct for the usual delivery
+    of exactly one, and a silent drop of everything after it for any delivery of
+    more. Nothing was logged, so a message lost this way was unrecoverable and
+    unanswerable: the person saw it sent, and it reached no run.
+
+    Each part keeps the whole envelope (``value.metadata``, ``contacts``) and
+    differs only in which single message it holds, so the parser is unchanged
+    and every part parses exactly as a single-message delivery does.
+
+    A payload carrying one message -- the overwhelming majority, and every
+    ``statuses``-only delivery -- comes back as itself, not a copy.
+    """
+    entries = payload.get("entry")
+    if not isinstance(entries, list) or len(entries) != 1:
+        return _split_all(payload, entries)
+    changes = entries[0].get("changes") if isinstance(entries[0], dict) else None
+    if not isinstance(changes, list) or len(changes) != 1:
+        return _split_all(payload, entries)
+    messages = payload_section(changes[0], "value").get("messages")
+    if not isinstance(messages, list) or len(messages) <= 1:
+        return [payload]
+    return _split_all(payload, entries)
+
+
+def _split_all(payload: dict[str, Any], entries: object) -> list[dict[str, Any]]:
+    """Every ``(entry, change, message)`` in a delivery, one payload each."""
+    if not isinstance(entries, list):
+        return [payload]
+    parts: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        changes = entry.get("changes")
+        if not isinstance(changes, list):
+            continue
+        for change in changes:
+            value = payload_section(change, "value")
+            messages = value.get("messages")
+            if not isinstance(messages, list) or not messages:
+                continue
+            for message in messages:
+                parts.append(
+                    {
+                        **payload,
+                        "entry": [
+                            {
+                                **entry,
+                                "changes": [
+                                    {
+                                        **change,
+                                        "value": {**value, "messages": [message]},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                )
+    # A delivery with no message at all (a status callback) still has to reach
+    # the parser, which answers None for it. Returning [] here would be a
+    # different behaviour, not a smaller one.
+    return parts or [payload]
+
+
+def _is_undeliverable(msg: dict[str, Any]) -> bool:
+    """Whether WhatsApp is reporting a message rather than delivering one.
+
+    Cloud API answers a message it cannot hand over with ``type: "unsupported"``
+    and the reason in ``errors`` -- a forwarded sticker, a view-once, a poll.
+    There is no media id behind it and nothing to download.
+    """
+    return msg.get("type") == "unsupported" or bool(msg.get("errors"))
+
+
+def _undeliverable_notice(msg: dict[str, Any]) -> str:
+    """What to tell the agent about a message that never actually arrived.
+
+    Read as ordinary media this produced the bare word ``unsupported`` as the
+    person's text -- the type name fallback below, applied to a type that is not
+    a kind of content but an error report. The agent then answered it as if they
+    had typed it. So say what happened, and say who is saying it: the line lands
+    in the transcript where the person's own words go.
+    """
+    errors = msg.get("errors")
+    first = errors[0] if isinstance(errors, list) and errors else {}
+    reason = ""
+    if isinstance(first, dict):
+        reason = str(first.get("title") or first.get("message") or "").strip()
+    return (
+        "(System notice, not the person's words: WhatsApp could not deliver "
+        f"their message{f' — {reason}' if reason else ''}. None of its content "
+        "reached Lemma.)"
+    )
+
+
 def _envelope(payload: dict[str, Any]) -> _WhatsAppEnvelope | None:
     """The message inside a webhook delivery, or None when it carries none."""
     entry_list = payload.get("entry") or []
@@ -145,6 +243,9 @@ class WhatsAppMessageParser:
                 "phone_number_id": phone_number_id,
                 "contacts": contacts,
                 "attachments": attachments,
+                # Carried so "the file never arrived" is answerable from the
+                # message row, not only from the agent's guess about it.
+                "undeliverable": _is_undeliverable(msg),
             },
             raw_payload=payload,
         )
@@ -158,13 +259,16 @@ class WhatsAppMessageParser:
         reading the wrong one is why a photo sent with a question arrived at the
         agent as the bare word "image" with the question dropped. The type name
         stays as the fallback for media genuinely sent without a caption, so the
-        agent at least knows something arrived.
+        agent at least knows something arrived -- but only for types that *are*
+        content, which is why the undeliverable check comes first.
         """
         msg_type = msg.get("type", "text")
         if msg_type == "text":
             return payload_section(msg, "text").get("body", ""), []
         if msg_type == "interactive":
             return self._interactive_title(payload_section(msg, "interactive")), []
+        if _is_undeliverable(msg):
+            return _undeliverable_notice(msg), []
         attachment = self._parse_attachment(msg, msg_type)
         caption = (
             str(payload_section(msg, msg_type).get("caption") or "").strip() or msg_type

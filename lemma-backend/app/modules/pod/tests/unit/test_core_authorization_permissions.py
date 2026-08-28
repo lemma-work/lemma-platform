@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 
-from fastapi import HTTPException
 
 from app.core.authorization.context import (
     ActorType,
@@ -33,6 +32,7 @@ from app.core.authorization.permissions import (
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.service import Authorizer
+from app.core.domain.errors import BadRequestError
 
 
 class CountingAuthorizer:
@@ -204,16 +204,16 @@ def test_resource_grant_validation_only_accepts_pod_permissions():
     validate_pod_resource_grant_permissions([Grant()])
 
     Grant.permission_ids = [Permissions.CONNECTOR_MANAGE]
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "Only pod-scoped permissions" in exc_info.value.detail
+    assert "Only pod-scoped permissions" in exc_info.value.message
 
     Grant.permission_ids = ["missing.permission"]
-    with pytest.raises(HTTPException) as unknown_exc:
+    with pytest.raises(BadRequestError) as unknown_exc:
         validate_pod_resource_grant_permissions([Grant()])
     assert unknown_exc.value.status_code == 400
-    assert "Unknown permission" in unknown_exc.value.detail
+    assert "Unknown permission" in unknown_exc.value.message
 
 
 def test_resource_grant_validation_rejects_permission_resource_type_mismatch():
@@ -222,11 +222,11 @@ def test_resource_grant_validation_rejects_permission_resource_type_mismatch():
         resource_name = "helper"
         permission_ids = [Permissions.APP_READ]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "do not apply to the resource type" in exc_info.value.detail
-    assert "agent:app.read" in exc_info.value.detail
+    assert "do not apply to the resource type" in exc_info.value.message
+    assert "agent:app.read" in exc_info.value.message
 
     Grant.permission_ids = [Permissions.AGENT_EXECUTE]
     validate_pod_resource_grant_permissions([Grant()])
@@ -241,10 +241,10 @@ def test_connector_grants_validate_use_permission():
     validate_pod_resource_grant_permissions([Grant()])
 
     Grant.permission_ids = [Permissions.AGENT_EXECUTE]
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "do not apply to the resource type" in exc_info.value.detail
+    assert "do not apply to the resource type" in exc_info.value.message
 
 
 class _FakeScalarResult:
@@ -296,7 +296,7 @@ async def test_resource_grant_normalization_reports_missing_connector_app():
         resource_name = "telegram"
         permission_ids = [Permissions.CONNECTOR_USE]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -304,8 +304,8 @@ async def test_resource_grant_normalization_reports_missing_connector_app():
         )
 
     assert exc_info.value.status_code == 400
-    assert "Unknown resource name(s)" in exc_info.value.detail
-    assert "connector:telegram" in exc_info.value.detail
+    assert "Unknown resource name(s)" in exc_info.value.message
+    assert "connector:telegram" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -322,7 +322,7 @@ async def test_resource_grant_normalization_reports_all_unknown_names():
         resource_name = "missing_function"
         permission_ids = [Permissions.FUNCTION_EXECUTE]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -330,8 +330,8 @@ async def test_resource_grant_normalization_reports_all_unknown_names():
         )
 
     assert exc_info.value.status_code == 400
-    assert "agent:missing_agent" in exc_info.value.detail
-    assert "function:missing_function" in exc_info.value.detail
+    assert "agent:missing_agent" in exc_info.value.message
+    assert "function:missing_function" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -343,7 +343,7 @@ async def test_resource_grant_normalization_rejects_unsupported_resource_type():
         resource_name = "some-conversation"
         permission_ids = [Permissions.CONVERSATION_READ]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -351,7 +351,7 @@ async def test_resource_grant_normalization_rejects_unsupported_resource_type():
         )
 
     assert exc_info.value.status_code == 400
-    assert "do not support name-based grants" in exc_info.value.detail
+    assert "do not support name-based grants" in exc_info.value.message
 
 
 @pytest.mark.asyncio

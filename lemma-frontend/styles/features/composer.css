@@ -83,6 +83,19 @@
     max-height: 8rem;
 }
 
+/* Sixteen pixels on a phone, and it is not a type decision.
+
+   Safari zooms the page in the moment a field under 16px takes focus, and it
+   does not zoom back out when the field is done — so tapping the composer left
+   the whole conversation magnified and scrolled sideways, on a screen with no
+   room to spare. This is the one field on the chat surface a reader is certain
+   to touch. The scale above 640px is untouched. */
+@media (max-width: 639px) {
+    .lm-composer-input.lm-composer-input {
+        font-size: var(--text-base);
+    }
+}
+
 .lm-composer-controls {
     display: flex;
     min-width: 0;

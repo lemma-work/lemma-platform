@@ -41,7 +41,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
-| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_a_conversation_can_be_watched` |
+| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_reasoning_is_never_shown_as_the_answer`, `test_a_conversation_can_be_watched` |
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
