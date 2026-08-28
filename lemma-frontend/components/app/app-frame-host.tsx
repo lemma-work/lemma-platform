@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { PanelsTopLeft } from '@/components/ui/icons';
-import { useApp } from '@/components/app/app-context';
+import { useApp, useAppPage } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
 import { EmptyState } from '@/components/shared/empty-state';
 import { resourceAllows } from '@/lib/authz/resource-actions';
@@ -35,6 +35,7 @@ export function AppFrameHost({
     canUpdateApp: boolean;
 }) {
     const { pages } = useApp();
+    const { page: activePage, isResolving } = useAppPage(activeSlug);
     const [activated, setActivated] = useState<string[]>([]);
 
     // Mark a slug live the first time its tab is opened and keep it mounted
@@ -54,11 +55,13 @@ export function AppFrameHost({
     const livePages = pages.filter(
         (page) => openAppSlugs.includes(page.slug) && activated.includes(page.slug) && page.url,
     );
-    const activePage = activeSlug ? pages.find((page) => page.slug === activeSlug) : null;
     const hasActiveFrame = livePages.some((page) => page.slug === activeSlug);
 
     const missingSlug = visible && !activeSlug;
-    const unavailable = visible && !!activeSlug && pages.length > 0 && (!activePage || !activePage.url);
+    // An app the index has not answered on yet is still loading, not missing:
+    // `useAppPage` re-asks once for a slug it does not know, which is what an
+    // app built moments ago in the conversation needs.
+    const unavailable = visible && !!activeSlug && !isResolving && (!activePage || !activePage.url);
     const loading = visible && !!activeSlug && !hasActiveFrame && !unavailable;
 
     return (

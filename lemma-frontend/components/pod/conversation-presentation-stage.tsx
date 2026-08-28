@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowUpRight, X } from '@/components/ui/icons';
 import { useEffect, useRef, type ReactNode } from 'react';
 
-import { useApp } from '@/components/app/app-context';
+import { useAppPage } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
 import { StepLoader } from '@/components/brand/loader';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -105,14 +105,11 @@ export function ConversationPresentationStage({
 }) {
     const router = useRouter();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
-    const { pages, isLoading: appsLoading } = useApp();
     // An app is presented in place rather than framed: the stage already sits
     // inside the pod's `AppProvider`, so it can mount the app's own frame
     // directly instead of re-loading the workspace to reach `AppFrameHost`.
     const appSlug = conversationStageAppSlug(resourceHref, podId);
-    const appPage = appSlug
-        ? pages.find((page) => page.slug === appSlug) ?? null
-        : null;
+    const { page: appPage, isResolving: appResolving } = useAppPage(appSlug);
     const embedHref = appSlug ? null : buildConversationStageEmbedHref(resourceHref);
     const standaloneHref = buildConversationStandaloneResourceHref(resourceHref);
 
@@ -136,7 +133,7 @@ export function ConversationPresentationStage({
         : presentationTitle(resourceHref);
 
     const stageBody = appSlug ? (
-        <StageAppBody podId={podId} page={appPage} title={title} isLoading={appsLoading} />
+        <StageAppBody podId={podId} page={appPage} title={title} isLoading={appResolving} />
     ) : embedHref ? (
         <iframe
             key={embedHref}
