@@ -310,6 +310,12 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # Production runs at INFO, so a broad `except` that logs at debug without
+      # exc_info reports nothing anywhere — and if it also stops the exception
+      # propagating, the job reports success. That pair is why 2,146 title jobs
+      # all said `succeeded` while the LLM path was failing.
+      - name: Swallowed errors (broad catches that leave no trace)
+        run: make lint-swallowed-errors
       # Also only ever ran in `make quality`. Main had drifted 35 modules above
       # its baseline before anybody looked, which is precisely what this gate
       # exists to prevent -- growth nobody decided on.

@@ -15,6 +15,7 @@ from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
+from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -79,7 +80,19 @@ class ConversationMCPService:
                 anti_csrf_check=False,
                 session_required=True,
             )
+        except SuperTokensSessionError:
+            # The token is not valid: expected traffic, and the denial below is
+            # the whole answer.
+            return False
         except Exception:
+            # The auth backend could not answer. Same denial — a caller holding
+            # a good token must not be let through because SuperTokens is down —
+            # but this is an outage, not a bad token, and catching both as one
+            # made the two indistinguishable from outside.
+            logger.error(
+                "agent.conversation_mcp_service.session_lookup.failed",
+                exc_info=True,
+            )
             return False
         if session is None:
             return False

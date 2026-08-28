@@ -52,3 +52,20 @@ export function createUniqueAppPageSlug(input: {
 export function isReservedAppPageSlug(slug: string): boolean {
     return RESERVED_APP_PAGE_SLUGS.has(normalizeAppPageSlug(slug));
 }
+
+/**
+ * The canonical page slug an `/app/view?page=` link names, or null when it
+ * names nothing.
+ *
+ * The app index slugs a page from the app's name, so `Expense Tracker` is
+ * addressed as `expense-tracker`. Not every link carries that form:
+ * `display_resource` names an app the way a person writes it, because a pod
+ * resource name is the only handle an agent has. Normalizing on arrival means
+ * both spellings resolve to the same page instead of one of them reading as an
+ * app that does not exist.
+ */
+export function appPageSlugFromRouteParam(value: string | null | undefined): string | null {
+    const raw = value?.trim();
+    if (!raw) return null;
+    return normalizeAppPageSlug(raw);
+}
