@@ -2551,9 +2551,17 @@
             "title": "Updated At"
           },
           "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where no app host is served -- see `public_app_url`.",
             "readOnly": true,
-            "title": "Url",
-            "type": "string"
+            "title": "Url"
           },
           "user_id": {
             "format": "uuid",
@@ -7930,14 +7938,20 @@
             "type": "string"
           },
           "url": {
-            "title": "Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
           "id",
           "name",
-          "url",
           "status"
         ],
         "title": "HomeAppResponse",
