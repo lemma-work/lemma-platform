@@ -4,8 +4,8 @@
 pod reaches them back.
 
 A surface connects a pod's agent to an outside platform — Slack, Microsoft
-Teams, Telegram, WhatsApp, Gmail, Outlook, or plain email. A person messages the
-agent there and gets an answer there, in the same thread, without opening Lemma.
+Teams, Telegram, WhatsApp, or email. A person messages the agent there and gets
+an answer there, in the same thread, without opening Lemma.
 
 Two rules run through everything here. **A surface is a door, not a hole**: who
 someone is on Slack has to resolve to who they are in Lemma before they get
@@ -179,7 +179,8 @@ it is asked, not skipped.
 - If an inbound email cannot be read completely, then the system shall drop it
   rather than starting an agent on a partial message.
 - Where a surface is email, the system shall compose everything one turn produces
-  into a single reply — the answer, any file shown, and any question asked.
+  into a single reply — the answer, any file shown, anything said aloud, and any
+  question asked.
 - Where an agent asks a question or requests approval on an email surface, the
   system shall put it in that reply and shall accept the person's emailed answer
   as the response.

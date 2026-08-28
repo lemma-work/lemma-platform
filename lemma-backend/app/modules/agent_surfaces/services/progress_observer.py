@@ -353,6 +353,11 @@ class SurfaceAgentRunProgressObserver(
                 pass
         await self._clear_progress(conversation.id)
         await self._deliver_run_error(conversation)
+        # Same reason as `on_run_finished`: what `display_resource` held belongs
+        # to this run. A run that died still held it, and the entry outlived the
+        # run -- attaching itself to whatever reply came next, or to nothing at
+        # all while the process kept the bytes.
+        discard_display_paths(conversation.id)
 
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.

@@ -11,9 +11,9 @@ deterministic TTS fake — only synthesis is faked, delivery runs for real).
 N/A cells:
 - **Only Telegram has a native voice-note send** (``sendVoice`` — see
   ``TelegramPlatformService._render_voice``); Slack/Teams/WhatsApp/base all
-  return ``False`` from ``_render_voice``, so ``say`` falls through to
-  ``_try_send_file_attachment`` (a normal inline audio file, per
-  ``send_voice_note_for_conversation``'s documented fallback chain) — Slack
+  return ``False`` from ``_render_voice``, so ``say`` degrades to a normal
+  inline audio file (``_deliver_file``, the second rung of the ladder
+  ``deliver`` walks) — Slack
   and WhatsApp support that (native files, per the display_resource matrix);
   Teams has no native file send either, so it falls all the way to a link
   card. All three fallback tiers are exercised below, just not per-platform
@@ -23,9 +23,12 @@ N/A cells:
   audio ingestion isn't wired into these tests), matching the prior suite's
   only coverage; broadening this is a follow-up, not a silent gap introduced
   here.
-- **Email is N/A for ``say``** — the agent has no ``SPEECH`` toolset on email
-  surfaces in this matrix (consistent with the ask_user/request_approval
-  negative pattern), and email has no audio-delivery mechanism regardless.
+- **Email is not N/A for ``say``**, and saying it was is what hid a live bug.
+  ``SPEECH`` is a per-agent declarable toolset with no platform gating, so an
+  agent that has it can call ``say`` on a Resend surface. Email gets one reply,
+  so the audio is held and attached to it rather than sent as a second message —
+  the same branch ``display_resource`` already took, and the one ``say`` was
+  never given: ``test_say_on_resend_attaches_the_audio_to_the_one_reply`` below.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -50,11 +54,13 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
+    _resend_payload,
     _seed_external_user,
     _set_user_mobile_number,
     _telegram_payload,
     _whatsapp_payload,
 )
+from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
@@ -313,6 +319,98 @@ async def test_say_falls_back_to_link_card_on_teams(
     # way through to a link card.
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
     assert "app.example.test" in json.dumps(teams_messages)
+
+
+async def test_say_on_resend_attaches_the_audio_to_the_one_reply(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    fake_speech_provider,
+    message_store,
+    monkeypatch,
+):
+    """Email gets one reply, so audio is an attachment on it — not a lost send.
+
+    The matrix used to call this cell N/A on the grounds that email has no
+    SPEECH toolset. There is no *platform* gating on it: `SPEECH` is declared
+    per agent (`toolsets=["SPEECH"]` below is the same line every other cell
+    uses), so this path was reachable the whole time — and broken twice over.
+
+    `_deliver_voice_note` returned False for email, on the reasoning that "email
+    composes one reply via the reply tool; the agent attaches the audio there" —
+    a tool this branch deletes. So the audio was synthesized, billed, written to
+    the pod and never delivered, while `say` reported that it had spoken. Had it
+    got past that, `EmailOneReplyMixin` folded five of the six envelope parts and
+    never read `voice`, so the send would have carried nothing anyway.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="resend",
+        credentials={
+            "api_key": "resend-token",
+            "api_base_url": fake_resend.api_base,
+        },
+        email="assistant@resend.test",
+        provider=AuthProvider.LEMMA,
+    )
+    _agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "RESEND", "account_id": str(account.id)},
+        toolsets=["SPEECH"],
+    )
+    assistant_address = surface.get("surface_identity_email")
+    if not assistant_address:
+        surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
+        assistant_address = surface_model.surface_identity_email
+    assert assistant_address
+
+    await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_address=assistant_address,
+                message_id="resend-message-say-1",
+                text="read me the summary",
+            ),
+            headers={},
+        ),
+        script=[
+            script_say("Here is the summary.", tool_call_id=_TOOL_CALL_ID),
+            script_text("Sent!"),
+        ],
+    )
+
+    sent = await wait_for_messages(message_store, "RESEND", min_count=1)
+    carrying_audio = [message for message in sent if _audio_attachment_names(message)]
+    assert carrying_audio, (
+        "the run said something aloud and no email carried the audio: "
+        f"{json.dumps(sent)[:600]}"
+    )
+
+
+def _audio_attachment_names(message: dict) -> list[str]:
+    """Attachment filenames on a Resend send that look like audio."""
+    attachments = message.get("attachments") or []
+    names = []
+    for attachment in attachments:
+        name = str(
+            (attachment or {}).get("filename")
+            or (attachment or {}).get("file_name")
+            or ""
+        )
+        if name.lower().endswith((".ogg", ".mp3", ".wav", ".opus")):
+            names.append(name)
+    return names
 
 
 async def test_telegram_voice_message_transcribed_at_ingress(

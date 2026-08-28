@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 
 logger = get_logger(__name__)
 
+
 def _keyed(collected: dict[str, list[PartDelivery]]) -> dict[str, PartDelivery]:
     """One receipt key per thing that was actually delivered.
 

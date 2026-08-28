@@ -41,6 +41,4 @@ def downgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.create_index(
-        "ix_agent_surfaces_schedule_id", "agent_surfaces", ["schedule_id"]
-    )
+    op.create_index("ix_agent_surfaces_schedule_id", "agent_surfaces", ["schedule_id"])

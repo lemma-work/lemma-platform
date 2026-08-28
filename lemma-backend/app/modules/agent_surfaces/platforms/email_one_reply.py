@@ -5,10 +5,11 @@ Email cannot: the person gets one message, so an attachment is *part of the
 reply* rather than a second send that could fall back to a line of text, and a
 question the run stopped on has to be in the body or it is not asked at all.
 
-This is where those parts merge. It is the only thing the three email adapters
-need in common beyond the transport they already share, which is why it is a
-mixin rather than three copies -- the last time email had its own send path, it
-read different threading headers from the shared one and silently split threads.
+This is where those parts merge. It is a mixin rather than something the Resend
+adapter simply holds, because it is the shape *any* one-reply surface needs and
+nothing about it is Resend's -- and because the last time email had its own send
+path, it read different threading headers from the shared one and silently split
+threads.
 """
 
 from __future__ import annotations

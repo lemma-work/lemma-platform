@@ -318,7 +318,7 @@ async def test_a_file_that_reached_nobody_is_reported_even_when_a_later_one_land
 
 
 async def test_a_resource_only_described_in_words_is_not_reported_as_native() -> None:
-    """"Shown as a card" and "described in a sentence" are different outcomes.
+    """ "Shown as a card" and "described in a sentence" are different outcomes.
 
     The base default already delivered the plan as text, but the caller recorded
     ``NATIVE`` because nothing raised — so ``receipt.degraded`` could never name

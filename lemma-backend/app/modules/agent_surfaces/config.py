@@ -43,7 +43,8 @@ class SurfaceSettings(BaseSettings):
             "sender failed is never believed regardless. Defaults to True because "
             "not every provider adds the header and flipping it blind would stop "
             "resolving every inbound sender; watch for "
-            "surface.email_sender_unauthenticated in logs, then set it False."
+            "agent_surfaces.identity.email_sender_unauthenticated.degraded in "
+            "logs, then set it False."
         ),
     )
 

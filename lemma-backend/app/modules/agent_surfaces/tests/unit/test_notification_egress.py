@@ -236,7 +236,7 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
 
 
 async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
-    """Outlook and Composio-backed Gmail reply through a message id they lack.
+    """A platform that replies through a provider message id it does not have.
 
     They are still offered as channels because ``can_cold_open`` is a property
     of email, not of the credential behind it. A clean False is what turns that

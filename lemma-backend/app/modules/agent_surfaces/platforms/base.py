@@ -145,8 +145,8 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
 
         The one thing email can do that chat cannot: address a mailbox with no
         prior message to reply to. Default: not supported → None, which is a
-        clean "this platform can't", not an error — Outlook and Composio-backed
-        Gmail both reply through endpoints keyed by a provider message id they
+        clean "this platform can't", not an error — every chat platform, and any
+        mailbox reached through an endpoint keyed by a provider message id it
         would not have.
 
         ``thread_seed_id`` is the Message-ID the caller will key the reply on;
