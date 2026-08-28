@@ -268,11 +268,30 @@ def compose_markdown(
     # applicable here" is information and "somebody has to go and click
     # something" is a task, and one buried in the other is how a suite quietly
     # proves less each month.
+    #
+    # Both are listed. A table cell reading "20 not run" and nothing else is the
+    # failure this file exists to prevent, one level in: a number nobody can act
+    # on reads as a detail rather than as twenty promises going unchecked.
     waiting = [pair for pair in total.skipped if pair[1].startswith(WAITING)]
-    if waiting:
-        lines += ["", "<details><summary>Waiting on a person</summary>", ""]
+    not_run = [pair for pair in total.skipped if not pair[1].startswith(WAITING)]
+
+    for heading, group in (
+        ("Not run", not_run),
+        ("Waiting on a person", waiting),
+    ):
+        if not group:
+            continue
+        # Grouped by reason: twenty scenarios skipped for one missing credential
+        # is one problem, and listing it twenty times buries it.
+        by_reason: dict[str, int] = {}
+        for _name, reason in group:
+            said = reason[len(WAITING):] if reason.startswith(WAITING) else reason
+            key = said.split(".")[0].strip() or "no reason given"
+            by_reason[key] = by_reason.get(key, 0) + 1
+        lines += ["", f"<details><summary>{heading} ({len(group)})</summary>", ""]
         lines += [
-            f"- {name} — {reason[len(WAITING):].strip()}" for name, reason in waiting
+            f"- {count}× {reason}"
+            for reason, count in sorted(by_reason.items(), key=lambda item: -item[1])
         ]
         lines += ["", "</details>"]
 
