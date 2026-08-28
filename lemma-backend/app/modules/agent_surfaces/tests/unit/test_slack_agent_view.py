@@ -190,6 +190,7 @@ async def test_agent_avatar_rides_along_with_the_name():
 
 
 async def test_setup_confirmation_names_what_was_saved():
+
     from app.modules.agent_surfaces.platforms.slack.blocks import (
         channel_setup_confirmation_blocks,
     )
@@ -204,7 +205,7 @@ async def test_setup_confirmation_names_what_was_saved():
 
 async def test_home_leads_with_value_then_configuration():
     """A first-time viewer should meet the pitch, not the routing table."""
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name="Test1",
@@ -229,7 +230,7 @@ async def test_home_leads_with_value_then_configuration():
 
 async def test_home_skips_a_logo_slack_cannot_fetch():
     """Slack loads the image from its own servers; localhost renders an empty box."""
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name=None,
@@ -251,7 +252,7 @@ async def test_publish_home_view_accepts_everything_the_caller_sends():
     import inspect
 
     from app.modules.agent_surfaces.platforms.slack.adapter import SlackSurfaceAdapter
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view_params = set(inspect.signature(app_home_view).parameters) - {"self"}
     adapter_params = set(
@@ -266,3 +267,65 @@ async def test_publish_home_view_accepts_everything_the_caller_sends():
     missing_on_service = view_params - service_params
     assert not missing_on_adapter, f"adapter cannot pass: {missing_on_adapter}"
     assert not missing_on_service, f"service cannot pass: {missing_on_service}"
+
+
+async def test_a_bot_made_for_one_agent_does_not_offer_to_change_agent():
+    """A dedicated bot answers as its agent or not at all.
+
+    Leaving the picker up would invite people out of the bot they are standing
+    in: they would pick another agent, and this app — which is one Slack bot
+    user — would carry on answering as the only agent it can.
+    """
+    from app.modules.agent_surfaces.platforms.slack.blocks import (
+        DM_AGENT_SETUP_ACTION_ID,
+    )
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
+
+    view = app_home_view(
+        pod_name="Test1",
+        dm_agent_name="triage",
+        channel_routes=[],
+        offers_dm_agent_choice=False,
+    )
+
+    assert DM_AGENT_SETUP_ACTION_ID not in str(view)
+    # The agent is still named — dropping the button must not drop the answer
+    # to "who am I talking to?".
+    assert "triage" in str(view)
+
+
+async def test_the_shared_bot_still_offers_the_choice():
+    """The workspace-wide bot is unchanged: one app, many agents, you pick."""
+    from app.modules.agent_surfaces.platforms.slack.blocks import (
+        DM_AGENT_SETUP_ACTION_ID,
+    )
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
+
+    view = app_home_view(
+        pod_name="Test1",
+        dm_agent_name="triage",
+        channel_routes=[],
+    )
+
+    assert DM_AGENT_SETUP_ACTION_ID in str(view)
+
+
+async def test_a_dedicated_bot_ignores_a_choice_made_before_it_became_one():
+    """The flag has to win over stored choices, not race them.
+
+    A workspace that ran the shared bot first has ``dm_agent_by_user`` entries.
+    If those still read, turning a bot into one agent's own would leave some
+    people quietly talking to a different agent than the bot they opened.
+    """
+    from app.modules.agent_surfaces.domain.surface_config import SurfaceSlackConfig
+
+    config = SurfaceSlackConfig(dm_agent_by_user={"U1": "someone-else"})
+    assert config.agent_for_user("U1") == "someone-else"
+    assert config.offers_dm_agent_choice()
+
+    dedicated = config.model_copy(update={"dedicated_to_agent": True})
+    assert dedicated.agent_for_user("U1") is None
+    assert not dedicated.chose_pod_assistant("U1")
+    assert not dedicated.offers_dm_agent_choice()
+    # Kept, not erased: pointing this bot back at the shared model restores it.
+    assert dedicated.dm_agent_by_user == {"U1": "someone-else"}
