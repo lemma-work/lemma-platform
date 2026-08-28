@@ -13,10 +13,18 @@ SQLAlchemy's asyncpg dialect keeps a second cache of its own, per DBAPI
 connection, defaulting to 100 statements, which that setting does not touch --
 so the bug was still there, and the register entry said it was fixed.
 
-Asserted on the connection the engine actually hands out rather than on the
-arguments passed to it: the arguments are two dict literals in two branches of
-``get_datastore_engine``, and the failure mode this guards against is precisely
-somebody setting one of them.
+``test_datastore_statement_cache.py`` covers the same ground far more cheaply
+and covers it better in one respect -- it pins the coercion that made the two
+names easy to confuse. This test earns its place on two things that one cannot
+reach:
+
+* It asserts on the connection the engine **actually hands out**, not on the
+  dict handed to it. The arguments come from two separate literals -- one in
+  ``_build_datastore_connect_args``, one inline in ``get_datastore_engine`` for
+  ``testing`` -- and the unit test sees only the first. Setting one and not the
+  other is exactly the shape of the original mistake.
+* A dict containing the right key proves the argument was passed, not that the
+  dialect honoured it. Here the cache object itself is read back.
 
 Why this needs a test rather than being obvious from the code: in ``testing``
 the datastore engine pools with ``NullPool``, so no connection lives long

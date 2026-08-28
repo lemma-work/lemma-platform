@@ -25,34 +25,6 @@ def _json_serial(obj):
 def _build_datastore_connect_args() -> dict:
     """Build asyncpg connect_args with server-side session settings.
 
-    The two cache settings are the ones that are not about timeouts, and they
-    are here rather than on the primary engine because only this one runs SQL
-    against tables a person can change.
-
-    **There are two prepared-statement caches, and both have to be off.**
-    Turning off one is what made this bug look fixed while it was not.
-
-    ``statement_cache_size=0`` is asyncpg's own. ``prepared_statement_cache_size=0``
-    is SQLAlchemy's — its asyncpg dialect keeps a second cache of its own, per
-    DBAPI connection, defaulting to **100** statements, and asyncpg's setting
-    does not touch it. SQLAlchemy documents the hazard itself: a cached
-    prepared statement goes stale "when DDL has been emitted to the PostgreSQL
-    database which modifies the tables", and it can only invalidate that cache
-    inside one process and engine — which is not the arrangement here, where
-    an API process and its workers each hold their own.
-
-    A record read is ``SELECT * FROM "<schema>"."<table>"`` — the same text
-    before and after a column is added or removed — so the cached plan is
-    reused with a result descriptor that no longer matches the table, and
-    asyncpg raises ``InvalidCachedStatementError``. Nothing caught it, so it
-    left as a 400: a person added or removed a column and their table stopped
-    being readable.
-
-    This is the second attempt at it (DEV-DATA-004, closed in #505 by setting
-    only asyncpg's knob). What found it again was the product scenario suite
-    run against a real install rather than a booted test stack — see the note
-    on ``testing`` below for why that difference decides whether it is visible
-    at all.
     The two cache knobs are the ones that are not about timeouts, and they are
     here rather than on the primary engine because only this one runs SQL
     against tables a person can change.
@@ -82,6 +54,20 @@ def _build_datastore_connect_args() -> dict:
     protocol desyncs (``the number of columns in the result row (1) is different
     from what was described (2)``, ``unexpected trailing 942 bytes in buffer``,
     ``cannot decode UUID, expected 16 bytes, got 554``).
+
+    Twice, now. DEV-DATA-004 was closed in #505 by setting only asyncpg's knob,
+    and the register entry was deleted in the same change -- so ``issues.md``
+    said this was fixed while every deployment with a real pool still had it.
+    SQLAlchemy documents the hazard plainly: a cached prepared statement goes
+    stale "when DDL has been emitted to the PostgreSQL database which modifies
+    the tables", and the dialect can only invalidate its cache within one
+    process and engine, which is not the arrangement here.
+
+    It was found the second time from two directions at once -- the production
+    500s above, and the product scenario suite run against a real install.
+    Nothing cheaper could have: in ``testing`` this engine pools with
+    ``NullPool``, so no connection lives long enough to reuse a stale statement
+    and the entire failure is invisible to a booted test stack.
 
     The cost is a parse per statement. That is the right trade for a schema
     that belongs to users rather than to migrations: the primary engine keeps
