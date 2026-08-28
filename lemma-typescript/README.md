@@ -630,5 +630,11 @@ This repo includes:
 
 - `registry.json` for registry source definitions
 - `public/r` for the generated flat registry output
-- `.github/workflows/deploy-registry-pages.yml` for GitHub Pages deployment
-- `.github/workflows/publish-npm.yml` for npm publishing
+- `.github/workflows/release-lemma-typescript.yml` for npm publishing
+
+There is no workflow that publishes the registry. `deploy-registry-pages.yml`
+used to be listed here; it was deleted because it had never run once, GitHub
+Pages is not enabled on this repository, and the token it needed was never
+configured. `npm run registry:build` still produces `public/r`; if the registry
+should be served somewhere, that is a decision to make rather than a workflow to
+un-delete.

@@ -54,7 +54,10 @@ jobs:
     # A skipped or failed e2e run has no complete set of coverage artifacts.
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Above the 20-minute deadline inside the script, so a genuine timeout is
+    # reported by the script -- which says which commit and why -- rather than
+    # by the runner killing the job.
+    timeout-minutes: 25
     permissions:
       actions: read
     outputs:
@@ -68,8 +71,23 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const headSha = context.payload.workflow_run.head_sha;
-            const deadline = Date.now() + 10 * 60 * 1000;
+            const deadline = Date.now() + 20 * 60 * 1000;
             const UNIT_JOB = 'lemma-backend unit';
+            // Ask the producing *job*, not the run it belongs to.
+            //
+            // This waited for the whole CI run to reach `completed` before it
+            // would believe a skipped unit job, and a CI run is as slow as its
+            // slowest job -- the desktop lanes, which have nothing to do with
+            // coverage. So on a commit that skipped the unit job, this polled
+            // for ten minutes, timed out two minutes before CI finished, and
+            // went red. That is most of what this workflow has ever done: six
+            // failures in twelve runs on one day, ten runner-minutes each,
+            // reporting nothing about the code.
+            //
+            // The unit job's own conclusion is the whole answer, and it is
+            // available the moment that job ends. It is the last step of that
+            // job that uploads the artifact, so a `success` here means the
+            // artifact is there or is seconds away.
             while (Date.now() < deadline) {
               const runs = await github.paginate(
                 github.rest.actions.listWorkflowRunsForRepo,
@@ -89,30 +107,31 @@ jobs:
                   return;
                 }
               }
-              // No artifact yet. If a finished CI run skipped the unit job,
-              // waiting longer cannot help -- the producer already decided this
-              // commit does not touch the backend.
               for (const run of candidates) {
-                if (run.status !== 'completed') continue;
                 const jobs = await github.paginate(
                   github.rest.actions.listJobsForWorkflowRun,
                   {owner, repo, run_id: run.id, per_page: 100},
                 );
                 const unit = jobs.find((job) => job.name === UNIT_JOB);
-                if (unit && unit.conclusion === 'skipped') {
-                  core.notice(
-                    `CI run ${run.id} skipped "${UNIT_JOB}" for ${headSha}, so there ` +
-                    'is no backend coverage to aggregate. Skipping the gate.',
-                  );
-                  core.setOutput('should_run', 'false');
-                  return;
-                }
+                // Still running, or not started. Nothing to conclude yet.
+                if (!unit || unit.status !== 'completed') continue;
+                if (unit.conclusion === 'success') break;
+                // Skipped: the producer decided this commit does not touch the
+                // backend. Failed or cancelled: there is no coverage to
+                // aggregate, and CI is already reporting that failure -- a
+                // second red here would only say it twice.
+                core.notice(
+                  `CI run ${run.id} finished "${UNIT_JOB}" as ${unit.conclusion} for ` +
+                  `${headSha}, so there is no backend coverage to aggregate.`,
+                );
+                core.setOutput('should_run', 'false');
+                return;
               }
               core.info('backend-unit-coverage not uploaded yet; waiting 30s.');
               await new Promise((resolve) => setTimeout(resolve, 30_000));
             }
             core.setFailed(
-              `No CI run for ${headSha} produced backend-unit-coverage within 10 minutes.`,
+              `No CI run for ${headSha} produced backend-unit-coverage within 20 minutes.`,
             );
 
   aggregate-coverage:
