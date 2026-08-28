@@ -235,6 +235,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
+        offers_dm_agent_choice: bool = True,
     ) -> bool:
         return await self._home(credentials).publish_home_view(
             user_id=user_id,
@@ -247,6 +248,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             logo_url=logo_url,
             surface_choices=surface_choices,
             access_message=access_message,
+            offers_dm_agent_choice=offers_dm_agent_choice,
         )
 
     async def channel_name(
