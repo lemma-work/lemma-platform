@@ -63,7 +63,7 @@ jobs:
     steps:
       - name: Locate the CI run that validated this commit
         id: ci-run
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const {owner, repo} = context.repo;
@@ -200,7 +200,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-backend/uv.lock
@@ -298,7 +298,7 @@ jobs:
         run: cat coverage-backend/overall.md >> "$GITHUB_STEP_SUMMARY"
       - name: Publish one authoritative PR coverage comment
         if: hashFiles('lemma-backend/coverage-backend/overall.md') != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -393,7 +393,7 @@ jobs:
           --fail-under=85
       - name: Upload aggregate evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-aggregate-coverage
           path: |
