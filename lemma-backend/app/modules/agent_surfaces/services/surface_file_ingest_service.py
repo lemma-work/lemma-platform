@@ -39,7 +39,7 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
 from app.composition.surface_datastore import build_file_service
-from app.core.file_types import extension_for_mime
+from app.core.file_types import extension_for_mime, sniff_media_mime
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
     normalize_datastore_name,
@@ -111,7 +111,9 @@ def _attachments_from_parsed(parsed: ParsedInboundSurfaceEvent) -> list[dict[str
     return [item for item in raw if isinstance(item, dict)]
 
 
-def _safe_file_name(name: str | None, mime: str | None = None) -> str:
+def _safe_file_name(
+    name: str | None, mime: str | None = None, content: bytes | None = None
+) -> str:
     """Reduce an attachment name to a single valid datastore segment.
 
     The extension is part of the name's job here. A chat surface is free to send
@@ -121,11 +123,19 @@ def _safe_file_name(name: str | None, mime: str | None = None) -> str:
     ``view_image`` refuses it, indexing skips it, and the agent is left holding a
     path to something it cannot open. So when the name carries no suffix and the
     download told us what the bytes are, say so in the name.
+
+    ``content`` is the last resort, for the surface that declares nothing at all:
+    a magic number is a fact about the file where a missing header is only an
+    absence. Read only when the name and the declared type have both failed, so
+    the ordinary case costs nothing.
     """
     candidate = Path(str(name or "").strip().replace("\\", "/")).name.strip()
     candidate = candidate.replace("/", "_").strip() or "attachment"
     if not Path(candidate).suffix:
-        candidate += extension_for_mime(mime) or ""
+        extension = extension_for_mime(mime)
+        if not extension and content:
+            extension = extension_for_mime(sniff_media_mime(content))
+        candidate += extension or ""
     try:
         return normalize_datastore_name(candidate)
     except Exception:
@@ -385,7 +395,7 @@ class SurfaceFileIngestService:
             )
 
         content_type = attachment.get("content_type")
-        file_name = _safe_file_name(name, mime)
+        file_name = _safe_file_name(name, mime, content)
 
         def _persist_as(candidate: str):
             async def _persist(file_service: Any) -> IngestedAttachment | None:
