@@ -213,18 +213,22 @@ class SurfacePlatformAdapterPort(Protocol):
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
-        envelope: "SurfaceEnvelope",
+        envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None = None,
-    ) -> "DeliveryReceipt": ...
+    ) -> DeliveryReceipt:
+        """The one outbound seam for conversation content.
 
-    # The one outbound seam for conversation content. Every kind of content is a
-    # field on the envelope, and the receipt says how each part landed -- native,
-    # degraded to text or a link, or reaching nobody.
-    #
-    # The `_render_*` hooks it composes are deliberately NOT declared here. They
-    # are a platform's private half of this call, and naming them on the port
-    # made the seam look like six verbs a caller could choose between -- which
-    # is how content came to be rendered past `deliver` in the first place.
+        Every kind of content is a field on the envelope, and the receipt says
+        how each part landed -- natively, degraded to text or a link, or
+        reaching nobody.
+
+        The ``_render_*`` hooks it composes are deliberately not declared on
+        this port. They are a platform's private half of this call, and naming
+        them here made the seam read as six verbs a caller could choose between
+        -- which is how content came to be rendered past ``deliver`` in the
+        first place.
+        """
+        ...
 
     async def fetch_thread_context(
         self,
