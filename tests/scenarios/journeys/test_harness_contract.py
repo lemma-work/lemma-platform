@@ -242,6 +242,50 @@ def test_stack_never_inherits_real_infrastructure():
     assert stack["ENVIRONMENT"] == "testing"
 
 
+def test_the_backend_binds_where_a_sandbox_can_reach_it():
+    """A sandbox is a container; loopback on the host is not an address it has.
+
+    The stack asks Docker to map `host.docker.internal` into every sandbox
+    (`WORKSPACE_ADD_HOST_GATEWAY`), and hands that name to functions and
+    workspaces as the way back to the API. On Linux that name resolves to the
+    bridge gateway, so a backend bound to 127.0.0.1 is simply not listening on
+    the address the container dials -- every function fails with `ConnectError:
+    All connection attempts failed` while its container sits up, healthy, with
+    its port published. On Docker Desktop the same name is proxied to the host's
+    loopback, which is why the bind was fine on every developer's machine and
+    the nightly sandbox lane was red for weeks.
+
+    Asserted by reading the launch arguments, because the alternative is booting
+    a stack -- and this file is the lane that costs seconds and runs on every
+    pull request.
+    """
+    import harness.stack as stack_module
+
+    source = Path(stack_module.__file__).read_text()
+    launch = ast.parse(source)
+
+    bindings = []
+    for node in ast.walk(launch):
+        if not isinstance(node, ast.List):
+            continue
+        parts = [
+            element.value
+            for element in node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        ]
+        if "uvicorn" not in parts or "--host" not in parts:
+            continue
+        bindings.append(parts[parts.index("--host") + 1])
+
+    assert bindings, "no uvicorn launch with an explicit --host was found in the stack"
+    for address in bindings:
+        assert address == "0.0.0.0", (
+            f"the scenario backend binds {address}, which a sandbox container "
+            f"cannot reach through the host gateway. Bind 0.0.0.0; the suite "
+            f"itself still talks to 127.0.0.1."
+        )
+
+
 def test_the_fast_lane_ignores_a_developers_configuration():
     """The default run is the same on every machine.
 
