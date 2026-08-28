@@ -133,7 +133,7 @@ dev = [
     # connector clients and migrations. `make lint` runs the default set, so
     # an unbounded bump does not tighten the gate, it drowns it. Adopting
     # those rules is its own piece of work.
-    "ruff>=0.14.8,<0.16",
+    "ruff>=0.14.8,<0.17",
 ]
 
 [build-system]
