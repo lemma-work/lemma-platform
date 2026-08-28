@@ -171,7 +171,7 @@ async def test_the_manifest_subscribes_to_everything_this_branch_needs():
 
 async def test_the_setup_checklist_does_not_restate_the_events():
     """Two lists of the same thing drift, and the copy is the one that loses."""
-    from app.modules.agent_surfaces.domain.setup_guides import (
+    from app.modules.agent_surfaces.domain.setup_actions import (
         build_surface_setup_actions,
     )
 
@@ -304,3 +304,79 @@ async def test_a_valid_signature_for_one_app_cannot_target_another_app(monkeypat
                 ),
             ],
         )
+
+
+async def test_the_manifest_names_the_app_after_the_agent_it_is_for():
+    """One Slack app is one bot user, so a bot for one agent is named for it.
+
+    The manifest is the only chance to set that name without a person editing
+    it in Slack afterwards, which is exactly the step this is here to remove.
+    """
+    from app.modules.agent_surfaces.platforms.slack.manifest import (
+        build_slack_app_manifest,
+    )
+
+    manifest = build_slack_app_manifest(agent_name="Triage")
+
+    assert manifest["display_information"]["name"] == "Triage"
+    assert manifest["features"]["bot_user"]["display_name"] == "Triage"
+    # The description is written around the name, so leaving it alone would ship
+    # a bot called Triage introducing itself as Lemma.
+    assert "Lemma" not in manifest["features"]["agent_view"]["agent_description"]
+    assert "Triage" in manifest["features"]["agent_view"]["agent_description"]
+
+
+async def test_the_manifest_still_defaults_to_lemma():
+    """Naming an agent is optional; the shared bot is still the common case."""
+    from app.modules.agent_surfaces.platforms.slack.manifest import (
+        build_slack_app_manifest,
+    )
+
+    manifest = build_slack_app_manifest()
+
+    assert manifest["display_information"]["name"] == "Lemma"
+    assert manifest["features"]["bot_user"]["display_name"] == "Lemma"
+
+
+async def test_an_agent_name_slack_would_reject_is_made_acceptable():
+    """Slack validates the manifest on paste, and rejects the whole document.
+
+    A period in a bot's display name, or a name past its length cap, does not
+    surface as a warning — it surfaces as an error page in front of the person
+    who just clicked "make my app", naming none of this.
+    """
+    from app.modules.agent_surfaces.platforms.slack.manifest import (
+        build_slack_app_manifest,
+        slack_app_name,
+    )
+
+    assert "." not in slack_app_name("release v2.1 bot")
+    assert slack_app_name("   ") == "Lemma"
+    assert slack_app_name(None) == "Lemma"
+
+    long_name = build_slack_app_manifest(agent_name="a" * 60)
+    assert len(long_name["display_information"]["name"]) == 35
+
+
+async def test_a_custom_app_with_no_recorded_app_id_is_reported_as_unfinished():
+    """The other half of "Lemma cannot verify this app's events".
+
+    Inbound narrows candidates by ``(app_id, signing_secret)`` and needs both,
+    so an account that never stored an app id is skipped and every event for it
+    is rejected. Only the missing secret was reported, which left the other
+    failure looking like Lemma being broken — the surface said it was ready and
+    then answered nothing.
+    """
+    from app.modules.agent_surfaces.domain.setup_actions import (
+        build_surface_setup_actions,
+    )
+
+    actions = build_surface_setup_actions(
+        platform=SurfacePlatform.SLACK,
+        is_custom_app=True,
+        webhook_url="https://api.example.test/surfaces/webhooks/slack",
+        slack_app_id_missing=True,
+    )
+
+    app_id_action = next(a for a in actions if a.key == "slack_app_id")
+    assert app_id_action.is_blocking

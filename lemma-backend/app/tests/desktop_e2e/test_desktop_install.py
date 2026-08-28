@@ -25,6 +25,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -54,7 +55,39 @@ INDEXING_PATIENCE_SECONDS = 120
 # is seconds-to-a-minute, and a timeout here reads as "functions are broken".
 SANDBOX_COLD_START_SECONDS = 300.0
 
-APP_JS = "window.__E2E_APP_LOADED = true;\n"
+# The app reports its own session, because when it is framed nobody else can.
+#
+# A cross-origin frame is opaque to its embedder by design, so the probe on the
+# outside cannot read whether this call succeeded -- only the app can say. Which
+# is also how a real app behaves: it calls the API through its own origin on
+# load, and either it is signed in or it renders signed out.
+APP_JS = """window.__E2E_APP_LOADED = true;
+(async () => {
+  const injected = window.__LEMMA_CONFIG__ || {};
+  const report = (payload) => {
+    window.__E2E_SESSION = payload;
+    if (window.parent !== window) {
+      window.parent.postMessage({ kind: "lemma-e2e-session", ...payload }, "*");
+    }
+  };
+  if (!injected.apiUrl) {
+    report({ error: "the served page carries no __LEMMA_CONFIG__.apiUrl" });
+    return;
+  }
+  try {
+    const response = await fetch(injected.apiUrl + "/users/me", {
+      credentials: "include",
+    });
+    let email = null;
+    if (response.ok) {
+      email = (await response.json()).email || null;
+    }
+    report({ status: response.status, email: email, origin: location.origin });
+  } catch (error) {
+    report({ error: String(error) });
+  }
+})();
+"""
 APP_CSS = "#root { color: rebeccapurple; }\n"
 
 # Deliberately arithmetic and not an LLM call: this lane is about whether a
@@ -188,45 +221,65 @@ async def test_a_published_app_serves_every_asset_it_asks_for(published_app, ins
         )
 
 
-async def test_the_app_is_told_to_call_the_api_on_its_own_origin(
-    published_app, install
-):
-    """A relative apiUrl is the whole fix, so it is asserted directly.
-
-    An absolute one pointing at the API host is the shipped bug: to WebKit that
-    is a different site, the session cookie is third-party, and the app renders
-    signed out.
-    """
-    index = httpx.get(install.app_url(published_app), timeout=30).text
+def _app_config(install, slug: str) -> dict:
+    """The `window.__LEMMA_CONFIG__` blob the server inlined into an app."""
+    index = httpx.get(install.app_url(slug), timeout=30).text
     marker = "window.__LEMMA_CONFIG__="
     start = index.index(marker) + len(marker)
-    config = json.loads(index[start : index.index("</script>", start)].rstrip(";"))
-
-    assert config["apiUrl"].startswith("/"), (
-        f"the app was handed an absolute apiUrl ({config['apiUrl']!r}); its "
-        "calls will be cross-site and carry no session"
-    )
-    # And that prefix has to actually route.
-    probe = httpx.get(
-        install.app_url(published_app).rstrip("/") + config["apiUrl"] + "/users/me",
-        timeout=30,
-    )
-    assert probe.status_code in (200, 401), (
-        f"the app's own API prefix does not route: HTTP {probe.status_code}. "
-        "401 is fine here (no cookie on this client); 404 means the middleware "
-        "is not stripping it."
-    )
+    return json.loads(index[start : index.index("</script>", start)].rstrip(";"))
 
 
-async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
-    published_app, install, account
+async def test_the_app_is_handed_an_api_url_that_can_carry_its_session(
+    published_app, install
 ):
-    """The regression test for apps loading signed out.
+    """The app's API calls must be same-site, and the URL must actually route.
 
-    Driven through **WKWebView**, which is not a detail: Chromium sends the
-    cookie in exactly this arrangement, so a Playwright or httpx test passes
-    against the broken build. This is the only lane that can tell the two apart.
+    There are two ways an install achieves that, and which one is correct
+    depends on the base domain it serves under -- so this asserts the property,
+    and reads the mechanism off the install rather than assuming one.
+
+    Under a base domain a browser cannot derive a registrable domain from
+    (`*.localhost`), the API is a different *site* to the app: an absolute URL
+    is cross-site, carries no cookie, and the app renders signed out. That is
+    the bug that shipped. The fix is a relative prefix, so the call goes to the
+    app's own origin and the API is reached through the `/_lemma` door.
+
+    Under a real registrable domain the two hosts are same-site already, the
+    door is switched off deliberately, and the absolute URL is correct. Which
+    is why this cannot simply demand a leading slash: doing so would fail the
+    arrangement that works *better*, and would have to be deleted by whoever
+    turned it on -- taking the check on the broken case with it.
     """
+    api_url = _app_config(install, published_app)["apiUrl"]
+
+    if install.api_via_app_origin:
+        assert api_url.startswith("/"), (
+            f"the app was handed an absolute apiUrl ({api_url!r}) on a base "
+            f"domain ({install.base_domain}) whose hosts are not same-site; "
+            "its calls will carry no session"
+        )
+        probe_url = install.app_url(published_app).rstrip("/") + api_url
+    else:
+        host = urlsplit(api_url).hostname or ""
+        assert host == install.base_domain or host.endswith(
+            f".{install.base_domain}"
+        ), (
+            f"the app was handed an apiUrl on {host!r}, which is outside this "
+            f"install's base domain ({install.base_domain}); the session "
+            "cookie is not scoped to it"
+        )
+        probe_url = api_url.rstrip("/")
+
+    probe = httpx.get(f"{probe_url}/users/me", timeout=30)
+    assert probe.status_code in (200, 401), (
+        f"the apiUrl the app was handed does not route: HTTP "
+        f"{probe.status_code} from {probe_url}/users/me. 401 is fine here (no "
+        "cookie on this client); 404 means the request is not reaching the API."
+    )
+
+
+def _run_probe(install, published_app, account, *, mode: str) -> dict:
+    """Drive the WKWebView probe and return what it reported."""
     assert PROBE.is_file(), f"the WKWebView probe is missing at {PROBE}"
 
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as config_file:
@@ -237,6 +290,7 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
                 "appUrl": install.app_url(published_app),
                 "email": account.email,
                 "password": account.password,
+                "mode": mode,
             },
             config_file,
         )
@@ -254,11 +308,70 @@ async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
 
     report = (result.stdout or "").strip()
     assert result.returncode == 0, (
-        "a pod app loaded without a session in WKWebView — the engine the "
+        f"a pod app ({mode}) had no session in WKWebView -- the engine the "
         f"desktop app actually ships.\n{report}\n{result.stderr[-2000:]}"
     )
-    answer = json.loads(report)
+    return json.loads(report)
+
+
+async def test_a_pod_app_is_signed_in_in_the_engine_lemma_ships(
+    published_app, install, account
+):
+    """The regression test for apps loading signed out, opened top-level.
+
+    Driven through **WKWebView**, which is not a detail: Chromium sends the
+    cookie in exactly this arrangement, so a Playwright or httpx test passes
+    against the broken build. This is the only lane that can tell the two apart.
+    """
+    answer = _run_probe(
+        published_app=published_app, install=install, account=account, mode="toplevel"
+    )
     assert answer["status"] == 200
+    assert answer["email"] == account.email
+
+
+async def test_a_pod_app_is_signed_in_when_the_workspace_embeds_it(
+    published_app, install, account
+):
+    """The same app, framed by the workspace -- which is how people open one.
+
+    This is a different failure from the one above and they do not move
+    together. Top-level, the app's origin is first-party and the session is
+    sent. Framed, the app is third-party to the workspace and WebKit gives it
+    no storage at all: the server's Set-Cookie is not kept, `document.cookie`
+    reads empty, and a credentialed call answers 401. Third-party is decided
+    against the *top* frame, so neither the cookie's attributes nor the app's
+    own-origin API prefix can change it.
+
+    Only the app can report this, because a cross-origin frame is opaque to its
+    embedder -- so the published test app posts its own `/users/me` result out
+    to the parent.
+
+    Testing only the top-level case is how this shipped broken twice.
+
+    Skipped, not failed, on an install serving a base domain whose hosts are
+    not same-site: embedding genuinely cannot work there, apps open in their
+    own window instead, and a permanently red test in a supported arrangement
+    teaches people to ignore it. What stops that skip from quietly becoming
+    every run is a separate assertion, in locald's own tests, that the shipped
+    default *is* the same-site arrangement -- so reaching this skip takes
+    deliberately asking for the fallback.
+    """
+    if install.api_via_app_origin:
+        pytest.skip(
+            f"this install serves {install.base_domain}, whose hosts a browser "
+            "cannot derive a common registrable domain from, so a framed app is "
+            "third-party by construction and pod apps open in their own window. "
+            "Embedding is testable under a registrable base domain (the default)."
+        )
+    answer = _run_probe(
+        published_app=published_app, install=install, account=account, mode="embedded"
+    )
+    assert answer["status"] == 200, (
+        "the workspace framed the app and the app had no session. On "
+        "*.localhost every host is its own site to WebKit, so the frame is "
+        "third-party and storage-blocked."
+    )
     assert answer["email"] == account.email
 
 
@@ -379,3 +492,81 @@ async def test_a_binary_file_is_not_mangled(pod):
             pod.files.delete(path)
         except Exception as error:  # noqa: BLE001
             print(f"warning: could not remove the e2e file {path}: {error}")
+
+
+def _table_column(name: str) -> dict:
+    return {"name": name, "type": "TEXT", "required": False, "unique": False}
+
+
+async def test_a_table_stays_readable_after_its_shape_changes(install, account, pod):
+    """Add a column, then read the table. It used to answer 400.
+
+    A record read is `SELECT * FROM "<schema>"."<table>"` -- the same SQL text
+    before and after a column is added -- so a cached prepared statement keeps a
+    result descriptor that no longer matches, and asyncpg raises
+    `InvalidCachedStatementError`. It surfaced as a 400 on the person's own
+    table, healing only when the connection recycled.
+
+    Tested here rather than in a unit suite because it needs a real connection
+    pool. In `testing` the datastore engine pools with `NullPool`, so no
+    connection lives long enough to reuse a stale statement and the whole thing
+    is invisible -- which is how DEV-DATA-004 was closed while still broken:
+    asyncpg's own cache was turned off and SQLAlchemy's second one, defaulting
+    to 100 statements per connection, was not.
+
+    Found by running the product scenarios against a real install
+    (`make scenarios-desktop`), which is the arrangement that has a pool.
+    """
+    base = f"{install.api_url}/pods/{pod.pod_id}/datastore/tables"
+    headers = {"Authorization": f"Bearer {account.access_token}"}
+    table = f"shape_{os.getpid()}"
+
+    created = httpx.post(
+        base,
+        json={
+            "name": table,
+            "columns": [_table_column("subject"), _table_column("body")],
+        },
+        headers=headers,
+        timeout=30,
+    )
+    assert created.status_code in (200, 201), created.text
+
+    added = httpx.post(
+        f"{base}/{table}/records",
+        json={"data": {"subject": "first", "body": "hello"}},
+        headers=headers,
+        timeout=30,
+    )
+    assert added.status_code in (200, 201), added.text
+
+    # Read once first, so a prepared statement for this exact SQL exists to go
+    # stale. Without this the test can pass for the wrong reason.
+    warm = httpx.get(f"{base}/{table}/records", headers=headers, timeout=30)
+    assert warm.status_code == 200, warm.text
+
+    for change in (
+        lambda: httpx.post(
+            f"{base}/{table}/columns",
+            json={"column": _table_column("priority")},
+            headers=headers,
+            timeout=30,
+        ),
+        lambda: httpx.delete(
+            f"{base}/{table}/columns/body", headers=headers, timeout=30
+        ),
+    ):
+        response = change()
+        assert response.status_code in (200, 201, 204), response.text
+
+        # Several reads, because the pool hands out a different connection each
+        # time and only the ones holding a cached statement for this table
+        # break. One read can miss it entirely.
+        for attempt in range(8):
+            rows = httpx.get(f"{base}/{table}/records", headers=headers, timeout=30)
+            assert rows.status_code == 200, (
+                f"reading the table after its shape changed answered "
+                f"{rows.status_code} on attempt {attempt + 1}: {rows.text}"
+            )
+
+    httpx.delete(f"{base}/{table}", headers=headers, timeout=30)

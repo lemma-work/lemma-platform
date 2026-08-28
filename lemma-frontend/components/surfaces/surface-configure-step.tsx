@@ -46,6 +46,8 @@ export interface ConfigureDraft {
     allowedDomains: string;
     allowedEmails: string;
     allowSend: boolean;
+    /** Slack only: this app is one agent's own bot, not the workspace's shared one. */
+    dedicatedToAgent: boolean;
 }
 
 /**
@@ -100,6 +102,11 @@ export function SurfaceConfigureStep({
     const firstJoinable = remainingChannels.find((channel) => channel.is_member) ?? remainingChannels[0];
     const anyJoined = availableChannels.some((channel) => channel.is_member);
 
+    // What to call this surface's responder in copy. The draft holds the
+    // sentinel for "the pod assistant", which is not a name anyone would read.
+    const responderLabel =
+        draft.agentName === DEFAULT_AGENT_VALUE ? DEFAULT_RESPONDER_NAME : draft.agentName;
+
     const updateRoute = (index: number, patch: Partial<ChannelDraft>) =>
         onDraftChange({
             channels: draft.channels.map((route, i) => (i === index ? { ...route, ...patch } : route)),
@@ -134,7 +141,9 @@ export function SurfaceConfigureStep({
                         this one answers whoever hasn't. Saying otherwise made it
                         look like a setting that overrides everybody. */}
                     {definition.platform === 'SLACK'
-                        ? 'Answers anyone who hasn’t picked their own, plus any channel you haven’t set separately.'
+                        ? draft.dedicatedToAgent
+                            ? 'Answers everyone here — this bot is theirs alone, so nobody picks anyone else.'
+                            : 'Answers anyone who hasn’t picked their own, plus any channel you haven’t set separately.'
                         : channelRoutes
                             ? 'Answers direct messages, plus any channel you haven’t set separately.'
                             : 'Answers everything that arrives here.'}
@@ -259,6 +268,39 @@ export function SurfaceConfigureStep({
                             </Button>
                         </>
                     )}
+                </div>
+            ) : null}
+
+            {/* Slack only, because the picker it turns off is Slack's alone.
+                Stated rather than inferred: a surface bound to an agent looks
+                identical whether that agent is the only responder or merely the
+                default, and only the person who made the app knows which they
+                meant. */}
+            {definition.platform === 'SLACK' ? (
+                <div className="surface-panel-muted flex items-center justify-between gap-3 p-3">
+                    <div className="min-w-0">
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                            {responderLabel} answers here, and only {responderLabel}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                            For a bot made for one agent. Turns off the “who answers my
+                            messages?” choice in Slack — this app can only be {responderLabel}.
+                        </p>
+                    </div>
+                    <Switch
+                        checked={draft.dedicatedToAgent}
+                        onCheckedChange={(value) => onDraftChange({ dedicatedToAgent: value })}
+                        aria-label={`Only ${responderLabel} answers here`}
+                        className="surface-platform-switch"
+                    >
+                        <SwitchTrack
+                            className={draft.dedicatedToAgent ? 'bg-[var(--action-primary)]' : undefined}
+                        >
+                            <SwitchThumb
+                                className={draft.dedicatedToAgent ? 'translate-x-4' : undefined}
+                            />
+                        </SwitchTrack>
+                    </Switch>
                 </div>
             ) : null}
 

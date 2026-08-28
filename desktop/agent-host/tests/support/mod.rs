@@ -607,6 +607,18 @@ struct ControlState {
     permission_answer: PermissionAnswer,
     published: Arc<Mutex<Option<(Uuid, String)>>>,
     start_sent: Arc<AtomicBool>,
+    /// The `START_RUN` we are offering, until the host acknowledges it.
+    ///
+    /// A real control plane redelivers a command until it comes back in a
+    /// poll's `acknowledged_command_ids`; this used to be a one-shot bool, marked the moment
+    /// the command was written into a response body. A response that never
+    /// arrived -- a dropped connection, a poll cancelled under load -- took the
+    /// run with it, permanently: nothing re-offered it, so the test waited its
+    /// whole 90s for events from a run that was never started. That is the
+    /// `published=Some(..), start_sent=true, events=[]` failure.
+    start_command: Arc<Mutex<Option<Uuid>>>,
+    /// Drop the first response that carries a command, as a lost one would be.
+    drop_first_command: Arc<AtomicBool>,
     /// Streamed text that, once seen, makes the next poll cancel the run.
     ///
     /// Keyed on the agent's own output so the cancel lands mid-turn, while the
@@ -689,6 +701,8 @@ impl ControlPlane {
             permission_answer,
             published: Arc::new(Mutex::new(None)),
             start_sent: Arc::new(AtomicBool::new(false)),
+            start_command: Arc::new(Mutex::new(None)),
+            drop_first_command: Arc::new(AtomicBool::new(false)),
             cancel_after: Arc::new(Mutex::new(None)),
             cancel_sent: Arc::new(AtomicBool::new(false)),
             refresh_after: Arc::new(Mutex::new(None)),
@@ -725,6 +739,11 @@ impl ControlPlane {
     ///
     /// # Panics
     /// If the mutex is poisoned.
+    /// Arm the stub to lose the first response that carries a command.
+    pub fn lose_the_first_command(&self) {
+        self.state.drop_first_command.store(true, Ordering::SeqCst);
+    }
+
     pub fn cancel_when_text_contains(&self, marker: &str) {
         *self.state.cancel_after.lock().unwrap() = Some(marker.to_owned());
     }
@@ -968,10 +987,31 @@ async fn poll(
             .unwrap()
             .extend(rejections.iter().cloned());
     }
+    // Command acknowledgements, which is how a real control plane learns a
+    // command landed. Without reading these the stub cannot tell "delivered"
+    // from "written into a response that never arrived".
+    let acked: Vec<Uuid> = body
+        .get("acknowledged_command_ids")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str())
+                .filter_map(|id| Uuid::parse_str(id).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !acked.is_empty()
+        && let Some(offered) = *state.start_command.lock().unwrap()
+        && acked.contains(&offered)
+    {
+        state.start_sent.store(true, Ordering::SeqCst);
+    }
+
     let mut commands = Vec::new();
     let published = state.published.lock().unwrap().clone();
+
     if let Some((harness_id, revision)) = published
-        && !state.start_sent.swap(true, Ordering::SeqCst)
+        && !state.start_sent.load(Ordering::SeqCst)
     {
         let payload = serde_json::to_value(RunSpec {
             agent_run_id: state.run_id,
@@ -989,8 +1029,16 @@ async fn poll(
             system_prompt_delivery: None,
         })
         .unwrap();
+        // One id across every redelivery: the host acknowledges by id, and a
+        // fresh id each time would make an ack for the copy that landed fail to
+        // match the copy we are still offering.
+        let command_id = *state
+            .start_command
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Uuid::new_v4);
         commands.push(json!({
-            "command_id": Uuid::new_v4(),
+            "command_id": command_id,
             "kind": "START_RUN",
             "created_at": Utc::now(),
             "expires_at": Utc::now() + chrono::Duration::minutes(2),
@@ -1076,6 +1124,12 @@ async fn poll(
                 "payload": {"request_id": request_id, "option_id": option_id},
             }));
         }
+    }
+    if !commands.is_empty() && state.drop_first_command.swap(false, Ordering::SeqCst) {
+        // The response the host never received. A real one is lost to a dropped
+        // connection or a poll cancelled under load; the effect is the same, and
+        // the command has to be offered again.
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
     Ok(Json(json!({
         "protocol_version": 2,

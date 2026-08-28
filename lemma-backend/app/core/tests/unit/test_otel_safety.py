@@ -450,8 +450,15 @@ def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
         lambda *args, **kwargs: _CaptureExporter(),
     )
     captured = []
+    # Patched on pydantic_ai itself rather than through `telemetry.Agent`.
+    # Telemetry imports Agent inside `_setup_llm_tracing` so that a deployment
+    # with LLM tracing switched off never pays pydantic_ai's import, which
+    # means there is no module attribute to reach through -- and patching the
+    # class where it is defined is what these assertions were always about.
+    from pydantic_ai import Agent
+
     monkeypatch.setattr(
-        telemetry.Agent,
+        Agent,
         "instrument_all",
         lambda instrumentation_settings: captured.append(instrumentation_settings),
     )
@@ -489,9 +496,9 @@ def test_llm_pipeline_exports_full_content_without_sanitization(monkeypatch) -> 
     monkeypatch.setattr(
         telemetry, "_build_span_exporter", lambda *args, **kwargs: capture
     )
-    monkeypatch.setattr(
-        telemetry.Agent, "instrument_all", lambda instrumentation_settings: None
-    )
+    from pydantic_ai import Agent
+
+    monkeypatch.setattr(Agent, "instrument_all", lambda instrumentation_settings: None)
     provider = telemetry._setup_llm_tracing("lemma-test")
     assert provider is not None
     try:

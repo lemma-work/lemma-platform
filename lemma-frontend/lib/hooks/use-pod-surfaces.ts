@@ -143,11 +143,18 @@ export const useSurfaceChannels = (
  * Belongs to no pod or org — it describes the deployment — which is what lets
  * it be shown before anything exists to scope it to. Fetched only when someone
  * opens a panel that shows it; it reads a file off disk on every call.
+ *
+ * `agentName` names the app after the agent the bot is being made for, since
+ * one Slack app is one bot user. It is part of the key: the response differs by
+ * agent, and `staleTime: Infinity` would otherwise hand the second agent the
+ * first one's manifest — a bot arriving under someone else's name, which is the
+ * exact failure this parameter exists to prevent.
  */
-export const useSlackManifest = (enabled = true) => {
+export const useSlackManifest = (agentName?: string | null, enabled = true) => {
+    const named = agentName?.trim() || null;
     return useQuery({
-        queryKey: ['slack-app-manifest'],
-        queryFn: () => getLemmaClient().podSurfaces.slackManifest(),
+        queryKey: ['slack-app-manifest', named],
+        queryFn: () => getLemmaClient().podSurfaces.slackManifest(named ?? undefined),
         enabled,
         // The URLs only change when the deployment moves, and the scopes when
         // Lemma ships — neither happens while a dialog is open.

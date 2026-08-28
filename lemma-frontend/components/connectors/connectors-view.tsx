@@ -28,6 +28,7 @@ import { AddYourOwnRow, ConnectionRow } from './connection-rows';
 import { ConnectAccountDialog, type CredentialTarget } from './connect-account-dialog';
 import { AddConnectionDialog, type ConnectionSubmission, type ConnectionTarget } from './add-connection-dialog';
 import { AdvancedConfigDialog, type AdvancedEnablePayload } from './advanced-config';
+import type { AuthConfigMode } from './connector-utils';
 import {
     canConnectWithDefaults,
     describeConnectorError,
@@ -97,6 +98,33 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const [isSavingConnection, setIsSavingConnection] = useState(false);
     const [busyInstallName, setBusyInstallName] = useState<string | null>(null);
     const [installPendingDelete, setInstallPendingDelete] = useState<AuthConfig | null>(null);
+    const [handledInstallParam, setHandledInstallParam] = useState(false);
+    const [advancedMode, setAdvancedMode] = useState<AuthConfigMode | undefined>(undefined);
+
+    /**
+     * `?install=<connector>` opens this page straight on its own-app form.
+     *
+     * Where the link comes from is the point: making a Slack app happens in
+     * Slack, and the three credentials it produces can only be pasted here.
+     * Landing on the connector grid instead left the person holding a client
+     * secret with nothing on screen asking for it — the offer to make the app
+     * is over there, and the only place to finish is over here.
+     *
+     * Once, hence the flag: reopening the dialog every render would make it
+     * impossible to close, and the param outlives the first visit.
+     */
+    useEffect(() => {
+        if (handledInstallParam || !connectors?.length) return;
+        const requested = new URLSearchParams(window.location.search).get('install');
+        if (!requested) return;
+        setHandledInstallParam(true);
+        const app = connectors.find((connector) => connector.id === requested.toLowerCase());
+        if (app) {
+            // Straight to the form the credentials go in.
+            setAdvancedMode('CUSTOM');
+            setAdvancedApp(app);
+        }
+    }, [connectors, handledInstallParam]);
 
     useEffect(() => {
         if (!pendingOAuth) return;
@@ -686,9 +714,14 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
             <AdvancedConfigDialog
                 app={advancedApp}
+                existingNames={existingInstallNames}
                 isEnabling={isEnabling}
+                initialMode={advancedMode}
                 onOpenChange={(open) => {
-                    if (!open) setAdvancedApp(null);
+                    if (!open) {
+                        setAdvancedApp(null);
+                        setAdvancedMode(undefined);
+                    }
                 }}
                 onEnable={handleAdvancedEnable}
             />

@@ -32,6 +32,7 @@ export function SurfaceConnectStep({
     credentials,
     onCredentialsChange,
     podId,
+    agentName,
 }: {
     definition: SurfacePlatformDefinition;
     catalog: CatalogSurface | null;
@@ -41,6 +42,8 @@ export function SurfaceConnectStep({
     credentials: CredentialValues;
     onCredentialsChange: (values: CredentialValues) => void;
     podId: string;
+    /** The agent this surface will answer as; `null` = the pod assistant. */
+    agentName?: string | null;
 }) {
     const schema = credentialSchema(catalog);
     const journey = definition.journey;
@@ -131,24 +134,51 @@ export function SurfaceConnectStep({
                     <Button asChild className="mt-3" size="sm" variant="secondary">
                         <Link href={`/pod/${podId}/connectors`}>Open connectors</Link>
                     </Button>
-                    {/* Running your own Slack app is a second route to the same
-                        place, not a footnote on this one — and it starts here,
-                        because making the app is what produces the credentials
-                        connectors then asks for. Burying it behind the link
-                        above meant nobody found it: it sat inside the custom
-                        credential form, on a row action that hid itself once
-                        Slack was connected. */}
-                    {definition.platform === 'SLACK' ? (
-                        <div className="mt-4 border-t border-[var(--border-subtle)] pt-3">
-                            <p className="mb-2 text-xs leading-5 text-[var(--text-secondary)]">
-                                Or run Lemma under your own name in Slack — your workspace,
-                                your app, your bot’s name and icon.
-                            </p>
-                            <CreateSlackAppButton />
-                        </div>
-                    ) : null}
                 </div>
             )}
+
+            {/* Running your own Slack app is a second route to the same place,
+                not a footnote on the first — and it starts here, because making
+                the app is what produces the credentials connectors then asks
+                for.
+
+                Outside the empty state, deliberately. It used to render only
+                when the org had *no* Slack account, which made "give this agent
+                its own bot" reachable exactly once: the second agent found a
+                picker where the offer had been, and no way to make a bot at
+                all. One Slack app is one bot user, so every agent that wants
+                its own needs this offer, not just the first. */}
+            {definition.platform === 'SLACK' ? (
+                <div className="border-t border-[var(--border-subtle)] pt-3">
+                    <p className="mb-2 text-xs leading-5 text-[var(--text-secondary)]">
+                        {agentName
+                            ? `Or give ${agentName} a bot of its own — your workspace, your app, answering as ${agentName} and nobody else.`
+                            : 'Or run Lemma under your own name in Slack — your workspace, your app, your bot’s name and icon.'}
+                    </p>
+                    <CreateSlackAppButton
+                        agentName={agentName}
+                        label={agentName ? `Make ${agentName}’s Slack app` : undefined}
+                    />
+                    {/* The step after the button, which it cannot take for you:
+                        Slack has no API that hands a third party another app's
+                        client id, secret or signing secret, so somebody has to
+                        carry those three values back. Saying so here is the
+                        difference between a button that starts something and a
+                        button that appears to do nothing — making the app in
+                        Slack changes nothing on this screen, and without this
+                        line the only visible outcome is a new browser tab. */}
+                    <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
+                        Made it already?{' '}
+                        <Link
+                            href={`/pod/${podId}/connectors?install=slack`}
+                            className="lemma-quiet-text-button custom-focus-ring font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                        >
+                            Paste its three credentials
+                        </Link>{' '}
+                        to finish connecting it, then pick it above.
+                    </p>
+                </div>
+            ) : null}
         </div>
     );
 }

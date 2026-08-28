@@ -39,6 +39,9 @@ class _Result:
     def one(self):
         return self._rows[0]
 
+    def all(self):
+        return list(self._rows)
+
 
 class _Session:
     def __init__(self, rows=(), scalar_one=None) -> None:
@@ -195,3 +198,38 @@ async def test_child_listing_resolves_latest_runs_in_one_statement() -> None:
 
     # No children came back, so no second query should have been needed at all.
     assert not any("agent_runs" in _sql(s) for s in uow.session.statements)
+
+
+@pytest.mark.asyncio
+async def test_opening_texts_read_two_bounded_rows_not_the_transcript() -> None:
+    """Titling reads two rows, and each one stops at the index.
+
+    The measured cost of getting this wrong: ``include_messages=True`` spent
+    1.4s materialising a 13,688-message thread into entities, inside an open
+    transaction, to answer a question about two of them.
+    """
+    uow = _Uow()
+
+    await ConversationRepository(uow).get_conversation_opening_texts(uuid4())
+
+    assert len(uow.session.statements) == 1, "two roles, still one round trip"
+    sql = _sql(uow.session.statements[0])
+    assert sql.count("limit 1") == 2, "each role must stop at its first row"
+    assert "union all" in sql
+    assert "order by agent_messages.sequence" in sql
+    assert "'user'" in sql and "'assistant'" in sql
+    assert "agent_messages.kind = 'text'" in sql
+
+
+@pytest.mark.asyncio
+async def test_opening_texts_select_only_the_columns_titling_reads() -> None:
+    """No tool payloads: a tool_args blob can be megabytes and is never used."""
+    uow = _Uow()
+
+    await ConversationRepository(uow).get_conversation_opening_texts(uuid4())
+
+    sql = _sql(uow.session.statements[0])
+    selected = sql.split(" from ")[0]
+    assert "agent_messages.text" in selected and "agent_messages.role" in selected
+    for unread in ("tool_args", "tool_result", "conversation_metadata"):
+        assert unread not in sql

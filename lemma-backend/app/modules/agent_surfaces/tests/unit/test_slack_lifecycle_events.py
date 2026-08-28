@@ -241,8 +241,8 @@ async def test_modal_offers_the_pod_assistant_first_then_agents():
 
 
 async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
+
     from app.modules.agent_surfaces.platforms.slack.blocks import (
-        channel_setup_modal,
         channel_setup_prompt_blocks,
     )
 
@@ -254,6 +254,8 @@ async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
     click["actions"][0]["value"] = prompt[1]["elements"][0]["value"]
     opened = SlackMessageParser().parse_channel_setup(click)
     assert opened["surface_id"] == "00000000-0000-0000-0000-000000000001"
+
+    from app.modules.agent_surfaces.platforms.slack.blocks import channel_setup_modal
 
     view = channel_setup_modal(
         channel_id="C_SALES",
@@ -269,7 +271,7 @@ async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
 
 
 async def test_app_home_surface_selector_parses_an_explicit_choice():
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name=None,
@@ -369,7 +371,7 @@ async def test_dm_picker_is_per_person_not_per_workspace():
 
 
 async def test_home_lists_agents_and_apps():
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name="Test1",
@@ -478,3 +480,39 @@ async def test_pod_assistant_dm_does_not_wear_the_default_agents_name():
     check = AgentSurfaceIngressService._routes_to_pod_assistant
     assert check(None, chose) is True
     assert check(None, did_not) is False
+
+
+async def test_a_dedicated_bot_refuses_a_dm_picker_left_open_on_a_stale_home_tab():
+    """Slack keeps a published Home tab until it is republished.
+
+    So the "Change" button outlives the decision to make this bot one agent's
+    own — anyone whose Home tab was rendered before it can still press it. The
+    modal must not open there: it would offer a choice this bot cannot honour.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.modules.agent_surfaces.domain.entities import SurfaceConfig
+    from app.modules.agent_surfaces.services.surface_configuration import (
+        SurfaceConfigurationMixin,
+    )
+
+    class _Service(SurfaceConfigurationMixin):
+        def __init__(self):
+            self._visible_agents = AsyncMock(return_value=[])
+
+    surface = SimpleNamespace(
+        config=SurfaceConfig.model_validate({"slack": {"dedicated_to_agent": True}})
+    )
+    adapter = AsyncMock()
+
+    await _Service()._open_dm_setup(
+        adapter, {}, {"trigger_id": "trig-9"}, surface, None
+    )
+    adapter.open_dm_agent_modal.assert_not_awaited()
+
+    # ...and a modal already open cannot be submitted into dead storage either.
+    await _Service()._submit_dm_setup(
+        adapter, {}, {"agent_name": "someone-else"}, surface, None
+    )
+    adapter.publish_home_view.assert_not_awaited()

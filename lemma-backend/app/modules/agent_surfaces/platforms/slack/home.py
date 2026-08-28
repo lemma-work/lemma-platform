@@ -14,13 +14,16 @@ from slack_sdk.errors import SlackApiError
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
-    app_home_view,
     channel_setup_confirmation_blocks,
     channel_setup_modal,
     channel_setup_prompt_blocks,
     dm_agent_modal,
     truncate_slack_text as _truncate_slack_text,
+)
+from app.modules.agent_surfaces.platforms.slack.home_blocks import (
+    app_home_view,
 )
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
@@ -202,6 +205,7 @@ class SlackHomeSurface:
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
+        offers_dm_agent_choice: bool = True,
     ) -> bool:
         """Publish the Home tab for one person."""
         token = slack_access_token(self.credentials)
@@ -221,6 +225,7 @@ class SlackHomeSurface:
                     logo_url=logo_url,
                     surface_choices=surface_choices,
                     access_message=access_message,
+                    offers_dm_agent_choice=offers_dm_agent_choice,
                 ),
             )
             return True

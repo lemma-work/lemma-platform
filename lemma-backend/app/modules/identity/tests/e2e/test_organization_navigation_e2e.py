@@ -10,6 +10,8 @@ from __future__ import annotations
 import time
 from uuid import uuid4
 
+from app.core.config import settings
+
 import pytest
 from fastapi import status
 
@@ -135,8 +137,20 @@ async def test_navigation_query_count_is_flat_across_organizations(
 
 
 async def test_home_returns_pods_with_their_apps_agents_and_roles(
-    authenticated_client, fixed_test_org
+    authenticated_client, fixed_test_org, monkeypatch
 ):
+    """Both halves of the app-URL contract, because one of them is a real state.
+
+    An install with no app base domain reports no URL for an app. That is not a
+    misconfiguration to assert away: a desktop stack shared over a tunnel serves
+    the workspace and the API on one public origin and serves no app host at
+    all, and reporting a URL anyway handed the visitor a link their own browser
+    resolved against their own machine. The `testing` environment leaves the
+    domain unset on purpose, so this is the state the suite runs in by default.
+
+    Asserting only the populated half is what let this test read a URL that was
+    never there; asserting only the empty half would let the address rot.
+    """
     org_id = fixed_test_org["id"]
     pod_name = f"home-{uuid4().hex[:6]}"
     pod_id = await _create_pod(authenticated_client, org_id, pod_name)
@@ -154,9 +168,32 @@ async def test_home_returns_pods_with_their_apps_agents_and_roles(
     assert len(pod["agents"]) == 1
     assert pod["agents"][0]["description"].endswith("desc")
     assert len(pod["apps"]) == 1
-    # The URL is the app's real serving address, not just its slug.
-    assert pod["apps"][0]["url"].startswith(("http://", "https://"))
-    assert "." in pod["apps"][0]["url"]
+    assert pod["apps"][0]["url"] is None, (
+        "this install serves no app host, so there is no address to report; "
+        f"got {pod['apps'][0]['url']!r}"
+    )
+
+    # And with a domain to serve them under, the real serving address -- not
+    # just the slug, and on the host apps are actually reachable at.
+    #
+    # No cache-busting needed, and that is the point: the cached listing is
+    # keyed by the app host it was built under, so changing the host is a miss
+    # rather than a thirty-second window of URLs pointing at the wrong machine.
+    monkeypatch.setattr(settings, "app_base_domain", "apps.example.test")
+    served = await authenticated_client.get(f"/organizations/{org_id}/home")
+    assert served.status_code == status.HTTP_200_OK, served.text
+    pod = next(item for item in served.json()["pods"] if item["id"] == pod_id)
+    url = pod["apps"][0]["url"]
+    assert url.startswith(("http://", "https://")), (
+        f"the app URL carries no scheme: {url!r}"
+    )
+    assert url.endswith(".apps.example.test"), (
+        f"the app URL is not on the host apps are served from: {url!r}"
+    )
+    # A slug in front of the domain, not the bare domain: the point of the
+    # field is to address one app, and `https://apps.example.test` addresses
+    # none of them.
+    assert url.split("://", 1)[1].removesuffix(".apps.example.test")
 
 
 async def test_home_query_count_does_not_grow_with_pods(

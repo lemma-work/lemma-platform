@@ -9,24 +9,27 @@ By default the title is derived directly from the user's first message — no LL
 call, so titling is instant and adds no model load or DB-connection pressure.
 A deployment can opt into LLM-generated titles by setting
 ``CONVERSATION_TITLE_MODEL`` to a model its provider actually serves; if that
-call fails we still fall back to the first-message title. Failures are swallowed
-and logged — titling must never break the worker that invokes it.
+call fails we still fall back to the first-message title.
+
+One attempt per conversation, and no retry: the job carries a deterministic id
+so it runs once, and a fallback title is an acceptable outcome. What is *not*
+acceptable is not knowing which of the two ran — a failure here is logged at
+``error`` with its traceback and counted on
+``lemma.agent.conversation_titles``. It stays non-fatal, because titling must
+never break the worker that invokes it, but non-fatal is not the same as silent.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
+from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
 from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import (
-    AgentRuntimeConfig,
-    MessageKind,
-    MessageRole,
-)
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.realtime import (
     publish_conversation_event,
@@ -47,6 +50,16 @@ from app.composition.agent_usage import (
 from app.composition.agent_usage import UsageExecutionContext
 
 logger = get_logger(__name__)
+
+meter = metrics.get_meter(__name__)
+# One increment per invocation that reaches a decision, labelled with which of
+# the two title paths produced it. This is the answer to "is the LLM path
+# actually working?", which nothing could answer before.
+title_counter = meter.create_counter("lemma.agent.conversation_titles")
+
+_OUTCOME_LLM = "llm"
+_OUTCOME_FALLBACK = "fallback"
+_OUTCOME_FAILED = "failed"
 
 _MAX_TITLE_LEN = 80
 _TITLE_USAGE_LIMITS = UsageLimits(
@@ -84,18 +97,19 @@ class ConversationTitleService:
         title already exists, there is no user message yet, or generation fails.
         """
         try:
+            # Two bounded rows, not the transcript: reading this with
+            # ``include_messages=True`` spent 1.4s materialising every message
+            # into an entity, inside an open transaction, to find two strings.
             async with self.uow_factory() as uow:
-                conversation = await ConversationRepository(uow).get_conversation(
-                    conversation_id, include_messages=True
-                )
-            if conversation is None or conversation.title:
-                return None
+                repo = ConversationRepository(uow)
+                conversation = await repo.get_conversation(conversation_id)
+                if conversation is None or conversation.title:
+                    return None
+                opening = await repo.get_conversation_opening_texts(conversation_id)
 
-            messages = conversation.ordered_messages()
-            user_text = _first_text(messages, MessageRole.USER.value)
+            user_text = opening.user_text
             if not user_text:
                 return None
-            reply_text = _first_text(messages, MessageRole.ASSISTANT.value)
 
             # Default: derive the title from the user's first message — no LLM
             # call. Opt into LLM titles by setting CONVERSATION_TITLE_MODEL to a
@@ -109,14 +123,23 @@ class ConversationTitleService:
                         organization_id=conversation.organization_id,
                         pod_id=conversation.pod_id,
                         user_text=user_text,
-                        reply_text=reply_text,
+                        reply_text=opening.assistant_text,
                     )
                 except Exception:
-                    logger.debug(
-                        "agent.conversation_title_service.llm_title_generation_s_using.diagnostic",
+                    # Not a retry point — one shot per conversation, and the
+                    # fallback below is a fine answer. But it is a real failure
+                    # and it gets a real record: at debug this was invisible in
+                    # every deployed environment, so a provider outage and a
+                    # working system looked exactly alike.
+                    logger.error(
+                        "agent.conversation_title.llm_call.failed",
                         conversation_id=conversation_id,
+                        exc_info=True,
                     )
-            if not title:
+            if title:
+                outcome = _OUTCOME_LLM
+            else:
+                outcome = _OUTCOME_FALLBACK
                 title = _title_from_user_message(user_text)
             if not title:
                 return None
@@ -136,12 +159,18 @@ class ConversationTitleService:
                 conversation_id,
                 title_updated_payload(conversation_id, title),
             )
+            # Counted here, at the one point where the whole thing worked, so a
+            # failure anywhere above falls through to the handler below and is
+            # counted once, as a failure, rather than twice.
+            title_counter.add(1, {"outcome": outcome})
             return title
         except Exception:  # never break the calling worker
-            logger.debug(
-                "agent.conversation_title_service.conversation_title_generation_s_s.diagnostic",
+            logger.error(
+                "agent.conversation_title.generation.failed",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
+            title_counter.add(1, {"outcome": _OUTCOME_FAILED})
             return None
 
     async def _generate(
@@ -235,19 +264,6 @@ def _title_from_user_message(user_text: str) -> str:
     if len(title) > _MAX_TITLE_LEN:
         title = f"{title[: _MAX_TITLE_LEN - 1].rstrip()}…"
     return title
-
-
-def _first_text(messages, role: str) -> str | None:
-    """First non-empty plain-text message body for ``role``."""
-    for message in messages:
-        if (
-            message.role == role
-            and message.kind == MessageKind.TEXT
-            and message.text
-            and message.text.strip()
-        ):
-            return message.text.strip()
-    return None
 
 
 def _build_user_prompt(user_text: str, reply_text: str | None) -> str:

@@ -101,6 +101,15 @@ class SurfaceSlackConfig(BaseModel):
     ``app_name`` mirrors :class:`SurfaceTelegramConfig` — the pod app to offer
     from the channel's bookmark bar and App Home, Slack's nearest equivalent to
     Telegram's chat menu button.
+
+    ``dedicated_to_agent`` says this Slack app *is* one agent — an app made and
+    named for it, rather than the workspace's one shared bot. It has to be
+    stated rather than inferred: ``surface.agent_id`` is set either way, holding
+    the sole responder here and merely the default there, and nothing else tells
+    the two apart. Where it is true the per-person choice above is not offered
+    and not read, because a bot that answers as one agent cannot honour a
+    request for another — leaving the picker up would invite people out of the
+    bot they are standing in.
     """
 
     # Stored when someone explicitly picks the pod assistant. Deleting the
@@ -110,11 +119,17 @@ class SurfaceSlackConfig(BaseModel):
 
     dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
     app_name: str | None = None
+    dedicated_to_agent: bool = False
 
     def choice_for_user(self, external_user_id: str | None) -> str | None:
         """Whatever this person picked — an agent name, the pod-assistant
-        sentinel, or None for "never picked"."""
-        if not external_user_id:
+        sentinel, or None for "never picked".
+
+        Always None on a dedicated bot. Choices made before it became one are
+        kept rather than erased — pointing this bot back at the shared model
+        restores them — but they are not read while it answers as one agent.
+        """
+        if not external_user_id or self.dedicated_to_agent:
             return None
         return self.dm_agent_by_user.get(str(external_user_id)) or None
 
@@ -127,6 +142,10 @@ class SurfaceSlackConfig(BaseModel):
 
     def chose_pod_assistant(self, external_user_id: str | None) -> bool:
         return self.choice_for_user(external_user_id) == self.POD_ASSISTANT
+
+    def offers_dm_agent_choice(self) -> bool:
+        """Whether to show, and honour, "who answers my DMs?" on this surface."""
+        return not self.dedicated_to_agent
 
 
 class SurfaceConfig(BaseModel):
