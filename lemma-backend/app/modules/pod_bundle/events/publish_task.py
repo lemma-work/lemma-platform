@@ -478,6 +478,8 @@ async def _fail_publish(
     state.error_code = str(getattr(exc, "code", None) or "POD_BUNDLE_PUBLISH_FAILED")
     state.retryable = False
     state.completed_at = _now()
+    # The last-resort reporter for a publish: if it is silent, a failed publish
+    # looks permanently stuck to whoever is watching.
     try:
         await store.save_publish(state)
         await publish_bundle_event(
@@ -485,9 +487,10 @@ async def _fail_publish(
             error_payload(state.error, state.seq),
         )
     except Exception:
-        logger.debug(
-            "pod_bundle.publish_task.persist_publish_s_s.diagnostic",
+        logger.error(
+            "pod_bundle.publish_task.publish_failure_report.failed",
             publish_id=state.publish_id,
+            exc_info=True,
         )
 
 
