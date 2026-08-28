@@ -68,8 +68,13 @@ class ComposioAuthProvider(AuthProviderInterface):
                     )
                     return None
         except Exception:
-            logger.debug(
-                "connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic"
+            # "Expiry unknown" degrades refresh scheduling; the connection still
+            # works, so this is not an error. The sibling debug above is a
+            # non-200 from tokeninfo, which means the token is invalid — an
+            # expected answer, not a swallowed failure.
+            logger.warning(
+                "connectors.composio_auth_provider.google_token_expiration_lookup.degraded",
+                exc_info=True,
             )
             return None
 

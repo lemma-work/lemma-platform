@@ -421,15 +421,24 @@ class ModelRequestStreamer:
     async def stop_requested(self) -> bool:
         """Whether the user has asked this run to stop.
 
-        Swallows a failing checker on purpose: the checker is a database read,
-        and a run that cannot be asked whether to stop should keep going rather
-        than stop for a reason nobody chose.
+        Keeps going when the checker fails, on purpose: the checker is a
+        database read, and a run that cannot be asked whether to stop should
+        keep going rather than stop for a reason nobody chose.
+
+        What is *not* on purpose is doing that silently. A checker that fails
+        every time means the stop button does nothing, and the failure it is
+        answering "no" from is exactly the thing an operator needs to see.
         """
         if self.should_stop is None:
             return False
         try:
             return await self.should_stop()
         except Exception:
+            logger.error(
+                "agent.pydantic_ai_streaming.stop_check.failed",
+                agent_run_id=str(self.agent_run_id),
+                exc_info=True,
+            )
             return False
 
     def stopped_event(self) -> AgentEvent:

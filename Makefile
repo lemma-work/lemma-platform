@@ -1698,6 +1698,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@echo "→ Swallowed errors…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"

@@ -58,16 +58,22 @@ class FastStreamRedisMessageBus:
                     try:
                         await broker.stop()
                     except Exception:
-                        logger.debug(
-                            "infrastructure.message_bus.closing_cancelled_redis_connection.diagnostic"
+                        # Warning, not error: the cancellation is re-raised
+                        # below and is the loud event. What was invisible is a
+                        # half-open Redis connection that `stop()` could not
+                        # close.
+                        logger.warning(
+                            "infrastructure.message_bus.cancelled_broker_stop.degraded",
+                            exc_info=True,
                         )
                     raise
                 except Exception:
                     try:
                         await broker.stop()
                     except Exception:
-                        logger.debug(
-                            "infrastructure.message_bus.closing_partial_redis_connection.diagnostic"
+                        logger.warning(
+                            "infrastructure.message_bus.partial_broker_stop.degraded",
+                            exc_info=True,
                         )
                     raise
                 self._broker = broker

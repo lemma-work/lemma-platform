@@ -192,9 +192,14 @@ class RunFinalizer:
             try:
                 await self.usage_recorder.release(run.usage_reservation)
             except Exception:
-                logger.debug(
-                    "agent.agent_runner_service.release_usage_reservation_run_s.diagnostic",
+                # A reservation that is never released permanently overstates
+                # usage against the customer's quota, and nothing self-heals it.
+                # The finalization error is re-raised below regardless; this is
+                # its own failure and needs its own record.
+                logger.error(
+                    "agent.run_finalizer.usage_reservation_release.failed",
                     agent_run_id=run.agent_run_id,
+                    exc_info=True,
                 )
             raise
 

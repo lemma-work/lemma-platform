@@ -317,9 +317,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         try:
             request = AskUserRequest.model_validate(raw_request)
         except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic",
+            # Stored tool_args that will not validate is a bug in whatever wrote
+            # them, not a transient — and the question is dropped here.
+            logger.warning(
+                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return False
         if not request.questions:
@@ -345,9 +348,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 ):
                     return True
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic",
+                # Degraded, not failed: the text fallback below still delivers
+                # the question. But a persistently broken platform adapter was
+                # indistinguishable from a routine fallback.
+                logger.warning(
+                    "agent_surfaces.ingress_service.surface_ask_user_native_render.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
             # Fallback: a well-formatted text message; the user replies in chat and the
             # typed-reply path in start_agent_chat resumes the run with their answer.
@@ -362,9 +369,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     metadata=metadata,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic",
+                # The comment above says "surface it loudly"; this used to be a
+                # debug record that production never emitted. The question has
+                # now reached nobody and the run sits WAITING forever.
+                logger.error(
+                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.failed",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
                 return False
             return True
@@ -442,9 +453,11 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 ):
                     return True
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic",
+                # The text fallback below still delivers the approval.
+                logger.warning(
+                    "agent_surfaces.ingress_service.surface_request_approval_native_render.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
             # Fallback: a text prompt; the user replies "approve"/"deny" and the
             # typed-reply path resumes the run with their decision.
@@ -456,9 +469,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     metadata=metadata,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic",
+                # The docstring above promises this is "reported rather than
+                # swallowed"; at debug it was neither. The run is now stuck on
+                # an approval nobody saw.
+                logger.error(
+                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.failed",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
                 return False
             return True
