@@ -258,6 +258,13 @@ def build_display_resource_url(
             conversation_id,
         )
     if request.type is DisplayResourceType.APP:
+        # `page` carries the app's resource name, not a slug, on purpose. The
+        # workspace addresses an app page by the slug of its name and
+        # canonicalizes whatever the link carries on arrival, so the name
+        # resolves. Slugifying here instead would need this module to reproduce
+        # the frontend's slug rule exactly -- `normalize_public_slug` does not
+        # (`Ledger 2.0` -> `ledger-2-0` there, `ledger20` in the index) -- and a
+        # slug built by the wrong rule is one the workspace cannot resolve back.
         return _append_conversation(
             f"{pod_base}/app/view?{urlencode({'page': request.name})}"
             if request.name

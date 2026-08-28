@@ -15,6 +15,7 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     truncate_slack_text as _truncate_slack_text,

@@ -22,7 +22,7 @@ and Windows on x86-64 is experimental rather than published — see below.
 
 Allow at least the expanded runtime size shown during setup plus 4 GiB of
 working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
-combined; user databases, files, images, and workspace sandboxs grow
+combined; user databases, files, images, and workspace sandboxes grow
 separately.
 
 ## macOS installation
@@ -111,7 +111,7 @@ Supported setup paths include:
 - local LM Studio.
 
 To run models on your own machine, start Ollama or LM Studio and press
-**Use Ollama** or **Use LM Studio**. Each fills in that tool's loopback base
+**Ollama** or **LM Studio**. Each fills in that tool's loopback base
 URL, which **Validate & apply** then probes for its model list. Lemma talks to
 them as ordinary OpenAI-compatible providers, so the models, their memory, and
 their lifecycle stay owned by the tool you already run. Local inference then
@@ -302,7 +302,7 @@ Important subpaths include:
 
 The active macOS guest root is attached directly from its release directory as
 read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
-containerd, and workspace sandboxs use the separate data disk. Updates replace
+containerd, and workspace sandboxes use the separate data disk. Updates replace
 the immutable release and preserve data.
 
 Removing the app does not silently remove user data. Quit Lemma, back up

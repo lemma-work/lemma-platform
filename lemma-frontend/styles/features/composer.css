@@ -51,7 +51,14 @@
     border: 0;
     background: transparent;
     box-shadow: none;
-    padding: 0;
+    /* Two pixels of vertical room, and they are not decoration. With `padding:
+       0` the line box started flush against the content box, and a textarea's
+       caret is drawn from the top of that line box rather than aligned to the
+       font — so the caret's first rows sat exactly on the edge `overflow: auto`
+       clips at, and were shaved off. Every other field in the app has padding
+       and never showed it. `min-height` still fixes the box at 28px, so this
+       only lifts the text off the ceiling. */
+    padding: var(--space-0-5) 0;
     color: var(--text-primary);
     font-size: var(--text-sm);
     line-height: 1.6;
@@ -74,6 +81,19 @@
 
 .lm-composer-tight .lm-composer-input.lm-composer-input {
     max-height: 8rem;
+}
+
+/* Sixteen pixels on a phone, and it is not a type decision.
+
+   Safari zooms the page in the moment a field under 16px takes focus, and it
+   does not zoom back out when the field is done — so tapping the composer left
+   the whole conversation magnified and scrolled sideways, on a screen with no
+   room to spare. This is the one field on the chat surface a reader is certain
+   to touch. The scale above 640px is untouched. */
+@media (max-width: 639px) {
+    .lm-composer-input.lm-composer-input {
+        font-size: var(--text-base);
+    }
 }
 
 .lm-composer-controls {

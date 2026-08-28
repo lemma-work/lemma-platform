@@ -54,7 +54,9 @@ from app.modules.agent_surfaces.platforms.email_one_reply import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
+    AttachmentIngest,
     IngestedAttachment,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
@@ -1097,6 +1099,48 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
     assert kwargs["message_metadata"]["external_message_id"] == "1700000000.000100"
 
 
+def _slack_chat_context(surface, conversation, text: str) -> SurfaceChatContext:
+    return SurfaceChatContext(
+        platform="SLACK",
+        pod_id=surface.pod_id,
+        agent_name=None,
+        conversation_id=conversation.id,
+        user_id=conversation.user_id,
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Lemma",
+        message_text=text,
+        message_metadata=SurfaceMessageMetadata(surface_platform="SLACK"),
+        message_user_id=conversation.user_id,
+        message_external_user_id="U123",
+        event=_slack_event(),
+    )
+
+
+async def test_a_message_arriving_mid_run_is_not_acknowledged():
+    """One message is routinely several webhooks on a chat surface, so an
+    acknowledgement per bubble was the agent narrating its own plumbing. The
+    run already going is told instead — see PendingUserMessagesCapability."""
+    surface = _slack_surface(agent_id=None)
+    conversation = _conversation(surface, uuid4())
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter, surfaces=[surface], conversation=conversation
+    )
+    service.conversation_service.add_user_message_and_start_run.return_value = (
+        AgentRunStartResult(
+            conversation_id=conversation.id,
+            agent_run_id=uuid4(),
+            started_new_run=False,
+        )
+    )
+
+    for _ in range(3):
+        await service.execute_chat(_slack_chat_context(surface, conversation, "photo"))
+
+    adapter.send_message.assert_not_awaited()
+
+
 @pytest.mark.parametrize("command", ["/start", "/help"])
 async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatch):
     surface = _telegram_surface()
@@ -1278,7 +1322,7 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
 
     async def _record_ingest(**_kwargs):
         ingest_active.append(factory.active)
-        return []
+        return AttachmentIngest()
 
     adapter.add_processing_indicator.side_effect = _record_indicator
 

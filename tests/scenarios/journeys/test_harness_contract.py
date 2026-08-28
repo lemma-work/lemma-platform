@@ -324,12 +324,15 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     )
 
 
-def test_production_is_refused_unless_somebody_said_so():
+def test_production_is_refused_unless_somebody_said_so(monkeypatch):
     """A production target is a decision, never a default."""
-    import os
-
-    from harness.environment import ALLOW_PRODUCTION, Deployment, Unreachable
-    from harness.environment import confirm_writable
+    from harness.environment import (
+        ALLOW_PRODUCTION,
+        EXPECTED_INSTANCE,
+        Deployment,
+        Unreachable,
+        confirm_writable,
+    )
 
     production = Deployment(
         base_url="https://lemma.example",
@@ -339,7 +342,13 @@ def test_production_is_refused_unless_somebody_said_so():
         configuration={"environment": "production", "llm_mode": "real"},
     )
 
-    os.environ.pop(ALLOW_PRODUCTION, None)
+    # Both guards cleared, not just the one under test. The instance check runs
+    # first, so with SCENARIOS_TARGET_INSTANCE_ID set in the environment -- which
+    # any run against a named target does -- this got that refusal instead and
+    # failed a test about a different one. A self-test of a pure function should
+    # not be able to read the ambient environment at all.
+    monkeypatch.delenv(ALLOW_PRODUCTION, raising=False)
+    monkeypatch.delenv(EXPECTED_INSTANCE, raising=False)
     try:
         confirm_writable(production)
     except Unreachable as refusal:
@@ -351,12 +360,14 @@ def test_production_is_refused_unless_somebody_said_so():
         )
 
 
-def test_a_target_pointed_somewhere_else_is_refused():
+def test_a_target_pointed_somewhere_else_is_refused(monkeypatch):
     """Naming the instance is what turns a mistyped host into a stopped run."""
-    import os
-
-    from harness.environment import EXPECTED_INSTANCE, Deployment, Unreachable
-    from harness.environment import confirm_writable
+    from harness.environment import (
+        EXPECTED_INSTANCE,
+        Deployment,
+        Unreachable,
+        confirm_writable,
+    )
 
     somewhere_else = Deployment(
         base_url="https://staging.example",
@@ -366,15 +377,17 @@ def test_a_target_pointed_somewhere_else_is_refused():
         configuration={"llm_mode": "real"},
     )
 
-    os.environ[EXPECTED_INSTANCE] = "dev-scenarios-1"
+    # Set through monkeypatch, which restores what was there. The `finally` this
+    # replaces *popped* the variable instead -- so this test, run inside a suite
+    # that had been pointed at a named instance, took that run's guard away and
+    # left every scenario after it free to write anywhere.
+    monkeypatch.setenv(EXPECTED_INSTANCE, "dev-scenarios-1")
     try:
         confirm_writable(somewhere_else)
     except Unreachable as refusal:
         assert "staging-9" in str(refusal), refusal
     else:
         raise AssertionError("the suite wrote to an instance it was not pointed at")
-    finally:
-        os.environ.pop(EXPECTED_INSTANCE, None)
 
 
 def test_a_fact_a_deployment_withholds_is_never_read_as_permission():

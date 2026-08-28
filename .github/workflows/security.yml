@@ -230,3 +230,37 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
+
+  # The single check that can be required for this workflow.
+  #
+  # Every job above is path-filtered, so none of them can be named in a branch
+  # ruleset: a required check that skips on a docs-only change leaves the pull
+  # request waiting on a status that will never arrive. That is why nothing
+  # here gated a merge at all -- gitleaks, CodeQL, the dependency audit and the
+  # image scan could all go red and the merge button stayed green -- while
+  # ci.yml and e2e.yml each solved exactly this problem with an aggregator.
+  # This is the same shape, so the same solution is available.
+  #
+  # `!cancelled()` rather than `always()`, for the reason "Backend E2E passed"
+  # records: `cancel-in-progress` above cancels every superseded push, and
+  # `always()` then reports failure for a run that was simply replaced.
+  security-passed:
+    name: Security passed
+    timeout-minutes: 10
+    if: ${{ !cancelled() }}
+    needs:
+      - changes
+      - dependency-review
+      - codeql-python
+      - codeql-javascript
+      - secrets
+      - python-audit
+      - container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any security check failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::One or more security checks failed or were cancelled."
+          exit 1
+      - run: echo "Security checks passed (or were skipped as unaffected)."

@@ -43,7 +43,7 @@ default-members = ["."]
 [workspace.package]
 # One version for six crates. Release used to rewrite desktop/Cargo.toml alone,
 # so the moment the other five moved in here they would have drifted silently.
-version = "0.7.0"
+version = "0.7.1"
 
 [workspace.dependencies]
 # Hoisted because feature unification makes the *emergent* feature set of a
@@ -85,6 +85,7 @@ tauri-plugin-deep-link = "2"
 # hidden is the ordinary case. An OS-drawn alert is the only surface that
 # survives that, so this is used from Rust only and needs no capability entry.
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 interprocess = "2.4"
@@ -107,6 +108,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Only to decode the committed updater public key and check it is a real
+# minisign key rather than a placeholder. A dev dependency, so it is not
+# linked into the shipped app.
+base64 = "0.22"
 
 # A workspace ignores [profile] in anything but the root manifest — with a
 # warning that is easy to miss — so every member's release profile lives here.

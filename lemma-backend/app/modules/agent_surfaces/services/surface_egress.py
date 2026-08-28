@@ -341,9 +341,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         try:
             request = AskUserRequest.model_validate(raw_request)
         except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic",
+            # Stored tool_args that will not validate is a bug in whatever wrote
+            # them, not a transient — and the question is dropped here.
+            logger.warning(
+                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return False
         if not request.questions:

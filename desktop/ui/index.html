@@ -30,25 +30,60 @@
     font-display: swap;
   }
   :root {
-    color-scheme: light;
+    color-scheme: light dark;
     --ink: #1c1812;
     --ink-soft: rgba(28, 24, 18, 0.62);
     --ink-faint: rgba(28, 24, 18, 0.38);
-    --gold: #c0801f;
-    --gold-deep: #8a5c16;
+    --gold: #5a3fd4;
+    --gold-deep: #4630b0;
     --bad: #b3382c;
+    --canvas: #fffdf8;
+    --canvas-choosing: #f5f4f0;
+    --wash: rgba(90, 63, 212, 0.13);
+    --halo: rgba(90, 63, 212, 0.18);
+    --sheen: rgba(255, 255, 255, 0.4);
+    --hairline: rgba(28, 24, 18, 0.14);
+    --solid: #131313;
+    --on-solid: #fffdf8;
     --mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
     --serif: "Fraunces", ui-serif, Georgia, serif;
     --sans: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  /* Every launch, every error and every shutdown ran on a light-only document,
+     so on a dark-mode Mac -- which is most of them -- the first thing the app
+     ever did was flash a full screen of cream. The window layer already tracked
+     the system appearance; this page simply never got the pass.
+
+     Tokens only. A colour defined inside this block and nowhere else would be
+     absent in light mode, which is the classic half-themed bug. */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #f2efe9;
+      --ink-soft: rgba(242, 239, 233, 0.66);
+      --ink-faint: rgba(242, 239, 233, 0.40);
+      --gold: #9583ee;
+      --gold-deep: #b3a5f5;
+      --bad: #f08a72;
+      --canvas: #131311;
+      --canvas-choosing: #191917;
+      --wash: rgba(149, 131, 238, 0.16);
+      --halo: rgba(149, 131, 238, 0.20);
+      --sheen: rgba(255, 255, 255, 0.03);
+      --hairline: rgba(242, 239, 233, 0.16);
+      /* Inverted: a near-black fill on a near-black canvas is not a button. */
+      --solid: #f2efe9;
+      --on-solid: #131311;
+    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     margin: 0;
     background:
-      radial-gradient(circle at 50% 0%, rgba(216, 155, 61, 0.13), transparent 40%),
-      linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.4)),
-      #fffdf8;
+      radial-gradient(circle at 50% 0%, var(--wash), transparent 40%),
+      linear-gradient(180deg, transparent, var(--sheen)),
+      var(--canvas);
     color: var(--ink);
     font: 15px/1.6 var(--sans);
     -webkit-font-smoothing: antialiased;
@@ -78,7 +113,7 @@
     position: absolute;
     inset: 10%;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(216, 155, 61, 0.18), transparent 66%);
+    background: radial-gradient(circle, var(--halo), transparent 66%);
     animation: halo 7s ease-in-out infinite;
   }
   @keyframes halo {
@@ -192,7 +227,7 @@
     gap: clamp(56px, 7vw, 104px);
     padding: clamp(48px, 8vh, 88px) clamp(64px, 8vw, 120px);
     text-align: left;
-    background: #f5f4f0;
+    background: var(--canvas-choosing);
   }
   .scene.choosing .setup-intro {
     position: relative;
@@ -263,7 +298,7 @@
   .scene.choosing #choose, .scene.choosing #local-confirm {
     width: 100%;
     padding: 0 0 0 clamp(40px, 5vw, 72px);
-    border-left: 1px solid rgba(28, 24, 18, 0.14);
+    border-left: 1px solid var(--hairline);
   }
   #choose { width: 100%; display: flex; flex-direction: column; align-items: center; }
   button.start {
@@ -271,25 +306,25 @@
     box-sizing: border-box;
     cursor: pointer;
     padding: 13px 42px;
-    border: 1px solid #131313;
+    border: 1px solid var(--solid);
     border-radius: 6px;
-    background: #131313;
-    color: #faf6ee;
+    background: var(--solid);
+    color: var(--on-solid);
     font-family: var(--sans);
     font-size: 0.95rem;
     font-weight: 600;
   }
-  button.start:hover { background: #2a2a28; }
-  button.start:focus-visible { outline: 3px solid rgba(192, 128, 31, 0.28); outline-offset: 3px; }
+  button.start:hover { background: color-mix(in srgb, var(--solid) 88%, var(--canvas)); }
+  button.start:focus-visible { outline: 3px solid color-mix(in srgb, var(--gold) 34%, transparent); outline-offset: 3px; }
   button.linklike {
     all: unset;
     cursor: pointer;
     color: var(--ink);
     font-weight: 560;
-    border-bottom: 1px solid rgba(28, 24, 18, 0.32);
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 32%, transparent);
   }
   button.linklike:hover { border-bottom-color: var(--gold); }
-  button.linklike:focus-visible { outline: 3px solid rgba(192, 128, 31, 0.28); outline-offset: 3px; }
+  button.linklike:focus-visible { outline: 3px solid color-mix(in srgb, var(--gold) 34%, transparent); outline-offset: 3px; }
   .local-cost {
     font-family: var(--mono);
     font-size: 0.72rem;
@@ -334,7 +369,7 @@
   .local-review li {
     position: relative;
     padding: 13px 0 13px 28px;
-    border-top: 1px solid rgba(28, 24, 18, 0.09);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 9%, transparent);
   }
   .local-review li::before {
     content: "";
@@ -345,7 +380,7 @@
     height: 8px;
     border-radius: 50%;
     background: var(--gold);
-    box-shadow: 0 0 0 4px rgba(192, 128, 31, 0.11);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 13%, transparent);
   }
   .confirm-actions {
     display: flex;
@@ -359,18 +394,18 @@
     font-weight: 600;
     padding: 10px 16px;
     border-radius: 11px;
-    border: 1px solid rgba(28, 24, 18, 0.24);
+    border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
     background: transparent;
     color: var(--ink);
     cursor: pointer;
   }
   .confirm-actions button.primary {
-    border-color: #131313;
-    background: #131313;
-    color: #faf6ee;
+    border-color: var(--solid);
+    background: var(--solid);
+    color: var(--on-solid);
   }
   .confirm-actions button:hover { border-color: var(--gold); }
-  .confirm-actions button.primary:hover { background: #2a2a28; }
+  .confirm-actions button.primary:hover { background: color-mix(in srgb, var(--solid) 88%, var(--canvas)); }
   .confirm-actions button:disabled { cursor: wait; opacity: 0.55; }
   .setup-error {
     margin: 14px 0 0;
@@ -407,7 +442,7 @@
     z-index: 80;
     height: 8px;
     overflow: hidden;
-    background: rgba(28, 24, 18, 0.13);
+    background: color-mix(in srgb, var(--ink) 13%, transparent);
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
   }
   .progress > div {
@@ -417,8 +452,8 @@
     background: linear-gradient(90deg, #f1ba60 0%, #d89b3d 45%, var(--gold) 100%);
     border-radius: 0 99px 99px 0;
     box-shadow:
-      0 0 18px rgba(216, 155, 61, 0.8),
-      2px 0 10px rgba(192, 128, 31, 0.85);
+      0 0 18px rgba(90, 63, 212, 0.8),
+      2px 0 10px color-mix(in srgb, var(--gold) 85%, transparent);
     transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .progress.active > div::after {
@@ -458,9 +493,9 @@
     font-weight: 600;
     padding: 13px 34px;
     border-radius: 999px;
-    border: 1px solid #131313;
-    background: #131313;
-    color: #faf6ee;
+    border: 1px solid var(--solid);
+    background: var(--solid);
+    color: var(--on-solid);
     cursor: pointer;
     margin-top: 40px;
     opacity: 0;
@@ -468,7 +503,7 @@
     transition: opacity 1.2s ease 0.5s, transform 1.2s ease 0.5s, background 0.2s ease;
   }
   .scene.awake button.cta { opacity: 1; transform: none; }
-  button.cta:hover { background: #2a2a28; }
+  button.cta:hover { background: color-mix(in srgb, var(--solid) 88%, var(--canvas)); }
   button.cta:disabled { cursor: wait; opacity: 0.78; }
   button.cta.busy {
     opacity: 1;
@@ -481,7 +516,7 @@
     height: 0.78em;
     margin-left: 10px;
     border: 2px solid rgba(250, 246, 238, 0.42);
-    border-top-color: #faf6ee;
+    border-top-color: var(--on-solid);
     border-radius: 50%;
     vertical-align: -0.08em;
     animation: button-spin 0.75s linear infinite;
@@ -505,12 +540,12 @@
     font-size: 0.85rem;
     padding: 9px 22px;
     border-radius: 999px;
-    border: 1px solid rgba(28, 24, 18, 0.25);
+    border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
     background: transparent;
     color: var(--ink);
     cursor: pointer;
   }
-  .err-actions button.dark { background: #131313; border-color: #131313; color: #faf6ee; }
+  .err-actions button.dark { background: var(--solid); border-color: var(--solid); color: var(--on-solid); }
   .err-actions button:disabled { cursor: wait; opacity: 0.55; }
 
   .log-panel {
@@ -572,7 +607,7 @@
     cursor: pointer;
   }
   .log-tabs button.active {
-    background: rgba(216, 155, 61, 0.18);
+    background: rgba(90, 63, 212, 0.18);
     color: #f3d39d;
   }
   pre.log {
@@ -656,7 +691,13 @@
              local, so it belongs where that is being decided rather than on a
              screen that no longer asks the question. -->
         <li>A local workspace shares no data with a cloud one.</li>
-        <li>First setup downloads several gigabytes and can take a while on a slow connection.</li>
+        <!-- The real numbers. "Several gigabytes" overstated the transfer by
+             about three times: the download gate is 750 MiB compressed, and a
+             current release is around 506 MB. This is the one screen where
+             somebody on a hotspot or a metered connection decides, so it should
+             not be the screen that guesses high. Resumability is worth saying
+             for the same reason -- it is already true, and nothing told them. -->
+        <li>First setup downloads about 500&nbsp;MB and installs about 1.8&nbsp;GB. On a slow connection this takes a while; you can close Lemma and it picks up where it left off.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" hidden></p>
@@ -680,6 +721,8 @@
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
       <button class="dark" id="retry" type="button">Try again</button>
+      <button class="dark" id="reset-data" type="button" hidden>Reset local data</button>
+      <button id="full-reinstall" type="button" hidden>Start over</button>
       <button id="error-logs" type="button">View log</button>
     </div>
   </div>
@@ -724,6 +767,9 @@
         chooseConnectionMode: () => invoke("choose_connection_mode"),
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
+        recoveryOptions: () => invoke("local_recovery_options"),
+        resetLocalData: () => invoke("reset_local_data"),
+        resetFullReinstall: () => invoke("reset_full_reinstall"),
         onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
         onState: (cb) => { tauri.event.listen("lemma:state", (e) => cb(e.payload)); },
       };
@@ -768,6 +814,14 @@
       chooseConnectionMode: () => console.log("[demo] switch mode"),
       setConnectionMode: (mode) => { console.log("[demo] mode:", mode); if (mode === "local") window.lemmaDesktop.start(); },
       getState: () => Promise.resolve({ status: "waiting", phaseKey: "boot", progress: 2, ready: false, running: false, error: false, setup: true, mode: "undecided" }),
+      recoveryOptions: () => Promise.resolve({
+        dataResetAvailable: true,
+        fullReinstallAvailable: true,
+        installedRuntimeRelease: "0.0.0-demo",
+        dataDiskAllocatedBytes: 0,
+      }),
+      resetLocalData: () => console.log("[demo] reset local data"),
+      resetFullReinstall: () => console.log("[demo] full reinstall"),
       onLog: (cb) => listeners.log.push(cb),
       onState: (cb) => listeners.state.push(cb),
     };
@@ -776,6 +830,11 @@
   // ---- the script: poetic line + honest mono subtitle per real phase ----
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
   const DEVICE = IS_WINDOWS ? "PC" : "Mac";
+  /** Any sentence about the machine, said the way this machine's owner would. */
+  function forThisDevice(text) {
+    if (!IS_WINDOWS) return text;
+    return text.replace(/\bthis Mac\b/g, "this PC").replace(/\bthis mac\b/g, "this PC");
+  }
   const VOICE = {
     boot:       [`A new kind of workspace is arriving on this ${DEVICE}.`, "starting"],
     download:   ["Bringing the runtime here.", "downloading runtime"],
@@ -804,22 +863,45 @@
   const errdetail = document.getElementById("errdetail");
   const retryBtn = document.getElementById("retry");
   const prepareWindowsBtn = document.getElementById("prepare-windows");
+  const resetDataBtn = document.getElementById("reset-data");
+  const fullReinstallBtn = document.getElementById("full-reinstall");
   const operationStatus = document.getElementById("operation-status");
   const operationDetail = document.getElementById("operation-detail");
   const operationMeta = document.getElementById("operation-meta");
 
-  if (IS_WINDOWS) {
-    document.getElementById("choose-local").textContent = "run Lemma on this PC";
-    document.getElementById("local-confirm-intro").textContent =
-      "Lemma will install and run services on this PC.";
-    document.getElementById("local-data-copy").textContent =
-      "Workspace data is stored on this PC.";
+  // Three of these used to be rewritten one id at a time, which meant the ones
+  // written from JS -- the boot subtitle and the local-install question --
+  // stayed "Mac" on a PC. "this Mac" is never right on Windows anywhere, so
+  // this rewrites text nodes wholesale rather than keeping a list nobody
+  // remembers to extend. Attributes and element structure are untouched.
+  function speakTheRightDevice(root) {
+    if (!IS_WINDOWS) return;
+    // SCRIPT and STYLE hold text nodes too, and this page's script is inline.
+    // Rewriting it after it has run changes nothing anyone sees, but it does
+    // leave a DOM whose source no longer matches the file -- which is a nasty
+    // half hour for whoever next reads it in a devtools window.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.parentNode && /^(SCRIPT|STYLE)$/.test(node.parentNode.nodeName)
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const spoken = forThisDevice(node.nodeValue);
+      if (spoken !== node.nodeValue) node.nodeValue = spoken;
+    }
   }
+  speakTheRightDevice(document.body);
+  // The lines written from JS never passed through that walk, so the phase
+  // subtitles kept saying "mac" on a PC. Rewritten once here rather than at
+  // every `say()`, so the table stays readable as prose.
+  for (const key of Object.keys(VOICE)) VOICE[key] = VOICE[key].map(forThisDevice);
 
   let shownLine = "";
   let queuedLine = null;
   let saying = false;
-  function say(text) {
+  function say(rawText) {
+    const text = forThisDevice(rawText);
     if (saying) { queuedLine = text; return; }
     if (text === shownLine) return;
     saying = true;
@@ -957,7 +1039,13 @@
       prepareWindowsBtn.hidden = !needsWindowsSetup;
       prepareWindowsBtn.disabled = false;
       prepareWindowsBtn.textContent = "Set up Windows runtime";
-      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart;
+      // Data this release cannot read: retrying reproduces it exactly, and
+      // offering Try again is how someone learns the app has nothing for them.
+      const dataIsUnreadable = s.errorCode === "local-data-incompatible";
+      const cannotStart = ["locald-start-failed", "locald-disconnected", "runtime-install-failed"]
+        .includes(s.errorCode);
+      showRecoveryButtons(dataIsUnreadable || cannotStart, dataIsUnreadable);
+      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart || dataIsUnreadable;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -967,6 +1055,7 @@
     errwrap.hidden = true;
     prepareWindowsBtn.hidden = true;
     retryBtn.hidden = false;
+    showRecoveryButtons(false, false);
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
@@ -1221,6 +1310,68 @@
     startWhispers();
     await requestStart();
   });
+
+  /* --------------------------------------------------------- recovery ---
+   * Shown only when the app has something to offer. `recoveryOptions` says
+   * whether there is anything left on this Mac to reset, so a fresh install
+   * that failed for some unrelated reason is not told to erase data it does
+   * not have.
+   *
+   * Both buttons confirm natively, inside the command -- WKWebView's own
+   * `window.confirm()` silently returns false, so a page-level dialog here
+   * would read as "cancelled" every time.
+   */
+  let recoveryOffered = false;
+  async function showRecoveryButtons(offer, dataIsUnreadable) {
+    if (!offer) {
+      resetDataBtn.hidden = true;
+      fullReinstallBtn.hidden = true;
+      recoveryOffered = false;
+      return;
+    }
+    if (recoveryOffered) return;
+    recoveryOffered = true;
+    let options = null;
+    try {
+      options = await window.lemmaDesktop.recoveryOptions();
+    } catch {
+      // Asking failed, so offer the tier that needs least to work.
+      resetDataBtn.hidden = true;
+      fullReinstallBtn.hidden = false;
+      return;
+    }
+    resetDataBtn.hidden = !options.dataResetAvailable;
+    fullReinstallBtn.hidden = !options.fullReinstallAvailable;
+    // Resetting data is the recommended move for data this release cannot
+    // read; starting over is always the last resort and never the primary.
+    resetDataBtn.classList.toggle("dark", dataIsUnreadable);
+  }
+
+  resetDataBtn.addEventListener("click", async () => {
+    resetDataBtn.disabled = true;
+    resetDataBtn.textContent = "Resetting…";
+    try {
+      await window.lemmaDesktop.resetLocalData();
+    } catch (error) {
+      errdetail.textContent = String(error);
+    } finally {
+      resetDataBtn.disabled = false;
+      resetDataBtn.textContent = "Reset local data";
+    }
+  });
+
+  fullReinstallBtn.addEventListener("click", async () => {
+    fullReinstallBtn.disabled = true;
+    fullReinstallBtn.textContent = "Starting over…";
+    try {
+      await window.lemmaDesktop.resetFullReinstall();
+    } catch (error) {
+      errdetail.textContent = String(error);
+    } finally {
+      fullReinstallBtn.disabled = false;
+      fullReinstallBtn.textContent = "Start over";
+    }
+  });
   prepareWindowsBtn.addEventListener("click", () => {
     prepareWindowsBtn.disabled = true;
     prepareWindowsBtn.textContent = "Waiting for Windows…";
@@ -1352,7 +1503,7 @@
 
 <script type="module">
   // AnomalousOrb, ported from lemma-frontend/components/ui/anomalous-orb.tsx.
-  // Same shaders, geometry, and gold (0xd89b3d); three.js vendored locally so
+  // Same shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
   // the splash never depends on the network.
   import * as THREE from "./vendor/three.module.min.js";
 
@@ -1445,7 +1596,7 @@ void main() {
     uniforms: {
       time: { value: 0 },
       pointLightPos: { value: new THREE.Vector3(0, 0, 4.5) },
-      color: { value: new THREE.Color(0xd89b3d) },
+      color: { value: new THREE.Color(0x7a5ce0) },
     },
     vertexShader,
     fragmentShader,
@@ -1457,11 +1608,11 @@ void main() {
   scene.add(mesh);
 
   let speed = 1;
-  const targetColor = new THREE.Color(0xd89b3d);
+  const targetColor = new THREE.Color(0x7a5ce0);
   window.__orb = {
     awake() { speed = 2.4; targetColor.set(0xeab451); setTimeout(() => { speed = 1.3; }, 1800); },
     stall() { speed = 0.12; targetColor.set(0xb0a48d); },
-    resume() { speed = 1; targetColor.set(0xd89b3d); },
+    resume() { speed = 1; targetColor.set(0x7a5ce0); },
   };
 
   const resize = () => {

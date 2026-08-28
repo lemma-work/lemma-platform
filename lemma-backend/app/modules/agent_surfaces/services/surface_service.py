@@ -274,6 +274,35 @@ class AgentSurfaceService(
             raise AgentSurfaceNotFoundError(name)
         return surface
 
+    async def resend_surface_for_agent(
+        self,
+        *,
+        pod_id: UUID,
+        agent_id: UUID | None,
+    ) -> AgentSurfaceEntity | None:
+        """This agent's mailbox, or the pod assistant's for ``agent_id=None``.
+
+        The other identity a surface has. Names answer "which surface is the API
+        talking about"; this answers "does this agent already have a mailbox",
+        which is what decides whether connecting email mints an address or
+        returns the one the agent has held since it was created.
+
+        ``match_agent`` rather than a bare ``agent_id``, because ``None`` here
+        means the pod assistant and has to compile to ``IS NULL`` — the same
+        deliberate absence ``surfaces_for_agent`` reads it as, not "any agent".
+
+        ``None`` rather than raising: the caller is asking whether one exists,
+        and for a pod created before mailboxes were eager the answer is no.
+        """
+        surfaces, _ = await self.list_surfaces_by_pod(
+            pod_id,
+            platform=SurfacePlatform.RESEND.value,
+            agent_id=agent_id,
+            match_agent=True,
+            limit=1,
+        )
+        return surfaces[0] if surfaces else None
+
     async def update_surface(
         self,
         *,
@@ -406,17 +435,67 @@ class AgentSurfaceService(
         await notify_surface_receiver_config_changed(surface_id)
 
     async def delete_all_surfaces_for_pod(self, pod_id: UUID) -> int:
-        """Remove every surface in a pod so its accounts become free again.
+        """Remove every surface in a pod so its accounts become free again."""
+        return await self._delete_matching_surfaces(pod_id)
 
-        Best-effort per surface: a failed external teardown is logged and
-        skipped. ``delete_surface`` deletes the row regardless, so the
-        org-unique account binding is always released.
+    async def delete_surfaces_for_agent(self, pod_id: UUID, agent_id: UUID) -> int:
+        """Remove the surfaces belonging to one agent, as it is deleted.
+
+        ``agent_surfaces.agent_id`` is ``ON DELETE SET NULL``, so without this a
+        deleted agent's mailbox does not go away — it becomes an *agentless*
+        surface, which is precisely what the pod assistant's own surface is.
+        `surfaces_for_agent` then finds two of them for the assistant and the pod
+        starts answering from a deleted agent's address. Harmless while most pods
+        had no agentless surface; every pod has one now.
+        """
+        return await self._delete_matching_surfaces(
+            pod_id, agent_id=agent_id, match_agent=True
+        )
+
+    async def delete_email_surfaces_for_pod(self, pod_id: UUID) -> int:
+        """Remove the pod's Resend surfaces, freeing their inbound addresses.
+
+        Called inline as a pod is deleted, because the pod's name is freed in
+        that same request and a pod recreated under it otherwise races the worker
+        for the address. Resend only, which is what keeps it bounded and
+        provider-free: everything else still goes through the pod-deleted event
+        and :meth:`delete_all_surfaces_for_pod`.
+        """
+        return await self._delete_matching_surfaces(
+            pod_id, platform=SurfacePlatform.RESEND.value
+        )
+
+    async def _delete_matching_surfaces(
+        self,
+        pod_id: UUID,
+        *,
+        platform: str | None = None,
+        agent_id: UUID | None = None,
+        match_agent: bool = False,
+    ) -> int:
+        """Delete a pod's surfaces, or the subset the filters name.
+
+        One loop for all three callers — a pod being deleted, an agent being
+        deleted, and a pod releasing its addresses — because the awkward part is
+        identical and worth having in one place: page through, tear each one
+        down, and never let one failure strand the rest.
+
+        Best-effort per surface. ``delete_surface`` runs the external teardown (a
+        Telegram webhook, a Composio polling schedule) and deletes the row even
+        when that fails, so an unreachable provider can neither keep a deleted
+        agent's mailbox alive nor hold an org-unique account binding hostage.
         """
         deleted = 0
         failure_count = 0
         cursor: UUID | None = None
         while True:
-            surfaces, cursor = await self.list_surfaces_by_pod(pod_id, cursor=cursor)
+            surfaces, cursor = await self.list_surfaces_by_pod(
+                pod_id,
+                platform=platform,
+                agent_id=agent_id,
+                match_agent=match_agent,
+                cursor=cursor,
+            )
             for surface in surfaces:
                 try:
                     await self.delete_surface(surface.id)

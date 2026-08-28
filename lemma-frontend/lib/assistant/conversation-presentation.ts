@@ -1,3 +1,5 @@
+import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
+
 export const CONVERSATION_PRESENTED_RESOURCE_PARAM = 'presented';
 export const CONVERSATION_STAGE_EMBED_PARAM = 'embed';
 export const CONVERSATION_STAGE_EMBED_VALUE = 'conversation-stage';
@@ -101,7 +103,7 @@ export function conversationStageAppSlug(
     const url = localResourceUrl(resourceHref);
     if (!url) return null;
     if (url.pathname !== `/pod/${encodeURIComponent(podId)}${APP_VIEW_SUFFIX}`) return null;
-    return url.searchParams.get('page')?.trim() || null;
+    return appPageSlugFromRouteParam(url.searchParams.get('page'));
 }
 
 export function buildConversationPresentationHref({

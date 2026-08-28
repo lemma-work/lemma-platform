@@ -36,14 +36,20 @@ watchdog_pid=""
 
 cleanup() {
     if [[ -n "$watchdog_pid" ]]; then
-        kill "$watchdog_pid" 2>/dev/null || true
+        # The group: killing the subshell leaves its `sleep` behind, idle until
+        # the whole timeout elapses.
+        kill -- "-$watchdog_pid" 2>/dev/null || kill "$watchdog_pid" 2>/dev/null || true
     fi
     if [[ ${#load_pids[@]} -gt 0 ]]; then
         kill "${load_pids[@]}" 2>/dev/null || true
         wait "${load_pids[@]}" 2>/dev/null || true
     fi
 }
-trap cleanup EXIT INT TERM
+# HUP as well as the rest. Closing the terminal running this sends SIGHUP, and
+# bash's default handler terminates *without* running the EXIT trap -- so every
+# CPU hog below survived at 100%, forever, which is the exact failure this
+# script exists to help diagnose.
+trap cleanup EXIT INT TERM HUP
 
 echo "Spawning $cpu_hogs CPU load generator(s)…"
 for _ in $(seq 1 "$cpu_hogs"); do
@@ -52,9 +58,19 @@ for _ in $(seq 1 "$cpu_hogs"); do
 done
 echo "Load pids: ${load_pids[*]}"
 
-# Hard backstop: if the test loop below hangs, this still tears everything
-# down after max_runtime_seconds rather than running forever.
-(sleep "$max_runtime_seconds" && kill -TERM $$ 2>/dev/null) &
+# Hard backstop: if the test loop below hangs, this still tears everything down
+# after max_runtime_seconds rather than running forever.
+#
+# It signals the *load*, not `$$`. `$$` is the original shell's pid even inside
+# a subshell, so in the one scenario no trap can cover -- this script dying
+# without unwinding -- the watchdog fired at a pid that was already gone and the
+# hogs kept running. Killing them directly needs nothing of the parent to still
+# be alive.
+(
+    sleep "$max_runtime_seconds"
+    kill "${load_pids[@]}" 2>/dev/null || true
+    kill -TERM $$ 2>/dev/null || true
+) &
 watchdog_pid=$!
 
 sleep 1

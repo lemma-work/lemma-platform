@@ -29,6 +29,7 @@ import {
 // artifacts, interaction cards) the transcript renders.
 import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
+import { thisComputer } from "@/lib/desktop/this-computer";
 import { cn } from "@/lib/utils";
 import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
 import { LEM_SEED } from "@/lib/identity/seeded-identity";
@@ -120,6 +121,30 @@ export interface ActiveToolBanner {
 
 /** How long typing has to pause before the draft is written to localStorage. */
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
+
+/**
+ * Does the browser grow the composer on its own?
+ *
+ * `composer.css` asks for `field-sizing: content` with a `min-height` and a
+ * `max-height`, which is the whole of what the JS fallback below computes.
+ * Where it is honoured — Chrome and Edge 123+, Safari 26+ — the fallback has to
+ * stay out of the way, because measuring costs a forced layout per keystroke
+ * and buys nothing. Firefox has no support yet, so the fallback is not dead
+ * code; it is the only thing sizing the box there.
+ *
+ * Answered once and cached: the support does not change under a running tab,
+ * and this is asked on the keystroke path. Lazily, not at module scope, so the
+ * server's evaluation of this module never decides it for the browser.
+ */
+let fieldSizingSupport: boolean | null = null;
+function cssSizesTheComposer(): boolean {
+  if (fieldSizingSupport === null) {
+    fieldSizingSupport = typeof CSS !== "undefined"
+      && typeof CSS.supports === "function"
+      && CSS.supports("field-sizing", "content");
+  }
+  return fieldSizingSupport;
+}
 
 function writeDraft(key: string, draft: string) {
   if (draft) {
@@ -295,6 +320,18 @@ export function AssistantExperienceView({
   const resizeComposer = useCallback(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
+
+    // Where the browser sizes the box itself, this measurement is not merely
+    // redundant — it is the flicker. `field-sizing: content` in `composer.css`
+    // grows the input from its own content between the same floor and ceiling
+    // this computes, so all the work below buys is a write of `height:auto`, a
+    // forced synchronous layout to read `scrollHeight`, and a write of the
+    // height back: the composer collapsing and returning inside one keystroke.
+    // A mobile browser with the keyboard up answers any layout change around
+    // the caret by scrolling it back into view, and with the keyboard owning
+    // the bottom of the screen that scroll moves the transcript. Once per
+    // character typed, the whole conversation jumped.
+    if (cssSizesTheComposer()) return;
 
     const minHeight = density === "compact" ? 32 : 32;
     const maxHeight = density === "compact" ? 112 : 220;
@@ -536,7 +573,7 @@ export function AssistantExperienceView({
   // it -- the harness list and the composer both re-read it on their own.
   const recheckLocalAgents = useCallback(() => {
     void agentHostBridge.refresh().then(
-      () => toast.success("Rechecking the coding agents on this Mac"),
+      () => toast.success(`Rechecking the coding agents on ${thisComputer()}`),
       (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
     );
   }, []);

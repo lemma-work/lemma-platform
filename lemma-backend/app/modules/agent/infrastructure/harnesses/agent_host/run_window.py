@@ -112,6 +112,11 @@ class LeaseOutcome:
     seen_at: float | None = None
     terminal_state: AgentHostRunState | None = None
     expired_state: AgentHostRunState | None = None
+    #: The sentence the lease recorded for why it ended, when it has one.
+    #: Carried alongside ``terminal_state`` because the lease row is where a
+    #: pre-dispatch refusal writes its reason, and the run it refused has no
+    #: events of its own to carry it.
+    terminal_detail: str | None = None
 
 
 def credential_bounded_timeout(
@@ -194,6 +199,25 @@ def terminal_checkpoint_state(
     if now - seen_at < grace_seconds:
         return seen_at, None
     return seen_at, state
+
+
+def lease_terminal_detail(lease: object | None) -> str | None:
+    """Why this lease ended, in the words it recorded, or ``None``.
+
+    Only ever a sentence written for a person: every writer of
+    ``error_detail`` -- the rejection receipt in ``control_updates`` and the
+    two recovery paths -- puts one there. That matters because this is the
+    text a run refused *before it started* ends on, and the alternative is
+    ``finish_without_terminal``'s description of Lemma's own plumbing.
+
+    Reads the attribute rather than the model, like
+    :func:`terminal_checkpoint_state` above it, so this module stays a pure
+    helper over whatever the repository hands back.
+    """
+    detail = getattr(lease, "error_detail", None)
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    return None
 
 
 def expiry_message(state: AgentHostRunState) -> str:

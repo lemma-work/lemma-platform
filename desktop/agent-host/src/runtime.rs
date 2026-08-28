@@ -84,6 +84,23 @@ const REVOKED_REFUSALS: u32 = 3;
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+/// How far event delivery is allowed to back off, and why it is not `RETRY_MAX`.
+///
+/// The poll loop backs off to thirty seconds because a failing poll means the
+/// target may be unreachable, and hammering it helps nobody. Event delivery is
+/// not that: it runs *beside* a poll loop that is separately proving the target
+/// answers, and everything it carries -- a run's output, its terminal state --
+/// is what somebody is sitting and waiting for.
+///
+/// Sharing the thirty-second ceiling meant a handful of transient failures
+/// compounded into more than a minute of silence: 0.5s, 1, 2, 4, 8, 16, 30 is
+/// 61.5s before the eighth attempt, on a control plane the poll loop was
+/// talking to successfully the whole time. That is how a run finishes with
+/// nothing delivered and no sign of why -- the retries below this were logged
+/// at `debug`, which the host does not emit.
+const EVENT_RETRY_MAX: Duration = Duration::from_secs(2);
+/// Consecutive delivery failures before saying so at a level that is emitted.
+const EVENT_RETRY_QUIET: u32 = 3;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 // How long a native permission request waits for a human before it is denied.
 // Long enough for someone to actually see and answer the prompt; bounded so a
@@ -613,6 +630,7 @@ async fn deliver_events(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut retry = RETRY_MIN;
+    let mut consecutive_failures: u32 = 0;
     loop {
         tokio::select! {
             () = events_ready.notified() => {}
@@ -622,14 +640,37 @@ async fn deliver_events(
             return;
         }
         match flusher.lock().await.flush().await {
-            Ok(()) => retry = RETRY_MIN,
+            Ok(()) => {
+                if consecutive_failures >= EVENT_RETRY_QUIET {
+                    tracing::warn!(
+                        failures = consecutive_failures,
+                        "Agent Host event delivery recovered"
+                    );
+                }
+                retry = RETRY_MIN;
+                consecutive_failures = 0;
+            }
             Err(error) => {
-                tracing::debug!(%error, "could not deliver Agent Host events; retrying");
+                consecutive_failures += 1;
+                // The first failures are ordinary and stay quiet. A run of them
+                // is the thing nobody could see: events are what a person is
+                // waiting on, so silence here reads to them as an agent that
+                // stopped, and `debug` alone meant neither a CI log nor a
+                // support bundle could tell them apart.
+                if consecutive_failures == EVENT_RETRY_QUIET {
+                    tracing::warn!(
+                        %error,
+                        failures = consecutive_failures,
+                        "Agent Host events are not being delivered; still retrying"
+                    );
+                } else {
+                    tracing::debug!(%error, "could not deliver Agent Host events; retrying");
+                }
                 tokio::select! {
                     () = tokio::time::sleep(retry) => {}
                     _ = shutdown.changed() => return,
                 }
-                retry = (retry * 2).min(RETRY_MAX);
+                retry = (retry * 2).min(EVENT_RETRY_MAX);
                 // Nothing consumed the notification that brought us here, so
                 // re-raise it: the events are still pending and the next pass
                 // has to be woken by something.
@@ -764,22 +805,7 @@ impl TargetWorker {
                 self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
                 self.apply_local_controls()?;
             }
-            while let Ok(outcome) = self.probed.1.try_recv() {
-                match outcome {
-                    Some(published) => {
-                        // Read before `store_published` takes ownership.
-                        let retry_soon = published.retry_soon;
-                        self.store_published(published);
-                        if let Some(delay) = self.transient_backoff.note(retry_soon) {
-                            self.refresh_due = std::time::Instant::now() + delay;
-                        }
-                    }
-                    // Come back in seconds rather than a quarter of an hour.
-                    None => {
-                        self.refresh_due = std::time::Instant::now() + HARNESS_RETRY_INTERVAL;
-                    }
-                }
-            }
+            self.drain_published();
             if self.reprobe_requested.swap(false, Ordering::SeqCst)
                 || self.refresh_due <= std::time::Instant::now()
             {
@@ -852,13 +878,13 @@ impl TargetWorker {
                         anyhow::bail!("target requires a newer Agent Host protocol");
                     }
                     if !response.commands.is_empty() {
-                        // Harnesses now publish off the poll path, so the very
-                        // first commands can arrive before that publish lands.
-                        // Rejecting them as HARNESS_NOT_FOUND is permanent and
-                        // wrong: the machine has the agent, it just has not said
-                        // so yet. Wait for the publish instead — bounded, and
-                        // only when there is work that needs it.
-                        self.await_first_harnesses().await;
+                        // Harnesses publish off the poll path, so what this
+                        // host holds can be behind what Lemma minted against
+                        // in two different ways — a publish still sitting in
+                        // the channel, or no publish at all yet. Both are the
+                        // same mistake to make, and both are corrected here,
+                        // before any command is judged against a harness.
+                        self.sync_harnesses_for_commands().await;
                     }
                     for command in response.commands {
                         if let Err(error) = self.handle_command(&command) {
@@ -988,12 +1014,53 @@ impl TargetWorker {
         Ok(())
     }
 
-    /// Block until the first harness publish lands, at most once and bounded.
+    /// Take every harness publish already waiting, without blocking.
+    ///
+    /// The channel is where a publish lands; `self.harnesses` only changes
+    /// when something drains it. So this is not bookkeeping that can happen
+    /// whenever it is convenient — until it runs, the host is judging commands
+    /// against harnesses it has already replaced.
+    fn drain_published(&mut self) {
+        while let Ok(outcome) = self.probed.1.try_recv() {
+            match outcome {
+                Some(published) => {
+                    // Read before `store_published` takes ownership.
+                    let retry_soon = published.retry_soon;
+                    self.store_published(published);
+                    if let Some(delay) = self.transient_backoff.note(retry_soon) {
+                        self.refresh_due = std::time::Instant::now() + delay;
+                    }
+                }
+                // Come back in seconds rather than a quarter of an hour.
+                None => {
+                    self.refresh_due = std::time::Instant::now() + HARNESS_RETRY_INTERVAL;
+                }
+            }
+        }
+    }
+
+    /// Bring the published harnesses up to date, then wait if there are none.
+    ///
+    /// Two jobs, and the first is the one that is easy to miss. Draining used
+    /// to happen only at the top of a loop iteration, and commands are handled
+    /// in the *same* iteration that polled them — so a publish that landed
+    /// while the poll was open sat unread in the channel until the next
+    /// iteration, and `handle_start` compared each command against the
+    /// harnesses this host held before it. Lemma mints commands against the
+    /// revision it was just told, which is precisely the one still in the
+    /// channel, so a run naming the newest revision was rejected as superseded
+    /// by an older one, two seconds after the publish that made it current.
+    ///
+    /// The second job is the original one: the first commands can arrive
+    /// before the first publish, and rejecting those as `HARNESS_NOT_FOUND` is
+    /// permanent and wrong — the machine has the agent, it just has not said
+    /// so yet.
     ///
     /// Only ever called when a command is in hand: the heartbeat must never
     /// wait on discovery, which is the whole reason publishing moved off the
     /// poll path.
-    async fn await_first_harnesses(&mut self) {
+    async fn sync_harnesses_for_commands(&mut self) {
+        self.drain_published();
         if !self.harnesses.is_empty() {
             return;
         }
@@ -1081,7 +1148,25 @@ impl TargetWorker {
                 published = %short_revision(&published.config_revision),
                 "rejecting a run minted against a superseded harness revision"
             );
-            anyhow::bail!("harness configuration revision changed");
+            // Publish again, now. Reaching here means Lemma minted against a
+            // revision this host does not have, and a publish is the only
+            // thing that ever reconciles the two — otherwise the next one is
+            // up to `HARNESS_REFRESH_INTERVAL` away and every run started in
+            // between fails exactly like this one. The refresh reschedules
+            // itself on the normal interval, so this cannot compound.
+            self.refresh_due = std::time::Instant::now();
+            // Both revisions in the detail, not only in this log line. The
+            // detail is what reaches Lemma on the rejection and is stored with
+            // the command, and "how far behind was it?" is the first question
+            // asked of a run that died here — on a machine whose log nobody
+            // reading the run will ever see.
+            anyhow::bail!(
+                "harness configuration revision changed: this computer publishes {} at {}, \
+                 and the run was minted against {}",
+                published.harness_key,
+                short_revision(&published.config_revision),
+                short_revision(&spec.profile_revision),
+            );
         }
         if self.active_runs.contains_key(&spec.agent_run_id) {
             let outcome = self.journal.accept_start(
@@ -1507,11 +1592,24 @@ impl TargetWorker {
         let driver = Arc::clone(&self.driver);
         let probe_root = self.paths.root.join("probe");
         let discover_manifest = manifest.clone();
+        // What is published right now, so a probe can say whether it actually
+        // changed anything. The obvious comparison — against the revision the
+        // snapshot arrived with — is not that: discovery has not run the ACP
+        // probe yet, so its snapshot carries no `config_options` and hashes to
+        // something the host has never published. Every probe therefore
+        // reported `revision_changed=true`, including the three consecutive
+        // ones that produced a byte-identical `opencode@4a03aaa4`.
+        let published_revisions: HashMap<String, String> = self
+            .harnesses
+            .values()
+            .map(|harness| (harness.harness_key.clone(), harness.config_revision.clone()))
+            .collect();
         let build_probes = move |discovered: Vec<HarnessSnapshot>| {
             discovered.into_iter().map(move |mut snapshot| {
                 let manifest = manifest.clone();
                 let driver = Arc::clone(&driver);
                 let scratch = probe_root.join(&snapshot.harness_key);
+                let published_revision = published_revisions.get(&snapshot.harness_key).cloned();
                 async move {
                     if snapshot.health != HarnessHealth::Ready {
                         return snapshot;
@@ -1525,7 +1623,6 @@ impl TargetWorker {
                         return snapshot;
                     };
                     let started = std::time::Instant::now();
-                    let previous_revision = snapshot.config_revision.clone();
                     match tokio::time::timeout(
                         Duration::from_secs(20),
                         driver.probe(adapter, scratch),
@@ -1541,8 +1638,11 @@ impl TargetWorker {
                                 outcome = "ready",
                                 elapsed_ms = started.elapsed().as_millis(),
                                 models = model_option_count(&snapshot.config_options),
-                                revision_changed =
-                                    previous_revision != snapshot.config_revision,
+                                revision_changed = published_revision
+                                    .as_deref()
+                                    .is_none_or(|published| {
+                                        published != snapshot.config_revision
+                                    }),
                                 revision = %short_revision(&snapshot.config_revision),
                                 auth_methods = %probe.auth_methods,
                                 "harness probe finished"
@@ -2519,9 +2619,10 @@ mod target_worker_tests {
     use tokio::sync::{Semaphore, watch};
     use uuid::Uuid;
 
-    use super::{TargetWorker, deliver_events};
+    use super::{ProbedHarnesses, TargetWorker, deliver_events};
     use crate::acp::{AcpCallbacks, AcpProbeOutcome, AcpRunOutcome, AcpRunRequest, AgentDriver};
     use crate::adapters::{AdapterManifest, ResolvedAdapter};
+    use crate::api::PublishedHarness;
     use crate::config::{HostPaths, TargetConfig};
     use crate::journal::Journal;
     use crate::permissions::PermissionDecision;
@@ -2652,6 +2753,10 @@ mod target_worker_tests {
 
     impl Harness {
         async fn new() -> Self {
+            Self::with_manifest(AdapterManifest::builtin().unwrap()).await
+        }
+
+        async fn with_manifest(manifest: AdapterManifest) -> Self {
             let stub = Arc::<StubState>::default();
             let app = Router::new()
                 .route("/agent-host/events:append", post(append_events))
@@ -2686,7 +2791,7 @@ mod target_worker_tests {
                 "installation".into(),
                 paths,
                 journal.clone(),
-                AdapterManifest::builtin().unwrap(),
+                manifest,
                 Arc::new(IdleDriver),
                 PathBuf::from("/nonexistent-bridge"),
                 Arc::new(Semaphore::new(2)),
@@ -2814,13 +2919,17 @@ mod target_worker_tests {
         // Exactly what a run task does the moment it journals an event.
         harness.worker.events_ready.notify_one();
 
+        // Both halves waited for, not one waited for and the other asserted.
+        // The journal is cleared *after* the server accepts, so "accepted == 3"
+        // is reached first and a bare assert on `pending` races the flusher
+        // finishing its own bookkeeping -- which is what failed here, at the
+        // second of these two sites, roughly one run in a hundred and fifty.
         within(
             Duration::from_secs(5),
-            "the run's events to reach Lemma",
-            || harness.accepted().get(&run_id) == Some(&3),
+            "the run's events to reach Lemma and leave the journal",
+            || harness.accepted().get(&run_id) == Some(&3) && harness.pending(run_id).is_empty(),
         )
         .await;
-        assert!(harness.pending(run_id).is_empty());
 
         // And it keeps serving. A run streams for its whole turn, so delivering
         // the first batch and then going quiet until the poll came back is the
@@ -2842,11 +2951,10 @@ mod target_worker_tests {
 
         within(
             Duration::from_secs(5),
-            "later events to reach Lemma",
-            || harness.accepted().get(&run_id) == Some(&7),
+            "later events to reach Lemma and leave the journal",
+            || harness.accepted().get(&run_id) == Some(&7) && harness.pending(run_id).is_empty(),
         )
         .await;
-        assert!(harness.pending(run_id).is_empty());
 
         delivery.abort();
     }
@@ -3158,6 +3266,166 @@ mod target_worker_tests {
         );
     }
 
+    /// An adapter that resolves without anything being installed, so a test
+    /// can reach the code past `handle_start`'s harness fence.
+    ///
+    /// `native` is the one distribution the manifest lets go unpinned, and
+    /// `echo` exists on every machine this suite runs on.
+    fn echo_manifest() -> AdapterManifest {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 1,
+            "manifest_id": "test-manifest",
+            "protocol": "ACP",
+            "adapters": [{
+                "key": "claude-code",
+                "display_name": "Claude Code",
+                "adapter_version": "0.0.0-test",
+                "command": "echo",
+                "args": [],
+                "upstream_command": "echo",
+                "upstream_version_args": ["--version"],
+                "minimum_upstream_version": null,
+                "distribution": "native",
+                "artifact_integrity": null,
+                "license": "Apache-2.0"
+            }]
+        }))
+        .unwrap()
+    }
+
+    /// Two revisions that stay distinct through `short_revision`, which keeps
+    /// only the first eight characters — as the log lines and the rejection
+    /// detail both do.
+    const REVISION_A: &str = "a1a1a1a1cafef00d";
+    const REVISION_B: &str = "b2b2b2b2cafef00d";
+
+    fn published_harness(id: Uuid, revision: &str) -> PublishedHarness {
+        PublishedHarness {
+            id,
+            harness_key: "claude-code".into(),
+            adapter_version: "0.0.0-test".into(),
+            config_revision: revision.into(),
+        }
+    }
+
+    fn start_command(harness_id: Uuid, run_id: Uuid, revision: &str) -> Command {
+        let spec = RunSpec {
+            agent_run_id: run_id,
+            conversation_id: Uuid::new_v4(),
+            harness_id,
+            profile_revision: revision.into(),
+            model_name: None,
+            config_selections: JsonMap::new(),
+            system_prompt: String::new(),
+            prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+            resume_session_id: None,
+            context: JsonMap::new(),
+            // Not an object, so the spawned run journals its failure and ends
+            // without going anywhere near a driver. This test is about whether
+            // the command is admitted, not about what it then does.
+            mcp: serde_json::Value::Null,
+            run_deadline: Utc::now() + chrono::Duration::minutes(5),
+            system_prompt_delivery: None,
+        };
+        Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::StartRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::to_value(&spec).unwrap(),
+        }
+    }
+
+    /// The race that rejected a run for naming the *newest* harness revision.
+    ///
+    /// A publish reaches the loop through a channel and only changes
+    /// `self.harnesses` when something drains it. Draining used to happen at
+    /// the top of an iteration and nowhere else, while commands are handled in
+    /// the same iteration that polled them — so a publish that landed during
+    /// the poll sat unread, and `handle_start` judged the command against the
+    /// revision this host held *before* it. Lemma mints against the revision it
+    /// was just told, which is exactly the one still in the channel.
+    ///
+    /// Observed as: `commanded=565b1f22 published=ec0f5482`, two seconds after
+    /// `published probed harnesses ... claude-code@565b1f22`.
+    #[tokio::test]
+    async fn a_publish_still_in_the_channel_is_applied_before_a_command_is_judged() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        let harness_id = Uuid::new_v4();
+        harness.worker.store_published(ProbedHarnesses {
+            published: vec![published_harness(harness_id, REVISION_A)],
+            probes: HashMap::new(),
+            retry_soon: false,
+        });
+        // Published, but not yet drained — the state the host is in for as
+        // long as a poll is being held open.
+        harness
+            .worker
+            .probed
+            .0
+            .send(Some(ProbedHarnesses {
+                published: vec![published_harness(harness_id, REVISION_B)],
+                probes: HashMap::new(),
+                retry_soon: false,
+            }))
+            .unwrap();
+
+        let run_id = Uuid::new_v4();
+        let command = start_command(harness_id, run_id, REVISION_B);
+        harness.worker.sync_harnesses_for_commands().await;
+        let outcome = harness.worker.handle_command(&command);
+
+        assert!(
+            outcome.is_ok(),
+            "a run naming the revision this host just published was refused: {:?}",
+            outcome.err()
+        );
+        assert!(
+            harness
+                .journal
+                .get_run(harness.target_id, run_id)
+                .unwrap()
+                .is_some(),
+            "an accepted start leaves a run to report on"
+        );
+    }
+
+    /// The fence itself still holds: a command naming a revision this host has
+    /// replaced is refused, and says so in terms someone can act on.
+    #[tokio::test]
+    async fn a_genuinely_stale_start_is_refused_with_both_revisions() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        let harness_id = Uuid::new_v4();
+        harness.worker.store_published(ProbedHarnesses {
+            published: vec![published_harness(harness_id, REVISION_B)],
+            probes: HashMap::new(),
+            retry_soon: false,
+        });
+        harness.worker.refresh_due = std::time::Instant::now() + Duration::from_secs(900);
+
+        let command = start_command(harness_id, Uuid::new_v4(), REVISION_A);
+        harness.worker.sync_harnesses_for_commands().await;
+        let error = harness
+            .worker
+            .handle_command(&command)
+            .expect_err("a superseded revision is refused");
+
+        // Lemma classifies on this substring, and stores the rest as the
+        // command's rejection detail — the only record of what the machine
+        // held that anyone reading the run will ever see.
+        let detail = error.to_string();
+        assert!(detail.contains("revision changed"), "{detail}");
+        assert!(detail.contains("b2b2b2b2"), "{detail}");
+        assert!(detail.contains("a1a1a1a1"), "{detail}");
+        assert!(
+            harness.worker.refresh_due <= std::time::Instant::now(),
+            "a fenced command asks this host to publish again rather than \
+             failing every run until the next refresh"
+        );
+    }
+
     /// A refusal is usually transient. Holding the heartbeat back forever meant
     /// one blip sentenced a healthy run to lease expiry and `DISPATCH_UNKNOWN`,
     /// so the hold has to lapse on its own.
@@ -3189,6 +3457,46 @@ mod target_worker_tests {
             applied.iter().any(|(run_id, _)| *run_id == poisoned),
             "the run's heartbeat must resume once the refusal passes"
         );
+    }
+
+    /// Event delivery must not go quiet for a minute over transient failures.
+    ///
+    /// Delivery used to share the poll loop's thirty-second ceiling. Doubling
+    /// from 500ms, a run of failures spends 0.5 + 1 + 2 + 4 + 8 + 16 + 30 =
+    /// 61.5s before the eighth attempt -- on a control plane the poll loop is
+    /// separately, successfully talking to the whole time. A run can finish
+    /// inside that window with none of its output delivered, and the retries
+    /// were logged at `debug`, which the host does not emit, so there was
+    /// nothing to find afterwards.
+    ///
+    /// The numbers rather than the constant, because the constant is only
+    /// meaningful as the total silence it permits.
+    #[test]
+    fn event_delivery_backs_off_in_seconds_not_minutes() {
+        use super::{EVENT_RETRY_MAX, RETRY_MAX, RETRY_MIN};
+
+        fn silence_over(attempts: u32, ceiling: Duration) -> Duration {
+            let mut retry = RETRY_MIN;
+            let mut total = Duration::ZERO;
+            for _ in 0..attempts {
+                total += retry;
+                retry = (retry * 2).min(ceiling);
+            }
+            total
+        }
+
+        // What it was: over a minute before the eighth try.
+        assert!(silence_over(7, RETRY_MAX) > Duration::from_secs(60));
+        // What it is: 0.5 + 1 + 2 x 6 = 13.5s for eight attempts, so a stalled
+        // delivery reads as slowness rather than as an agent that stopped.
+        assert!(
+            silence_over(8, EVENT_RETRY_MAX) < Duration::from_secs(15),
+            "eight delivery attempts spend {:?}",
+            silence_over(8, EVENT_RETRY_MAX),
+        );
+        // And it must stay well inside the 90s a permission-flow run is given,
+        // which is the budget this overran.
+        assert!(silence_over(20, EVENT_RETRY_MAX) < Duration::from_secs(45));
     }
 
     /// Narrowing must not lose commands: a cancellation handed back by one of

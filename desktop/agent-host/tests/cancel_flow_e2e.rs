@@ -103,3 +103,49 @@ async fn the_agents_own_cancelled_stop_reason_is_what_lemma_records() {
 
     host.shutdown().await;
 }
+
+/// A run whose `START_RUN` response is lost still starts.
+///
+/// The flake this closes: the stub marked `START_RUN` sent the moment it wrote it
+/// into a response body, with nothing to re-offer it. A response the host never
+/// received therefore took the run with it permanently -- the suite waited its
+/// full 90 seconds for events from a run that was never started, and reported
+/// `published=Some(..), start_sent=true, events=[]`. Roughly one run in twenty,
+/// on CI and locally, and it never reproduced on demand.
+///
+/// A real control plane redelivers a command until it comes back in a poll's
+/// `acknowledged_command_ids`, which is what the stub does now. Asserted by losing a
+/// response on purpose rather than waiting for a loaded machine to lose one.
+#[tokio::test]
+async fn a_run_whose_start_command_is_lost_is_offered_it_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let shims = ShimmedAgents::install(directory.path(), "cancel");
+    let control = ControlPlane::start(
+        &shims.harness_key,
+        "Say LEMMA_CANCEL_WORKING and stop.",
+        json!({
+            "server_name": "lemma_tools",
+            "url": "http://127.0.0.1:1/agent-runtime/conversations/unused/mcp",
+            "authorization": "Bearer unused-cancel-e2e-token",
+        }),
+        PermissionAnswer::Ignore,
+    )
+    .await;
+    control.lose_the_first_command();
+    // The shim for this profile works until it is told to stop, so the run is
+    // cancelled the same way `run_cancelled` does it -- otherwise there is no
+    // terminal event to wait for and the assertion would be about the shim
+    // rather than about the lost command.
+    control.cancel_when_text_contains("LEMMA_CANCEL_WORKING");
+    let host = HostProcess::start(directory.path(), &control, &shims).await;
+
+    control
+        .wait_for(
+            "the run to start despite a lost command",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+
+    host.shutdown().await;
+}

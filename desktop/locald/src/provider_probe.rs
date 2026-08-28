@@ -280,6 +280,6 @@ mod tests {
             HttpModelProviderProbe.discover(&profile, None).unwrap(),
             vec!["alpha", "zeta"]
         );
-        server.join().unwrap();
+        crate::join_within(server, "the probe's stand-in provider");
     }
 }

@@ -96,10 +96,51 @@ def configured_email_domain(monkeypatch):
     addresses on a domain nobody owns, which bounce on the way out and match no
     surface on the way back. Tests that provision a Resend surface therefore
     have to configure it, exactly as an operator does.
+
+    The domain only. Provisioning is gated on ``email_is_configured()``, which
+    wants a key as well, so a pod created under this fixture has no mailbox —
+    which is the premise most of this shard is written against and the reason
+    ``UNDELIVERABLE`` is an assertion here rather than a failure. Use
+    :func:`pod_with_a_mailbox` for the other deployment.
     """
     from app.modules.agent_surfaces.config import surface_settings
 
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+
+
+@pytest_asyncio.fixture
+async def pod_with_a_mailbox(authenticated_client, fixed_test_org, monkeypatch):
+    """A pod on a deployment where email is *fully* configured.
+
+    The distinction is load-bearing and was invisible for a while. The autouse
+    fixture above sets the inbound domain and no API key, and CI sets neither —
+    so `email_is_configured()` is false everywhere in this shard, no pod or
+    agent is ever given a mailbox at creation, and a bug that needs one to
+    exist cannot reproduce. A collision between the pod assistant's surface and
+    a plain "connect email" request held for every pod on a configured
+    deployment while this suite stayed green.
+
+    Both settings go on *before* the pod is created, because what they change is
+    what pod creation does.
+    """
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+
+    response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Mailbox Pod {uuid4()}",
+            "slug": f"mailbox-pod-{uuid4()}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    return response.json()
 
 
 @pytest_asyncio.fixture(autouse=True)

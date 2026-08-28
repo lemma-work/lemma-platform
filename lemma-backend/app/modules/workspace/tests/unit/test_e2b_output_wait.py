@@ -71,7 +71,10 @@ async def test_a_finished_process_returns_at_once(state: ProcessState) -> None:
     elapsed = asyncio.get_running_loop().time() - started
 
     assert snapshot.state is state
-    assert elapsed < 1.0, f"waited {elapsed:.1f}s for a process that had exited"
+    # 3s, not 1s. The regression is a full 30s block, so this still fails
+    # loudly, and the correct path returns immediately -- the extra headroom
+    # only rules out a stalled runner, and costs no runtime.
+    assert elapsed < 3.0, f"waited {elapsed:.1f}s for a process that had exited"
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,27 @@ describe("buildChatTurns", () => {
     expect(turns[0].items.filter((item) => item.kind === "text")).toHaveLength(1);
   });
 
+  it("no bubble ever carries the words the agent was thinking", () => {
+    // The count assertions above all passed while people were reading chains of
+    // thought in the answer bubble: a leaked thought arrived as one more TEXT
+    // message, so the counts were right and the content was not. The server now
+    // guarantees the split (`run_message_writer.split_reasoning_drafts`); this
+    // is the reading of it from the other end, asserting on the words.
+    const turns = turnsFor([
+      userMessage("capital of France?"),
+      thinking("General knowledge question. I should answer it directly.", 5),
+      assistantText("Paris.", 30),
+    ]);
+
+    const spoken = turns[0].items
+      .filter((item): item is Extract<typeof item, { kind: "text" }> => item.kind === "text")
+      .map((item) => item.text);
+
+    expect(spoken).toEqual(["Paris."]);
+    expect(spoken.join(" ")).not.toContain("I should answer it directly");
+    expect(spoken.join(" ").toLowerCase()).not.toContain("<think");
+  });
+
   it("counts steps and durations for the status pill — recovered failures stay out of it", () => {
     const turns = turnsFor([
       userMessage("do the work"),

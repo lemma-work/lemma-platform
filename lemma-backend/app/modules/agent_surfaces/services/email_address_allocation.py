@@ -45,6 +45,13 @@ _SUFFIX_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # no look-alikes
 # pod named "Support" asks for `support@` on a domain every organization shares.
 # `candidate_addresses` drops the request and falls through to a suffixed form —
 # the same thing it already does when another pod holds the name.
+#
+# Written without separators, and compared against a candidate with its own
+# separators stripped — see :func:`is_reserved`. Pod names admit spaces,
+# hyphens and underscores, all of which `slugify` collapses to a hyphen, so
+# screening the literal spelling alone caught `postmaster@` and let `Post
+# Master` through as `post-master@`. One entry now covers every way of writing
+# it.
 RESERVED_LOCAL_PARTS = frozenset(
     {
         # RFC 2142 §3-5: operations, protocol support, business roles.
@@ -72,15 +79,27 @@ RESERVED_LOCAL_PARTS = frozenset(
         "contact",
         "hello",
         "noreply",
-        "no-reply",
         "donotreply",
-        "do-not-reply",
         "bounce",
         "bounces",
-        "mailer-daemon",
-        # Lemma's own identity on Lemma's own domain.
+        "mailerdaemon",
+        # Lemma's own identity on Lemma's own domain. Enumerated compounds
+        # rather than a `lemma*` prefix rule, because the suffixed form of a pod
+        # honestly named "Lemma" is `lemma-7rmt@` — a prefix rule would reject
+        # that too, and go on rejecting every candidate until the bounded loop
+        # in `candidate_addresses` gave up and returned nothing, leaving the pod
+        # with no mailbox at all. These entries cannot do that: `lemma-support`
+        # normalizes to `lemmasupport` and is refused, while `lemma-support-x9k2`
+        # normalizes to `lemmasupportx9k2` and is not.
         "lem",
         "lemma",
+        "lemmaadmin",
+        "lemmabilling",
+        "lemmahelp",
+        "lemmanotifications",
+        "lemmasecurity",
+        "lemmasupport",
+        "lemmateam",
     }
 )
 
@@ -101,8 +120,25 @@ def is_reserved(local_part: str) -> bool:
     Matches the whole local part, never a prefix: ``triage.support@`` is an
     agent in a pod named "Support" and is fine, while ``support@`` is the shared
     domain's business address and is not.
+
+    Hyphens and underscores are stripped before the comparison, so one entry
+    covers every spelling a pod name can reach. Pod names allow spaces, hyphens
+    and underscores and `slugify` turns all three into a hyphen, which is how
+    ``postmaster@`` was refused while "Post Master" quietly took
+    ``post-master@`` — the same address to anyone reading it.
+
+    The dot is deliberately *not* stripped. It is the agent/pod separator, so a
+    local part containing one is an agent's address rather than a bare role
+    word, and collapsing it would refuse an agent named "Sale" in a pod named
+    "S" for looking like ``sales@`` when nobody reading ``sale.s@`` would think
+    so.
     """
-    return local_part.strip().lower() in RESERVED_LOCAL_PARTS
+    return _normalize_for_reservation(local_part) in RESERVED_LOCAL_PARTS
+
+
+def _normalize_for_reservation(local_part: str) -> str:
+    """Casefold and drop the separators that only vary the spelling."""
+    return re.sub(r"[-_]+", "", local_part.strip().lower())
 
 
 def build_local_part(
@@ -164,6 +200,12 @@ def candidate_addresses(
     that reasoning silently expires the day somebody adds one. The generation
     loop is bounded for the same reason: a filter that can reject must not be
     able to spin.
+
+    Screening every candidate is also why :data:`RESERVED_LOCAL_PARTS` may not
+    hold prefix rules. A rule matching `lemma*` would reject not just
+    ``lemma-support@`` but every suffixed candidate for a pod honestly named
+    "Lemma", and this loop would exhaust its bound and return an empty list —
+    trading an ugly address for no mailbox at all.
     """
     wanted = max(1, attempts)
     candidates: list[str] = []

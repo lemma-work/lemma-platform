@@ -281,3 +281,53 @@ async def test_the_universal_abilities_need_no_declaring(pod):
         None,
     )
     assert planned is not None, "an agent that declared nothing could not plan"
+
+
+@scenario("An agent's thinking never arrives as its answer")
+@proves("PS-AGENT-011")
+@covers("agent.conversation.create", "agent.conversation.message.list")
+async def test_reasoning_is_never_shown_as_the_answer(pod):
+    """Four turns, because the failure was cumulative.
+
+    A model that reasons can be taught, by its own conversation history, to
+    write that reasoning into the answer instead of into the reasoning channel.
+    It took three prior turns to teach it, so a one-turn scenario watched this
+    pass while people were reading chains of thought where the answer should be.
+
+    Asserted against the transcript rather than the screen: whatever a client
+    renders, a message the system calls the agent's speech must be speech.
+    """
+    needs(MODEL_IS_REAL)
+    alice, the_pod = pod
+    agent = await alice.creates_an_agent(
+        in_pod=the_pod,
+        instruction="Answer briefly and think carefully before you do.",
+    )
+
+    conversation = await alice.starts_a_conversation(
+        in_pod=the_pod,
+        with_agent=agent["name"],
+        saying="Name a European capital city.",
+    )
+    await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
+
+    for question in (
+        "Name another one.",
+        "Which of those two is further north?",
+        "And which has more people?",
+    ):
+        await alice.says(question, in_conversation=conversation, in_pod=the_pod)
+        await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
+
+    messages = await alice.messages_in(conversation, in_pod=the_pod)
+    spoken = [
+        message
+        for message in messages
+        if message["role"] == "assistant" and message["kind"] == "TEXT"
+    ]
+    assert len(spoken) >= 4, messages
+
+    # Built from ordinals so the tag survives tooling that reads source as markup.
+    opening_tag = chr(60) + "think"
+    for message in spoken:
+        assert opening_tag not in (message["text"] or "").lower(), message

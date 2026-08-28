@@ -250,7 +250,7 @@ async def test_function_execution_quality_benchmark(
         release_sandbox=_release_function_sandbox if lifecycle_measured else None,
         destroy_sandbox=_destroy_function_sandbox if lifecycle_measured else None,
         concurrency=_positive_int("FUNCTION_BENCH_CONCURRENCY", 5),
-        invocations=_positive_int("FUNCTION_BENCH_INVOCATIONS", 5),
+        invocations=_positive_int("FUNCTION_BENCH_INVOCATIONS", 20),
         batch_rows=_positive_int("FUNCTION_BENCH_BATCH_ROWS", 1_000),
         poll_interval_seconds=_positive_float(
             "FUNCTION_BENCH_POLL_INTERVAL_SECONDS",

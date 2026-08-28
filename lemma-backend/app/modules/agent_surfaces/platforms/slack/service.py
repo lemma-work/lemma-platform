@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_text,
 )
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     fallback_text,

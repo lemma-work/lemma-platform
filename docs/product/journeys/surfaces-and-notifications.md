@@ -48,6 +48,9 @@ it is asked, not skipped.
 
 - Where a platform needs an app definition, the system shall generate it rather
   than asking a person to write one.
+- Where a platform gives one app one identity, the system shall name the
+  generated definition after the agent it is being made for, so a bot made for
+  one agent arrives under that agent's name.
 - Where a platform needs administrator consent, the system shall carry the
   person through it and shall report when it has been granted.
 - The system shall let a person set up a bot for a platform without leaving

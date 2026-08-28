@@ -15,6 +15,24 @@
         <key>NSIncludesSubdomains</key>
         <true/>
       </dict>
+      <!--
+        The loopback wildcard a configured local domain uses. Scoped to
+        127.0.0.1.sslip.io rather than sslip.io: the service answers every
+        address under its own name, and an exception on the parent would let
+        cleartext through to anyone else's sslip host too.
+
+        Needed because NSAllowsLocalNetworking above covers unqualified names,
+        *.local and IP literals -- not a fully-qualified public name, even one
+        that answers 127.0.0.1. Without this entry ATS refuses the load and the
+        workspace never paints.
+      -->
+      <key>127.0.0.1.sslip.io</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+      </dict>
       <key>localhost</key>
       <dict>
         <key>NSExceptionAllowsInsecureHTTPLoads</key>

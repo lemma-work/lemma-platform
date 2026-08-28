@@ -29,6 +29,19 @@ from app.modules.agent_surfaces.domain.models import (
 class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     platform: str
 
+    def split_inbound_payloads(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """One webhook delivery, as the one-or-more messages it actually carries.
+
+        Every parser here reads a single message out of a delivery, which is
+        right for platforms that send one. Where a platform may batch, silently
+        parsing the first and discarding the rest loses a person's message with
+        nothing logged — so the platform that batches says so here, and the
+        webhook handler processes each part as its own inbound event.
+
+        Default: the delivery is the message.
+        """
+        return [payload]
+
     async def enrich_inbound_event(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:

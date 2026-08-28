@@ -22,9 +22,19 @@ import { useSlackManifest } from '@/lib/hooks/use-pod-surfaces';
  * the connector list. Nothing here is scoped to a pod, an org or an account,
  * so rendering it twice is not two of anything: the manifest describes the
  * deployment, and an org may run as many Slack apps as it likes.
+ *
+ * `agentName` is the one thing that does vary: a Slack app is a single bot
+ * user, so an app made for one agent arrives already named for it rather than
+ * as a second thing called Lemma. Passing nothing still makes the shared bot.
  */
-export function CreateSlackAppButton({ label = 'Make your Slack app' }: { label?: string }) {
-    const { data: manifest, isLoading, isError } = useSlackManifest();
+export function CreateSlackAppButton({
+    label = 'Make your Slack app',
+    agentName,
+}: {
+    label?: string;
+    agentName?: string | null;
+}) {
+    const { data: manifest, isLoading, isError } = useSlackManifest(agentName);
 
     if (isLoading) {
         return (

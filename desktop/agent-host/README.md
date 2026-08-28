@@ -231,7 +231,27 @@ The crate has:
   publication, event replay, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and
 - Desktop/locald supervision tests that verify restart and full process-tree
-  cleanup.
+  cleanup; and
+- a control-plane contract test that pins the properties the stand-in backend in
+  `tests/support` has to share with the real one.
+
+That last one earned its place. Every end-to-end test here drives the shipped
+host binary against that stand-in, which proves something about the host only
+while the stand-in behaves like the backend. It did not: `agent_host_harnesses`
+is unique on `(host_id, harness_key)` so a harness keeps one id for the life of
+a host, and the double minted a fresh UUID on every publish. A re-publish then
+named an id the host had not been told about yet, `START_RUN` was refused as
+`HARNESS_NOT_FOUND` — permanent, and the double sends it once — and the test sat
+out its full 90-second timeout. It surfaced as an intermittent hang across four
+different tests in two files, on branches touching none of them.
+
+**These tests are hermetic, and that is enforced rather than assumed.** The host
+warms its adapter cache on `serve`, which means a real `npm install` of the
+Codex and Claude Agent adapters and then a real probe of whichever finishes —
+launching the developer's own agents inside a suite whose real-agent tests are
+deliberately `#[ignore]`d. `HostProcess` sets
+`LEMMA_AGENT_HOST_SKIP_ADAPTER_DOWNLOAD=1` to stop it. Set that variable
+yourself only for a test run; a normal install needs its adapters.
 
 The ignored real-harness test runs the same ACP driver against authenticated
 Codex, Claude Code, and OpenCode installations, then pairs a complete

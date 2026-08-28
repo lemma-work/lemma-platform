@@ -1591,6 +1591,249 @@ mod tests {
         .is_err());
     }
 
+    /// Serialises the tests that set process-global environment variables.
+    ///
+    /// The local-artifact gate reads `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS` and
+    /// `LEMMA_DESKTOP_RELEASE_MANIFEST` from the process, and cargo runs tests
+    /// in threads -- so two of these racing would have one clear the other's
+    /// variables mid-install and fail for a reason that is not the code.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Build a zip in memory from `(path, contents)` pairs.
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, contents) in entries {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(contents).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    /// The smallest tree `validate_installed` will accept as a host pack.
+    ///
+    /// Everything sits under `local-runtime/`, because the archive is expanded
+    /// into the release root and `installed_runtime` looks for the pack at
+    /// `<release>/local-runtime`. Getting that wrong is exactly the mistake
+    /// this test exists to catch, and it caught it on the first run.
+    fn host_pack_entries(release: &str) -> Vec<(String, Vec<u8>)> {
+        let marker = format!("{{\"version\":\"{release}\"}}");
+        let pack = format!("{{\"release\":\"{release}\"}}");
+        let (python, node) = if cfg!(windows) {
+            ("backend/python/python.exe", "frontend/node/node.exe")
+        } else {
+            ("backend/python/bin/python3", "frontend/node/bin/node")
+        };
+        vec![
+            ("local-runtime/release.json".to_owned(), marker.into_bytes()),
+            ("local-runtime/pack.json".to_owned(), pack.into_bytes()),
+            (format!("local-runtime/{python}"), b"#!/bin/sh\n".to_vec()),
+            (format!("local-runtime/{node}"), b"#!/bin/sh\n".to_vec()),
+        ]
+    }
+
+    fn guest_runtime_entries() -> Vec<(String, Vec<u8>)> {
+        let target = guest_target();
+        let marker = format!("{{\"target\":\"{target}\"}}");
+        let mut entries = vec![(format!("{target}/runtime.json"), marker.into_bytes())];
+        let files: &[&str] = if cfg!(target_os = "macos") {
+            &["vmlinuz", "initrd", "disk.raw"]
+        } else {
+            &["rootfs.tar"]
+        };
+        for name in files {
+            entries.push((format!("{target}/{name}"), b"guest-bytes".to_vec()));
+        }
+        entries
+    }
+
+    /// A manifest entry, as JSON. `ArtifactRef` is deserialize-only, which is
+    /// the right shape for a type that only ever reads a signed document.
+    fn artifact_for_bytes(
+        path: &Path,
+        bytes: &[u8],
+        expanded: u64,
+        platform: &str,
+    ) -> serde_json::Value {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        serde_json::json!({
+            "url": reqwest::Url::from_file_path(path).unwrap().to_string(),
+            "sha256": format!("{:x}", hasher.finalize()),
+            "size": bytes.len() as u64,
+            "expanded_size": expanded,
+            "format": "zip",
+            "platform": platform,
+            "architecture": host_architecture(),
+            "runtime_version": "1.2.3",
+        })
+    }
+
+    /// The whole install, end to end, with no network and no VM.
+    ///
+    /// `install_from_manifest` is the single most consequential function in the
+    /// app -- it is what turns a 23 MB download into a working installation --
+    /// and nothing exercised it as a unit. Its parts were tested individually
+    /// (digest checks, zip safety, the local-artifact gate) while the sequence
+    /// they form was proven only by somebody installing the app by hand.
+    ///
+    /// This runs the real thing over fabricated archives: download, verify,
+    /// extract, validate, record identity, activate. Then it runs it again to
+    /// prove the second call is free, which is the promise a warm launch
+    /// depends on.
+    ///
+    /// Serialised with the other env-var test in this module: the local
+    /// artifact gate reads process-global state, and cargo runs tests in
+    /// threads.
+    #[test]
+    fn a_manifest_installs_end_to_end_and_a_second_install_is_free() {
+        let _guard = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let release = "1.2.3";
+
+        let host_entries = host_pack_entries(release);
+        let host_zip = zip_of(
+            &host_entries
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+        let host_expanded: u64 = host_entries.iter().map(|(_, b)| b.len() as u64).sum();
+        let host_path = root.path().join("host.zip");
+        fs::write(&host_path, &host_zip).unwrap();
+
+        let guest_entries = guest_runtime_entries();
+        let guest_zip = zip_of(
+            &guest_entries
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+        let guest_expanded: u64 = guest_entries.iter().map(|(_, b)| b.len() as u64).sum();
+        let guest_path = root.path().join("guest.zip");
+        fs::write(&guest_path, &guest_zip).unwrap();
+
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "version": release,
+            "host_packs": {
+                host_target(): artifact_for_bytes(
+                    &host_path, &host_zip, host_expanded, host_platform()),
+            },
+            "guest_runtimes": {
+                guest_target(): artifact_for_bytes(
+                    &guest_path, &guest_zip, guest_expanded, "linux"),
+            },
+        });
+        let manifest_path = root.path().join("lemma-local.json");
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        // The only way a `file://` artifact is honoured, and only for this
+        // exact manifest.
+        std::env::set_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS", "1");
+        std::env::set_var("LEMMA_DESKTOP_RELEASE_MANIFEST", &manifest_path);
+
+        let install_root = root.path().join("runtime");
+        let mut stages = Vec::new();
+        let installed = install_from_manifest(&manifest_path, &install_root, release, &mut |p| {
+            stages.push(p.stage.to_owned());
+        })
+        .expect("a well-formed manifest installs");
+
+        assert!(installed.is_complete(), "the installed tree validates");
+        assert!(installed.has_recorded_artifact_identity());
+        assert_eq!(installed.release, release);
+        assert!(
+            installed.host_pack_root.join("release.json").is_file(),
+            "the host pack is extracted where locald looks for it",
+        );
+        assert!(installed
+            .managed_runtime_root
+            .join(guest_target())
+            .join("runtime.json")
+            .is_file());
+        // Real progress, in order, not a bar that jumps to done.
+        for stage in [
+            "download",
+            "verify",
+            "host-extract",
+            "guest-extract",
+            "validate",
+        ] {
+            assert!(
+                stages.iter().any(|seen| seen == stage),
+                "missing {stage}: {stages:?}"
+            );
+        }
+        // The archives are cleaned up once they are no longer needed.
+        assert!(
+            !install_root
+                .join("downloads")
+                .join(release)
+                .join("host-pack.zip")
+                .exists(),
+            "a successful install does not leave its downloads behind",
+        );
+
+        // A second call must be a no-op. This is what a warm launch depends on:
+        // recognising an already-installed runtime by recorded identity rather
+        // than re-downloading half a gigabyte.
+        let mut second_stages = Vec::new();
+        let again = install_from_manifest(&manifest_path, &install_root, release, &mut |p| {
+            second_stages.push(p.stage.to_owned());
+        })
+        .expect("an already-installed runtime is reused");
+        assert_eq!(again.host_pack_root, installed.host_pack_root);
+        assert!(
+            second_stages.is_empty(),
+            "reinstalling did work it did not need to: {second_stages:?}",
+        );
+
+        std::env::remove_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS");
+        std::env::remove_var("LEMMA_DESKTOP_RELEASE_MANIFEST");
+    }
+
+    /// A manifest whose version disagrees with the app installs nothing.
+    #[test]
+    fn a_manifest_for_another_release_is_refused_before_anything_is_downloaded() {
+        let _guard = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let manifest_path = root.path().join("lemma-local.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "version": "9.9.9",
+                "host_packs": {},
+                "guest_runtimes": {},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = install_from_manifest(
+            &manifest_path,
+            &root.path().join("runtime"),
+            "1.2.3",
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match"), "{error}");
+        assert!(
+            !root.path().join("runtime/downloads").exists(),
+            "nothing is fetched for a runtime this app cannot use",
+        );
+    }
+
     #[test]
     fn installed_runtime_requires_every_native_and_guest_marker() {
         let root = tempfile::tempdir().unwrap();

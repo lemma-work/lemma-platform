@@ -7,7 +7,6 @@ from typing import Any
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.slack.blocks import (
-    AGENT_DM_ACTION_ID,
     CHANNEL_SETUP_ACTION_ID,
     CHANNEL_SETUP_BLOCK_ID,
     CHANNEL_SETUP_SELECT_ACTION_ID,
@@ -17,8 +16,12 @@ from app.modules.agent_surfaces.platforms.slack.blocks import (
     DM_AGENT_SETUP_ACTION_ID,
     DM_AGENT_VIEW_CALLBACK_ID,
     POD_ASSISTANT_VALUE,
+)
+from app.modules.agent_surfaces.platforms.slack.home_blocks import (
+    AGENT_DM_ACTION_ID,
     SURFACE_SELECT_ACTION_ID,
 )
+
 
 logger = get_logger(__name__)
 

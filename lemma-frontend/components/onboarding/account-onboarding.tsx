@@ -398,8 +398,19 @@ function SetupAssistant({
   const [allowDomainJoin, setAllowDomainJoin] = useState(
     initialDraft?.allowDomainJoin ?? Boolean(normalizedWorkDomain),
   );
+  // Never on a local install.
+  //
+  // The backend suggests an organization on a domain match alone, and the
+  // consent toggle that would let someone decline lives on a step the local
+  // flow skips. So on a machine where an `EMAIL_DOMAIN` organization already
+  // exists, the next person to sign up with an address at that domain was
+  // joined to it silently -- and told so by a success toast, after the fact.
+  //
+  // The org-creation path was gated for exactly this reason; this is the other
+  // half of it, and the one that was still open.
   const suggestedOrganizations = useSuggestedOrganizations({
     enabled:
+      !isLocal &&
       Boolean(profile?.email) &&
       organizations.length === 0,
   });
@@ -462,7 +473,22 @@ function SetupAssistant({
    * one call that cannot fail on a name.
    */
   const createFirstOrganization = async (): Promise<Organization> => {
-    const useDomainJoin = Boolean(normalizedWorkDomain);
+    // Respects the consent toggle, where it used to infer domain-join purely
+    // from the address. On a local install that inference was never shown to
+    // anyone: this runs from the identity step, and the flow then jumps
+    // straight to intelligence, skipping the step the toggle lives on. So the
+    // owner got an organization anyone with an address at their work domain
+    // could join, without being asked and without being told.
+    //
+    // That is not theoretical on a shared installation. Email verification is
+    // off for local mode, so the address is never proven — typing one is
+    // enough to be auto-joined as a member, which grants the full member
+    // roster and the ability to create pods inside the owner's organization.
+    //
+    // `allowDomainJoin` defaults to true when a work domain is present, so a
+    // hosted signup that *does* see the toggle behaves exactly as before.
+    const useDomainJoin =
+      allowDomainJoin && Boolean(normalizedWorkDomain) && !isLocal;
 
     return createOrganization.mutateAsync({
       name: organizationNameCandidate({
@@ -506,7 +532,10 @@ function SetupAssistant({
       }
 
       let organization = activeOrganization;
-      if (!organization && suggestedOrganization) {
+      // `!isLocal` again rather than relying on the query being disabled: a
+      // silent join is not something to leave resting on one condition several
+      // hundred lines away.
+      if (!organization && !isLocal && suggestedOrganization) {
         organization = await joinSuggestedOrganization.mutateAsync(
           suggestedOrganization.id,
         );

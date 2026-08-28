@@ -50,6 +50,20 @@ def _deadline() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=30)
 
 
+def _expiring_deadline() -> datetime:
+    """A deadline for the tests that assert on giving up.
+
+    `wait_ready` now spends the caller's whole budget polling, so a test of
+    the never-answers path spends it too -- in real seconds. The 30s
+    `_deadline` made one of these the slowest test in the unit suite at 20s
+    (its poll capped at `ensure_serving`'s old default), and honouring the
+    deadline would have made it 30. What these two assert is the shape of
+    the giving-up, not how long a caller is willing to wait for it, so they
+    ask for the shortest budget that still gets a poll.
+    """
+    return datetime.now(timezone.utc) + timedelta(milliseconds=50)
+
+
 @pytest.fixture
 def world() -> FakeE2B:
     return FakeE2B()
@@ -1007,7 +1021,7 @@ async def test_a_sandbox_whose_runtime_died_is_not_ready(
 
     with pytest.raises(ProviderFailed) as failure:
         await provider.wait_ready(
-            instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_expiring_deadline()
         )
 
     assert "502" in str(failure.value)
@@ -1052,7 +1066,7 @@ async def test_a_workspace_whose_agent_died_is_not_ready(
 
     with pytest.raises(ProviderFailed):
         await provider.wait_ready(
-            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_expiring_deadline()
         )
 
 
