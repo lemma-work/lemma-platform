@@ -523,6 +523,16 @@ fn summarize_target(target: &Value) -> Value {
 /// Loopback HTTP is the one plain-HTTP case the host accepts, and only when
 /// asked. A development backend is served that way.
 fn is_loopback_http(url: &str) -> bool {
+    is_loopback_http_for(url, &crate::local_domain::LocalDomain::from_env())
+}
+
+/// The check with the install's domain handed in.
+///
+/// Split so the tests can state which domain they mean. `from_env` probes DNS
+/// and caches the answer for the process, so a test that leaned on it would
+/// assert one thing on a machine with a network and the opposite on one
+/// without -- and a gate that flips with the weather gets switched off.
+fn is_loopback_http_for(url: &str, domain: &crate::local_domain::LocalDomain) -> bool {
     let Some(rest) = url.strip_prefix("http://") else {
         return false;
     };
@@ -531,12 +541,26 @@ fn is_loopback_http(url: &str) -> bool {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    // `.localhost` is reserved to loopback by RFC 6761, and Lemma Desktop serves
-    // its own workspace and API on `app.lemma.localhost`. Matching only the
-    // three literal spellings meant this flag was never passed for a desktop
-    // install's own URL, so the host refused to pair with the very workspace
-    // that asked it to.
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]") || host.ends_with(".localhost")
+    // Twice now. `.localhost` is reserved to loopback by RFC 6761, and matching
+    // only the three literal spellings meant this flag was never passed for a
+    // desktop install's own URL, so the host refused to pair with the very
+    // workspace that asked it to. Adding `.localhost` fixed that -- and then the
+    // base domain stopped being `.localhost`.
+    //
+    // An install now serves itself under whatever `LocalDomain` resolved,
+    // because a browser derives no registrable domain from `*.localhost` and a
+    // pod app framed by the workspace needs one. On such an install the URL is
+    // `app.127.0.0.1.sslip.io:<port>`: loopback in every way that matters --
+    // the name resolves to 127.0.0.1 and the backend binds there -- and matched
+    // by none of the spellings above. Pairing failed silently, and the
+    // onboarding step sat on "Connecting this computer" for ever.
+    //
+    // So the question this asks is the one it always meant: is this address
+    // this installation's own? Asking `LocalDomain` means the next time the
+    // domain moves, this moves with it.
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+        || host.ends_with(".localhost")
+        || domain.owns_host(host)
 }
 
 /// Strip anything from a subprocess message that we passed in as a secret.
@@ -1097,6 +1121,10 @@ mod tests {
 
     #[test]
     fn plain_http_is_opted_into_only_on_loopback() {
+        use crate::local_domain::LocalDomain;
+        let sslip = LocalDomain::parse(Some("sslip"));
+        let is_loopback_http = |url: &str| is_loopback_http_for(url, &sslip);
+
         assert!(is_loopback_http("http://localhost:8710"));
         assert!(is_loopback_http("http://127.0.0.1:8710/api"));
         assert!(is_loopback_http("http://[::1]:8710"));
@@ -1108,7 +1136,21 @@ mod tests {
         assert!(is_loopback_http(
             "http://apps.lemma.localhost:52502/internal"
         ));
+        // And the hostname it serves itself on now. A shipped install resolves
+        // to the loopback wildcard, because a browser derives no registrable
+        // domain from `*.localhost` and a framed pod app needs one. This is the
+        // same failure as the line above, one domain later: pairing died
+        // silently and onboarding sat on "Connecting this computer" for ever.
+        assert!(is_loopback_http("http://app.127.0.0.1.sslip.io:61624"));
+        assert!(is_loopback_http(
+            "http://apps.127.0.0.1.sslip.io:61624/internal"
+        ));
         // A LAN or public address over plain HTTP stays refused.
+        // Somebody else's sslip host is somebody else's machine, not ours.
+        assert!(!is_loopback_http("http://app.10.0.0.7.sslip.io:61624"));
+        assert!(!is_loopback_http(
+            "http://app.127.0.0.1.sslip.io.evil:61624"
+        ));
         assert!(!is_loopback_http("http://192.168.1.10:8710"));
         assert!(!is_loopback_http("http://localhost.evil.example:8710"));
         // ".localhost" must be the suffix, not a substring someone else owns.

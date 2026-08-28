@@ -84,6 +84,11 @@ produces them.
 make quality
 ```
 
+`make quality` is Python only, all the way down. If you touched the frontend or
+the TypeScript SDK, add `make quality-frontend` — eslint, `tsc`, the
+design-system audit and the education anchors, the four gates CI runs that
+`quality` cannot see. (`make check` is both, plus CodeQL.)
+
 Then the checks for the component you touched, from the table in
 `CONTRIBUTING.md`. The pull request template lists what the description needs —
 including the exact commands you ran and what they printed.
