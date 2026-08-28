@@ -18,8 +18,10 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+_token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
@@ -95,8 +97,15 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     cache = _get_token_cache()
     try:
         cached_token = await cache.get_raw(cache_key)
-    except Exception:
+    except Exception as exc:
+        # A cache miss is survivable — the OAuth fetch below is the real source
+        # — so this stays non-fatal. Recorded rather than logged per call: this
+        # runs on every outbound Teams call, and one record per call during a
+        # Redis outage would be thousands a minute for one condition.
+        _token_cache_incident.record_failure(error_type=type(exc).__name__)
         cached_token = None
+    else:
+        _token_cache_incident.record_success()
     if cached_token:
         return cached_token
 
@@ -153,8 +162,10 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     # Subtract 60 s so we refresh before the token actually expires.
     try:
         await cache.set_raw(cache_key, str(token), ttl_seconds=max(60, expires_in - 60))
-    except Exception:
-        pass
+    except Exception as exc:
+        _token_cache_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _token_cache_incident.record_success()
     return str(token)
 
 

@@ -170,6 +170,21 @@ def _instructions(
         return text
 
 
+def _report_teardown_failure(exc: BaseException, *, agent_run_id: UUID) -> None:
+    """Report a driver task that crashed unwinding — but not cancellation.
+
+    Swallowed either way; ``reraise_driver_failure`` owns what the run reports.
+    Caught by name, not as ``BaseException``, so SystemExit still propagates.
+    """
+    if isinstance(exc, asyncio.CancelledError):
+        return
+    logger.error(
+        "agent.pydantic_ai.stream_teardown.failed",
+        agent_run_id=str(agent_run_id),
+        exc_info=exc,
+    )
+
+
 class PydanticAIHarness:
     """Execute an agent through PydanticAI and emit domain events."""
 
@@ -474,8 +489,8 @@ class PydanticAIHarness:
             with anyio.CancelScope(shield=True):
                 try:
                     await task
-                except BaseException:
-                    pass
+                except (Exception, asyncio.CancelledError) as exc:
+                    _report_teardown_failure(exc, agent_run_id=agent_run_id)
 
         reraise_driver_failure(
             pending_error,

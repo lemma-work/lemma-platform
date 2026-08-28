@@ -53,13 +53,35 @@ def _build_datastore_connect_args() -> dict:
     run against a real install rather than a booted test stack — see the note
     on ``testing`` below for why that difference decides whether it is visible
     at all.
+    The two cache knobs are the ones that are not about timeouts, and they are
+    here rather than on the primary engine because only this one runs SQL
+    against tables a person can change.
+
+    Prepared statements are cached per connection, keyed on the SQL text. A
+    record read is ``SELECT * FROM "<schema>"."<table>"`` — the same text before
+    and after a column is added or removed, and the same text for two pods whose
+    tables share a name, because the pod is selected by ``SET LOCAL search_path``
+    rather than by anything in the statement. So a cached plan is reused with a
+    result descriptor that no longer matches the table.
 
     Worse than one bad request, because the connection is pooled. Any request
-    landing on it saw the same 400, and it cleared itself only when the
+    landing on it hit the same failure, and it cleared itself only when the
     connection recycled — a table that broke and then healed with nothing done
-    in between. Which of add or remove hit it was never about the operation but
+    in between. Which operation triggered it was never about the operation but
     about which connection served the next read; ``pool_use_lifo`` makes that
     reliably unpredictable.
+
+    **Both names are required, and only one of them is the one that matters.**
+    ``statement_cache_size`` is asyncpg's own; ``prepared_statement_cache_size``
+    is SQLAlchemy's, which the asyncpg dialect implements on top because it
+    prepares every statement itself, and which defaults to 100 per connection.
+    Setting only asyncpg's — which is what this did — leaves SQLAlchemy's cache
+    fully active, so the fix this docstring describes never took effect. It cost
+    59 HTTP 500s in a single day in production, all from
+    ``execute_readonly_query``, as ``InvalidCachedStatementError`` and as raw
+    protocol desyncs (``the number of columns in the result row (1) is different
+    from what was described (2)``, ``unexpected trailing 942 bytes in buffer``,
+    ``cannot decode UUID, expected 16 bytes, got 554``).
 
     The cost is a parse per statement. That is the right trade for a schema
     that belongs to users rather than to migrations: the primary engine keeps

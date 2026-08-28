@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import io
+import json
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import structlog
 
+from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import MessageKind
+from app.modules.agent.infrastructure.repositories import (
+    conversation_repository as cts_repo,
+)
 from app.modules.agent.services import conversation_title_service as cts
 from app.modules.agent.services.conversation_title_service import (
     ConversationTitleService,
@@ -17,6 +25,55 @@ from app.modules.usage.domain.entities import UsageReservation
 
 
 # --- fakes ---------------------------------------------------------------
+
+
+class _FakeCounter:
+    """Records what the OTel counter was told, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict]] = []
+
+    def add(self, amount: int, attributes: dict | None = None) -> None:
+        self.calls.append((amount, attributes or {}))
+
+    @property
+    def outcomes(self) -> list[str]:
+        return [attributes.get("outcome") for _, attributes in self.calls]
+
+
+def _one(records: list[dict], event: str) -> dict:
+    """The single record for ``event``; fails loudly when it is missing."""
+    matching = [record for record in records if record.get("event") == event]
+    assert matching, f"{event} was not logged; saw {[r.get('event') for r in records]}"
+    assert len(matching) == 1, f"{event} logged {len(matching)} times"
+    return matching[0]
+
+
+@pytest.fixture
+def records_at_info():
+    """Structured records as production emits them — INFO, not DEBUG.
+
+    The level is the point of the fixture: these assertions must fail if a
+    failure path is ever demoted back below INFO, which is exactly how the
+    original bug stayed invisible.
+    """
+    setup_logging(
+        "development", service_name="lemma-test", json_logs=True, log_level="INFO"
+    )
+    handler = next(
+        candidate
+        for candidate in logging.getLogger().handlers
+        if isinstance(candidate.formatter, structlog.stdlib.ProcessorFormatter)
+    )
+    buffer = io.StringIO()
+    original_stream = handler.stream
+    handler.stream = buffer
+    try:
+        yield lambda: [
+            json.loads(line) for line in buffer.getvalue().splitlines() if line
+        ]
+    finally:
+        handler.stream = original_stream
 
 
 class _FakeUow:
@@ -47,7 +104,34 @@ class _FakeRepo:
     async def get_conversation(
         self, conversation_id, *, include_messages=False, include_runs=False
     ) -> Conversation | None:
+        if include_messages:
+            # Titling needs two rows. Loading the transcript to find them cost
+            # 1.4s of materialisation inside an open transaction in production.
+            raise AssertionError(
+                "titling must not load the transcript; "
+                "use get_conversation_opening_texts"
+            )
         return self.uow.conversation
+
+    async def get_conversation_opening_texts(self, conversation_id):
+        """The real query's answer, computed the way the old scan computed it."""
+        conversation = self.uow.conversation
+        messages = conversation.ordered_messages() if conversation else []
+
+        def _first(role: str) -> str | None:
+            for message in messages:
+                if (
+                    message.role == role
+                    and message.kind == MessageKind.TEXT
+                    and message.text
+                    and message.text.strip()
+                ):
+                    return message.text.strip()
+            return None
+
+        return cts_repo.ConversationOpeningTexts(
+            user_text=_first("user"), assistant_text=_first("assistant")
+        )
 
     async def update_conversation(self, conversation: Conversation) -> Conversation:
         self.uow.updated_with = conversation
@@ -276,6 +360,83 @@ async def test_works_without_assistant_reply(monkeypatch: pytest.MonkeyPatch) ->
 
     assert title == "Japan Trip"
     assert "Assistant's reply" not in str(capture["prompt"])
+
+
+async def test_llm_failure_is_visible_at_production_log_level(
+    monkeypatch: pytest.MonkeyPatch, records_at_info
+) -> None:
+    """The record this whole change exists for.
+
+    The handler used to be ``logger.debug`` with no ``exc_info``. Production
+    runs at INFO behind a filtering bound logger, so the record was dropped
+    before formatting: a provider outage and a healthy system looked identical,
+    and the job counter said ``succeeded`` either way.
+    """
+    _patch_llm(monkeypatch, raise_on_run=True)
+    conv = _conversation()
+    uow = _FakeUow(conv)
+    monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)
+
+    title = await ConversationTitleService(uow_factory=uow).generate_title_if_absent(
+        conv.id
+    )
+
+    # The fallback title: the user's own first message, which is precisely what
+    # "the title didn't generate" looks like from the outside.
+    assert title == "Help me plan a 5-day trip to Japan in spring."
+    failure = _one(records_at_info(), "agent.conversation_title.llm_call.failed")
+    assert failure["level"] == "error"
+    assert failure["error_type"] == "RuntimeError"
+    assert "llm boom" in failure["error_message"]
+    assert "\n" in failure["error_traceback"], "a one-line traceback is useless"
+
+
+async def test_unexpected_failure_is_logged_and_counted_without_raising(
+    monkeypatch: pytest.MonkeyPatch, records_at_info
+) -> None:
+    """A broken read must not raise, but must stop reporting success."""
+    _patch_llm(monkeypatch)
+    conv = _conversation()
+    uow = _FakeUow(conv)
+
+    class _BrokenRepo(_FakeRepo):
+        async def get_conversation(self, conversation_id, **kwargs):
+            raise RuntimeError("database down")
+
+    monkeypatch.setattr(cts, "ConversationRepository", _BrokenRepo)
+    counter = _FakeCounter()
+    monkeypatch.setattr(cts, "title_counter", counter)
+
+    title = await ConversationTitleService(uow_factory=uow).generate_title_if_absent(
+        conv.id
+    )
+
+    assert title is None, "titling must never break the calling worker"
+    failure = _one(records_at_info(), "agent.conversation_title.generation.failed")
+    assert failure["level"] == "error"
+    assert failure["error_type"] == "RuntimeError"
+    assert "database down" in failure["error_message"]
+    assert counter.outcomes == ["failed"]
+
+
+@pytest.mark.parametrize(
+    ("raise_on_run", "expected"),
+    [(False, "llm"), (True, "fallback")],
+)
+async def test_counter_says_which_title_path_ran(
+    monkeypatch: pytest.MonkeyPatch, raise_on_run: bool, expected: str
+) -> None:
+    """ "Half the time it doesn't work" is answerable only if the two differ."""
+    _patch_llm(monkeypatch, output="Japan Trip", raise_on_run=raise_on_run)
+    conv = _conversation()
+    uow = _FakeUow(conv)
+    monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)
+    counter = _FakeCounter()
+    monkeypatch.setattr(cts, "title_counter", counter)
+
+    await ConversationTitleService(uow_factory=uow).generate_title_if_absent(conv.id)
+
+    assert counter.outcomes == [expected]
 
 
 def test_title_updated_payload_shape() -> None:

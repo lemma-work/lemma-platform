@@ -32,6 +32,8 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -72,6 +74,14 @@ _MAX_COLUMNS = 40
 _BriefKey = tuple[UUID, UUID, UUID, bool]
 _brief_cache: RedisJsonCache | None = None
 
+logger = get_logger(__name__)
+# Read and written on every conversation's context assembly, so a Redis outage
+# would be one record per run for a condition that is uniform. This emits one
+# degraded/recovered pair per incident instead — the alternative, staying
+# silent, is how a cache that has been down for hours degrades every
+# conversation with nothing to show for it.
+_brief_cache_incident = DependencyIncident("agent_context_brief_cache", logger=logger)
+
 
 def _get_brief_cache() -> RedisJsonCache | None:
     global _brief_cache
@@ -96,10 +106,13 @@ async def _get_cached_brief(key: _BriefKey) -> str | None:
     if cache is None:
         return None
     try:
-        return await cache.get_raw(_cache_suffix(key))
-    except Exception:
+        cached = await cache.get_raw(_cache_suffix(key))
+    except Exception as exc:
         # Redis unavailable -> treat as a cache miss; never fail a run.
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
         return None
+    _brief_cache_incident.record_success()
+    return cached
 
 
 async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
@@ -108,9 +121,11 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
         return
     try:
         await cache.set_raw(_cache_suffix(key), brief)
-    except Exception:
+    except Exception as exc:
         # Redis unavailable -> skip caching; never fail a run.
-        pass
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
+        return
+    _brief_cache_incident.record_success()
 
 
 class AgentContextBriefBuilder:
