@@ -654,12 +654,15 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 except asyncio.CancelledError:
                     # The expected path: we cancelled it on the line above.
                     pass
-                except BaseException:
+                except Exception:
                     # Anything else is that task failing on its own way out.
                     # Still swallowed — the loop must reach every remaining
                     # task, which is the whole point of the ordering above —
                     # but a bare `pass` is how a background task that has been
                     # dying at every shutdown for months goes unnoticed.
+                    # `Exception`, not `BaseException`: KeyboardInterrupt and
+                    # SystemExit are the process being told to stop, and a
+                    # shutdown loop is the last place that should be ignored.
                     logger.warning(
                         "infrastructure.streaq_runtime.background_task_shutdown.degraded",
                         task=background_task.get_name(),

@@ -173,8 +173,8 @@ def _instructions(
 def _report_teardown_failure(exc: BaseException, *, agent_run_id: UUID) -> None:
     """Report a driver task that crashed unwinding — but not cancellation.
 
-    Swallowed either way: ``reraise_driver_failure`` owns what the run reports.
-    But a bare ``pass`` is how a teardown that has been failing goes unnoticed.
+    Swallowed either way; ``reraise_driver_failure`` owns what the run reports.
+    Caught by name, not as ``BaseException``, so SystemExit still propagates.
     """
     if isinstance(exc, asyncio.CancelledError):
         return
@@ -489,7 +489,7 @@ class PydanticAIHarness:
             with anyio.CancelScope(shield=True):
                 try:
                     await task
-                except BaseException as exc:
+                except (Exception, asyncio.CancelledError) as exc:
                     _report_teardown_failure(exc, agent_run_id=agent_run_id)
 
         reraise_driver_failure(
