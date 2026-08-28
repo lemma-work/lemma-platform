@@ -421,7 +421,11 @@ def node_rpath_libraries(executable: Path, root: Path) -> list[Path]:
         listing = subprocess.run(
             ["otool", "-L", str(executable)], text=True, capture_output=True, check=True
         ).stdout
-    except OSError, subprocess.CalledProcessError:
+    # Parenthesised on purpose. Unlike the backend, which pins 3.14, this
+    # script is run by CI as a bare `python` -- so it must parse on whatever
+    # interpreter the runner happens to have. PEP 758's unparenthesised form
+    # is a SyntaxError before 3.14, and it took the Windows host pack with it.
+    except (OSError, subprocess.CalledProcessError):
         # Not a Mach-O binary, or no Xcode command line tools. Either way the
         # probe below is the one that decides whether this pack is usable.
         return []
