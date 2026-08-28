@@ -479,9 +479,11 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
         if transcribed:
             spoken = "\n".join(f"- {path}" for path in sorted(transcribed))
             blocks.append(
-                "Their message above includes what they said in a voice note. "
-                "It is already transcribed — treat those words as theirs and do "
-                "NOT call `listen`. The audio itself is saved at:\n" + spoken
+                "The message above IS the transcript of the voice note they "
+                "sent — their spoken words, already transcribed on arrival. "
+                "Treat it as what they said and answer it directly. Calling "
+                "`listen` on the file returns this same text and tells you "
+                "nothing new. The audio itself is saved at:\n" + spoken
             )
         if blocks:
             return blocks

@@ -11,7 +11,7 @@ limited.
 from __future__ import annotations
 
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, proves, scenario, stack_lane
 from harness.credentials import needs
 from harness.environment import SERVER_SPEND_CAPS
 from harness.stack import SPEND_CAP_PROBE_SLUG_PREFIX
@@ -37,6 +37,7 @@ PROBE_ORGANIZATION_PREFIX = SPEND_CAP_PROBE_SLUG_PREFIX
     "agent.create",
     "agent.conversation.message.send",
 )
+@stack_lane("needs USAGE_ORG_LIMIT_OVERRIDES_JSON capping a slug at zero")
 async def test_work_over_the_limit_is_refused_clearly(world, run):
     needs(SERVER_SPEND_CAPS)
     alice = await world.person("priya")

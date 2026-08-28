@@ -45,9 +45,11 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _seed_external_user,
     _set_user_mobile_number,
     _telegram_payload,
+    _telegram_photo_payload,
     _whatsapp_payload,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    A_RED_PNG,
     build_resend_svix_headers,
     build_slack_signature_headers,
     build_telegram_secret_headers,
@@ -1501,3 +1503,109 @@ async def test_outlook_schedule_event_runs_from_outbox_to_composio_provider(
     )
     inbound = next(item for item in persisted if item["role"] == "user")
     assert (inbound.get("metadata") or {})["ingested_files"]
+
+
+# The test that was missing, and the reason a real bug shipped. Every other
+# attachment e2e drives a platform that declares its own media types, and the
+# unit tests for ingest hand it a hardcoded "image/png" -- so the one case that
+# matters on Telegram, a file with no name and no type, was certified by a
+# double while production had nothing to go on. `FakeTelegramServer` had no
+# `getFile` route at all, which is what made it untestable rather than untested.
+@pytest.mark.slow
+async def test_a_telegram_photo_is_saved_as_something_the_agent_can_open(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    worker,
+    monkeypatch,
+):
+    _ = worker
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://surface-e2e.test")
+    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="telegram",
+        credentials={
+            "bot_token": "e2e-telegram-bot-token",
+            "api_base_url": f"{fake_telegram.api_base}/bot",
+        },
+    )
+    agent_name = await _create_system_lemma_agent(authenticated_client, pod_id)
+    surface = await _create_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "TELEGRAM", "account_id": str(account.id)},
+        agent_name=agent_name,
+    )
+    surface_id = surface["id"]
+    sender_id = 5550009
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id=str(sender_id),
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    surface_row = await db_session.get(AgentSurface, UUID(surface_id))
+    assert surface_row is not None and surface_row.webhook_secret
+    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+
+    response = await authenticated_client.post(
+        f"/surfaces/{surface_id}/webhook",
+        content=json.dumps(
+            _telegram_photo_payload(
+                caption="what colour is this?", message_id=1, sender_id=sender_id
+            )
+        ).encode("utf-8"),
+        headers=build_telegram_secret_headers(secret),
+    )
+    assert response.status_code == 200, response.text
+
+    conversation = await _conversation_by_external_thread(
+        authenticated_client,
+        pod_id=pod_id,
+        agent_name=agent_name,
+        external_thread_id=str(sender_id),
+    )
+    assert conversation is not None
+    inbound = await _wait_for_conversation_message(
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=conversation["id"],
+        predicate=lambda item: (
+            item.get("role") == "user"
+            and bool((item.get("metadata") or {}).get("ingested_files"))
+        ),
+        timeout_seconds=REAL_REPLY_TIMEOUT,
+    )
+    [saved_path] = (inbound.get("metadata") or {})["ingested_files"]
+
+    # Not "a file arrived" -- that passed throughout the outage. The photo was
+    # downloaded and saved every time; it was saved as `photo`, with no
+    # extension, which the datastore types as application/octet-stream, which
+    # `view_image` refuses. So the assertion has to be the property the agent
+    # actually depends on: the stored file says it is an image.
+    stored = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/files/by-path", params={"path": saved_path}
+    )
+    assert stored.status_code == 200, stored.text
+    detail = stored.json()
+    assert str(detail.get("mime_type") or "").startswith("image/"), (
+        f"a photo reached the pod typed {detail.get('mime_type')!r}, so the agent "
+        f"is holding a path to something view_image will refuse to open: {detail}"
+    )
+
+    # And the bytes are the ones Telegram served, not a truncated or empty file.
+    downloaded = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/files/download", params={"path": saved_path}
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == A_RED_PNG
