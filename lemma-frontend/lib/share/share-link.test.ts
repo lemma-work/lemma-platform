@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
     buildShareLink,
     isShareKind,
+    humanizeResourceName,
     prettifySlug,
     resolveShareDestination,
     resolveShareName,
@@ -148,5 +149,38 @@ describe('resolveShareTarget', () => {
         expect(resolveShareTarget('document', [...podPath, 'files'], {})).toBeNull();
         expect(resolveShareTarget('agent', ['not-pod', 'p1', 'agents', 'a'], {})).toBeNull();
         expect(resolveShareTarget('agent', [], {})).toBeNull();
+    });
+});
+
+describe('humanizeResourceName', () => {
+    it('reads a filesystem name as a title', () => {
+        expect(humanizeResourceName('annamacharya-report.html')).toBe('Annamacharya report.html');
+        expect(humanizeResourceName('meeting_minutes.md')).toBe('Meeting minutes.md');
+    });
+
+    it('takes the file, not the folders above it', () => {
+        expect(humanizeResourceName('/library/q3/quarterly-review.pdf'))
+            .toBe('Quarterly review.pdf');
+    });
+
+    it('raises only the first letter', () => {
+        // Title Case On Every Word reads as a headline someone wrote. This is a
+        // name someone typed, and the rest of it is theirs.
+        expect(humanizeResourceName('notes-on-the-BOM-encoding.txt'))
+            .toBe('Notes on the BOM encoding.txt');
+    });
+
+    it('leaves a name that is already a name alone', () => {
+        expect(humanizeResourceName('README.md')).toBe('README.md');
+        expect(humanizeResourceName('Orders')).toBe('Orders');
+    });
+
+    it('collapses runs of separators rather than leaving a gap', () => {
+        expect(humanizeResourceName('draft__v2--final.docx')).toBe('Draft v2 final.docx');
+    });
+
+    it('keeps a name it cannot improve', () => {
+        expect(humanizeResourceName('')).toBe('');
+        expect(humanizeResourceName('/')).toBe('/');
     });
 });

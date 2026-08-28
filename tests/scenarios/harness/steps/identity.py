@@ -11,7 +11,7 @@ import os
 from typing import Any
 
 from harness.run import a_name_for, must_be_traceable
-from harness.drivers.api import items_of
+from harness.drivers.api import every_item, items_of
 
 JSON = dict[str, Any]
 
@@ -261,8 +261,17 @@ class IdentitySteps:
         return await self.api.get("/organizations/navigation")
 
     async def members_of(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/organizations/{organization['id']}/members")
+        """Everyone in the organization, following the pages.
+
+        Capped at 100 like every other list here. `_only_the_cast` reads this to
+        put a standing tenant's membership back to the people it declares, so a
+        first-page answer means the reconciliation quietly stops working on
+        exactly the tenant that has been running longest.
+        """
+        return await every_item(
+            lambda params: self.api.get(
+                f"/organizations/{organization['id']}/members", params=params
+            )
         )
 
     async def own_membership_of(self, organization: JSON) -> JSON:

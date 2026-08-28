@@ -252,6 +252,30 @@ export function resolveShareName(input: {
     return last ? prettifySlug(last) : null;
 }
 
+/**
+ * A stored name, read as a title.
+ *
+ * Files are named for the filesystem — `annamacharya-report.html`,
+ * `meeting_minutes.md` — and a share page is the one place that name is read by
+ * someone who did not choose it. Separators become spaces and the first letter
+ * is raised.
+ *
+ * The extension stays. On a page stripped to one bar and a document it is the
+ * only thing left saying what you were sent, and the reader has no file browser
+ * to check it against. Only the first letter is raised, not every word: this
+ * labels a file, it does not retitle it, and Title Case On Every Word reads as
+ * a headline someone wrote rather than a name someone typed.
+ *
+ * Distinct from {@link prettifySlug}, which does write a headline — for the
+ * social card, where the extension is noise and title case is the register.
+ */
+export function humanizeResourceName(value: string): string {
+    const base = value.split('/').filter(Boolean).at(-1) ?? '';
+    const spaced = base.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!spaced) return value;
+    return spaced[0].toUpperCase() + spaced.slice(1);
+}
+
 /** `support-triage` → `Support Triage`. */
 export function prettifySlug(value: string): string {
     const cleaned = value

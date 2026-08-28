@@ -1,0 +1,165 @@
+name: Notify a failure nobody is looking at
+
+# Every workflow in this repository, watched from one place.
+#
+# The pull-request lanes take care of themselves: a red check sits on the pull
+# request, in front of the person who caused it. Nothing else does. A scheduled
+# run, a release and a push to main all fail into a run list, and a run list is
+# not a place anybody looks. The evidence, on the day this was written:
+#
+#   Product scenarios (nightly)      9 of 9 scheduled runs red, back to 19 Aug
+#   Security (weekly full-tree scan) 7 of 7 scheduled runs red, back to 13 Jul
+#   Backend protected E2E (weekly)   5 of 7 scheduled runs red
+#   CI on main                       red for 3 days and 11 merges
+#
+# Every one of those is a signal somebody deliberately built and then never
+# received. The weekly security scan is the sharpest example: it is the only
+# gitleaks pass over the whole working tree rather than a commit range, it had
+# been reporting eleven findings for six weeks, and nobody had read one of them.
+#
+# One workflow rather than a notify job in each. A job has to be added to every
+# workflow, and remembered for the next one; this watches by name, and a
+# workflow missing from the list below is the only way to escape it -- which
+# `check_ci_aggregators.py` now refuses.
+#
+# `workflow_run` only fires for a copy of this file on the default branch, so
+# changes to it are not testable from a pull request. Dispatch it by hand
+# against a known-failed run id after merging if you change the message.
+#
+# "Backend coverage" is deliberately not watched. See the exemption in
+# scripts/check_ci_aggregators.py, where the reason is written down.
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Backend E2E
+      - Backend protected E2E
+      - Security
+      - Product scenarios
+      - Sandbox function benchmark
+      - Release Lemma Desktop
+      - Release Local Stack Images
+      - Release Lemma Python SDK
+      - Release Lemma TypeScript SDK
+      - Release Lemma Terminal CLI
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Announce this run id, whatever its conclusion (for testing)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  announce:
+    name: Announce
+    timeout-minutes: 10
+    # An allowlist of triggers, not "everything except pull_request".
+    #
+    # A pull request shows its own failures to the person who caused them, on
+    # the pull request. Posting those to Slack would be a second copy of a
+    # signal that already landed, several times a day, and a channel that
+    # carries noise stops being read -- which is the failure this whole
+    # workflow exists to undo. So the rule is: announce only what has no
+    # conversation attached to it.
+    #
+    # Excluding `pull_request` by name is not enough, and this is the trap. A
+    # `workflow_run` consumer reports its own event as `workflow_run` even when
+    # the commit under it is a pull request head, so a `!= 'pull_request'` test
+    # lets every one of those through -- and it reports `head_branch: main`
+    # regardless, so no branch test rescues it either. That is why the one
+    # consumer this repository has is exempt rather than filtered; the reason
+    # is written down in scripts/check_ci_aggregators.py. `workflow_run` is
+    # absent from the allowlist below for the same reason.
+    #
+    # `workflow_dispatch` upstream is excluded on the same principle: somebody
+    # pressed the button and is watching the run.
+    #
+    # `cancelled` is excluded too. `cancel-in-progress` cancels superseded runs
+    # constantly, and treating that as news is the other way a channel dies.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+      (github.event.workflow_run.event == 'schedule' ||
+      github.event.workflow_run.event == 'release' ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main')))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the failing jobs
+        id: collect
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const runId = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.run_id)
+              : context.payload.workflow_run.id;
+            const {data: run} = await github.rest.actions.getWorkflowRun(
+              {owner, repo, run_id: runId},
+            );
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {owner, repo, run_id: runId, per_page: 100},
+            );
+            const failed = jobs
+              .filter((job) => job.conclusion === 'failure')
+              .map((job) => job.name);
+            // A run can fail with no failed job -- a startup failure, or a
+            // matrix that could not be generated. Say so rather than posting an
+            // empty list, which reads like a bug in this notifier.
+            core.setOutput('jobs', failed.length
+              ? failed.join(', ')
+              : 'no job reported a failure (startup failure or cancelled matrix)');
+            core.setOutput('workflow', run.name);
+            core.setOutput('trigger', run.event);
+            core.setOutput('branch', run.head_branch || '(no branch)');
+            core.setOutput('sha', (run.head_sha || '').slice(0, 12));
+            core.setOutput('url', run.html_url);
+            core.setOutput('title', (run.display_title || '').split('\n')[0]);
+
+      - name: Post to Slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          WORKFLOW: ${{ steps.collect.outputs.workflow }}
+          TRIGGER: ${{ steps.collect.outputs.trigger }}
+          BRANCH: ${{ steps.collect.outputs.branch }}
+          SHA: ${{ steps.collect.outputs.sha }}
+          TITLE: ${{ steps.collect.outputs.title }}
+          JOBS: ${{ steps.collect.outputs.jobs }}
+          URL: ${{ steps.collect.outputs.url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          e = os.environ
+          text = (
+              f"*{e['WORKFLOW']} failed* ({e['TRIGGER']} · {e['BRANCH']})\n"
+              f"{e['JOBS']}\n"
+              f"{e['SHA']} {e['TITLE']}\n"
+              f"{e['URL']}"
+          )
+          print(text)
+
+          webhook = e["WEBHOOK"]
+          if not webhook:
+              print(
+                  "::warning title=No Slack webhook configured::"
+                  f"{e['WORKFLOW']} failed and nothing was notified. Set the "
+                  "SLACK_WEBHOOK_URL repository secret."
+              )
+              raise SystemExit(0)
+
+          request = urllib.request.Request(
+              webhook,
+              data=json.dumps({"text": text}).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              print(f"Slack responded {response.status}")
+          PY

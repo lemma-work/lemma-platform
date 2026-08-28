@@ -140,6 +140,54 @@ def _media_group_ids(batch: list[Any]) -> list[str]:
     )
 
 
+#: Every field an inbound message can carry a file in, in the order they are
+#: read. ``video_note`` (the round camera messages) and ``animation`` (GIFs) were
+#: missing, so both were dropped in silence -- the person watched the agent
+#: answer their caption and ignore what they had filmed.
+_MEDIA_KEYS = (
+    "photo",
+    "animation",
+    "document",
+    "video",
+    "video_note",
+    "audio",
+    "voice",
+    "sticker",
+)
+
+#: What Telegram sends but never declares. Nothing in the update says a photo is
+#: JPEG or a sticker is WebP, and a file with no type is stored as an untyped
+#: blob: unviewable, unindexable, and refused by `view_image`.
+_UNDECLARED_MIME_TYPES = {
+    "photo": "image/jpeg",
+    "sticker": "image/webp",
+    "video_note": "video/mp4",
+}
+
+
+def _media_keys_in(message: dict[str, Any]) -> tuple[str, ...]:
+    """The media fields to read off this message, without reading one twice.
+
+    An animation message carries ``document`` as well, for compatibility with
+    clients older than the ``animation`` field. Both point at the same file, so
+    reading both saves the GIF twice and tells the agent about two files where
+    the person sent one.
+    """
+    if message.get("animation"):
+        return tuple(key for key in _MEDIA_KEYS if key != "document")
+    return _MEDIA_KEYS
+
+
+def _media_mime(key: str, data: dict[str, Any]) -> str | None:
+    """What the platform said these bytes are, or what we know it did not say."""
+    declared = str(data.get("mime_type") or "").strip()
+    if declared:
+        return declared
+    if key == "sticker" and data.get("is_video"):
+        return "video/webm"
+    return _UNDECLARED_MIME_TYPES.get(key)
+
+
 class TelegramMessageParser:
     platform = "TELEGRAM"
 
@@ -300,7 +348,7 @@ class TelegramMessageParser:
 
     def _parse_attachments(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         attachments = []
-        for key in ("photo", "document", "video", "audio", "voice", "sticker"):
+        for key in _media_keys_in(message):
             data = message.get(key)
             if not data:
                 continue
@@ -311,6 +359,10 @@ class TelegramMessageParser:
                         "file_id": largest.get("file_id"),
                         "name": "photo",
                         "content_type": "image",
+                        # Telegram re-encodes every inbound photo and then says
+                        # nothing about it. Left undeclared, the file is stored
+                        # untyped and `view_image` refuses to open it.
+                        "mime_type": "image/jpeg",
                         "size": largest.get("file_size"),
                     }
                 )
@@ -320,7 +372,7 @@ class TelegramMessageParser:
                         "file_id": data.get("file_id"),
                         "name": data.get("file_name") or key,
                         "content_type": key,
-                        "mime_type": data.get("mime_type"),
+                        "mime_type": _media_mime(key, data),
                         "size": data.get("file_size"),
                     }
                 )
