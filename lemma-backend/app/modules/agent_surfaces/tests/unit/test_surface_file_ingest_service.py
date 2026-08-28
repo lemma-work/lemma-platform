@@ -106,7 +106,7 @@ async def test_ingest_all_writes_files_to_me_platform_folder():
     file_service = _FakeFileService()
     pod_id = uuid4()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=pod_id,
         platform="TELEGRAM",
@@ -117,7 +117,7 @@ async def test_ingest_all_writes_files_to_me_platform_folder():
         attachments=[{"file_id": "a1"}, {"file_id": "a2"}],
     )
 
-    assert [item.path for item in saved] == [
+    assert [item.path for item in outcome.saved] == [
         "/me/telegram/report.pdf",
         "/me/telegram/data.csv",
     ]
@@ -128,14 +128,14 @@ async def test_ingest_all_writes_files_to_me_platform_folder():
     assert file_service.created[0]["pod_id"] == pod_id
 
 
-async def test_ingest_skips_attachment_whose_declared_size_exceeds_cap():
+async def test_an_oversize_attachment_is_reported_rather_than_dropped():
     service = _service()
     adapter = _FakeAdapter(
         results={"big": (b"x", "big.bin", "application/octet-stream")}
     )
     file_service = _FakeFileService()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -146,9 +146,13 @@ async def test_ingest_skips_attachment_whose_declared_size_exceeds_cap():
         attachments=[{"file_id": "big", "size": INBOUND_ATTACHMENT_BYTE_CAP + 1}],
     )
 
-    assert saved == []
+    assert outcome.saved == []
     assert adapter.calls == []  # never even downloaded
     assert file_service.created == []
+    # Reported, so the agent can say why rather than ignoring the file.
+    assert [(f.name, f.reason) for f in outcome.failed] == [
+        ("the file", "it is larger than the 50 MB limit")
+    ]
 
 
 async def test_ingest_isolates_download_failure_and_continues():
@@ -159,7 +163,7 @@ async def test_ingest_isolates_download_failure_and_continues():
     )
     file_service = _FakeFileService()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -170,16 +174,19 @@ async def test_ingest_isolates_download_failure_and_continues():
         attachments=[{"file_id": "bad"}, {"file_id": "ok"}],
     )
 
-    # The failing download is skipped; the good one still lands.
-    assert [item.path for item in saved] == ["/me/telegram/ok.txt"]
+    # The failing download does not sink the good one, and is still named.
+    assert [item.path for item in outcome.saved] == ["/me/telegram/ok.txt"]
+    assert [(f.name, f.reason) for f in outcome.failed] == [
+        ("the file", "the download failed")
+    ]
 
 
-async def test_ingest_skips_when_adapter_returns_none():
+async def test_an_undownloadable_attachment_is_reported_rather_than_dropped():
     service = _service()
     adapter = _FakeAdapter(results={"x": None})
     file_service = _FakeFileService()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -190,8 +197,9 @@ async def test_ingest_skips_when_adapter_returns_none():
         attachments=[{"file_id": "x"}],
     )
 
-    assert saved == []
+    assert outcome.saved == []
     assert file_service.created == []
+    assert [f.reason for f in outcome.failed] == ["the download failed"]
 
 
 async def test_ingest_carries_audio_bytes_for_voice_and_not_for_docs():
@@ -204,7 +212,7 @@ async def test_ingest_carries_audio_bytes_for_voice_and_not_for_docs():
     )
     file_service = _FakeFileService()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -218,7 +226,7 @@ async def test_ingest_carries_audio_bytes_for_voice_and_not_for_docs():
         ],
     )
 
-    by_path = {item.path: item for item in saved}
+    by_path = {item.path: item for item in outcome.saved}
     voice = by_path["/me/telegram/note.ogg"]
     assert voice.is_audio is True
     assert voice.audio_bytes == b"OGGAUDIO"  # carried for transcription
@@ -276,7 +284,7 @@ async def test_a_second_photo_with_the_same_name_is_still_saved():
     file_service = _FakeFileService()
     attachments = [{"file_id": "p1"}, {"file_id": "p2"}]
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -287,7 +295,7 @@ async def test_a_second_photo_with_the_same_name_is_still_saved():
         attachments=attachments,
     )
 
-    assert [item.path for item in saved] == [
+    assert [item.path for item in outcome.saved] == [
         "/me/telegram/photo.png",
         "/me/telegram/photo-2.png",
     ]
@@ -298,7 +306,7 @@ async def test_a_nameless_photo_is_stored_under_a_typed_name():
     adapter = _FakeAdapter(results={"p1": (b"\x89PNG", "photo", "image/png")})
     file_service = _FakeFileService()
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=adapter,
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -309,7 +317,7 @@ async def test_a_nameless_photo_is_stored_under_a_typed_name():
         attachments=[{"file_id": "p1"}],
     )
 
-    assert [item.path for item in saved] == ["/me/telegram/photo.png"]
+    assert [item.path for item in outcome.saved] == ["/me/telegram/photo.png"]
 
 
 async def test_no_transaction_is_open_while_an_attachment_downloads():
@@ -346,7 +354,7 @@ async def test_no_transaction_is_open_while_an_attachment_downloads():
         finally:
             order.append("close")
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=_RecordingAdapter(),
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -357,7 +365,7 @@ async def test_no_transaction_is_open_while_an_attachment_downloads():
         store=_store,
     )
 
-    assert len(saved) == 2
+    assert len(outcome.saved) == 2
     assert order == [
         "download",
         "open",
@@ -383,7 +391,7 @@ async def test_a_failed_download_opens_no_transaction_at_all():
         opened += 1
         return await persist(_FakeFileService())
 
-    saved = await service._ingest_all(
+    outcome = await service._ingest_all(
         adapter=_FailingAdapter(),
         pod_id=uuid4(),
         platform="TELEGRAM",
@@ -394,5 +402,6 @@ async def test_a_failed_download_opens_no_transaction_at_all():
         store=_store,
     )
 
-    assert saved == []
+    assert outcome.saved == []
     assert opened == 0
+    assert [f.reason for f in outcome.failed] == ["the download failed"]

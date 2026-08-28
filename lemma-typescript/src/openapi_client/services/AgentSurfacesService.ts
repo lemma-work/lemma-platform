@@ -352,14 +352,24 @@ export class AgentSurfacesService {
      *
      * Signed-in access is the only gate, and that is enough: every value in here
      * is already public — this deployment's URLs and the scopes its own code
-     * asks for. It carries no credential and reveals nothing about a pod.
+     * asks for. It carries no credential and reveals nothing about a pod: the
+     * agent name is supplied by the caller and echoed back, never read from one.
+     * @param agentName Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.
      * @returns any Successful Response
      * @throws ApiError
      */
-    public static agentSurfaceSlackManifest(): CancelablePromise<Record<string, any>> {
+    public static agentSurfaceSlackManifest(
+        agentName?: (string | null),
+    ): CancelablePromise<Record<string, any>> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/surface-setup/slack/manifest',
+            query: {
+                'agent_name': agentName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
 }

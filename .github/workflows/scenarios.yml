@@ -149,6 +149,28 @@ jobs:
       - name: Run journey
         working-directory: tests/scenarios
         run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
+
+      # The nightly lane's whole purpose is a signal somebody reads without
+      # opening CI, and `report_scenarios_to_slack.py` was written to be that
+      # signal -- it turns this XML into the product's own sentences and, as
+      # its docstring insists, reports skips as loudly as failures, because a
+      # lane whose credentials expired goes green while testing nothing. It has
+      # never been called by anything. So the nightly ran, the XML was uploaded
+      # to an artifact with a seven-day retention, and the only way to learn
+      # what the product does was to go looking.
+      #
+      # Scheduled runs only: a labelled pull request is somebody already
+      # watching. Without SLACK_WEBHOOK_URL the script prints and exits 0, by
+      # design -- a missing webhook must not fail a lane that passed.
+      - name: Say what the product did
+        if: always() && github.event_name == 'schedule'
+        working-directory: tests/scenarios
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SCENARIO_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 ../../scripts/report_scenarios_to_slack.py results.xml
+          --lane "${{ matrix.journey.name }}"
       # The stack writes the server and worker to one file. Without it a
       # CI-only failure is undiagnosable from CI: the scenario says what it
       # waited for, and the reason it never happened is in the worker's log.
@@ -213,6 +235,17 @@ jobs:
       - name: Run the sandbox lane
         working-directory: tests/scenarios
         run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
+
+      # See the journey matrix above for why this step exists at all.
+      - name: Say what the product did
+        if: always() && github.event_name == 'schedule'
+        working-directory: tests/scenarios
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SCENARIO_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 ../../scripts/report_scenarios_to_slack.py sandbox-results.xml
+          --lane "sandbox"
       # A sandbox failure is a container failure, and the container is gone by
       # the time anyone reads this. `schema_extraction` failing with a bare
       # ConnectError says only that nothing answered on the published port —

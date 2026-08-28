@@ -216,13 +216,24 @@ async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatc
     assert address == "ops.acme@ops.asur.work"
 
 
-async def test_an_unnamed_second_mailbox_does_not_collide_with_the_pod_s(monkeypatch):
-    """Every pod's assistant holds the surface named "resend" from creation.
+def _minting_service(existing=None):
+    """A surface service that reports what mailbox the agent already has."""
+    service = AsyncMock()
+    service.resend_surface_for_agent = AsyncMock(return_value=existing)
+    return service
 
-    `create_surface` defaults an unnamed surface to its platform, so connecting
-    email for an agent — no name given, which is what the UI sends — would come
-    back "already exists". The agent-derived name is what the eager and lazy
-    provisioning paths already pick.
+
+def _minting_uow():
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+    return SimpleNamespace(session=session)
+
+
+async def test_an_unnamed_mailbox_is_named_for_its_agent(monkeypatch):
+    """The name follows whose mailbox it is, so two agents never collide.
+
+    `create_surface` defaults an unnamed surface to its platform — `resend` —
+    which is a single pod-unique name for a thing every agent has one of.
     """
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
@@ -231,13 +242,11 @@ async def test_an_unnamed_second_mailbox_does_not_collide_with_the_pod_s(monkeyp
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
-    service = AsyncMock()
-    session = AsyncMock()
-    session.begin_nested = MagicMock(return_value=AsyncMock())
+    service = _minting_service()
 
     await email_surface_provisioning.create_surface_on_minted_address(
         service,
-        SimpleNamespace(session=session),
+        _minting_uow(),
         pod_id=uuid4(),
         agent_id=uuid4(),
         agent_name="Ops Assistant",
@@ -248,6 +257,118 @@ async def test_an_unnamed_second_mailbox_does_not_collide_with_the_pod_s(monkeyp
     )
 
     assert service.create_surface.await_args.kwargs["name"] == "resend-ops-assistant"
+
+
+async def test_the_pod_assistant_does_not_take_the_platform_s_own_name(monkeypatch):
+    """The branch the original test left uncovered, and the 409 it caused.
+
+    `surface_name_for(None)` returned `resend`, which is also what
+    `create_surface` picks for an unnamed surface of this platform. So from the
+    moment a pod's assistant was provisioned at creation, `POST /surfaces
+    {"platform": "RESEND"}` — no name, no agent, which the schema explicitly
+    allows — resolved to a name the pod already held and came back 409. Every
+    pod, every time.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    service = _minting_service()
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    chosen = service.create_surface.await_args.kwargs["name"]
+    assert chosen == "resend-assistant"
+    assert chosen != AgentSurfaceEntity.default_name_for(SurfacePlatform.RESEND), (
+        "the assistant is back on the name an unnamed request resolves to"
+    )
+
+
+async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypatch):
+    """ "Connect email" means use this agent's address, not mint a second one.
+
+    Both mailboxes exist before anyone asks — the assistant's from pod
+    creation, an agent's from agent creation — so minting again produced a
+    second surface whose address had to be suffixed around the first, and
+    handed whoever asked the ugly one. It is also what the UI has always said
+    this does: "Every agent already has one... reads as 'back on', not 'new'".
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
+    service = _minting_service(existing)
+    service.update_surface = AsyncMock(return_value=existing)
+    account_id = uuid4()
+
+    result = await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.CUSTOM,
+        account_id=account_id,
+    )
+
+    assert result is existing
+    service.create_surface.assert_not_awaited()
+    # The request's credentials still land — this is a connect, not a no-op.
+    updated = service.update_surface.await_args.kwargs
+    assert updated["surface_id"] == existing.id
+    assert updated["credential_mode"] is SurfaceCredentialMode.CUSTOM
+    assert updated["account_id"] == account_id
+
+
+async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
+    """A caller that names a surface is naming a distinct thing.
+
+    The bundle applier always passes a name, and its upsert is keyed on it so a
+    bundle round-trips. Adopting under a name the caller chose would rewrite
+    whichever surface happened to share the agent, not the one they meant.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
+    service = _minting_service(existing)
+    service.update_surface = AsyncMock(return_value=existing)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name="inbox",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    service.update_surface.assert_not_awaited()
+    assert service.create_surface.await_args.kwargs["name"] == "inbox"
 
 
 async def test_a_non_email_surface_passes_straight_through(monkeypatch):
@@ -1162,3 +1283,133 @@ async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
         )
 
     assert captured["json"]["from"] == "Lemma <acme@ops.asur.work>"
+
+
+async def test_a_taken_name_advances_to_the_next_candidate(monkeypatch):
+    """The name is pod-unique too, and either half can be the thing that clashes.
+
+    `create_surface` checks the name up front and raises before inserting, so a
+    name clash never reached the loop's `except IntegrityError` at all. Holding
+    the name fixed across candidates meant the same name was offered five
+    times, each refused for the same reason, and the failure was then reported
+    as "every candidate address was already taken" — the one constraint that
+    was not the problem.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceAlreadyExistsError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+
+    seen: list[str] = []
+
+    async def create(**kwargs):
+        seen.append(kwargs["name"])
+        if len(seen) == 1:
+            raise AgentSurfaceAlreadyExistsError(kwargs["name"])
+        return SimpleNamespace(id=uuid4(), name=kwargs["name"])
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert len(seen) == 2, f"the loop did not advance past the taken name: {seen}"
+    assert seen[0] == "resend-ops-assistant"
+    assert seen[1] != seen[0], "the same name was offered twice"
+    assert seen[1].startswith("resend-ops-assistant-")
+
+
+async def test_the_name_borrows_the_suffix_its_address_already_carries(monkeypatch):
+    """So the pair stays legible rather than drifting onto unrelated tails."""
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceAlreadyExistsError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    async def create(**kwargs):
+        calls.append((kwargs["name"], kwargs["surface_identity_email"]))
+        if len(calls) == 1:
+            raise AgentSurfaceAlreadyExistsError(kwargs["name"])
+        return SimpleNamespace(id=uuid4())
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    name, address = calls[1]
+    suffix = address.split("@", 1)[0].rsplit("-", 1)[-1]
+    assert name == f"resend-assistant-{suffix}", (
+        f"name {name!r} and address {address!r} carry different suffixes"
+    )
+
+
+async def test_a_database_failure_degrades_rather_than_killing_the_creation(
+    monkeypatch,
+):
+    """The best-effort contract, for the failures that actually reach it.
+
+    This runs inside pod and agent creation, and only ``IntegrityError`` is
+    handled by the retry loop. Every other database failure — a savepoint that
+    cannot open on a transaction an earlier statement invalidated, a connection
+    that dropped mid-request — escaped the three-type guard and took the whole
+    creation with it. Creating a pod had no mail dependency at all before
+    mailboxes became eager; it should not have acquired one that can 500 it.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+
+    service = AsyncMock()
+    service.create_surface = AsyncMock(
+        side_effect=OperationalError("INSERT", {}, Exception("connection lost"))
+    )
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+
+    surface, cause = await email_surface_provisioning.provision_email_surface(
+        service,
+        session,
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        pod_name="Acme",
+    )
+
+    assert surface is None
+    assert cause, "a None with no cause tells the caller nothing"

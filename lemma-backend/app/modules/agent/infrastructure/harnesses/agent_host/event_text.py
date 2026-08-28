@@ -20,6 +20,10 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
+    json_object,
+)
+from app.modules.usage.contracts import AgentRunUsage
 
 
 @dataclass(slots=True)
@@ -141,6 +145,47 @@ def narration_event(
     )
 
 
+def usage_event(
+    *,
+    agent_run_id: UUID,
+    model_name: str,
+    payload: JsonObject,
+    metadata: JsonObject,
+    sequence: int,
+) -> AgentEvent:
+    usage = json_object(payload.get("usage")) or payload
+    return AgentEvent(
+        type=AgentEventType.USAGE,
+        data=AgentRunUsage(
+            model_name=str(usage.get("model_name") or model_name),
+            input_tokens=integer(usage.get("input_tokens")),
+            output_tokens=integer(usage.get("output_tokens")),
+            request_count=integer(usage.get("request_count"), default=1),
+            tool_call_count=integer(usage.get("tool_call_count")),
+            units=number(usage.get("units")),
+            metadata=metadata,
+        ),
+        agent_run_id=agent_run_id,
+        sequence=sequence,
+    )
+
+
+def status_event(
+    *,
+    agent_run_id: UUID,
+    status: str,
+    payload: JsonObject,
+    metadata: JsonObject,
+    sequence: int,
+) -> AgentEvent:
+    return AgentEvent(
+        type=AgentEventType.STATUS,
+        data={"status": status, "detail": payload, **metadata},
+        agent_run_id=agent_run_id,
+        sequence=sequence,
+    )
+
+
 def error_event(agent_run_id: UUID, message: str) -> AgentEvent:
     return AgentEvent(
         type=AgentEventType.ERROR,
@@ -178,6 +223,24 @@ def terminal_event(
         data=data,
         agent_run_id=agent_run_id,
         sequence=sequence,
+    )
+
+
+def no_terminal_message(state: AgentHostRunState) -> str:
+    """What to say about a run whose lease ended without a terminal event.
+
+    Deliberately the *last* resort. It describes Lemma's plumbing rather than
+    what happened to the run, so it is only ever right when the lease recorded
+    no reason of its own -- a run that genuinely stopped reporting. Anything
+    that was refused, expired or recovered has a sentence about itself, and
+    ``finish_without_terminal`` prefers it.
+
+    Kept here beside ``expiry_message``'s siblings so the wordings a person
+    reads are all in one file, and so the normalizer holds no prose.
+    """
+    return (
+        f"Agent Host reached terminal checkpoint {state.value} "
+        "without its required terminal event"
     )
 
 

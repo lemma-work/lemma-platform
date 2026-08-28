@@ -68,16 +68,26 @@ class AppAssetDocument(BaseModel):
     is_entrypoint: bool = False
 
 
-def public_app_url(public_slug: str) -> str:
-    """Where an app is served: ``<public_slug>.<app_base_domain>``.
+def public_app_url(public_slug: str) -> str | None:
+    """Where an app is served: ``<public_slug>.<app_base_domain>``, or None.
 
     One definition, because two copies of a URL rule drift and each caller then
     describes a slightly different app. Host-based routing
-    (``apps/api/host_routing.py``) is the other half of this contract.
+    (``apps/api/host_routing.py``) is the other half of this contract, and it
+    already declines to route anything when the base domain is blank.
+
+    None when there is no base domain, which is a real state and not a
+    misconfiguration: a desktop stack shared over a tunnel serves the workspace
+    and the API on one public origin and serves no app host at all. Returning a
+    URL anyway handed a visitor `<slug>.apps.lemma.localhost`, which their
+    browser resolves against *their own* machine -- so the link was not merely
+    dead, it pointed somewhere else entirely.
     """
     from urllib.parse import urlparse
 
     from app.core.config import settings
 
+    if not settings.app_base_domain:
+        return None
     scheme = urlparse(settings.api_url).scheme or "https"
     return f"{scheme}://{public_slug}.{settings.app_base_domain}"

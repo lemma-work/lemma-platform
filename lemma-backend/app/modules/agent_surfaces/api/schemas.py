@@ -25,10 +25,8 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.domain.setup_guides import (
-    SurfaceSetupAction,
-    SurfacePlatformSetupGuide,
-)
+from app.modules.agent_surfaces.domain.setup_actions import SurfaceSetupAction
+from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 
 
 class SurfaceIdentityConfigInput(BaseModel):
@@ -82,12 +80,19 @@ class SurfaceTelegramConfigInput(BaseModel):
 class SurfaceSlackConfigInput(BaseModel):
     """The Slack settings a *caller* owns.
 
-    Only ``app_name``. The per-person DM agent map is written from inside Slack
-    — each person picks their own in the App Home — so it is readable here and
-    never writable, which keeps one editor from reassigning everybody.
+    Not the per-person DM agent map: that is written from inside Slack — each
+    person picks their own in the App Home — so it is readable here and never
+    writable, which keeps one editor from reassigning everybody.
+
+    ``dedicated_to_agent`` is the caller's, though, and has to be: it says this
+    app was made as one agent's own bot, which is a fact about why the app
+    exists and cannot be read off the surface. Setting it is what withdraws the
+    per-person choice, so it is the one Slack setting that decides whether the
+    other is offered at all.
     """
 
     app_name: str | None = None
+    dedicated_to_agent: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -100,6 +105,7 @@ class SurfaceSlackConfigResponse(BaseModel):
 
     app_name: str | None = None
     dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
+    dedicated_to_agent: bool = False
 
 
 class SurfaceBehaviorConfigInput(BaseModel):
@@ -186,7 +192,10 @@ def surface_config_from_input(
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
-        slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
+        slack=SurfaceSlackConfig(
+            app_name=config_input.slack.app_name,
+            dedicated_to_agent=config_input.slack.dedicated_to_agent,
+        ),
     )
 
 

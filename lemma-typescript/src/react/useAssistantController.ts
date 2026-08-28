@@ -284,11 +284,15 @@ export function resolveStreamingThinking({
   }
 
   // The durable text is the streamed buffer plus whatever the model emitted
-  // between the last token flush and the message, so match by prefix.
+  // around it, so match by containment rather than equality. Prefix is the
+  // shape of a buffer that was filled from the run's first token; a buffer
+  // filled by a *resumed* stream starts wherever we reattached, which is a
+  // suffix. Both are runs of tokens out of the same message, so both are
+  // inside it.
   const durableLanded = messages.some((message) => (
     message.kind === "THINKING"
     && typeof message.text === "string"
-    && message.text.trim().startsWith(pending.text)
+    && message.text.trim().includes(pending.text)
   ));
   if (durableLanded) {
     held.current = null;
@@ -351,9 +355,14 @@ export function resolveStreamingText({
     const message = messages[index];
     if (message.role !== "assistant" || message.kind === "THINKING") continue;
     if (typeof message.text !== "string") continue;
-    // Prefix, not equality: the durable text is the buffer plus whatever the
-    // model emitted between the last token flush and the message.
-    if (message.text.trim().startsWith(pending.text)) {
+    // Containment, not equality: the durable text is the buffer plus whatever
+    // the model emitted around it. Prefix was too narrow by exactly the case
+    // this bridge is most needed in — coming back to a run already in flight.
+    // A resumed stream starts at the token after we reattached, so its buffer
+    // is the *end* of the answer, and "The report is ready." does not start
+    // with "is ready.". The buffer was never retired, and the fragment stayed
+    // on screen underneath the finished answer.
+    if (message.text.trim().includes(pending.text)) {
       held.current = null;
       return "";
     }
@@ -1490,12 +1499,40 @@ export function useAssistantController({
   }, [sessionCancel, sessionStop, touchConversation]);
 
   const selectConversation = useCallback((conversationId: string | null) => {
-    if (sessionIsStreamingRef.current || isStreamingRef.current) {
+    const currentConversationId = activeConversationIdRef.current;
+    const isSwitchingAway = currentConversationId !== conversationId;
+    const wasStreaming = sessionIsStreamingRef.current || isStreamingRef.current;
+    // Re-selecting the conversation already open is not leaving it. Cancelling
+    // unconditionally meant clicking the open conversation in the history list
+    // killed the stream it was in the middle of, and every path below then
+    // treated the transcript as one it already holds — so nothing reattached.
+    if (wasStreaming && isSwitchingAway) {
       sessionCancel();
       setIsStreaming(false);
     }
 
-    const currentConversationId = activeConversationIdRef.current;
+    // The turn we are walking out on keeps going without us. Whatever it writes
+    // from here — the rest of the answer, its tool calls, the durable messages
+    // the aborted stream will never deliver — lands in the database and nowhere
+    // near the store, so the transcript we are holding stops being the current
+    // one the moment we look away.
+    //
+    // Saying so is the whole fix: `loadedConversationIds` is the claim "we hold
+    // this transcript and it is up to date", and the two paths that open a
+    // conversation both read it and skip *both* the re-list and the resume when
+    // it says yes. Dropping the claim sends the re-open back through the full
+    // path, which reloads what landed while we were away and reattaches to the
+    // run if it is still going. Retention still holds the messages, so the
+    // re-open paints them immediately and the catch-up fills in behind it.
+    if (currentConversationId && isSwitchingAway) {
+      const leftBehind = conversationsRef.current.find(
+        (conversation) => conversation.id === currentConversationId,
+      );
+      if (wasStreaming || isConversationRunning(leftBehind?.status)) {
+        loadedConversationIdsRef.current.delete(currentConversationId);
+      }
+    }
+
     if (conversationId) {
       void refreshConversationDetail(conversationId)
         .then((openedConversation) => {

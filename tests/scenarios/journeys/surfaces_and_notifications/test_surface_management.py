@@ -90,6 +90,26 @@ async def test_a_slack_manifest_is_generated(connected):
     )
 
 
+@scenario("An app definition made for one agent carries that agent's name")
+@proves("PS-SURF-002")
+@covers("agent.surface.slack_manifest")
+async def test_a_slack_manifest_is_named_for_its_agent(connected):
+    """One Slack app is one bot user, so a bot for one agent is named for it.
+
+    The manifest is the only chance to set that name without a person editing
+    it in Slack afterwards — which is the step this whole path exists to
+    remove.
+    """
+    alice, _pod, _agent, _surface, _fake = connected
+
+    response = await alice.slack_manifest(for_agent="Triage")
+
+    assert response.status_code == 200, response.text[:300]
+    manifest = response.json()
+    assert manifest["display_information"]["name"] == "Triage", manifest
+    assert manifest["features"]["bot_user"]["display_name"] == "Triage", manifest
+
+
 @scenario("Deleting a surface stops it accepting messages")
 @proves("PS-SURF-003")
 @covers("agent.surface.delete", "agent.surface.list", "surface.webhook.handle_surface")

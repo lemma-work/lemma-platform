@@ -71,28 +71,71 @@ offline release artifacts are intentionally removed.
 Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
 Python/uv, and the repository’s normal build toolchain.
 
-Run focused validation:
+### Before you push
+
+One command runs every desktop gate CI has, cheapest first:
 
 ```bash
-make desktop-test          # every crate in the desktop workspace
-make desktop-test-app      # just the app crate, for a fast loop
-make desktop-lint          # clippy, warnings are errors
+make desktop-check
+```
+
+It is `desktop-fmt`, `desktop-concepts-check`, `desktop-lint`, `desktop-test`,
+and `desktop-check-windows`. Run it rather than the individual targets. It is
+not a promise that CI will be green — bundling, codesigning, and the app crate's
+Windows paths have no local equivalent (see below) — but everything it does
+cover fails here in seconds instead of there in minutes. The
+pieces have always existed and nothing ran them together, so "I ran the desktop
+checks" meant whichever two you remembered — and the two most often forgotten
+are the two that fail slowest in CI:
+
+| Local step | CI job it stands in for | What only it catches |
+| --- | --- | --- |
+| `make desktop-fmt` | Desktop workspace → Check formatting | `cargo fmt` is **not** part of `desktop-lint`; clippy will not tell you |
+| `make desktop-concepts-check` | Desktop workspace → Verify baked splash concepts | `ui/concepts.gen.json` regenerated but not committed |
+| `make desktop-lint` | Desktop workspace → Lint, plus Memory balloon policy | clippy `-D warnings` across the workspace |
+| `make desktop-test` | Desktop workspace → Test, and Desktop contracts | the whole workspace, `--locked` |
+| `make desktop-check-windows` | Windows desktop build check, **in part** | the `cfg(windows)` paths in locald and the runtime manager — no other local step compiles them |
+
+The Windows one is worth the 15 seconds every time you touch `locald` or the
+runtime manager. Nothing else on a Mac compiles those `cfg` branches, and the
+job that does takes 90 minutes to tell you. A `#[cfg(unix)]` helper called from
+a function that is not gated compiles perfectly here and fails there.
+
+Faster loops, once you know what you are changing:
+
+```bash
+make desktop-test-app      # just the app crate
+make desktop-fmt-fix       # rewrite instead of check
 swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
 npx tsc --noEmit --project lemma-frontend/tsconfig.json
 ```
 
+**What `make desktop-check` cannot cover.** Bundling and codesigning need
+release certificates, so the DMG and NSIS steps of those CI jobs have no local
+equivalent — `make desktop-dmg` is the approximation. The **Guest daemon
+(Linux)** job is also only partly covered: `desktop-test` builds and tests
+`lemma-guestd` on macOS, but its vsock listener sits behind a Linux `cfg` that
+only a Linux build compiles, which is what `make desktop-guestd` does there.
+
 `lemma-guestd` is the Linux guest daemon: it reaches for `std::os::unix`
 unconditionally, so it builds and tests on macOS and Linux but not on Windows.
 Its vsock listener is behind a Linux `cfg` that only a Linux build compiles,
 which is why CI runs `make desktop-guestd` there as well.
 
-The `cfg(windows)` branches — most of the runtime manager, locald's job objects
-and named pipes, the Agent Host's npm shims — compile on no developer machine
-here. The msvc target cannot be cross-compiled from macOS because
-`libsqlite3-sys` needs a C toolchain, but the gnu target compiles the same
-branches, which is enough to lint them:
+The `cfg(windows)` branches are most of the runtime manager, locald's job
+objects and named pipes, and the Agent Host's npm shims.
+
+`make desktop-check-windows` covers locald and the runtime manager, using the
+msvc target directly — those two crates pull no C toolchain, so it needs
+nothing installed but the target and takes about fifteen seconds. That is the
+one to run habitually, and it is already part of `make desktop-check`.
+
+The **app crate** is the part that cannot be cross-compiled to msvc from macOS:
+`libsqlite3-sys` needs a C toolchain. The gnu target compiles the same `cfg`
+branches, so when you have changed the app crate's Windows paths, lint the whole
+workspace this way:
 
 ```bash
 brew install mingw-w64
@@ -110,8 +153,8 @@ CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
 rm -f binaries/*windows-gnu.exe
 ```
 
-The **Windows desktop build check** job in CI is the real gate; this is how to
-avoid learning about it from a red PR.
+The **Windows desktop build check** job in CI is the real gate for both; this is
+how to avoid learning about it from a red PR ninety minutes later.
 
 Build Desktop sidecars:
 
@@ -133,6 +176,57 @@ for now. `desktop/local-runtime/manager` names its WSL distribution with a
 global constant, so a dev run in a throwaway state root would adopt and mutate
 the distribution a real install owns. On Windows, build and install the
 installer instead.
+
+### End-to-end: does an install actually serve a working app?
+
+`make desktop-check` compiles and unit-tests. None of it opens an app. These
+three lanes do, in rising order of what they need.
+
+```bash
+make desktop-e2e-temp     # this working tree, no build, ~35s
+make desktop-e2e          # a packaged install you are running
+make scenarios-desktop    # the whole journey suite against that install
+```
+
+**`desktop-e2e-temp` is the one to run while changing locald.** It builds locald
+from the working tree, renders a host pack, borrows the running install's guest
+Postgres and Redis, publishes an app and drives a real WKWebView against it —
+top-level *and* embedded in a workspace frame. It needs the desktop app running
+(for the guest), `swift`, and `psql`.
+
+Two things it deliberately does not cover, both reported rather than hidden:
+
+- **Functions.** It runs no locald, so nothing dispatches a function into a
+  guest sandbox. That test skips, naming `make desktop-e2e` as the lane for it.
+- **The `.localhost` arrangement.** The embedded test skips there, because a
+  framed app genuinely cannot hold a session under a base domain whose hosts a
+  browser cannot derive a registrable domain from. Force it with
+  `LEMMA_LOCAL_DOMAIN=lemma.localhost` to see the fallback behave.
+
+**`desktop-e2e` runs against whatever install is running** and *hard-fails*
+rather than skipping when it cannot find one. That is on purpose — a lane that
+skips when the thing it tests is absent reports success for doing nothing — but
+it means the message, not the failure, is what tells you what is missing. No CI
+job runs it: it needs a packaged install and a guest VM.
+
+**`scenarios-desktop` is the widest coverage the desktop build has.** It points
+the product journey suite — orgs, pods, tables, files, agents, functions,
+workflows, schedules, bundles, app publishing — at the install, through the real
+host pack and the real guest. The address comes from what locald rendered, so
+there is nothing to configure.
+
+It writes real data, and the product cannot delete an organization, so:
+
+```bash
+make scenarios-desktop-provision SCENARIOS_ALLOW_NEW_CAST=1   # once per install
+```
+
+The flag is not passed for you. On a fresh install it means "yes, first time";
+on a shared deployment the same prompt means the cast already exists under other
+addresses, and answering blindly builds a second parallel one out of
+organizations nothing can remove. The run also pins
+`SCENARIOS_TARGET_INSTANCE_ID` to the install's own id, so restarting the app
+onto a different install mid-session stops the run instead of writing into it.
 
 ### Signing a local build you intend to actually use
 
@@ -205,8 +299,15 @@ export LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1
 ```
 
 Only that explicitly selected manifest may use `file://` artifact sources.
-Packaged releases ignore development port overrides and do not enable arbitrary
-local artifacts.
+
+These are **development-build overrides and a packaged release ignores them
+entirely** — along with `LEMMA_DESKTOP_HOST_PACK_ROOT`,
+`LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`, and the port overrides below. That is not
+tidiness: the manifest carries the digests every downloaded artifact is verified
+against, so honouring an override in a signed build would let anything already
+running as the user choose both the runtime Lemma executes and the check on it.
+`dev_override` in `desktop/src/main.rs` is the single gate, and a test asserts
+none of those variables is read around it.
 
 ## Build a test installer
 
@@ -304,8 +405,9 @@ Acceptance flow:
    thinking and structured tool calls. Also verify an API provider can replace
    them, and that a model the provider does not serve is refused.
 9. From the onboarding agents step, and again from **Models**, press
-   **Connect this computer** and confirm pairing needs no code and no terminal.
-   Add a detected agent with **Add to chat models**, pick it in a chat, run a
+   confirm the computer pairs on its own -- no code, no terminal, and no
+   button to press.
+   Add a detected agent with **Use in chat**, pick it in a chat, run a
    prompt, and approve a permission. Confirm the tray reads
    `Agent Host: connected`, that turning it off from either the tray or the card
    stops the process and survives an app restart, and that a full quit stops it
@@ -348,6 +450,49 @@ Acceptance flow:
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.
 
+### Recovery and update scenarios
+
+None of these are reachable from a fake engine, so they belong here rather than
+in the Rust suite. Each one is a path that used to have no way out.
+
+19. **Incompatible data.** Install a build pinned to an older Postgres major,
+    create a pod with data, then install one pinned to a newer major and press
+    Start. The failure must arrive in **under ten seconds**, not after a
+    two-minute timeout; `errorCode` must be `local-data-incompatible`; **Reset
+    local data** must be offered and **Try again** must not be. After the reset,
+    confirm no container images were re-pulled — the guest tidies itself
+    precisely so they survive.
+20. **A data disk that cannot be read.** With Lemma closed, overwrite the first
+    megabyte of `locald/runtime/macos/data.raw`. Launch: the console must carry
+    `lemma-data: needs-repair:`, the app must say so rather than waiting out its
+    budget, and the reset must recover. Worth running once against a build from
+    before this change, to see the old one destroy the disk silently.
+21. **Reset with the stack up.** Press **Reset local data** while everything is
+    running. `ps` must show no `lemma-vz` at the moment the disk is discarded,
+    and the app must come back to a clean workspace.
+22. **Start over from a wedged installation.** Truncate `locald/control.token`
+    *and* corrupt `operator-config.json`, launch, and confirm the splash names
+    the actual reason. After **Start over**:
+    `security find-generic-password -s work.lemma.local` finds nothing, the
+    locald root and `runtime/releases` are gone, `runtime/install.log`
+    **survives**, and the next launch shows the chooser.
+23. **Start over with an orphaned VM.** `kill -9` the locald pid, leaving
+    `lemma-vz` alive, then start over. The helper must be gone afterwards — it
+    is reclaimed by verified identity, not by name.
+24. **Session isolation.** Sign in, reset local data, sign up again. There must
+    be no 401 refresh storm in `backend.log`: a cookie minted against the
+    deleted database would otherwise be accepted as a session that can do
+    nothing.
+25. **Concurrency.** Press Start and Reset within the same second. One must be
+    refused as busy, and the loser must touch nothing.
+26. **Update.** Install v(N-1) from its DMG into Applications, complete first
+    run, create a workspace. Publish v(N) and confirm Local settings offers it
+    with the real runtime download size. Update, restart, and confirm the
+    workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
+    from the previous bundle, and that the relaunched app does not bounce off
+    its own single-instance lock. Repeat with Lemma in a non-writable location
+    and confirm it says to download the DMG instead.
+
 ## Runtime state and debugging
 
 macOS state root:
@@ -374,7 +519,14 @@ locald/runtime/macos/console.log
 
 Set `LEMMA_DESKTOP_DEVTOOLS=1` for the WKWebView inspector and
 `LEMMA_DESKTOP_DEBUG=1` for protocol event output. The in-app Diagnostics view
-is the preferred user-facing path; it returns bounded redacted data.
+is the preferred user-facing path; it returns bounded data, redacted two ways.
+
+Values read out of `control.token` and the on-disk secret files are substituted
+exactly. Everything else is masked **by shape** — vendor key prefixes, JWTs, and
+whatever follows an `Authorization:` header — because the operator's 19 secrets
+live in the OS credential vault, not on disk, and reading them back to redact
+them would put every one of them into a diagnostics buffer. Treat the shape
+pass as best effort: skim a log before pasting it into a support thread.
 
 Development-only dynamic-port overrides require both variables:
 

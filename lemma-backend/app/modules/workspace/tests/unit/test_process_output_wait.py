@@ -26,7 +26,12 @@ from sandbox_runtime.workspace.process_manager import OutputBuffer
 pytestmark = pytest.mark.unit
 
 # Generous next to the real 29s window, tight enough that a lost wakeup fails.
-_IMMEDIATE_SECONDS = 0.5
+# 2s rather than 0.5s: the bug these guard against blocks for the whole 29s, so
+# anything well under that still fails loudly, while the correct path returns in
+# microseconds. The margin buys nothing except immunity to a runner that stalls
+# for half a second under coverage tracing -- and raising a `<` bound costs no
+# runtime at all, since nothing waits for it.
+_IMMEDIATE_SECONDS = 2.0
 
 
 def _buffer() -> OutputBuffer:
@@ -80,7 +85,7 @@ async def test_a_waiting_poll_wakes_the_moment_the_process_exits() -> None:
     elapsed = time.monotonic() - started
     await asyncio.wait_for(task, timeout=5)
 
-    assert elapsed < 1.0, f"woke {elapsed:.1f}s after exit, not promptly"
+    assert elapsed < 3.0, f"woke {elapsed:.1f}s after exit, not promptly"
 
 
 @pytest.mark.asyncio
@@ -97,7 +102,7 @@ async def test_a_waiting_poll_wakes_the_moment_output_appears() -> None:
     elapsed = time.monotonic() - started
     await asyncio.wait_for(task, timeout=5)
 
-    assert elapsed < 1.0, f"woke {elapsed:.1f}s after output, not promptly"
+    assert elapsed < 3.0, f"woke {elapsed:.1f}s after output, not promptly"
     assert len(snapshot.chunks) == 1
 
 

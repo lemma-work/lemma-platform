@@ -225,6 +225,12 @@ jobs:
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
       - name: Build native local sidecars
+        # The telemetry key is compiled into locald here. Absent, install
+        # telemetry stays off -- which is the behaviour every local build gets
+        # and a safe default, but it means a release built without the secret
+        # reports nothing about installs that fail on a new macOS version.
+        env:
+          LEMMA_TELEMETRY_KEY: ${{ secrets.LEMMA_TELEMETRY_KEY }}
         run: desktop/scripts/build-sidecar.sh
 
       - name: Lint
@@ -254,11 +260,44 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build online DMG
-        working-directory: desktop
+      - name: Require an updater signing key, and the public half to check it
+        shell: bash
+        env:
+          TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+          if [[ -z "${TAURI_UPDATER_PRIVATE_KEY}" ]]; then
+            echo "::error::TAURI_UPDATER_PRIVATE_KEY is required. Without it this \
+          release ships an app that cannot be updated in place, and every user \
+          who installs it is stranded on it." >&2
+            exit 1
+          fi
+          # Both halves, because they fail at opposite ends and only one of them
+          # was ever checked. The private key signs the artifact here; the public
+          # key is what the *installed* app verifies with, and it is committed in
+          # tauri.conf.json. An empty pubkey is not permissive -- `verify_signature`
+          # decodes it and errors -- so a release built without it produces an app
+          # whose every update attempt fails at the last step.
+          pubkey="$(python3 -c "import json,sys; \
+          print(json.load(open('desktop/tauri.conf.json'))['plugins']['updater']['pubkey'])")"
+          if [[ -z "${pubkey}" ]]; then
+            echo "::error::desktop/tauri.conf.json has an empty updater pubkey. \
+          Generate the keypair with 'tauri signer generate', commit the public \
+          half here, and store the private half as TAURI_UPDATER_PRIVATE_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build online DMG
+        working-directory: desktop
+        # The updater overlay is merged only here. `tauri build` runs from five
+        # other places with no signing key -- CI's build check, the Windows
+        # check, both nightly jobs and `make desktop-dmg` -- and every one of
+        # them would fail if the base config demanded updater artifacts.
+        run: |
+          set -euo pipefail
+          npx -y "$TAURI_CLI" build \
+            --config tauri.online.conf.json \
+            --config tauri.updater.conf.json
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -270,6 +309,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
+          LEMMA_RELEASE_CHANNEL: stable
+          LEMMA_BUILD_SHA: ${{ github.sha }}
 
 
       # Tauri notarizes and staples the .app, then builds the DMG from it and
@@ -297,38 +340,195 @@ jobs:
 
       - name: Verify Developer ID signatures and notarization staples
         shell: bash
+        # Every check here used to be a bare `test`/`codesign` line under
+        # `set -e`: silent on success, and silent on failure too -- a run that
+        # failed gave no indication of which assertion tripped, on a bundle
+        # that had already been built, signed and notarized. `check` below
+        # prints a result for every assertion, runs all of them instead of
+        # stopping at the first failure (so one run reports every problem, not
+        # just the first), and raises a `::error::` annotation GitHub surfaces
+        # on the job itself. A step that fails must say why.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
           vz="${app}/Contents/Resources/lemma-vz"
+          dmg="desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
 
-          test -x "${locald}"
-          test -x "${runtime_bridge}"
-          test -x "${vz}"
-          test ! -e "${app}/Contents/MacOS/lemma-vz"
-          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
-          test ! -e "${app}/Contents/MacOS/uv"
+          failed=0
+          check() {
+            local description="$1"
+            shift
+            if "$@" >/tmp/check-output 2>&1; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- failed: $*"
+              sed 's/^/    /' /tmp/check-output
+              failed=1
+            fi
+          }
+          check_grep() {
+            local description="$1" pattern="$2"
+            shift 2
+            local output
+            if output="$("$@" 2>&1)" && grep -qF "${pattern}" <<<"${output}"; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- expected to find '${pattern}' in: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            fi
+          }
+          # Exact whole-line match, for values (like an identifier) where a
+          # substring match would also accept "work.lemma.locald.staging".
+          check_grep_exact() {
+            local description="$1" pattern="$2"
+            shift 2
+            local output
+            if output="$("$@" 2>&1)" && grep -qFx "${pattern}" <<<"${output}"; then
+              echo "ok: ${description}"
+            else
+              echo "::error::${description} -- expected a line exactly matching '${pattern}' in: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            fi
+          }
+
+          echo "--- Contents/MacOS ---"
+          ls -la "${app}/Contents/MacOS/" || true
+          echo "--- Contents/Resources ---"
+          ls -la "${app}/Contents/Resources/" || true
+
+          check "locald is executable" test -x "${locald}"
+          check "runtime bridge is executable" test -x "${runtime_bridge}"
+          check "vz helper is executable" test -x "${vz}"
+          check "vz is not also an externalBin copy in Contents/MacOS" test ! -e "${app}/Contents/MacOS/lemma-vz"
+          check "no legacy lemma-supervisor binary" test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          check "no legacy bundled uv binary" test ! -e "${app}/Contents/MacOS/uv"
+
           app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          test "${app_bytes}" -le "$((25 * 1024 * 1024))"
-          codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign --verify --strict --verbose=2 "${locald}"
-          codesign --verify --strict --verbose=2 "${runtime_bridge}"
-          codesign --verify --strict --verbose=2 "${vz}"
-          codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          # 25 MiB didn't have room for lemma-agent-host (added as a Desktop
+          # sidecar after this budget was set) -- v0.7.1's bundle came in at
+          # 26,423,296 bytes, 208,896 bytes over. 30 MiB gives that real
+          # addition headroom without leaving the budget meaningless.
+          limit=$((30 * 1024 * 1024))
+          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 30 MiB)"
+          if [[ "${app_bytes}" -gt "${limit}" ]]; then
+            echo "::error::online app bundle is ${app_bytes} bytes, over the 30 MiB budget by $((app_bytes - limit)) bytes"
+            failed=1
+          fi
+
+          check "app bundle codesign verifies" codesign --verify --deep --strict --verbose=2 "${app}"
+          check "locald codesign verifies" codesign --verify --strict --verbose=2 "${locald}"
+          check "runtime bridge codesign verifies" codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          check "vz codesign verifies" codesign --verify --strict --verbose=2 "${vz}"
+
+          check_grep "app is signed with a Developer ID Application identity" \
+            "Authority=Developer ID Application:" codesign -dvvv "${app}"
           # The daemon's keychain access is keyed to this identifier, and Tauri
           # re-signs sidecars without one of its own -- so this asserts the
           # embedded Info.plist survived bundling. If it ever does not, the app
           # still ships and still works, and every user is asked to re-authorise
           # access to their own secrets on the first launch of each release.
-          codesign -dvvv "${locald}" 2>&1 | grep -Fx "Identifier=work.lemma.locald"
-          codesign -d --entitlements :- "${vz}" 2>/dev/null | grep -F "com.apple.security.virtualization"
-          xcrun stapler validate "${app}"
-          xcrun stapler validate \
-            "desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
+          check_grep_exact "locald kept its embedded Info.plist identifier" \
+            "Identifier=work.lemma.locald" codesign -dvvv "${locald}"
+          check_grep "vz helper has the virtualization entitlement" \
+            "com.apple.security.virtualization" codesign -d --entitlements :- "${vz}"
+
+          check "app passes stapler validation" xcrun stapler validate "${app}"
+          check "dmg passes stapler validation" xcrun stapler validate "${dmg}"
+
+          if [[ "${failed}" -ne 0 ]]; then
+            echo "::error::Desktop bundle verification failed -- see the errors above"
+            exit 1
+          fi
+          echo "All Desktop bundle verification checks passed."
         env:
           VERSION: ${{ steps.version.outputs.version }}
+
+      # Tauri notarizes and staples the .app, then tars it. That ordering is
+      # believed, not documented -- and an update payload that is not notarized
+      # installs an app Gatekeeper then refuses, on a machine that was working
+      # before it updated. Asserted rather than assumed.
+      - name: Verify the updater payload is notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          test -f "${tarball}"
+          workdir="$(mktemp -d)"
+          tar -xzf "${tarball}" -C "${workdir}"
+          app="${workdir}/Lemma.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          xcrun stapler validate "${app}"
+          spctl -a -t exec -vv "${app}"
+
+      - name: Publish the update feed
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          # A prerelease must never become the feed every stable install
+          # follows. GitHub's `latest` alias already excludes prereleases, so
+          # this is the second of two independent guards.
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            echo "Prerelease: the DMG is attached, the update feed is not."
+            exit 0
+          fi
+          artifacts="desktop/target/release/release-artifacts"
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          cp "${tarball}" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz"
+          cp "${tarball}.sig" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz.sig"
+          python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          repository = os.environ["REPOSITORY"]
+          artifacts = pathlib.Path("desktop/target/release/release-artifacts")
+          # The signature is the *contents* of the .sig file. A path or a URL
+          # here produces a feed nothing can verify, and the failure only shows
+          # up on a user's machine.
+          signature = (artifacts / f"Lemma_{version}_aarch64.app.tar.gz.sig").read_text().strip()
+
+          # Carried alongside the standard fields so the app can warn about a
+          # data-incompatible upgrade *before* downloading half a gigabyte. The
+          # updater ignores unknown top-level keys.
+          manifest = json.loads(pathlib.Path("desktop/runtime/lemma-local.json").read_text())
+          host = manifest["host_packs"]["aarch64-apple-darwin"]
+          guest = manifest["guest_runtimes"]["macos-aarch64"]
+          postgres = manifest.get("infra", {}).get("postgres", "")
+          major = None
+          if "-pg" in postgres:
+              digits = postgres.split("-pg")[1].split("@")[0].split(".")[0]
+              major = int(digits) if digits.isdigit() else None
+
+          feed = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).isoformat(),
+              "notes": f"https://github.com/{repository}/releases/tag/v{version}",
+              "platforms": {
+                  "darwin-aarch64": {
+                      "url": (
+                          f"https://github.com/{repository}/releases/download/"
+                          f"v{version}/Lemma_{version}_aarch64.app.tar.gz"
+                      ),
+                      "signature": signature,
+                  }
+              },
+              "lemma": {
+                  "postgres_major": major,
+                  "runtime_download_bytes": host["size"] + guest["size"],
+              },
+          }
+          (artifacts / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
+          PY
+          echo "Update feed:"
+          cat "${artifacts}/latest.json"
 
       - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
@@ -343,7 +543,51 @@ jobs:
           # event does not fire (a release created by GITHUB_TOKEN does not
           # trigger workflows), so that path has to be able to attach.
           tag_name: v${{ steps.version.outputs.version }}
-          files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
+          files: |
+            desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
+            desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz
+            desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz.sig
+            desktop/target/release/release-artifacts/latest.json
+
+      # The feed is only real once it is fetchable at the URL every installed
+      # app polls. A malformed or unreachable one is silent: installs simply
+      # never update, and nobody finds out until a fix needs to reach them.
+      - name: Verify the published update feed
+        if: github.event.release.prerelease != true
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          feed="https://github.com/${REPOSITORY}/releases/latest/download/latest.json"
+          # GitHub takes a moment to re-point `latest` after a publish.
+          for attempt in {1..10}; do
+            if body="$(curl -fsSL "${feed}")"; then
+              break
+            fi
+            if [[ "${attempt}" == 10 ]]; then
+              echo "::error::The update feed is not reachable at ${feed}" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          printf '%s' "${body}" | python3 -c '
+          import json, os, sys, urllib.request
+          feed = json.load(sys.stdin)
+          version = os.environ["VERSION"]
+          feed_version = feed["version"]
+          if feed_version != version:
+              raise SystemExit(f"feed names {feed_version}, expected {version}")
+          entry = feed["platforms"]["darwin-aarch64"]
+          if not entry["signature"].strip():
+              raise SystemExit("the feed carries an empty signature")
+          request = urllib.request.Request(entry["url"], method="HEAD")
+          with urllib.request.urlopen(request) as response:
+              if response.status != 200:
+                  raise SystemExit(f"update payload is not downloadable: {response.status}")
+          print("update feed verified:", feed["version"])
+          '
 
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'

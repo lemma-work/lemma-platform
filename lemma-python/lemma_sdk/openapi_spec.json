@@ -2551,9 +2551,17 @@
             "title": "Updated At"
           },
           "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where no app host is served -- see `public_app_url`.",
             "readOnly": true,
-            "title": "Url",
-            "type": "string"
+            "title": "Url"
           },
           "user_id": {
             "format": "uuid",
@@ -7944,14 +7952,20 @@
             "type": "string"
           },
           "url": {
-            "title": "Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
           "id",
           "name",
-          "url",
           "status"
         ],
         "title": "HomeAppResponse",
@@ -13680,7 +13694,7 @@
       },
       "SurfaceSlackConfigInput": {
         "additionalProperties": false,
-        "description": "The Slack settings a *caller* owns.\n\nOnly ``app_name``. The per-person DM agent map is written from inside Slack\n\u2014 each person picks their own in the App Home \u2014 so it is readable here and\nnever writable, which keeps one editor from reassigning everybody.",
+        "description": "The Slack settings a *caller* owns.\n\nNot the per-person DM agent map: that is written from inside Slack \u2014 each\nperson picks their own in the App Home \u2014 so it is readable here and never\nwritable, which keeps one editor from reassigning everybody.\n\n``dedicated_to_agent`` is the caller's, though, and has to be: it says this\napp was made as one agent's own bot, which is a fact about why the app\nexists and cannot be read off the surface. Setting it is what withdraws the\nper-person choice, so it is the one Slack setting that decides whether the\nother is offered at all.",
         "properties": {
           "app_name": {
             "anyOf": [
@@ -13692,6 +13706,11 @@
               }
             ],
             "title": "App Name"
+          },
+          "dedicated_to_agent": {
+            "default": false,
+            "title": "Dedicated To Agent",
+            "type": "boolean"
           }
         },
         "title": "SurfaceSlackConfigInput",
@@ -13710,6 +13729,11 @@
               }
             ],
             "title": "App Name"
+          },
+          "dedicated_to_agent": {
+            "default": false,
+            "title": "Dedicated To Agent",
+            "type": "boolean"
           },
           "dm_agent_by_user": {
             "additionalProperties": {
@@ -17627,7 +17651,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.0"
+    "version": "0.7.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -32130,8 +32154,29 @@
     },
     "/surface-setup/slack/manifest": {
       "get": {
-        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod.",
+        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
         "operationId": "agent.surface.slack_manifest",
+        "parameters": [
+          {
+            "description": "Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.",
+            "in": "query",
+            "name": "agent_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.",
+              "title": "Agent Name"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -32144,6 +32189,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Get Slack App Manifest",

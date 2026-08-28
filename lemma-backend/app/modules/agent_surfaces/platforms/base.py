@@ -26,6 +26,19 @@ from app.modules.agent_surfaces.domain.models import (
 class BaseSurfaceAdapter:
     platform: str
 
+    def split_inbound_payloads(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """One webhook delivery, as the one-or-more messages it actually carries.
+
+        Every parser here reads a single message out of a delivery, which is
+        right for platforms that send one. Where a platform may batch, silently
+        parsing the first and discarding the rest loses a person's message with
+        nothing logged — so the platform that batches says so here, and the
+        webhook handler processes each part as its own inbound event.
+
+        Default: the delivery is the message.
+        """
+        return [payload]
+
     async def enrich_inbound_event(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:
@@ -265,10 +278,12 @@ class BaseSurfaceAdapter:
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
+        offers_dm_agent_choice: bool = True,
     ) -> bool:
         """Render the app's home tab. Default: the platform has no home tab."""
         del credentials, user_id, pod_name, dm_agent_name, channel_routes
         del agents, apps, workspace_url, logo_url, surface_choices, access_message
+        del offers_dm_agent_choice
         return False
 
     async def send_channel_setup_prompt(

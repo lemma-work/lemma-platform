@@ -15,7 +15,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
-from app.modules.agent_surfaces.platforms.whatsapp.parser import WhatsAppMessageParser
+from app.modules.agent_surfaces.platforms.whatsapp.parser import (
+    WhatsAppMessageParser,
+    split_whatsapp_deliveries,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
     WhatsAppPlatformService,
 )
@@ -26,6 +29,9 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
 
     def __init__(self) -> None:
         self._parser = WhatsAppMessageParser()
+
+    def split_inbound_payloads(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return split_whatsapp_deliveries(payload)
 
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { resolvePodDefaultRuntime } from '@/components/agents/agent-runtime-helpers';
 import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
 import { projectFromMetadata } from '@/lib/assistant/project-selection';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
@@ -145,8 +145,7 @@ function PodConversationSurface({
         : activeConversation?.title?.trim() || 'Untitled conversation';
     const isRouteConversationSelected = isNewConversation || openedConversationId === conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
-    const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
+    const podDefaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
     const hydratedConversationRuntime = resolveHydratedConversationRuntime({
         isNewConversation,
         hasPersistedConversation: Boolean(activeConversation),

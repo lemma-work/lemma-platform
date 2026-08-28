@@ -38,7 +38,7 @@ pub struct ManagedRuntimeBootstrap {
 }
 
 impl ManagedRuntimeBootstrap {
-    pub fn discover(paths: &LocalPaths) -> io::Result<Option<Self>> {
+    pub fn discover(paths: &LocalPaths, healed: &mut Vec<String>) -> io::Result<Option<Self>> {
         let Some(artifact_root) = env::var_os("LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -85,7 +85,7 @@ impl ManagedRuntimeBootstrap {
                 vz_executable,
                 #[cfg(windows)]
                 wsl_executable,
-                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"))?,
+                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"), healed)?,
             }))
         }
     }
@@ -129,6 +129,7 @@ impl ManagedRuntimeBootstrap {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
         }))
     }
 }
@@ -234,6 +235,11 @@ pub struct ManagedRuntimeController {
     /// said once rather than twice a minute for as long as the stack runs.
     last_clock_error: Mutex<Option<String>>,
     sandbox_images: Mutex<SandboxImageStatus>,
+    /// The auth service, still coming up while the backend boots.
+    ///
+    /// See `start_with_progress`. Joined by `await_private_services` before
+    /// anything reports ready, so this is a reordering and not a weakening.
+    pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
 }
 
 impl ManagedRuntimeController {
@@ -268,6 +274,9 @@ impl ManagedRuntimeController {
             "images": self.spec.images,
             "credentials": self.spec.credentials,
         });
+        // Postgres and Redis first, and waited for: migrations run against the
+        // database before the backend starts, and the backend reaches for both
+        // as it boots.
         for (operation, component, label, percentage, detail) in [
             (
                 "core.images",
@@ -290,13 +299,6 @@ impl ManagedRuntimeController {
                 58,
                 "preparing local streams, cache, and pub/sub",
             ),
-            (
-                "core.supertokens",
-                "supertokens",
-                "Starting local authentication",
-                64,
-                "preparing the private auth service",
-            ),
         ] {
             progress(component, label, percentage, detail);
             if let Err(error) = self.runtime.request(operation, parameters.clone()) {
@@ -305,17 +307,46 @@ impl ManagedRuntimeController {
                 return Err(error);
             }
         }
+
+        // The auth service starts here and is *waited for* later, because the
+        // backend does not need it to boot.
+        //
+        // `core.supertokens` does not return when the container starts; it
+        // returns when the service answers, and getting a JVM to answer took
+        // 5.13s of a 19.9s cold start on the machine this was measured on. That
+        // wait sat on the critical path in front of a backend that spends its
+        // own ~4s importing and binding, and `initialize_supertokens` only
+        // writes local configuration -- the first call to the auth service
+        // happens on the first authenticated request, long after.
+        //
+        // On a thread rather than by reordering the request, because the guest
+        // control channel is single: the host bridge holds one vsock connection
+        // behind a process-wide mutex and guestd handles connections inline on
+        // its accept loop, so this request occupies that channel either way.
+        // What it must not also occupy is *this* thread, which is what the
+        // daemon needs back in order to start the backend at all.
         progress(
-            "infrastructure-health",
-            "Checking private services",
-            66,
-            "waiting for the Mac-to-VM database, cache, and auth routes",
+            "supertokens",
+            "Starting local authentication",
+            64,
+            "preparing the private auth service",
         );
-        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
-            let _ = self.runtime.capture_diagnostics();
-            let _ = self.runtime.stop();
-            return Err(error);
-        }
+        let auth = {
+            let controller = Arc::clone(self);
+            let parameters = parameters.clone();
+            thread::Builder::new()
+                .name("lemma-locald-supertokens".into())
+                .spawn(move || {
+                    controller
+                        .runtime
+                        .request("core.supertokens", parameters)
+                        .map(|_| ())
+                })?
+        };
+        *self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned") = Some(auth);
         if let Err(error) = self.ensure_forwarders(&status) {
             let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
@@ -324,6 +355,84 @@ impl ManagedRuntimeController {
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
         self.start_clock_keeper();
         Ok(())
+    }
+
+    /// Wait for everything `start_with_progress` left in flight.
+    ///
+    /// The auth service is started there and joined here, so it comes up beside
+    /// the backend instead of in front of it. Nothing may report ready before
+    /// this returns: a workspace whose first action is signing in would meet an
+    /// auth service that is not answering yet, which is a worse failure than
+    /// the wait this removes.
+    ///
+    /// Called after the host processes are up rather than before, which is the
+    /// whole point -- and it is also why a failure here has to stop them. The
+    /// caller owns that, because it owns the processes.
+    pub fn await_private_services(&self) -> io::Result<()> {
+        let pending = self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned")
+            .take();
+        if let Some(handle) = pending {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(error);
+                }
+                // A panicked worker is not a runtime the caller should keep
+                // using, and joining loses the payload, so say which thread.
+                Err(_) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(io::Error::other(
+                        "the private auth service failed to start (worker panicked)",
+                    ));
+                }
+            }
+        }
+        let status = self
+            .status
+            .lock()
+            .expect("managed runtime status poisoned")
+            .clone();
+        let Some(status) = status else {
+            return Ok(());
+        };
+        // The same check as before, in the same place in the sequence relative
+        // to anything that uses these services -- only now the services had the
+        // backend's boot to finish coming up in, so it usually finds them ready.
+        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Ask the guest to destroy every database, volume and workspace it holds.
+    ///
+    /// The surgical half of a local-data reset: the guest tidies itself, so the
+    /// pulled container images survive and coming back up is seconds rather
+    /// than a re-download. Only reached when `probe` has already answered, so a
+    /// guest that cannot be asked falls to `discard_data_disk` instead of
+    /// retrying this.
+    pub fn reset_guest_data(&self) -> io::Result<serde_json::Value> {
+        self.runtime
+            .request("core.reset_data", json!({"confirm": "reset-local-data"}))
+    }
+
+    /// Throw the whole data disk away, returning the bytes reclaimed.
+    ///
+    /// The blunt half, for a guest that will not answer -- a torn filesystem, a
+    /// VM that will not boot. Takes the container images with it.
+    #[cfg(target_os = "macos")]
+    pub fn discard_data_disk(&self) -> io::Result<u64> {
+        self.stop_clock_keeper();
+        self.clear_forwarders();
+        self.runtime.discard_data_disk()
     }
 
     pub fn stop_infrastructure(&self) -> io::Result<()> {
@@ -911,19 +1020,77 @@ fn private_ipv4(value: &str, label: &str) -> io::Result<Ipv4Addr> {
     }
 }
 
-fn load_or_create_secrets(path: &Path) -> io::Result<InfraSecrets> {
+/// Read the infrastructure passwords, replacing them only if unreadable.
+///
+/// An unreadable file used to end the daemon permanently. Healing it needs one
+/// extra step that ordinary self-healing does not: `postgres_password` was
+/// baked into the `lemma-postgres-data` volume at `initdb`, so a new password
+/// does not open the existing database. `ensure_core_container` only replaces a
+/// container when its image or config generation changes, and `ensure_database`
+/// connects over the local socket with no password at all -- so the mismatch
+/// survives the entire guest start and first surfaces deep in the backend's
+/// migrations as an opaque auth error.
+///
+/// So the replacement is recorded as "this installation's data can no longer be
+/// read", which `start_host_packs` refuses on, with a reset the user can press.
+fn load_or_create_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<InfraSecrets> {
     if path.is_file() {
-        ensure_private_file(path)?;
-        let secrets: InfraSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_secret("postgres_password", &secrets.postgres_password)?;
-        validate_secret("redis_password", &secrets.redis_password)?;
-        return Ok(secrets);
+        match read_existing_secrets(path) {
+            Ok(secrets) => return Ok(secrets),
+            Err(reason) => {
+                let aside = crate::paths::quarantine_aside(path)?;
+                if let Some(root) = path.parent() {
+                    crate::paths::require_data_reset(
+                        root,
+                        "the private infrastructure passwords were replaced, and the existing \
+                         workspace database was created with the previous ones",
+                    )?;
+                }
+                healed.push(format!(
+                    "the infrastructure passwords were unreadable ({reason}); kept as {} and \
+                     replaced. The existing local data cannot be opened with the new ones",
+                    aside.display()
+                ));
+            }
+        }
+    }
+    // Missing, rather than unreadable. Same consequence: the password baked
+    // into the Postgres volume at `initdb` does not change because this file
+    // was recreated, so the new one opens nothing. Only a genuine first run may
+    // mint quietly, and a first run has no data.
+    else if path
+        .parent()
+        .is_some_and(crate::paths::installation_has_data)
+    {
+        let root = path.parent().expect("checked just above");
+        crate::paths::require_data_reset(
+            root,
+            "the private infrastructure passwords are missing, and the existing workspace \
+             database was created with the previous ones",
+        )?;
+        healed.push(
+            "the infrastructure passwords were missing while local data was still present; \
+             new ones were created and the existing database cannot be opened with them"
+                .to_owned(),
+        );
     }
     let secrets = InfraSecrets {
         postgres_password: random_hex()?,
         redis_password: random_hex()?,
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
+    Ok(secrets)
+}
+
+fn read_existing_secrets(path: &Path) -> Result<InfraSecrets, String> {
+    ensure_private_file(path).map_err(|error| error.to_string())?;
+    let raw = fs::read(path).map_err(|error| error.to_string())?;
+    let secrets: InfraSecrets =
+        serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+    validate_secret("postgres_password", &secrets.postgres_password)
+        .map_err(|error| error.to_string())?;
+    validate_secret("redis_password", &secrets.redis_password)
+        .map_err(|error| error.to_string())?;
     Ok(secrets)
 }
 
@@ -1021,8 +1188,8 @@ mod tests {
     fn secrets_are_stable_private_and_not_accepted_when_tampered() {
         let root = tempdir().unwrap();
         let path = root.path().join("infra.secrets.json");
-        let first = load_or_create_secrets(&path).unwrap();
-        let second = load_or_create_secrets(&path).unwrap();
+        let first = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        let second = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
 
         assert_eq!(first.postgres_password, second.postgres_password);
         assert_eq!(first.redis_password, second.redis_password);
@@ -1032,6 +1199,42 @@ mod tests {
             use std::os::unix::fs::MetadataExt;
             assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         }
+    }
+
+    /// Replacing the infrastructure passwords is recorded as stranded data.
+    ///
+    /// This is the one self-heal that deliberately makes the failure *harder*.
+    /// A new `postgres_password` does not open a volume that was `initdb`'d
+    /// with the old one, and nothing downstream notices: `ensure_core_container`
+    /// only replaces on an image or config-generation change, and
+    /// `ensure_database` connects over the local socket with no password. So
+    /// healing quietly would surface hours later as an opaque auth error deep
+    /// in the backend's migrations. The marker is what turns that into a button.
+    #[test]
+    fn replacing_the_infrastructure_passwords_records_that_data_must_be_reset() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("infra.secrets.json");
+        let original = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        fs::write(&path, b"{\"postgres_password\": \"too-short\"").unwrap();
+
+        let mut healed = Vec::new();
+        let replaced = load_or_create_secrets(&path, &mut healed).unwrap();
+
+        assert_ne!(replaced.postgres_password, original.postgres_password);
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].contains("cannot be opened"), "{}", healed[0]);
+        let reason = crate::paths::data_reset_reason(root.path())
+            .expect("a replaced password strands the existing database");
+        assert!(reason.contains("previous ones"), "{reason}");
+        // The unreadable original is kept, not destroyed.
+        assert_eq!(
+            fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1253,6 +1456,7 @@ mod tests {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
@@ -1338,6 +1542,7 @@ mod tests {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

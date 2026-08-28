@@ -19,3 +19,9 @@ paths-ignore:
   # editing, so findings would be noise no one can act on.
   - "lemma-python/lemma_sdk/openapi_client"
   - "lemma-typescript/src/openapi_client"
+  # Generated connector clients, for the same reason and at four times the
+  # scale: 3,222 files and 459k of the repository's 1.11M tracked Python lines
+  # sit under `lemma-connectors/src/lemma_connectors/*/generated/`, emitted by
+  # scripts/generate_*.py from each provider's OpenAPI document. Extracting them
+  # was roughly 40% of a six-minute Python analysis that no PR can act on.
+  - "**/generated"

@@ -170,8 +170,13 @@ class FileStoragePhase:
             try:
                 await search_service.remove_file(updated_entity.id)
             except Exception:
-                logger.debug(
-                    "datastore.storage_phase.remove_indexed_chunks_unsearchable_file.diagnostic"
+                # Stale chunks keep the file findable after the user made it
+                # unsearchable. The row is correct and a reindex repairs it, so
+                # degraded rather than failed — but it is user-visible.
+                logger.warning(
+                    "datastore.storage_phase.search_index_purge_unsearchable.degraded",
+                    file_id=str(updated_entity.id),
+                    exc_info=True,
                 )
             await self.projection.delete_child_artifacts(
                 updated_entity.pod_id,
@@ -217,8 +222,10 @@ class FileStoragePhase:
             except DatastoreObjectNotFoundError:
                 return
             except Exception:
-                logger.debug(
-                    "datastore.storage_phase.clean_up_uncommitted_datastore_object.diagnostic"
+                # An orphaned object costs storage; nothing is incorrect.
+                logger.warning(
+                    "datastore.storage_phase.uncommitted_object_delete.degraded",
+                    exc_info=True,
                 )
         for move in plan.storage_moves:
             if move.destination_key == move.source_key:
@@ -228,8 +235,9 @@ class FileStoragePhase:
             except DatastoreObjectNotFoundError:
                 continue
             except DatastoreDomainError:
-                logger.debug(
-                    "datastore.storage_phase.clean_up_staged_moved_object.diagnostic"
+                logger.warning(
+                    "datastore.storage_phase.staged_object_delete.degraded",
+                    exc_info=True,
                 )
 
     async def cleanup_deleted_paths(
@@ -257,9 +265,14 @@ class FileStoragePhase:
                 try:
                     await search_service.remove_file(UUID(item["file_id"]))
                 except Exception:
-                    logger.debug(
-                        "datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic",
+                    # Chunks of a DELETED file left in the index means deleted
+                    # content stays searchable and retrievable by an agent.
+                    # The loop keeps going so one bad file does not strand the
+                    # batch, but this is a data-deletion failure, not a cost.
+                    logger.error(
+                        "datastore.storage_phase.deleted_file_search_purge.failed",
                         file_id=item["file_id"],
+                        exc_info=True,
                     )
             return
         for item in files:
@@ -269,7 +282,8 @@ class FileStoragePhase:
             try:
                 await search_service.remove_file(UUID(item["file_id"]))
             except Exception:
-                logger.debug(
-                    "datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic",
+                logger.error(
+                    "datastore.storage_phase.deleted_file_search_purge.failed",
                     file_id=item["file_id"],
+                    exc_info=True,
                 )

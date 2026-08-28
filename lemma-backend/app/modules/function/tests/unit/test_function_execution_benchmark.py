@@ -4,6 +4,7 @@ import pytest
 
 from load_tests.function_execution import (
     BenchmarkCase,
+    BenchmarkConfig,
     BenchmarkPhase,
     FunctionExecutionBenchmark,
     FunctionKind,
@@ -64,6 +65,44 @@ def test_case_summary_uses_interpolated_p95_and_counts_failures() -> None:
     assert summary.terminal.p50_seconds == 2.5
     assert summary.terminal.p95_seconds == pytest.approx(3.85)
     assert summary.submit.p95_seconds == pytest.approx(1.925)
+
+
+def test_one_slow_sample_does_not_decide_a_p95_budget() -> None:
+    """A percentile budget needs enough samples to be a percentile.
+
+    `_percentile` interpolates at `(n - 1) * 0.95`. At the old default of five
+    invocations that is position 3.8 -- four fifths of the way to the maximum --
+    so the p95 gates were the slowest of five wearing a percentile's name, and
+    one scheduling hiccup on a shared runner failed the protected suite and
+    with it every Desktop release:
+
+        job_write_batch platform overhead p95 2.742s exceeds 2.000s
+
+    from a single 3.37s sample among siblings near 0.2s. Driven off
+    `BenchmarkConfig`'s own default rather than a hard-coded 20, so lowering it
+    back to a number that cannot express a p95 fails here first.
+    """
+    default = BenchmarkConfig(provider="docker").invocations
+    steady = [_sample(index, 0.2) for index in range(default - 1)]
+    hiccup = [_sample(default, 8.0)]
+    budget = (
+        LatencyBudget(case=_API_READ_SINGLE.name, platform_overhead_p95_seconds=2.0),
+    )
+
+    summary = summarize_case(
+        _API_READ_SINGLE, steady + hiccup, concurrency=5, wall_seconds=5
+    )
+    assert evaluate_latency_budgets([summary], budget) == ()
+
+    # ...and it still fails for a tail that is actually slow, which is the only
+    # reason to gate on p95 rather than the median.
+    regressed = [_sample(index, 0.2) for index in range(default - 4)] + [
+        _sample(index, 8.0) for index in range(default - 4, default)
+    ]
+    regressed_summary = summarize_case(
+        _API_READ_SINGLE, regressed, concurrency=5, wall_seconds=5
+    )
+    assert evaluate_latency_budgets([regressed_summary], budget) != ()
 
 
 def test_latency_budget_reports_terminal_and_job_submission_regressions() -> None:

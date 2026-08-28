@@ -51,9 +51,10 @@ class AppResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @computed_field(return_type=str)
+    @computed_field(return_type=str | None)
     @property
-    def url(self) -> str:
+    def url(self) -> str | None:
+        """None where no app host is served -- see `public_app_url`."""
         return public_app_url(self.public_slug)
 
 

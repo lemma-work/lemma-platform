@@ -8,7 +8,8 @@ once per organization.
 
 Keyed by user as well as organization. Two members of the same organization see
 different pods, so an organization-only key would hand one person's listing to
-another — a correctness bug wearing a performance cache's clothes.
+another — a correctness bug wearing a performance cache's clothes. It is keyed
+by the app host as well, for the reason spelled out on ``_suffix``.
 """
 
 from __future__ import annotations
@@ -39,7 +40,22 @@ def _get_cache() -> ResilientJsonCache | None:
 
 
 def _suffix(organization_id: UUID, user_id: UUID) -> str:
-    return f"{organization_id}:{user_id}"
+    """Keyed by the app host too, because the payload has one baked into it.
+
+    Every app in this listing carries the URL it is served at, built from
+    ``app_base_domain`` when the payload was assembled. That domain is not
+    constant for the life of the data: a desktop stack that starts being shared
+    over a tunnel restarts its backend with no app host at all, and one that
+    stops sharing gets its local host back.
+
+    Redis outlives that restart. Without the domain in the key, the first half
+    minute of either transition serves a listing built under the *other*
+    arrangement -- which for a visitor means an app link resolving against
+    their own machine, exactly the bug that made these URLs optional in the
+    first place. Including it makes the stale entries unreachable rather than
+    wrong; they expire on their own.
+    """
+    return f"{organization_id}:{user_id}:{settings.app_base_domain}"
 
 
 def _decode(payload: str) -> dict[str, Any]:

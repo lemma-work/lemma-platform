@@ -129,10 +129,14 @@ export class PodSurfacesNamespace {
    * Takes no pod: it describes the deployment, and it is what you need before
    * you have anything to scope it to — the app it creates is what issues the
    * client id that connects the account a surface is built on.
+   *
+   * `agentName` names the app after one agent, for a bot that answers as that
+   * agent alone. One Slack app is one bot user, so this is the only chance to
+   * set the name without a person editing it in Slack afterwards.
    */
-  slackManifest() {
+  slackManifest(agentName?: string) {
     return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackManifest(),
+      AgentSurfacesService.agentSurfaceSlackManifest(agentName),
     );
   }
 }

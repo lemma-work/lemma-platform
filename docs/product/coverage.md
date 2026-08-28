@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 157 |
-| `gap` | 2 |
+| `covered` | 158 |
+| `gap` | 1 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **163** |
 
-Scenario tests declaring a promise: 375.
+Scenario tests declaring a promise: 379.
 
 ## Contract coverage
 
@@ -41,7 +41,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
-| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_a_conversation_can_be_watched` |
+| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_reasoning_is_never_shown_as_the_answer`, `test_a_conversation_can_be_watched` |
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
@@ -208,7 +208,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
-| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
+| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
@@ -217,7 +217,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
-| `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused` |
+| `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `gap` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
@@ -228,7 +228,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-DATA-001` A person creates a table by declaring its columns | `covered` | `test_a_table_is_created_from_its_columns`, `test_a_duplicate_table_name_is_refused`, `test_a_bad_column_name_is_refused` |
-| `PS-DATA-002` A table's shape can change without losing what is in it | `gap` | `test_a_tables_settings_can_change`, `test_adding_and_removing_columns_keeps_the_records`, `test_the_primary_key_column_cannot_be_removed`, `test_a_duplicate_column_is_refused` |
+| `PS-DATA-002` A table's shape can change without losing what is in it | `covered` | `test_a_tables_settings_can_change`, `test_adding_and_removing_columns_keeps_the_records`, `test_the_primary_key_column_cannot_be_removed`, `test_a_duplicate_column_is_refused` |
 | `PS-DATA-003` Deleting a table is destructive and says so | `covered` | `test_deleting_a_table_takes_its_records` |
 | `PS-DATA-010` A person adds records and the system holds them to the shape | `covered` | `test_the_python_sdk_writes_a_record`, `test_a_record_goes_in_and_comes_back`, `test_a_wrongly_typed_value_is_refused`, `test_a_missing_required_value_is_refused` |
 | `PS-DATA-011` A person finds the records they want without reading all of them | `covered` | `test_the_cli_reads_tables_and_records`, `test_paging_returns_every_record_once`, `test_records_can_be_sorted`, `test_a_page_is_bounded` |
