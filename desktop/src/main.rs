@@ -794,7 +794,46 @@ fn hosted_url() -> String {
 }
 
 /// The workspace origins `capabilities/workspace.json` already covers.
-const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
+/// The origins the shipped capability already covers, read from the file.
+///
+/// Restated beside it, this list was a second copy of a rule that had already
+/// drifted once in this very function -- and it silently gained a third failure
+/// mode: the shipped entries carry a `:*` port pattern, while the origins
+/// checked against them are concrete, so `contains` never matched a local
+/// workspace and an override capability was minted for an origin that did not
+/// need one.
+fn shipped_workspace_origins() -> Vec<String> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["remote"]["urls"]
+        .as_array()
+        .expect("capabilities/workspace.json lists remote urls")
+        .iter()
+        .map(|url| {
+            url.as_str()
+                .expect("a shipped remote url is a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Whether a shipped pattern already covers this concrete origin.
+///
+/// Only the port may be a wildcard, and only as the whole port: a local
+/// workspace is served on whatever port was free, so `http://host:*` has to
+/// cover `http://host:52413`. Nothing else is treated as a pattern, because a
+/// looser match here hands shell commands to a lookalike host.
+fn shipped_workspace_origin_covers(pattern: &str, origin: &str) -> bool {
+    if pattern == origin {
+        return true;
+    }
+    let Some(prefix) = pattern.strip_suffix(":*") else {
+        return false;
+    };
+    origin
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+}
 
 /// The shipped workspace capability, read at compile time so the override below
 /// cannot drift from it.
@@ -835,6 +874,7 @@ fn overridden_workspace_capability() -> Option<String> {
 }
 
 fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
+    let shipped = shipped_workspace_origins();
     let mut urls: Vec<String> = Vec::new();
     for value in configured {
         let Ok(url) = tauri::Url::parse(value.trim()) else {
@@ -847,7 +887,10 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
             Some(port) => format!("{}://{host}:{port}", url.scheme()),
             None => format!("{}://{host}", url.scheme()),
         };
-        if SHIPPED_WORKSPACE_ORIGINS.contains(&origin.as_str()) {
+        if shipped
+            .iter()
+            .any(|pattern| shipped_workspace_origin_covers(pattern, &origin))
+        {
             continue;
         }
         if !urls.contains(&origin) {
@@ -8527,6 +8570,32 @@ mod tests {
         assert!(capability_for(&["https://lemma.work"]).is_none());
         assert!(capability_for(&["not a url"]).is_none());
 
+        // ...including a local workspace, whose port is not known until it is
+        // allocated. The shipped entry is `http://app.<base>:*`, and the origin
+        // checked against it is concrete, so a plain string comparison never
+        // matched one and quietly minted an override for every local launch.
+        for base in ["lemma.localhost", "127.0.0.1.sslip.io"] {
+            assert!(
+                capability_for(&[&format!("http://app.{base}:52413")]).is_none(),
+                "the shipped capability already covers app.{base} on any port",
+            );
+        }
+        // And the wildcard is the port alone. A host that merely starts the
+        // same way is a different machine, and must still be treated as an
+        // override rather than silently accepted as shipped.
+        assert!(
+            capability_for(&["http://app.lemma.localhost.evil:52413"]).is_some(),
+            "a lookalike host must not read as a shipped origin",
+        );
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost:52413/admin"
+        ));
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost"
+        ));
+
         let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
             .expect("an overridden origin produces a capability");
         let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
@@ -8553,6 +8622,30 @@ mod tests {
             "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
+    }
+
+    /// Every local base this build serves has to be an origin the workspace
+    /// capability covers.
+    ///
+    /// The failure this catches is silent and total. A workspace served on a
+    /// base the capability does not list matches no capability at all, so
+    /// opening Local settings, connecting the Agent Host and configuring a
+    /// provider each answer `not allowed by ACL` -- the whole of onboarding,
+    /// with nothing on screen to say why. Nothing else ties the two files
+    /// together: the base domain is chosen in locald and the origins are
+    /// declared in a Tauri capability, and neither imports the other.
+    #[test]
+    fn every_local_base_this_build_serves_is_a_shipped_workspace_origin() {
+        let shipped = shipped_workspace_origins();
+        for base in TRUSTED_LOCAL_BASES {
+            let origin = format!("http://app.{base}:52413");
+            assert!(
+                shipped
+                    .iter()
+                    .any(|pattern| shipped_workspace_origin_covers(pattern, &origin)),
+                "capabilities/workspace.json does not cover {origin}, so a                  workspace served there reaches no shell command at all",
+            );
+        }
     }
 
     #[test]
