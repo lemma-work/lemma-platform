@@ -398,16 +398,96 @@ def node_root(explicit: Path | None) -> Path:
     return root
 
 
+def node_rpath_libraries(executable: Path, root: Path) -> list[Path]:
+    """The dylibs inside the Node installation that its executable needs.
+
+    The nodejs.org tarballs are a single static executable, and for a long time
+    that was the whole story: copy `bin/node` and nothing else. It is not true
+    of every build. The GitHub tool-cache build of Node 22.23.1 for macOS arm64
+    links `@rpath/libnode.127.dylib`, and Homebrew's links a dozen of its own
+    kegs. Copying the executable alone from either produces a pack that unpacks
+    cleanly, passes every file-existence check, and dies with a dyld error the
+    first time the app tries to serve a page.
+
+    Only `@rpath`/`@loader_path` entries are followed, and only to files inside
+    the Node root. A dylib in /usr/lib is part of the OS and is there on the
+    user's machine too; a Homebrew keg outside the root is not relocatable and
+    is a Node that should not be packed at all, which `check_host_pack.py`
+    then says out loud.
+    """
+    if sys.platform != "darwin":
+        return []
+    try:
+        listing = subprocess.run(
+            ["otool", "-L", str(executable)], text=True, capture_output=True, check=True
+        ).stdout
+    # Parenthesised on purpose. Unlike the backend, which pins 3.14, this
+    # script is run by CI as a bare `python` -- so it must parse on whatever
+    # interpreter the runner happens to have. PEP 758's unparenthesised form
+    # is a SyntaxError before 3.14, and it took the Windows host pack with it.
+    except (OSError, subprocess.CalledProcessError):
+        # Not a Mach-O binary, or no Xcode command line tools. Either way the
+        # probe below is the one that decides whether this pack is usable.
+        return []
+    names = [line.strip().split(" (", 1)[0] for line in listing.splitlines()[1:]]
+    return _resolve_rpath_libraries(root, executable, names)
+
+
+def _resolve_rpath_libraries(
+    root: Path, executable: Path, names: list[str]
+) -> list[Path]:
+    """The `otool -L` names that resolve to a file inside the Node root."""
+    libraries = []
+    for name in names:
+        if not name.startswith(("@rpath/", "@loader_path/")):
+            continue
+        leaf = name.split("/", 1)[1]
+        for candidate in (root / "lib" / leaf, executable.parent / leaf):
+            if candidate.is_file():
+                libraries.append(candidate)
+                break
+    return libraries
+
+
 def copy_node_runtime(frontend: Path, explicit_root: Path | None) -> None:
     root = node_root(explicit_root)
     relative = Path("node.exe") if os.name == "nt" else Path("bin/node")
     source = root / relative
     destination = frontend / "node" / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # The official Node executable is self-contained on both target platforms.
-    # Copying the whole installation would also bundle npm and any unrelated
-    # globally installed packages from the build runner.
+    # The executable and the libraries it carries an @rpath to, and nothing
+    # else. Copying the whole installation would also bundle npm and any
+    # unrelated globally installed packages from the build runner.
     shutil.copy2(source, destination)
+    for library in node_rpath_libraries(source, root):
+        # `bin/node` resolves @rpath through `@loader_path/../lib`, so the
+        # layout inside the pack has to be the layout it came from.
+        packed = destination.parent.parent / "lib" / library.name
+        packed.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(library, packed)
+
+    # Ask the copy the only question that matters, here rather than in a later
+    # job: a Node that cannot start is a frontend that never serves, and every
+    # cheaper check -- the file exists, it is executable, it is the right
+    # version -- passes on one that cannot.
+    try:
+        probe = subprocess.run(
+            [str(destination), "--version"], text=True, capture_output=True
+        )
+        failure = (
+            None
+            if probe.returncode == 0
+            else f"exited {probe.returncode}\n{probe.stderr.strip()}"
+        )
+    except OSError as error:
+        failure = f"could not be started at all: {error}"
+    if failure is not None:
+        raise SystemExit(
+            f"the packed Node cannot start: {destination} {failure}\n"
+            f"It was copied from {source}. A Node that links libraries outside "
+            f"its own installation cannot be packed; use a distribution from "
+            f"nodejs.org (which `.nvmrc` and actions/setup-node give you)."
+        )
 
 
 def standalone_server(root: Path) -> Path:
