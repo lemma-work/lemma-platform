@@ -101,11 +101,6 @@ class AgentSurface(UUIDAuditBase):
     status: Mapped[str] = mapped_column(
         String(50), default="ACTIVE", server_default="ACTIVE"
     )
-    schedule_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("schedules.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
     surface_identity_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
@@ -141,7 +136,6 @@ class AgentSurface(UUIDAuditBase):
             surface_identity_id=self.surface_identity_id,
             surface_identity_username=self.surface_identity_username,
             status=self.status or AgentSurfaceStatus.ACTIVE.value,
-            schedule_id=self.schedule_id,
             surface_identity_email=self.surface_identity_email,
             # Decrypt at rest; legacy plaintext rows pass through unchanged.
             webhook_secret=get_secret_cipher().decrypt_str(self.webhook_secret),

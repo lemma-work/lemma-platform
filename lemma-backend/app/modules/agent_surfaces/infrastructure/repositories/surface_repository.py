@@ -169,14 +169,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
-    async def get_by_email_schedule_id(
-        self, schedule_id: UUID
-    ) -> AgentSurfaceEntity | None:
-        stmt = select(AgentSurface).where(AgentSurface.schedule_id == schedule_id)
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
     async def get_by_platform_and_account_id(
         self,
         *,
@@ -277,7 +269,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_id=entity.surface_identity_id,
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
-            schedule_id=entity.schedule_id,
             surface_identity_email=entity.surface_identity_email,
             webhook_secret=get_secret_cipher().encrypt_str(entity.webhook_secret),
         )
@@ -314,7 +305,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_id = entity.surface_identity_id
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
-        model.schedule_id = entity.schedule_id
         model.surface_identity_email = entity.surface_identity_email
         model.webhook_secret = get_secret_cipher().encrypt_str(entity.webhook_secret)
         await self.session.flush()

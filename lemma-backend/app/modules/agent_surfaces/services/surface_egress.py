@@ -476,10 +476,17 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     metadata=metadata,
                 )
             except AgentSurfaceError:
-                logger.warning(
-                    "agent_surfaces.egress.envelope_reached_nobody.degraded",
+                # An error, not a warning, and with the traceback. This is the
+                # end of every ladder: native, then text, then nobody. A run
+                # left WAITING on a prompt that reached nobody cannot be seen or
+                # acted on by the person it was for, and the two events this
+                # path replaced were deliberately raised to `error` on main for
+                # exactly that reason.
+                logger.error(
+                    "agent_surfaces.egress.envelope_reached_nobody.failed",
                     conversation_id=str(conversation_id),
                     platform=target.surface.surface_type.value,
+                    exc_info=True,
                 )
                 return False
             if receipt.degraded:

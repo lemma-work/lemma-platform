@@ -263,3 +263,82 @@ async def test_a_resource_degrades_to_its_own_text() -> None:
     )
     assert receipt.parts["resources"] is PartDelivery.DEGRADED
     assert "Orders" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_a_file_that_reached_nobody_is_reported_even_when_a_later_one_lands() -> (
+    None
+):
+    """A receipt for a list has to speak for the worst of it, not the last of it.
+
+    ``parts["files"]`` was assigned inside the loop, so the final file's outcome
+    overwrote every one before it. Two files where the first was lost and the
+    second attached reported ``NATIVE`` with an empty ``undelivered`` — and
+    ``undelivered`` exists precisely so a caller can say what was dropped.
+    """
+    attempts = {"n": 0}
+
+    async def attach(*, file_name: str, **_: Any) -> bool:
+        attempts["n"] += 1
+        # The first file cannot be attached; the second can.
+        if attempts["n"] == 1:
+            raise httpx.ConnectError("upload rejected")
+        return True
+
+    sends = {"n": 0}
+
+    async def send(**_: Any) -> None:
+        sends["n"] += 1
+        # The lost file's text fallback cannot go out either.
+        if sends["n"] == 1:
+            raise httpx.ConnectError("no route")
+
+    adapter = _Adapter(
+        _render_file=AsyncMock(side_effect=attach),
+        send_message=AsyncMock(side_effect=send),
+    )
+    receipt = await _deliver(
+        adapter,
+        SurfaceEnvelope(
+            files=[
+                EnvelopeFile(
+                    file_name="lost.pdf", content=b"%PDF", mime_type="application/pdf"
+                ),
+                EnvelopeFile(
+                    file_name="fine.pdf", content=b"%PDF", mime_type="application/pdf"
+                ),
+            ]
+        ),
+    )
+    # Indexed, so the receipt names *which* file was lost -- and still reports
+    # the envelope as delivered, because the second one did land.
+    assert receipt.parts["files[0]"] is PartDelivery.UNDELIVERED
+    assert receipt.parts["files[1]"] is PartDelivery.NATIVE
+    assert receipt.undelivered == ["files[0]"]
+    assert receipt.delivered
+
+
+async def test_a_resource_only_described_in_words_is_not_reported_as_native() -> None:
+    """"Shown as a card" and "described in a sentence" are different outcomes.
+
+    The base default already delivered the plan as text, but the caller recorded
+    ``NATIVE`` because nothing raised — so ``receipt.degraded`` could never name
+    a resource on any platform without cards.
+    """
+
+    class _NoCards(BaseSurfaceAdapter):
+        platform = "TEST"
+
+        def __init__(self) -> None:
+            self.send_message = AsyncMock()
+
+    adapter = _NoCards()
+    receipt = await adapter.deliver(
+        credentials={},
+        event=_event(),
+        envelope=SurfaceEnvelope(
+            resources=[SurfaceDisplayRenderPlan(resource_type="TABLE", title="Orders")]
+        ),
+    )
+    assert receipt.parts["resources"] is PartDelivery.DEGRADED
+    assert receipt.degraded == ["resources"]
+    assert "Orders" in adapter.send_message.await_args.kwargs["message"]

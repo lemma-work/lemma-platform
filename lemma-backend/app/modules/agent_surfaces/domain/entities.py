@@ -273,8 +273,8 @@ class AgentSurfaceEntity(AggregateRoot):
     external_channel_id: str | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
-    schedule_id: UUID | None = None  # Gmail/Outlook: linked email schedule
-    surface_identity_email: str | None = None  # Gmail/Outlook: for self-email filtering
+    #: The address this surface receives on, and the one it replies from.
+    surface_identity_email: str | None = None
     webhook_secret: str | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 

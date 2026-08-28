@@ -151,10 +151,11 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         await ResendPlatformService(credentials)._render_resource(
             event, render_plan, metadata
         )
+        return True
 
     async def add_processing_indicator(
         self,

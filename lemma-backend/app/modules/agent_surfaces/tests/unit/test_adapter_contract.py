@@ -18,6 +18,7 @@ import inspect
 
 import pytest
 
+from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -249,4 +250,114 @@ def test_nothing_outside_the_delivery_mixin_renders_content_itself():
     assert not offenders, (
         f"{offenders} call a render hook directly. Build a SurfaceEnvelope and "
         "call deliver() so the part degrades the same way it does everywhere else."
+    )
+
+
+def _single_part_envelope(field: str):
+    """An envelope carrying exactly one kind of content, for `field`."""
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeFile,
+        EnvelopeVoice,
+    )
+    from app.modules.agent_surfaces.domain.models import (
+        APPROVAL_DECISION_APPROVE,
+        SurfaceApprovalButton,
+        SurfaceApprovalRenderPlan,
+        SurfaceDisplayRenderPlan,
+        SurfaceQuestion,
+        SurfaceQuestionOption,
+        SurfaceQuestionRenderPlan,
+    )
+
+    made = {
+        "text": lambda: SurfaceEnvelope(text="something to say"),
+        "resources": lambda: SurfaceEnvelope(
+            resources=[SurfaceDisplayRenderPlan(resource_type="TABLE", title="Orders")]
+        ),
+        "files": lambda: SurfaceEnvelope(
+            files=[
+                EnvelopeFile(
+                    file_name="q3.pdf", content=b"%PDF", mime_type="application/pdf"
+                )
+            ]
+        ),
+        "voice": lambda: SurfaceEnvelope(
+            voice=EnvelopeVoice(
+                file_name="answer.ogg", content=b"OggS", mime_type="audio/ogg"
+            )
+        ),
+        "choices": lambda: SurfaceEnvelope(
+            choices=SurfaceQuestionRenderPlan(
+                title="Pick",
+                callback_id="conv|tool",
+                questions=[
+                    SurfaceQuestion(
+                        header="which",
+                        question="Which one?",
+                        options=[SurfaceQuestionOption(label="Red")],
+                    )
+                ],
+            )
+        ),
+        "decision": lambda: SurfaceEnvelope(
+            decision=SurfaceApprovalRenderPlan(
+                title="Delete the table?",
+                callback_id="conv|tool",
+                buttons=[
+                    SurfaceApprovalButton(
+                        label="Approve", decision=APPROVAL_DECISION_APPROVE
+                    )
+                ],
+            )
+        ),
+    }
+    builder = made.get(field)
+    assert builder is not None, (
+        f"SurfaceEnvelope grew a {field!r} field and this test does not know how "
+        "to build one. Add it here — that is the point of the test."
+    )
+    return builder()
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+@pytest.mark.parametrize("field", sorted(SurfaceEnvelope.model_fields))
+async def test_every_envelope_field_reaches_the_person_on_every_platform(
+    platform, adapter, field
+):
+    """A part `deliver` does not handle is a part that reaches nobody, silently.
+
+    This is the hole the seam was supposed to close and did not. `SurfaceEnvelope`
+    grew a `voice` field; `EmailOneReplyMixin._render_one` folded five of the six
+    and never read it — so `say` on an email surface composed an empty body, sent
+    nothing, and returned a receipt saying nothing was undelivered. Every other
+    contract test here checks a method *exists*; none checked that the one method
+    that matters covers everything it is handed.
+
+    Driven against a stubbed transport, so this asserts the envelope was walked,
+    not that a real platform accepted it.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+
+    adapter.send_message = AsyncMock()
+    receipt = await adapter.deliver(
+        credentials={},
+        event=ParsedInboundSurfaceEvent(
+            platform=platform,
+            conversation_type=ConversationType.EXTERNAL_DM,
+            external_thread_id="thread-1",
+            message_text="hi",
+        ),
+        envelope=_single_part_envelope(field),
+    )
+    assert field in receipt.parts or any(
+        name.startswith(f"{field}[") for name in receipt.parts
+    ), (
+        f"{platform} delivered an envelope carrying only {field!r} and the receipt "
+        f"never mentions it ({sorted(receipt.parts)}). A part `deliver` does not "
+        "walk is a part that reaches nobody with nothing saying so."
     )

@@ -35,12 +35,21 @@ def compose_one_reply(envelope: SurfaceEnvelope) -> str:
     platform without native controls gets -- is what carries it, and the typed
     reply that comes back resolves the pause exactly as a tapped button does
     elsewhere.
+
+    Files and audio are not here: they are attachments on the same send, added
+    by ``_render_one``. Only a voice note's *caption* is body text, because a
+    reply carrying nothing but a sound file otherwise arrives blank.
     """
     blocks: list[str] = []
     if envelope.text and envelope.text.strip():
         blocks.append(envelope.text.strip())
     for resource in envelope.resources:
         blocks.append(resource.to_plain_text())
+    if envelope.voice is not None and (envelope.voice.caption or "").strip():
+        # The audio itself is attached, but a reply whose whole content is a
+        # sound file reads as an empty email. The caption is what the person
+        # sees before they press play.
+        blocks.append(envelope.voice.caption.strip())
     if envelope.choices is not None:
         blocks.append(envelope.choices.to_plain_text())
     if envelope.decision is not None:
@@ -65,6 +74,19 @@ class EmailOneReplyMixin:
         attachments = [
             (item.file_name, item.content, item.mime_type) for item in envelope.files
         ]
+        # Audio is an attachment here. Email has no voice notes, so the same
+        # bytes ride the reply as a file -- which is exactly what
+        # ``EnvelopeVoice`` says it degrades to on a platform without them.
+        # Reading only ``files`` meant a ``say`` on an email surface composed an
+        # empty body with no attachments, sent nothing, and reported success.
+        if envelope.voice is not None:
+            attachments.append(
+                (
+                    envelope.voice.file_name,
+                    envelope.voice.content,
+                    envelope.voice.mime_type,
+                )
+            )
         if not body and not attachments:
             return DeliveryReceipt(parts={})
 
@@ -91,10 +113,14 @@ class EmailOneReplyMixin:
             )
 
         parts = {name: PartDelivery.NATIVE for name in _named_parts(envelope)}
-        # Choices and a decision are text here, not controls. Recording that as
-        # DEGRADED is what lets a caller tell "asked, as a written question"
-        # apart from "asked, with buttons".
-        for name in ("choices", "decision"):
+        # What email renders as text rather than as the thing itself. Recording
+        # it as DEGRADED is what lets a caller tell "asked, as a written
+        # question" apart from "asked, with buttons" -- and ``resources``
+        # belongs here for the same reason ``choices`` does: ``compose_one_reply``
+        # writes ``to_plain_text()`` into the body, it does not render a card.
+        # ``voice`` is degraded because it arrives as an attachment a person
+        # opens, not as a voice note that plays in the thread.
+        for name in ("resources", "voice", "choices", "decision"):
             if name in parts:
                 parts[name] = PartDelivery.DEGRADED
         return DeliveryReceipt(parts=parts)
@@ -109,6 +135,8 @@ def _named_parts(envelope: SurfaceEnvelope) -> list[str]:
         present.append("resources")
     if envelope.files:
         present.append("files")
+    if envelope.voice is not None:
+        present.append("voice")
     if envelope.choices is not None:
         present.append("choices")
     if envelope.decision is not None:

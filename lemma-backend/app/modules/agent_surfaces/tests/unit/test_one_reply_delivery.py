@@ -285,3 +285,113 @@ async def test_a_failed_run_on_email_says_so_instead_of_vanishing() -> None:
     )
 
     assert sent == ["I couldn't finish that request."]
+
+
+# --- what a run says aloud, on a surface that only gets one reply ------------
+
+
+async def test_audio_the_run_produced_rides_the_one_reply() -> None:
+    """`say` on an email surface used to reach nobody and report success.
+
+    `compose_one_reply` folded text, resources, choices and a decision, and the
+    attachment list was built from `envelope.files` alone — so an envelope
+    carrying only `voice`, which is exactly what `send_voice_note_for_conversation`
+    builds, composed an empty body with no attachments and sent nothing at all.
+    Email has no voice notes, so the bytes ride the reply as an attachment,
+    which is the degradation `EnvelopeVoice` already documents.
+    """
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeVoice,
+        SurfaceEnvelope,
+    )
+
+    call = await _render_one(
+        SurfaceEnvelope(
+            voice=EnvelopeVoice(
+                file_name="answer.ogg",
+                content=b"OggS-audio",
+                mime_type="audio/ogg",
+                caption="Here is what I found.",
+            )
+        )
+    )
+    assert call is not None, "the audio reached nobody"
+    assert call.kwargs["metadata"]["attachments"] == [
+        ("answer.ogg", b"OggS-audio", "audio/ogg")
+    ]
+    # A reply whose whole content is a sound file otherwise arrives blank.
+    assert "Here is what I found." in call.kwargs["message"]
+
+
+async def test_audio_is_recorded_as_degraded_not_as_a_voice_note() -> None:
+    """An attachment a person opens is not a voice note that plays in-thread.
+
+    The distinction is the only thing `receipt.degraded` is for.
+    """
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeVoice,
+        PartDelivery,
+        SurfaceEnvelope,
+    )
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    adapter = ResendSurfaceAdapter()
+    adapter.send_message = AsyncMock()  # type: ignore[method-assign]
+    receipt = await adapter.deliver(
+        credentials={},
+        event=ParsedInboundSurfaceEvent(
+            platform="RESEND",
+            conversation_type=ConversationType.EXTERNAL_DM,
+            external_thread_id="thread-1",
+            message_text="hi",
+        ),
+        envelope=SurfaceEnvelope(
+            voice=EnvelopeVoice(
+                file_name="answer.ogg", content=b"OggS", mime_type="audio/ogg"
+            )
+        ),
+    )
+    assert receipt.parts["voice"] is PartDelivery.DEGRADED
+    assert receipt.degraded == ["voice"]
+
+
+async def test_a_one_reply_surface_that_reached_nobody_raises() -> None:
+    """The check used to live inside the many-part path only.
+
+    So a one-reply surface that sent nothing returned an empty receipt, and
+    `_deliver_envelope` — which reads "no exception" as "delivered" — reported
+    success for a run that had reached nobody.
+    """
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+    from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+    from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    class _SendsNothing(ResendSurfaceAdapter):
+        async def _render_one(self, **_: object):
+            from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
+
+            return DeliveryReceipt(parts={})
+
+    with pytest.raises(AgentSurfacePlatformError):
+        await _SendsNothing().deliver(
+            credentials={},
+            event=ParsedInboundSurfaceEvent(
+                platform="RESEND",
+                conversation_type=ConversationType.EXTERNAL_DM,
+                external_thread_id="thread-1",
+                message_text="hi",
+            ),
+            envelope=SurfaceEnvelope(text="something"),
+        )

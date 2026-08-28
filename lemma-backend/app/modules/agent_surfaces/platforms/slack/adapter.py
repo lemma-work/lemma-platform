@@ -59,12 +59,13 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         await self._service(credentials)._render_resource(
             event=event,
             render_plan=render_plan,
             metadata=metadata,
         )
+        return True
 
     async def add_processing_indicator(
         self,

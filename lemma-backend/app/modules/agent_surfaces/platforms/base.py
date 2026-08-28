@@ -72,13 +72,22 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Show a resource as the platform's own card. Default: no cards, so say
+        what it is in words and report the degradation.
+
+        Returning ``False`` is the whole point of the bool. This default already
+        delivered the text, but the caller recorded ``NATIVE`` because nothing
+        raised -- so ``receipt.degraded`` could never name a resource, on any
+        platform, and "shown as a card" was indistinguishable from "described in
+        a sentence"."""
         await self.send_message(
             credentials=credentials,
             event=event,
             message=render_plan.to_plain_text(),
             metadata=metadata,
         )
+        return False
 
     async def _render_choices(
         self,

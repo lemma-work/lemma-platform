@@ -27,6 +27,23 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 
 logger = get_logger(__name__)
 
+def _keyed(collected: dict[str, list[PartDelivery]]) -> dict[str, PartDelivery]:
+    """One receipt key per thing that was actually delivered.
+
+    A part carrying exactly one item keeps its bare name, which is the ordinary
+    case and what every caller reads. A part carrying several is indexed, so a
+    receipt can say *which* of three files reached nobody rather than having to
+    choose between reporting the last one and condemning all of them.
+    """
+    keyed: dict[str, PartDelivery] = {}
+    for part, outcomes in collected.items():
+        if len(outcomes) == 1:
+            keyed[part] = outcomes[0]
+            continue
+        for index, outcome in enumerate(outcomes):
+            keyed[f"{part}[{index}]"] = outcome
+    return keyed
+
 
 class EnvelopeDeliveryMixin:
     """The one outbound seam, composed over the per-content verbs on the base."""
@@ -67,18 +84,29 @@ class EnvelopeDeliveryMixin:
             # One send, so the parts merge rather than degrade one at a time:
             # an attachment on an email is part of the reply, not a second
             # message that could fall back to a line of text.
-            return await self._render_one(
+            receipt = await self._render_one(
                 credentials=credentials,
                 event=event,
                 envelope=envelope,
                 metadata=metadata,
             )
-        return await self._deliver_each_part(
-            credentials=credentials,
-            event=event,
-            envelope=envelope,
-            metadata=metadata,
-        )
+        else:
+            receipt = await self._deliver_each_part(
+                credentials=credentials,
+                event=event,
+                envelope=envelope,
+                metadata=metadata,
+            )
+        # Here rather than inside the MANY path, because a one-reply surface can
+        # reach nobody too -- and when it did, the empty receipt sailed back to
+        # a caller that reads "no exception" as "delivered". A run waiting on a
+        # prompt nobody saw is the one state a person can neither see nor act on.
+        if not receipt.delivered:
+            raise AgentSurfacePlatformError(
+                self.platform,
+                f"nothing in this envelope reached the person ({sorted(receipt.parts)}).",
+            )
+        return receipt
 
     async def _deliver_each_part(
         self,
@@ -93,57 +121,86 @@ class EnvelopeDeliveryMixin:
         Order is the order a person reads: narration, then what it refers to,
         then the thing being asked.
         """
-        parts: dict[str, PartDelivery] = {}
+        collected: dict[str, list[PartDelivery]] = {}
+
+        def record(part: str, outcome: PartDelivery) -> None:
+            """Keep every outcome a part had, in order.
+
+            ``resources`` and ``files`` are lists, and assigning each result to
+            one key in turn let the last one speak for all of them: two files
+            where the first reached nobody and the second attached reported
+            ``NATIVE``, and ``receipt.undelivered`` -- which exists so a caller
+            can say what was dropped -- came back empty. Collapsing to the worst
+            outcome instead would have traded that for the opposite lie, since
+            one lost file out of two would then read as an envelope that reached
+            nobody at all.
+            """
+            collected.setdefault(part, []).append(outcome)
+
         if envelope.text and envelope.text.strip():
-            parts["text"] = await self._deliver_text(
-                credentials=credentials,
-                event=event,
-                text=envelope.text,
-                metadata=metadata,
+            record(
+                "text",
+                await self._deliver_text(
+                    credentials=credentials,
+                    event=event,
+                    text=envelope.text,
+                    metadata=metadata,
+                ),
             )
         for resource in envelope.resources:
-            parts["resources"] = await self._deliver_resource(
-                credentials=credentials,
-                event=event,
-                render_plan=resource,
-                metadata=metadata,
+            record(
+                "resources",
+                await self._deliver_resource(
+                    credentials=credentials,
+                    event=event,
+                    render_plan=resource,
+                    metadata=metadata,
+                ),
             )
         for attachment in envelope.files:
-            parts["files"] = await self._deliver_file(
-                credentials=credentials,
-                event=event,
-                attachment=attachment,
-                metadata=metadata,
+            record(
+                "files",
+                await self._deliver_file(
+                    credentials=credentials,
+                    event=event,
+                    attachment=attachment,
+                    metadata=metadata,
+                ),
             )
         if envelope.voice is not None:
-            parts["voice"] = await self._deliver_voice(
-                credentials=credentials,
-                event=event,
-                voice=envelope.voice,
-                metadata=metadata,
+            record(
+                "voice",
+                await self._deliver_voice(
+                    credentials=credentials,
+                    event=event,
+                    voice=envelope.voice,
+                    metadata=metadata,
+                ),
             )
         if envelope.choices is not None:
-            parts["choices"] = await self._deliver_choices(
-                credentials=credentials,
-                event=event,
-                envelope=envelope,
-                metadata=metadata,
+            record(
+                "choices",
+                await self._deliver_choices(
+                    credentials=credentials,
+                    event=event,
+                    envelope=envelope,
+                    metadata=metadata,
+                ),
             )
         if envelope.decision is not None:
-            parts["decision"] = await self._deliver_decision(
-                credentials=credentials,
-                event=event,
-                envelope=envelope,
-                metadata=metadata,
+            record(
+                "decision",
+                await self._deliver_decision(
+                    credentials=credentials,
+                    event=event,
+                    envelope=envelope,
+                    metadata=metadata,
+                ),
             )
 
-        receipt = DeliveryReceipt(parts=parts)
-        if not receipt.delivered:
-            raise AgentSurfacePlatformError(
-                self.platform,
-                f"nothing in this envelope reached the person ({sorted(parts)}).",
-            )
-        return receipt
+        # The "nothing landed" check lives in ``deliver`` now, so the one-reply
+        # path is held to it too.
+        return DeliveryReceipt(parts=_keyed(collected))
 
     def _delivers_one_reply(self) -> bool:
         from app.modules.agent_surfaces.platforms.platform_capabilities import (
@@ -295,7 +352,7 @@ class EnvelopeDeliveryMixin:
         metadata: dict[str, Any] | None,
     ) -> PartDelivery:
         try:
-            await self._render_resource(
+            rendered = await self._render_resource(
                 credentials=credentials,
                 event=event,
                 render_plan=render_plan,
@@ -309,7 +366,10 @@ class EnvelopeDeliveryMixin:
                 metadata=metadata,
                 part="resources",
             )
-        return PartDelivery.NATIVE
+        # The base default already sent the plan as text and answers False. It
+        # reached the person either way -- but calling that NATIVE is what made
+        # ``receipt.degraded`` structurally unable to report a resource.
+        return PartDelivery.NATIVE if rendered else PartDelivery.DEGRADED
 
     async def _deliver_file(
         self,

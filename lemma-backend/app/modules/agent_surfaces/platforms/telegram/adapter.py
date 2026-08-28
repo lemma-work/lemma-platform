@@ -126,12 +126,13 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         await TelegramPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
+        return True
 
     async def _render_choices(
         self,
