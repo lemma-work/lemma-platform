@@ -150,27 +150,6 @@ jobs:
         working-directory: tests/scenarios
         run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
 
-      # The nightly lane's whole purpose is a signal somebody reads without
-      # opening CI, and `report_scenarios_to_slack.py` was written to be that
-      # signal -- it turns this XML into the product's own sentences and, as
-      # its docstring insists, reports skips as loudly as failures, because a
-      # lane whose credentials expired goes green while testing nothing. It has
-      # never been called by anything. So the nightly ran, the XML was uploaded
-      # to an artifact with a seven-day retention, and the only way to learn
-      # what the product does was to go looking.
-      #
-      # Scheduled runs only: a labelled pull request is somebody already
-      # watching. Without SLACK_WEBHOOK_URL the script prints and exits 0, by
-      # design -- a missing webhook must not fail a lane that passed.
-      - name: Say what the product did
-        if: always() && github.event_name == 'schedule'
-        working-directory: tests/scenarios
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SCENARIO_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: >-
-          python3 ../../scripts/report_scenarios_to_slack.py results.xml
-          --lane "${{ matrix.journey.name }}"
       # The stack writes the server and worker to one file. Without it a
       # CI-only failure is undiagnosable from CI: the scenario says what it
       # waited for, and the reason it never happened is in the worker's log.
@@ -236,16 +215,6 @@ jobs:
         working-directory: tests/scenarios
         run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
 
-      # See the journey matrix above for why this step exists at all.
-      - name: Say what the product did
-        if: always() && github.event_name == 'schedule'
-        working-directory: tests/scenarios
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SCENARIO_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: >-
-          python3 ../../scripts/report_scenarios_to_slack.py sandbox-results.xml
-          --lane "sandbox"
       # A sandbox failure is a container failure, and the container is gone by
       # the time anyone reads this. `schema_extraction` failing with a bare
       # ConnectError says only that nothing answered on the published port —
@@ -332,7 +301,18 @@ jobs:
         run: uv sync
       - name: Client conformance
         working-directory: tests/scenarios
-        run: uv run pytest journeys/clients -q
+        # `--junitxml`, which this lane alone was missing, so it appeared in no
+        # report at all -- the one lane whose subject is the SDKs a user
+        # actually installs.
+        run: uv run pytest journeys/clients -q --junitxml=clients-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-clients
+          path: tests/scenarios/clients-results.xml
+          retention-days: 7
 
       # The stack writes the server and worker to one file. Without it a
       # CI-only failure is undiagnosable from CI: the scenario says what it
@@ -345,3 +325,110 @@ jobs:
           path: /tmp/lemma-scenarios-*.log
           retention-days: 7
           if-no-files-found: ignore
+
+  # One report for the whole run, wherever it is going.
+  #
+  # Two audiences, one reading of the same XML. A labelled pull request gets a
+  # comment, the same shape the backend coverage gate already posts, so a
+  # reviewer learns one place to look. The nightly gets a Slack message, because
+  # nobody is watching it -- and it was that lane, red 9 runs running, that made
+  # the case for any of this.
+  #
+  # Aggregated rather than per-lane on purpose. The first cut of this posted
+  # from inside the journey matrix, which on a nightly would have been twelve
+  # Slack messages for one run: the shape of noise that stops a channel being
+  # read, which is the thing this is supposed to fix.
+  #
+  # `!cancelled()` rather than `success()`: a run where a lane failed is exactly
+  # the run worth reporting.
+  scenarios-reported:
+    name: scenarios reported
+    timeout-minutes: 10
+    needs: [journeys, sandbox, clients]
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-scenarios'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect every lane's results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: scenarios-*
+          path: scenario-results
+        continue-on-error: true
+
+      # Grouped by journey, which the reporting plugin writes onto every case,
+      # so the report names stretches of product rather than CI shards.
+      - name: Compose the report
+        id: report
+        run: |
+          shopt -s globstar nullglob
+          reports=(scenario-results/**/*.xml)
+          if [ ${#reports[@]} -eq 0 ]; then
+            echo "::warning title=No scenario results::Nothing was uploaded, so there is nothing to report."
+            echo "written=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/report_scenarios_to_slack.py "${reports[@]}" \
+            --lane "${{ github.event_name == 'schedule' && 'nightly' || 'run-scenarios' }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --markdown-out scenario-report.md
+          echo "written=true" >> "$GITHUB_OUTPUT"
+          cat scenario-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The same comment every time, edited rather than added to, keyed on the
+      # marker the composer writes. A fork's token cannot comment, so that case
+      # is skipped rather than failed.
+      - name: Publish one scenario comment
+        if: >-
+          steps.report.outputs.written == 'true' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-product-scenarios -->';
+            const body = fs.readFileSync('scenario-report.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const number = context.issue.number;
+            const {data: pull} = await github.rest.pulls.get(
+              {owner, repo, pull_number: number},
+            );
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping the scenario comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment(
+                {owner, repo, comment_id: existing.id, body},
+              );
+            } else {
+              await github.rest.issues.createComment(
+                {owner, repo, issue_number: number, body},
+              );
+            }
+
+      # Slack only where nobody is reading a pull request. Reporting is not the
+      # build: no webhook, or a Slack outage, prints and exits 0.
+      - name: Say what the product did
+        if: >-
+          steps.report.outputs.written == 'true' &&
+          github.event_name != 'pull_request'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          shopt -s globstar nullglob
+          python3 scripts/report_scenarios_to_slack.py scenario-results/**/*.xml \
+            --lane nightly \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
