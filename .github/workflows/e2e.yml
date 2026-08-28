@@ -136,7 +136,7 @@ jobs:
       # it; this job only decides whether it has to be created.
       - name: Is the image already cached?
         id: probe
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/e2e-sandbox-images.tar
           key: ${{ steps.key.outputs.value }}
@@ -151,7 +151,7 @@ jobs:
             $(make print-sandbox-images | awk '{print $2}')
       - name: Upload the image cache
         if: steps.probe.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: /tmp/e2e-sandbox-images.tar
           key: ${{ steps.key.outputs.value }}
@@ -192,7 +192,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           # Scoped deliberately. The default glob is `**/uv.lock`, and this
@@ -218,7 +218,7 @@ jobs:
       # the generator is free to change.
       - name: Cache e2e container images
         id: cache-e2e-images
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/e2e-docker-images.tar
           key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py') }}
@@ -250,7 +250,7 @@ jobs:
       # came to be the single slowest test in the suite at 130 seconds. The
       # model is pinned in config.py, so that is what the key follows.
       - name: Cache the local embedding model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/lemma/fastembed
           key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
@@ -266,7 +266,7 @@ jobs:
       # sandbox-function-benchmark.yml already uses.
       - name: Restore sandbox images
         if: matrix.shard.needs_sandbox_images
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/e2e-sandbox-images.tar
           key: ${{ needs.sandbox-images.outputs.key }}
@@ -322,7 +322,7 @@ jobs:
           echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend e2e coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-e2e-${{ matrix.shard.name }}-coverage
           include-hidden-files: true
@@ -391,7 +391,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-backend/uv.lock
