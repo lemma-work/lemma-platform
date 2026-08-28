@@ -132,14 +132,14 @@ jobs:
         run: python3 scripts/check_version_consistency.py --expect "${{ steps.version.outputs.version }}"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
       # The Agent Host's ACP integration tests spawn a scripted Python agent over
       # stdio, and panic outright when there is no interpreter to spawn.
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -160,7 +160,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -531,7 +531,7 @@ jobs:
           cat "${artifacts}/latest.json"
 
       - name: Upload online DMG to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Name the tag rather than letting the action infer it. On
           # `release: published` it reads the tag off the event payload, but on
@@ -683,7 +683,7 @@ jobs:
         run: python3 scripts/check_version_consistency.py --expect "${{ steps.version.outputs.version }}"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -733,7 +733,7 @@ jobs:
               path.write_text(json.dumps(config, indent=2) + "\n")
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -880,7 +880,7 @@ jobs:
       # Deliberately an artifact, not a release asset. See the note at the top
       # of this file: Windows is experimental and is not published yet.
       - name: Keep the Windows installer as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-desktop-windows-${{ steps.version.outputs.version }}
           path: desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe
