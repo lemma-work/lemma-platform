@@ -23,6 +23,7 @@ import { AssistantExperienceView } from "@/components/lemma/assistant/assistant-
 import type {
   AssistantControllerView,
   AssistantResourceMention,
+  EmptyStateSuggestion,
 } from "@/components/lemma/assistant/assistant-types";
 import { Button } from "@/components/ui/button";
 import {
@@ -133,6 +134,28 @@ export function AssistantToolIcon({
     <MessageSquare aria-hidden="true" className={cn("h-4 w-4", className)} strokeWidth={1.9} />
   );
 }
+
+/**
+ * What an empty conversation offers to open with.
+ *
+ * Module constants rather than literals in the JSX, because the empty state
+ * built from them is a prop of the memoized transcript. Written inline, they
+ * were a new array on every render of this surface — and every keystroke is one
+ * of those wherever a parent owns the draft — which changed the empty state's
+ * identity and re-rendered the whole transcript to draw a conversation that had
+ * not moved.
+ */
+const POD_SUGGESTIONS: EmptyStateSuggestion[] = [
+  { text: "Summarize the state of this pod" },
+  { text: "What should I build next?" },
+  { text: "Review the latest errors and unblock me" },
+];
+
+const WORKSPACE_SUGGESTIONS: EmptyStateSuggestion[] = [
+  { text: "Show my recent pods" },
+  { text: "What can you help me with?" },
+  { text: "Help me plan a new pod" },
+];
 
 function buildControllerView(
   assistant: ReturnType<typeof useAIAssistant>,
@@ -247,7 +270,16 @@ function PodAssistantSurface({
   // Subscribed separately from the rest of the assistant: this is the surface
   // that draws the transcript, so it is the one that should re-render per flush.
   const transcript = useAIAssistantTranscript();
-  const controller = buildControllerView(assistant, transcript);
+  // Rebuilt only when one of the two contexts it reads changes, never merely
+  // because this component rendered. Both context values are memoized by the
+  // provider, so on a keystroke — which re-renders this surface whenever a
+  // parent owns the draft — the controller keeps its identity, and the
+  // memoized transcript below it can tell that nothing about the conversation
+  // moved.
+  const controller = useMemo(
+    () => buildControllerView(assistant, transcript),
+    [assistant, transcript],
+  );
   const resourceMentions = useMemo<AssistantResourceMention[]>(() => {
     const tableMentions = (tablesData?.items || []).map((table) => ({
       id: `table:${table.name}`,
@@ -304,17 +336,7 @@ function PodAssistantSurface({
         emptyState={emptyState}
         emptyStateFillsViewport={emptyStateFillsViewport}
         emptyStateSuggestions={
-          assistant.hasPodContext
-            ? [
-                { text: "Summarize the state of this pod" },
-                { text: "What should I build next?" },
-                { text: "Review the latest errors and unblock me" },
-              ]
-            : [
-                { text: "Show my recent pods" },
-                { text: "What can you help me with?" },
-                { text: "Help me plan a new pod" },
-              ]
+          assistant.hasPodContext ? POD_SUGGESTIONS : WORKSPACE_SUGGESTIONS
         }
       />
     </div>
