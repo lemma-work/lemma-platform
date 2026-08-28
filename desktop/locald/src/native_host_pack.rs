@@ -1712,11 +1712,25 @@ mod tests {
              api_url and every call dies in DNS: {sandbox_facing:?}",
         );
 
+        let base = LocalDomain::from_env().base().to_owned();
         for name in sandbox_facing {
             let value = env[name].as_str().unwrap_or_default();
             assert!(
                 !value.contains(".localhost"),
                 "{name} is {value}, and .localhost resolves only on the host",
+            );
+            // And not this install's own base domain either, whatever it is.
+            //
+            // The `.localhost` check above stopped being the whole story when
+            // the base domain became a runtime choice. A loopback wildcard is
+            // worse than an unresolvable name, not better: inside a container
+            // it resolves perfectly well, to 127.0.0.1 -- which is the
+            // container itself. The failure is then a connection refused, or
+            // worse a connection to whatever that container happens to be
+            // running, rather than a DNS error naming the problem.
+            assert!(
+                !value.contains(&base),
+                "{name} is {value}, and {base} answers this Mac's loopback --                  inside a container that address is the container",
             );
             assert!(
                 value.is_empty() || value.contains("host.lemma.internal"),
