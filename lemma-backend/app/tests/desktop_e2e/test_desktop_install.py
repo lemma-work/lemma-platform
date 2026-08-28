@@ -25,6 +25,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -220,33 +221,60 @@ async def test_a_published_app_serves_every_asset_it_asks_for(published_app, ins
         )
 
 
-async def test_the_app_is_told_to_call_the_api_on_its_own_origin(
-    published_app, install
-):
-    """A relative apiUrl is the whole fix, so it is asserted directly.
-
-    An absolute one pointing at the API host is the shipped bug: to WebKit that
-    is a different site, the session cookie is third-party, and the app renders
-    signed out.
-    """
-    index = httpx.get(install.app_url(published_app), timeout=30).text
+def _app_config(install, slug: str) -> dict:
+    """The `window.__LEMMA_CONFIG__` blob the server inlined into an app."""
+    index = httpx.get(install.app_url(slug), timeout=30).text
     marker = "window.__LEMMA_CONFIG__="
     start = index.index(marker) + len(marker)
-    config = json.loads(index[start : index.index("</script>", start)].rstrip(";"))
+    return json.loads(index[start : index.index("</script>", start)].rstrip(";"))
 
-    assert config["apiUrl"].startswith("/"), (
-        f"the app was handed an absolute apiUrl ({config['apiUrl']!r}); its "
-        "calls will be cross-site and carry no session"
-    )
-    # And that prefix has to actually route.
-    probe = httpx.get(
-        install.app_url(published_app).rstrip("/") + config["apiUrl"] + "/users/me",
-        timeout=30,
-    )
+
+async def test_the_app_is_handed_an_api_url_that_can_carry_its_session(
+    published_app, install
+):
+    """The app's API calls must be same-site, and the URL must actually route.
+
+    There are two ways an install achieves that, and which one is correct
+    depends on the base domain it serves under -- so this asserts the property,
+    and reads the mechanism off the install rather than assuming one.
+
+    Under a base domain a browser cannot derive a registrable domain from
+    (`*.localhost`), the API is a different *site* to the app: an absolute URL
+    is cross-site, carries no cookie, and the app renders signed out. That is
+    the bug that shipped. The fix is a relative prefix, so the call goes to the
+    app's own origin and the API is reached through the `/_lemma` door.
+
+    Under a real registrable domain the two hosts are same-site already, the
+    door is switched off deliberately, and the absolute URL is correct. Which
+    is why this cannot simply demand a leading slash: doing so would fail the
+    arrangement that works *better*, and would have to be deleted by whoever
+    turned it on -- taking the check on the broken case with it.
+    """
+    api_url = _app_config(install, published_app)["apiUrl"]
+
+    if install.api_via_app_origin:
+        assert api_url.startswith("/"), (
+            f"the app was handed an absolute apiUrl ({api_url!r}) on a base "
+            f"domain ({install.base_domain}) whose hosts are not same-site; "
+            "its calls will carry no session"
+        )
+        probe_url = install.app_url(published_app).rstrip("/") + api_url
+    else:
+        host = urlsplit(api_url).hostname or ""
+        assert host == install.base_domain or host.endswith(
+            f".{install.base_domain}"
+        ), (
+            f"the app was handed an apiUrl on {host!r}, which is outside this "
+            f"install's base domain ({install.base_domain}); the session "
+            "cookie is not scoped to it"
+        )
+        probe_url = api_url.rstrip("/")
+
+    probe = httpx.get(f"{probe_url}/users/me", timeout=30)
     assert probe.status_code in (200, 401), (
-        f"the app's own API prefix does not route: HTTP {probe.status_code}. "
-        "401 is fine here (no cookie on this client); 404 means the middleware "
-        "is not stripping it."
+        f"the apiUrl the app was handed does not route: HTTP "
+        f"{probe.status_code} from {probe_url}/users/me. 401 is fine here (no "
+        "cookie on this client); 404 means the request is not reaching the API."
     )
 
 
@@ -320,7 +348,22 @@ async def test_a_pod_app_is_signed_in_when_the_workspace_embeds_it(
     to the parent.
 
     Testing only the top-level case is how this shipped broken twice.
+
+    Skipped, not failed, on an install serving a base domain whose hosts are
+    not same-site: embedding genuinely cannot work there, apps open in their
+    own window instead, and a permanently red test in a supported arrangement
+    teaches people to ignore it. What stops that skip from quietly becoming
+    every run is a separate assertion, in locald's own tests, that the shipped
+    default *is* the same-site arrangement -- so reaching this skip takes
+    deliberately asking for the fallback.
     """
+    if install.api_via_app_origin:
+        pytest.skip(
+            f"this install serves {install.base_domain}, whose hosts a browser "
+            "cannot derive a common registrable domain from, so a framed app is "
+            "third-party by construction and pod apps open in their own window. "
+            "Embedding is testable under a registrable base domain (the default)."
+        )
     answer = _run_probe(
         published_app=published_app, install=install, account=account, mode="embedded"
     )
