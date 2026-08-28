@@ -344,11 +344,17 @@ class TestUsingAConnector:
         # before running it — true of any operation, and naming one tied this
         # to the spec the suite serves rather than to the product.
         offered = await alice.operations_of(auth_config, in_organization=organization)
-        if not offered:
-            pytest.skip(
-                "this connector discovered no operations, so there is nothing "
-                "to read the shape of"
-            )
+        # Asserted, not skipped. This used to skip when `offered` was empty —
+        # which is to say it stood down at exactly the moment its own
+        # precondition had failed. Operation discovery regressing is the thing
+        # most worth hearing about here, and a skip is not a failure: it would
+        # have been reported as "not run" and nobody would have looked.
+        assert offered, (
+            "this connector discovered no operations at all, so there is nothing "
+            "whose shape a person could read before running it. The installation "
+            "succeeded and discovery produced nothing — that is the bug this "
+            "scenario is for, not a reason to stand down"
+        )
         name = str(offered[0]["name"])
 
         detail = await alice.operation_detail(

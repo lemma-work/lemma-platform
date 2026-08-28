@@ -29,12 +29,89 @@ _MAX_AUDIO_BYTES = 50 * 1024 * 1024
 _SUPPORTED_TTS_FORMATS = {"mp3", "wav", "ogg", "opus"}
 
 
+def _both_spellings_of(deps: BaseAgentContext, path: str) -> tuple[str, ...]:
+    """The datastore path as stored and as a person would write it.
+
+    ``/me/whatsapp/audio.ogg`` and ``/{user_id}/whatsapp/audio.ogg`` are the same
+    file: the first is what a listing shows, the second is what is stored and
+    what the surface prompt block quotes. Either can arrive here.
+    """
+    personal_root = f"/{deps.user_id}"
+    if path.startswith("/me/"):
+        return (path, f"{personal_root}{path.removeprefix('/me')}")
+    if path.startswith(f"{personal_root}/"):
+        return (path, f"/me{path.removeprefix(personal_root)}")
+    return (path,)
+
+
+async def _already_transcribed(deps: BaseAgentContext, path: str) -> str | None:
+    """What ingress already made of this file, if it made anything.
+
+    Best effort by construction: a lookup that fails must fall through to a real
+    transcription rather than fail the call, because being slow and expensive is
+    better than refusing to answer.
+
+    Narrow on purpose. This is one indexed SELECT in a session of its own, so a
+    database error is the whole of what it can fail with -- the same reasoning
+    `PendingUserMessagesCapability._claim` states for the same shape. Anything
+    else raised here is a bug and should surface rather than quietly cost the
+    caller a second transcription.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+
+    # A transcript belongs to a conversation, so without one there is nothing to
+    # look in. Every real run has one; this keeps the tool callable from the
+    # paths that build a leaner context rather than making them carry a field
+    # only this lookup reads.
+    conversation_id = getattr(deps, "conversation_id", None)
+    if conversation_id is None:
+        return None
+    try:
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            return await ConversationRepository(uow).find_existing_voice_transcript(
+                conversation_id, _both_spellings_of(deps, path)
+            )
+    except SQLAlchemyError:
+        logger.warning(
+            "agent.speech.transcript_reuse_lookup_failed.degraded",
+            conversation_id=str(conversation_id),
+            exc_info=True,
+        )
+        return None
+
+
 async def listen_internal(
     deps: BaseAgentContext, request: ListenRequest
 ) -> ListenResponse:
     path = (request.file_path or "").strip()
     if not path:
         return ListenResponse(success=False, error="file_path is required.")
+
+    # Answered from what the run was already given, before a provider is
+    # reached. A voice note is transcribed at ingress and its words arrive as
+    # the message text; the prompt says so and says not to call this, and
+    # sometimes the model calls it anyway. Telling it again would not help --
+    # what stops the second bill is there being nothing to bill for.
+    reused = await _already_transcribed(deps, path)
+    if reused is not None:
+        logger.info(
+            "agent.speech.transcript_reused.observed",
+            conversation_id=str(getattr(deps, "conversation_id", None)),
+        )
+        return ListenResponse(
+            success=True,
+            transcript=reused,
+            message=(
+                "This voice note was transcribed when it arrived; these are the "
+                "same words already in the message above. Nothing was "
+                "re-transcribed."
+            ),
+        )
+
     try:
         content, mime = await read_agent_file_bytes(deps, path)
     except FileNotFoundError:

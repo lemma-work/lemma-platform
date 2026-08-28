@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from harness.run import a_name_for
-from harness.drivers.api import items_of
+from harness.drivers.api import UnexpectedResponse, every_item, items_of
 
 JSON = dict[str, Any]
 
@@ -282,8 +282,48 @@ class DatastoreSteps:
             what=f"{self.label} opening {path!r}",
         )
 
-    async def files_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/datastore/files"))
+    async def files_in(
+        self, pod: JSON, *, directory: str = "/", pages: int = 20
+    ) -> list[JSON]:
+        """Every file in one directory of the pod, following the pages.
+
+        The listing that can actually answer "is it there yet". `file_tree_of`
+        cannot — see its docstring — and being asked to was how a working
+        attachment read as a missing one for four consecutive nightly runs.
+
+        `directory` because the interesting question is nearly always about one
+        folder: a surface saves what a person sent to `/me/{platform}`, and
+        listing the whole pod to find it is both slower and less specific.
+
+        A folder that does not exist yet answers "nothing", not an error. That is
+        not this step being lenient — it is the honest answer to what a scenario
+        is asking. `/me/telegram` is created by the first attachment that lands
+        in it, so a scenario waiting for one starts polling before the folder is
+        there, and "the directory is missing" and "the directory is empty" are
+        the same state as far as the question goes. Every other refusal is still
+        raised, loudly.
+        """
+
+        async def page(params: JSON) -> Any:
+            try:
+                return await self.api.get(
+                    f"/pods/{pod['id']}/datastore/files",
+                    params={**params, "directory_path": directory},
+                )
+            except UnexpectedResponse as refused:
+                if "Directory not found" in str(refused):
+                    return {}
+                raise
+
+        return await every_item(page, pages=pages)
+
+    async def paths_in(self, pod: JSON, *, directory: str = "/") -> set[str]:
+        """The paths of the files in one directory. What an assertion wants."""
+        return {
+            str(item.get("path"))
+            for item in await self.files_in(pod, directory=directory)
+            if item.get("path")
+        }
 
     async def deletes_file(self, path: str, *, in_pod: JSON) -> None:
         await self.api.delete(
@@ -312,8 +352,30 @@ class DatastoreSteps:
             json={"path": at_path},
         )
 
-    async def file_tree_of(self, pod: JSON) -> Any:
-        return await self.api.get(f"/pods/{pod['id']}/datastore/files/tree")
+    async def file_tree_of(self, pod: JSON, *, files_per_directory: int = 20) -> Any:
+        """The pod's folder structure, with a *sample* of the files in each.
+
+        Read the word sample. `file.tree` truncates to `files_per_directory`
+        files per folder — **three** if nobody says otherwise, twenty at the
+        most, with no way to page — because it exists to render a sidebar rather
+        than to enumerate a pod. It says so in `has_more_files` on every node it
+        cut, and anything still using this to look for one file should be
+        reading that flag rather than trusting the absence.
+
+        This cost four consecutive nightly runs. `/me/telegram` in a pod that
+        stands between runs held `photo`, `photo-2`, `photo-3` and then
+        `quarter.csv`; sorted by name, the CSV was the fourth entry, the default
+        showed three, and a scenario waiting ninety seconds for a file that had
+        been saved the whole time reported the product had lost it.
+
+        Use `files_in(pod, directory=...)` to ask whether a file is there. That
+        one pages, and it is the question nearly every scenario is really
+        asking.
+        """
+        return await self.api.get(
+            f"/pods/{pod['id']}/datastore/files/tree",
+            params={"files_per_directory": files_per_directory},
+        )
 
     async def searches_files(self, query: str, *, in_pod: JSON, limit: int = 10) -> Any:
         return await self.api.post(

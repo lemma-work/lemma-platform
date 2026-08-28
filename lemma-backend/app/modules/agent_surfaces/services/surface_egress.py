@@ -51,6 +51,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_display_resource_render_plan,
     render_questions_as_text,
 )
+from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.services.surface_egress_target import (
@@ -513,7 +514,10 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         entity, content = loaded
 
-        mime = entity.mime_type or "audio/ogg"
+        # `or` was not enough: a file stored without an extension is typed
+        # `application/octet-stream`, which is truthy, so the fallback never
+        # fired and Telegram was handed a blob where sendVoice wants OGG.
+        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
