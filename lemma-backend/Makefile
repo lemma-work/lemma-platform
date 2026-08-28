@@ -372,12 +372,18 @@ lint-swallowed-errors:
 lint-e2e-waits:
 	uv run python scripts/check_e2e_wait_patterns.py
 
-# Import-budget gate (enforced in CI). Importing the api loads ~5,400 modules
-# and ~323 MiB before it can serve a request, and the worker is larger still.
-# Most of that is structural — openai, mcp and fastmcp arrive through
-# pydantic_ai, which the agent runtime needs — so this does not ask anyone to
-# shrink it. It asks that growth be a decision rather than a side effect of a
-# new dependency. Ratcheted against import-budget-baseline.json.
+# Import-budget gate (enforced in CI). Importing the api loads ~4,600 modules
+# before it can serve a request, and the worker is larger still. Much of that is
+# structural — fastapi, sqlalchemy and supertokens_python are all needed before
+# the first authenticated request — so this does not ask anyone to shrink it. It
+# asks that growth be a decision rather than a side effect of a new dependency.
+# Ratcheted against import-budget-baseline.json.
+#
+# This used to say openai arrived structurally through pydantic_ai and so could
+# not be deferred. That was measured and is wrong: it arrived through composio,
+# from one module-scope line of ours, and deferring that line removed 993
+# modules. A note in a gate saying "not worth looking at" is worse than no note,
+# because it is believed.
 lint-import-budget:
 	uv run python scripts/check_import_budget.py
 

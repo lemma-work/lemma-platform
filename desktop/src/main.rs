@@ -2534,7 +2534,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or_else(|| local_auth_url(&url, "signup"));
+                .unwrap_or_else(|| local_auth_url_returning_to(&url, "signup", "/"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -4884,6 +4884,57 @@ fn saved_placement(config: &Value) -> Option<WindowPlacement> {
     })
 }
 
+/// A saved placement in the units the window builder actually reads.
+///
+/// Everything else about placement is in physical pixels and consistently so:
+/// `outer_position` and `inner_size` return physical, and
+/// `placement_is_reachable` compares them against monitor geometry that is also
+/// physical. The window *builder* is the one place that is not --
+/// `WebviewWindowBuilder::position` and `inner_size` are documented as logical
+/// pixels -- and handing it physical values was silently wrong on every display
+/// that is not 1:1.
+///
+/// On a 2x screen it doubled both: a window saved at 3024x1898 came back asking
+/// for 3024x1898 *logical*, which is 6048x3796 physical, so macOS clamped the
+/// size to the visible frame, and a saved y of 66 became 132 -- the window
+/// opened lower than it was left and short of the top of the screen. Restoring
+/// looked broken in a way that reads as "the app won't remember my window".
+///
+/// Returns None when the window would come back smaller than the app's own
+/// minimum. That check belongs here rather than beside the parse, because
+/// `MIN_RESTORED` is a logical size and until this point the numbers are not.
+fn placement_in_logical(
+    placement: &WindowPlacement,
+    scale: f64,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = placement.position.to_logical::<f64>(scale);
+    let size = placement.size.to_logical::<f64>(scale);
+    if size.width < f64::from(MIN_RESTORED.0) || size.height < f64::from(MIN_RESTORED.1) {
+        return None;
+    }
+    Some((position, size))
+}
+
+/// The scale of the display a placement lands on, or the primary one.
+///
+/// Asked per placement rather than taken from the primary monitor, because a
+/// second display with a different scale is exactly the case that makes the
+/// conversion wrong in a way the user sees.
+fn placement_scale_factor(handle: &AppHandle, placement: &WindowPlacement) -> f64 {
+    handle
+        .monitor_from_point(
+            f64::from(placement.position.x),
+            f64::from(placement.position.y),
+        )
+        .ok()
+        .flatten()
+        .or_else(|| handle.primary_monitor().ok().flatten())
+        .map_or(1.0, |monitor| monitor.scale_factor())
+}
+
 /// Whether a saved placement still lands on a display that exists.
 ///
 /// The failure this prevents is the classic one: quit with the window on a
@@ -5095,16 +5146,12 @@ fn build_main_window_at(
     // guess: an unplaced window lands where the OS puts it, which is right for
     // a first-ever launch and safe for everything else.
     let placement = placement.or_else(|| remembered_placement(handle));
-    let main_builder = match placement {
-        Some(placement) => main_builder
-            .position(
-                f64::from(placement.position.x),
-                f64::from(placement.position.y),
-            )
-            .inner_size(
-                f64::from(placement.size.width),
-                f64::from(placement.size.height),
-            ),
+    let main_builder = match placement
+        .and_then(|saved| placement_in_logical(&saved, placement_scale_factor(handle, &saved)))
+    {
+        Some((position, size)) => main_builder
+            .position(position.x, position.y)
+            .inner_size(size.width, size.height),
         None => main_builder,
     };
 
@@ -6000,6 +6047,44 @@ fn desktop_auth_url(base: &str, auth_mode: &str) -> String {
 
 fn local_auth_url(base: &str, auth_mode: &str) -> String {
     format!("{}/auth?show={auth_mode}", base.trim_end_matches('/'),)
+}
+
+/// The auth portal, told where to go once it is done.
+///
+/// Without a return address the portal has nowhere to send someone who is
+/// already signed in, so it stops and offers a "Continue" button. That is the
+/// right screen when a person navigated to sign-in themselves and might mean to
+/// switch accounts. It is the wrong one on launch: the app asked for the
+/// workspace, the session is already there, and the only thing between the two
+/// was a click.
+///
+/// This is reached on every cold start, not just a first run. A launch mints a
+/// new runtime generation, so the recorded resume target never matches and the
+/// app falls back to the portal each time -- which is why the button was on
+/// screen every single launch rather than occasionally.
+///
+/// The return address stays relative on purpose. It is resolved against the
+/// portal's own origin, so it cannot point off it, and it survives locald
+/// handing out a different port than the one this launch happens to use.
+fn local_auth_url_returning_to(base: &str, auth_mode: &str, route: &str) -> String {
+    let route = if route.starts_with('/') { route } else { "/" };
+    let mut url = format!("{}/auth", base.trim_end_matches('/'));
+    match tauri::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed
+                .query_pairs_mut()
+                .append_pair("show", auth_mode)
+                .append_pair("redirect_uri", route);
+            parsed.to_string()
+        }
+        // A base this malformed will fail at navigation anyway; falling back to
+        // the plain portal keeps that the failure rather than a panic here.
+        Err(_) => {
+            url.push_str("?show=");
+            url.push_str(auth_mode);
+            url
+        }
+    }
 }
 
 #[tauri::command]
@@ -9116,6 +9201,80 @@ mod tests {
         // monitors at all. Neither is evidence the saved value is wrong, and
         // refusing to restore there would look like the bug this fixes.
         assert!(placement_is_reachable(&at(100, 100), &[]));
+    }
+
+    #[test]
+    fn a_launch_tells_the_auth_portal_where_to_come_back_to() {
+        // The portal auto-continues an existing session only when it is given
+        // somewhere to go; without one it stops on a Continue button. Every
+        // cold start reached it without one, because a new runtime generation
+        // means the recorded resume target never matches.
+        let url = local_auth_url_returning_to("http://app.lemma.localhost:3711/", "signup", "/");
+        assert!(
+            url.starts_with("http://app.lemma.localhost:3711/auth?"),
+            "{url}"
+        );
+        assert!(url.contains("show=signup"), "{url}");
+        assert!(
+            url.contains("redirect_uri=%2F"),
+            "the portal needs a return address to continue without asking: {url}"
+        );
+
+        // Relative, so it resolves against the portal's own origin and cannot
+        // be aimed off it -- and so it survives locald allocating a different
+        // port than the one this launch used.
+        let sneaky = local_auth_url_returning_to(
+            "http://app.lemma.localhost:3711",
+            "signin",
+            "https://evil.example",
+        );
+        assert!(sneaky.contains("redirect_uri=%2F"), "{sneaky}");
+        assert!(!sneaky.contains("evil.example"), "{sneaky}");
+    }
+
+    #[test]
+    fn a_restored_window_comes_back_the_size_it_was_left() {
+        // The numbers are a real record from a 3024x1964 Retina display: the
+        // window filled the screen below the menu bar. Handed to the builder as
+        // written they mean 3024x1898 *logical* -- twice the screen -- so macOS
+        // clamped the size and put the window 66 points too low, which is what
+        // "it doesn't open full and the top is cut off" actually was.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 66),
+            size: tauri::PhysicalSize::new(3024, 1898),
+        };
+
+        let (position, size) = placement_in_logical(&saved, 2.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 33.0));
+        assert_eq!((size.width, size.height), (1512.0, 949.0));
+
+        // A 1:1 display is the case that always worked, and must keep working.
+        let (position, size) = placement_in_logical(&saved, 1.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 66.0));
+        assert_eq!((size.width, size.height), (3024.0, 1898.0));
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_app_allows_is_not_restored() {
+        // 1200x800 physical is a legitimate record on a 1:1 screen and half the
+        // app's minimum on a 2x one. The floor is a logical size, so it can
+        // only be applied after the conversion -- applying it to the physical
+        // numbers is how a window half the allowed size gets restored and then
+        // clamped by the OS into a shape nobody chose.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 0),
+            size: tauri::PhysicalSize::new(1200, 800),
+        };
+        assert!(placement_in_logical(&saved, 1.0).is_some());
+        assert!(
+            placement_in_logical(&saved, 2.0).is_none(),
+            "600x400 logical is below the {}x{} minimum",
+            MIN_RESTORED.0,
+            MIN_RESTORED.1
+        );
+        // A monitor that reports nonsense must not produce an infinite window.
+        assert!(placement_in_logical(&saved, 0.0).is_none());
+        assert!(placement_in_logical(&saved, f64::NAN).is_none());
     }
 
     #[test]

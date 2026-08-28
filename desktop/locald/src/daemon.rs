@@ -1865,6 +1865,23 @@ impl Daemon {
                 "log_source": log_source,
             }));
         })?;
+        // The auth service was started before the backend and is only now
+        // waited for, so it came up alongside it rather than in front of it.
+        // Nothing may report ready until it answers: a workspace whose first
+        // act is signing in would otherwise meet an auth service that is not
+        // there yet, which is worse than the wait this removes.
+        //
+        // Its failure has to take the host processes with it. They are running
+        // by this point -- that is the whole point -- and a stack with no auth
+        // is not a stack anybody can use.
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            if let Err(error) = runtime.await_private_services() {
+                if let Some(manager) = self.host_processes.as_ref() {
+                    let _ = manager.stop_all();
+                }
+                return Err(error);
+            }
+        }
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",

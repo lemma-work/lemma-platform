@@ -229,6 +229,7 @@ def install_python(
         *wheel_files,
     )
     prune_python_runtime(destination)
+    compile_python_runtime(destination, executable)
     smoke_environment = os.environ.copy()
     smoke_environment.update(
         {
@@ -259,6 +260,11 @@ def install_python(
 def prune_python_runtime(python_root: Path) -> None:
     """Remove build/test-only files while retaining package metadata and data."""
 
+    # Bytecode is cleared here and rebuilt by `compile_python_runtime` once the
+    # pruning below has finished, so nothing is compiled that is about to be
+    # deleted and every `.pyc` in the pack was written with the same
+    # invalidation mode. Leaving this out and keeping whatever uv or the
+    # interpreter distribution happened to ship would mix modes silently.
     for cache in sorted(python_root.rglob("__pycache__"), reverse=True):
         shutil.rmtree(cache, ignore_errors=True)
     for compiled in python_root.rglob("*.py[co]"):
@@ -277,6 +283,64 @@ def prune_python_runtime(python_root: Path) -> None:
                 continue
             for tests in sorted(root.rglob("tests"), reverse=True):
                 shutil.rmtree(tests, ignore_errors=True)
+
+
+def compile_python_runtime(python_root: Path, executable: Path) -> None:
+    """Precompile the pack's bytecode, so the first launch does not.
+
+    Without this the pack ships pure source: `prune_python_runtime` above
+    removes the 418 stdlib `.pyc` the standalone CPython distribution ships,
+    `UV_COMPILE_BYTECODE` is not set for the install, and nothing else
+    compiles the application's ~1,300 modules. The install root is writable, so
+    Python caches on first use -- which means the entire parse-and-compile is
+    paid on the first backend start after every install and every update.
+
+    Measured on an M-series Mac against the shipped 0.7.0 runtime, `import
+    app.app` alone: 7.62s with no cached bytecode, 2.81s with it. That is ~4.8s
+    on the launch a person forms their first impression from, and it is the
+    same defect the container build already fixed (see the note beside
+    `compileall` in `lemma-backend/Dockerfile`).
+
+    `unchecked-hash` rather than the default timestamp mode for the same reason
+    the container uses it: a timestamp-invalidated `.pyc` makes the interpreter
+    `stat` every source file on every start to decide whether the cache is
+    stale. Nothing rewrites a `.py` inside an installed pack, so that check
+    buys nothing and costs a syscall per module forever.
+
+    Failures are reported and not fatal. A pack that ships a module some
+    dependency cannot compile -- vendored Python 2, a template with
+    placeholders -- is a pack that works today, because the file is never
+    imported. Refusing to build the DMG over one would trade a real release for
+    an optimisation.
+    """
+    command = [
+        str(executable),
+        "-m",
+        "compileall",
+        "-q",
+        # One worker per core: this walks ~18k files and is pure CPU.
+        "-j",
+        "0",
+        "--invalidation-mode",
+        "unchecked-hash",
+        str(python_root),
+    ]
+    print("+", " ".join(command), flush=True)
+    completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
+    compiled = sum(1 for _ in python_root.rglob("*.pyc"))
+    if completed.returncode != 0:
+        print(
+            f"  warning: compileall reported errors (exit {completed.returncode}); "
+            f"{compiled} modules were still compiled. The pack is usable -- the "
+            "uncompiled ones cost parse time only if something imports them.",
+            flush=True,
+        )
+    if compiled == 0:
+        raise SystemExit(
+            "compileall wrote no bytecode; the pack would ship pure source and "
+            "pay the full compile on a user's first launch"
+        )
+    print(f"  compiled {compiled} modules", flush=True)
 
 
 def copy_browser_assets(output: Path) -> None:
