@@ -172,10 +172,11 @@ def _patch_llm(
             capture["model"] = model
             capture["system_prompt"] = system_prompt
 
-        async def run(self, prompt, *, usage_limits=None):
+        async def run(self, prompt, *, usage_limits=None, model_settings=None):
             capture["run_calls"] = int(capture["run_calls"]) + 1
             capture["prompt"] = prompt
             capture["usage_limits"] = usage_limits
+            capture["model_settings"] = model_settings
             if raise_on_run:
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
@@ -267,6 +268,10 @@ async def test_generates_persists_and_publishes(
     ]
     # Reply text is fed into the prompt alongside the user message.
     assert "Assistant's reply" in str(capture["prompt"])
+    # A reasoning model must not spend the token budget on a hidden
+    # chain-of-thought trace for a 3-6 word title (see conversation_title_service
+    # module docstring / _TITLE_MODEL_SETTINGS).
+    assert capture["model_settings"] == {"openai_reasoning_effort": "none"}
 
 
 @pytest.mark.asyncio
