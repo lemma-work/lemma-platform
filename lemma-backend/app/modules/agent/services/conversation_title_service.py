@@ -24,7 +24,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from opentelemetry import metrics
-from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai import Agent as PydanticAIAgent, ModelSettings, UsageLimits
 
 from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -69,6 +69,14 @@ _TITLE_USAGE_LIMITS = UsageLimits(
     total_tokens_limit=12_256,
     count_tokens_before_request=True,
 )
+
+# The title itself is 3-6 words (well under 20 tokens). Reasoning models spend
+# the rest of the budget above on a hidden chain-of-thought trace nobody
+# reads: verified directly against deepseek-v4-flash-0731 that the exact
+# title prompt used 246 completion tokens with 239 of them reasoning, and the
+# same call with reasoning_effort='none' produced the identical title in 5.
+# Providers that don't recognize this key ignore it.
+_TITLE_MODEL_SETTINGS: ModelSettings = {"openai_reasoning_effort": "none"}
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -208,6 +216,7 @@ class ConversationTitleService:
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
                 usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
+                model_settings=_TITLE_MODEL_SETTINGS,
             )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
