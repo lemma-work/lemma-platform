@@ -259,10 +259,12 @@ def test_the_backend_binds_where_a_sandbox_can_reach_it():
     a stack -- and this file is the lane that costs seconds and runs on every
     pull request.
     """
-    import harness.stack as stack_module
-
-    source = Path(stack_module.__file__).read_text()
-    launch = ast.parse(source)
+    # Read by path rather than imported. Every other test here reaches into
+    # `harness.stack` with `from ... import`, and importing the same module
+    # both ways in one file is the kind of drift that makes a reader wonder
+    # which one is authoritative. Nothing here needs the module anyway -- this
+    # is an AST guard, and its subject is the source.
+    launch = ast.parse((SUITE / "harness" / "stack.py").read_text())
 
     bindings = []
     for node in ast.walk(launch):

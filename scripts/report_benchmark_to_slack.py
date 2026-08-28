@@ -141,16 +141,13 @@ def main() -> int:
             f":red_circle: *function benchmark · {args.lane}* — "
             f"no report was written at all"
         )
-        report = None
     else:
         try:
             report = json.loads(path.read_text())
         except ValueError as error:
             print(f"could not read {path}: {error}", file=sys.stderr)
             return 0
-        message = compose(
-            report, lane=args.lane, run_url=args.run_url, ref=args.ref
-        )
+        message = compose(report, lane=args.lane, run_url=args.run_url, ref=args.ref)
 
     webhook = os.getenv("SLACK_WEBHOOK_URL")
     if not webhook:
