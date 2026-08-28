@@ -9,7 +9,7 @@ import { ArrowRight } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { StepLoader } from '@/components/brand/loader';
 import { captureEvent } from '@/lib/analytics/client';
-import { GuestResourceView } from '@/components/share/guest-resource-view';
+import { SharedResourceView } from '@/components/share/shared-resource-view';
 import { JoinPodPanel } from '@/components/share/join-pod-panel';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -38,9 +38,15 @@ interface ShareLandingProps {
  * unconditionally, which was fine for a teammate and a dead end for everyone
  * else: `/pod/…` answers "can I open this?" only by trying to render the whole
  * pod, so someone who was sent one document landed on a "request pod access"
- * wall no matter how widely that document was shared. Now the redirect happens
- * only for people who actually have pod access, and everyone else gets the
- * resource itself if it is theirs to read.
+ * wall no matter how widely that document was shared.
+ *
+ * Now nobody is redirected past the thing they clicked. A link should open what
+ * it points at, and bouncing a member into the workspace answered a question
+ * they had not asked — losing the document they came for, and their place in a
+ * long one. Members get the same page with an "Open in pod" button on it, which
+ * is the workspace offered rather than imposed. Two cases still redirect: a pod
+ * link, which names no resource to render, and a member who cannot read this
+ * particular resource, where only the pod can explain itself.
  */
 export function ShareLanding({
     destination,
@@ -85,7 +91,7 @@ export function ShareLanding({
                 return null;
             }
         },
-        enabled: Boolean(isAuthenticated && target && hasPodAccess === false),
+        enabled: Boolean(isAuthenticated && target),
         retry: false,
     });
 
@@ -107,12 +113,19 @@ export function ShareLanding({
             router.replace(destination);
             return;
         }
-        if (hasPodAccess) router.replace(destination);
-    }, [isAuthenticated, isLoading, destination, router, target, hasPodAccess]);
+        // A member who cannot read this particular resource. Nothing can be
+        // rendered here and the pod is the only place that can say why, so this
+        // is the one case that still redirects.
+        if (hasPodAccess && preview === null) router.replace(destination);
+    }, [isAuthenticated, isLoading, destination, router, target, hasPodAccess, preview]);
 
+    // The pod check only decides whether an "Open in pod" button appears, so it
+    // no longer holds the document up — except when there is no preview to show,
+    // where it is what separates "redirect a member" from "ask to join".
     const isResolving = isLoading
-        || (isAuthenticated && Boolean(target) && (isCheckingPod || hasPodAccess === true))
-        || (isAuthenticated && hasPodAccess === false && isCheckingPreview);
+        || (isAuthenticated && Boolean(target) && isCheckingPreview)
+        || (isAuthenticated && Boolean(target) && !preview && isCheckingPod)
+        || (isAuthenticated && Boolean(target) && !preview && hasPodAccess === true);
 
     if (isResolving) {
         return (
@@ -126,11 +139,12 @@ export function ShareLanding({
 
     if (isAuthenticated && target && preview) {
         return (
-            <GuestResourceView
+            <SharedResourceView
                 target={target}
                 kind={kind}
                 preview={preview as never}
                 fallbackName={name}
+                openInPodHref={hasPodAccess ? destination : null}
             />
         );
     }
