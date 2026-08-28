@@ -84,6 +84,23 @@ const REVOKED_REFUSALS: u32 = 3;
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+/// How far event delivery is allowed to back off, and why it is not `RETRY_MAX`.
+///
+/// The poll loop backs off to thirty seconds because a failing poll means the
+/// target may be unreachable, and hammering it helps nobody. Event delivery is
+/// not that: it runs *beside* a poll loop that is separately proving the target
+/// answers, and everything it carries -- a run's output, its terminal state --
+/// is what somebody is sitting and waiting for.
+///
+/// Sharing the thirty-second ceiling meant a handful of transient failures
+/// compounded into more than a minute of silence: 0.5s, 1, 2, 4, 8, 16, 30 is
+/// 61.5s before the eighth attempt, on a control plane the poll loop was
+/// talking to successfully the whole time. That is how a run finishes with
+/// nothing delivered and no sign of why -- the retries below this were logged
+/// at `debug`, which the host does not emit.
+const EVENT_RETRY_MAX: Duration = Duration::from_secs(2);
+/// Consecutive delivery failures before saying so at a level that is emitted.
+const EVENT_RETRY_QUIET: u32 = 3;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 // How long a native permission request waits for a human before it is denied.
 // Long enough for someone to actually see and answer the prompt; bounded so a
@@ -613,6 +630,7 @@ async fn deliver_events(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut retry = RETRY_MIN;
+    let mut consecutive_failures: u32 = 0;
     loop {
         tokio::select! {
             () = events_ready.notified() => {}
@@ -622,14 +640,37 @@ async fn deliver_events(
             return;
         }
         match flusher.lock().await.flush().await {
-            Ok(()) => retry = RETRY_MIN,
+            Ok(()) => {
+                if consecutive_failures >= EVENT_RETRY_QUIET {
+                    tracing::warn!(
+                        failures = consecutive_failures,
+                        "Agent Host event delivery recovered"
+                    );
+                }
+                retry = RETRY_MIN;
+                consecutive_failures = 0;
+            }
             Err(error) => {
-                tracing::debug!(%error, "could not deliver Agent Host events; retrying");
+                consecutive_failures += 1;
+                // The first failures are ordinary and stay quiet. A run of them
+                // is the thing nobody could see: events are what a person is
+                // waiting on, so silence here reads to them as an agent that
+                // stopped, and `debug` alone meant neither a CI log nor a
+                // support bundle could tell them apart.
+                if consecutive_failures == EVENT_RETRY_QUIET {
+                    tracing::warn!(
+                        %error,
+                        failures = consecutive_failures,
+                        "Agent Host events are not being delivered; still retrying"
+                    );
+                } else {
+                    tracing::debug!(%error, "could not deliver Agent Host events; retrying");
+                }
                 tokio::select! {
                     () = tokio::time::sleep(retry) => {}
                     _ = shutdown.changed() => return,
                 }
-                retry = (retry * 2).min(RETRY_MAX);
+                retry = (retry * 2).min(EVENT_RETRY_MAX);
                 // Nothing consumed the notification that brought us here, so
                 // re-raise it: the events are still pending and the next pass
                 // has to be woken by something.
@@ -3416,6 +3457,46 @@ mod target_worker_tests {
             applied.iter().any(|(run_id, _)| *run_id == poisoned),
             "the run's heartbeat must resume once the refusal passes"
         );
+    }
+
+    /// Event delivery must not go quiet for a minute over transient failures.
+    ///
+    /// Delivery used to share the poll loop's thirty-second ceiling. Doubling
+    /// from 500ms, a run of failures spends 0.5 + 1 + 2 + 4 + 8 + 16 + 30 =
+    /// 61.5s before the eighth attempt -- on a control plane the poll loop is
+    /// separately, successfully talking to the whole time. A run can finish
+    /// inside that window with none of its output delivered, and the retries
+    /// were logged at `debug`, which the host does not emit, so there was
+    /// nothing to find afterwards.
+    ///
+    /// The numbers rather than the constant, because the constant is only
+    /// meaningful as the total silence it permits.
+    #[test]
+    fn event_delivery_backs_off_in_seconds_not_minutes() {
+        use super::{EVENT_RETRY_MAX, RETRY_MAX, RETRY_MIN};
+
+        fn silence_over(attempts: u32, ceiling: Duration) -> Duration {
+            let mut retry = RETRY_MIN;
+            let mut total = Duration::ZERO;
+            for _ in 0..attempts {
+                total += retry;
+                retry = (retry * 2).min(ceiling);
+            }
+            total
+        }
+
+        // What it was: over a minute before the eighth try.
+        assert!(silence_over(7, RETRY_MAX) > Duration::from_secs(60));
+        // What it is: 0.5 + 1 + 2 x 6 = 13.5s for eight attempts, so a stalled
+        // delivery reads as slowness rather than as an agent that stopped.
+        assert!(
+            silence_over(8, EVENT_RETRY_MAX) < Duration::from_secs(15),
+            "eight delivery attempts spend {:?}",
+            silence_over(8, EVENT_RETRY_MAX),
+        );
+        // And it must stay well inside the 90s a permission-flow run is given,
+        // which is the budget this overran.
+        assert!(silence_over(20, EVENT_RETRY_MAX) < Duration::from_secs(45));
     }
 
     /// Narrowing must not lose commands: a cancellation handed back by one of
