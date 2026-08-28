@@ -229,3 +229,47 @@ def items_of(payload: Any) -> list[JSON]:
             if isinstance(value, list):
                 return value
     return []
+
+
+#: How many pages to follow before giving up. A bound rather than a limit
+#: anyone should reach — twenty pages of a hundred is two thousand rows — so a
+#: bug in the cursor cannot spin a scenario forever instead of failing it.
+PAGES = 20
+
+
+async def every_item(
+    fetch: Callable[[JSON], Awaitable[Any]], *, limit: int = 100, pages: int = PAGES
+) -> list[JSON]:
+    """Every row of a paginated list, not just the first page of them.
+
+    The default page size on a list endpoint reads as "all of them" and is not,
+    and the suite has now been caught by that three times: conversations
+    (lemma-platform#507), pods, and the files in a folder. Each one failed the
+    same way — a scenario asked whether the thing it had just made was there,
+    was shown the first hundred rows of a tenant that stands between runs, and
+    reported the product had lost it.
+
+    The reading half is worse and quieter. A step that asks "is it *not* there"
+    against one page fails **open**: a pod still visible on page two reads as
+    correctly hidden, and every deletion and access-boundary scenario built on
+    it passes while proving nothing.
+
+    ``fetch`` takes the query parameters and returns the payload, so a caller
+    keeps its own path and any filters it needs and gets the paging for free.
+    """
+    found: list[JSON] = []
+    token: str | None = None
+    for _ in range(pages):
+        params: JSON = {"limit": limit}
+        if token:
+            params["page_token"] = token
+        answered = await fetch(params)
+        found.extend(items_of(answered))
+        token = (
+            (answered or {}).get("next_page_token")
+            if isinstance(answered, dict)
+            else None
+        )
+        if not token:
+            break
+    return found
