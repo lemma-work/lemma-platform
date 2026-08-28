@@ -255,7 +255,13 @@ fn migrate_legacy_local_api_url(value: &str) -> String {
     if !suffix.is_empty() && !suffix.starts_with(':') && !suffix.starts_with('/') {
         return value.to_owned();
     }
-    format!("http://app.lemma.localhost{suffix}")
+    // To whatever host this installation serves now, not the one that era used:
+    // a migrated URL is stored state the shell will be handed, and pointing it
+    // at a hostname nothing answers just makes the next launch resume nowhere.
+    format!(
+        "http://{}{suffix}",
+        crate::local_domain::LocalDomain::from_env().frontend_host()
+    )
 }
 
 fn string_field(event: &Value, name: &str, fallback: &str) -> String {

@@ -17,20 +17,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::local_domain::LocalDomain;
 use crate::network::{load_or_allocate, NetworkPorts};
 use crate::paths::LocalPaths;
 
 const POSTGRES_PORT: u16 = 55432;
 const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
-const LOCAL_FRONTEND_HOST: &str = "app.lemma.localhost";
-// Safari/WKWebView blocks a response from a different hostname from setting
-// the SuperTokens session cookies used by the top-level frontend. Keep the
-// processes on separate ports, but expose both through one browser hostname.
-// The backend still binds only to loopback and sandboxes use the explicit
-// host.lemma.internal callback URLs below.
-const LOCAL_BACKEND_HOST: &str = LOCAL_FRONTEND_HOST;
-const LOCAL_CORS_ORIGIN_REGEX: &str = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$";
+// The workspace and the API share one browser hostname on two ports.
+//
+// Safari/WKWebView blocks a response from a different hostname from setting the
+// SuperTokens session cookies the top-level frontend uses, so both are exposed
+// through one name. The backend still binds only to loopback, and sandboxes use
+// the explicit host.lemma.internal callbacks below.
+//
+// Which name that is comes from `local_domain`, not from a constant here -- see
+// that module for why it is configurable and what it costs.
 
 #[derive(Clone, Debug)]
 pub(crate) struct ManagedManifestMaterial {
@@ -126,7 +128,15 @@ pub(crate) fn prepare(
     crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
     let source = source_layout()?;
-    let manifest = build(paths, pack_root, &material, ports, source.as_ref(), healed)?;
+    let manifest = build(
+        paths,
+        pack_root,
+        &material,
+        ports,
+        source.as_ref(),
+        healed,
+        &LocalDomain::from_env(),
+    )?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
@@ -232,6 +242,7 @@ fn build(
     ports: NetworkPorts,
     source: Option<&SourceLayout>,
     healed: &mut Vec<String>,
+    domain: &LocalDomain,
 ) -> io::Result<Value> {
     validate_hex_secret("postgres password", &material.postgres_password)?;
     validate_hex_secret("Redis password", &material.redis_password)?;
@@ -357,8 +368,9 @@ fn build(
     let frontend_port = ports.frontend_port;
     let backend_port = ports.backend_port;
     let runtime_instance_id = random_hex(16)?;
-    let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{frontend_port}");
-    let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{backend_port}");
+    let host = domain.frontend_host();
+    let frontend_origin = format!("http://{host}:{frontend_port}");
+    let backend_origin = format!("http://{host}:{backend_port}");
     let mut backend_env = BTreeMap::from([
         ("ENVIRONMENT", "local".to_owned()),
         ("DEBUG", "true".to_owned()),
@@ -508,7 +520,7 @@ fn build(
         // it, and every *.lemma.localhost host is served by this install's own
         // backend. An app acting as the signed-in user is the feature, and it
         // is what already happens on the web build.
-        ("SESSION_COOKIE_DOMAIN", ".lemma.localhost".to_owned()),
+        ("SESSION_COOKIE_DOMAIN", domain.cookie_domain()),
         // Empty, and deliberately not absent: it names the scheme the line
         // above replaced.
         //
@@ -534,12 +546,28 @@ fn build(
         // first-party. Off by default in the backend, because on a real domain
         // an app subdomain and the API host are already same-site and this
         // would widen the refresh cookie for nothing.
-        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
+        // Only where the app host and the API host are *not* already same-site.
+        //
+        // On `*.localhost` a browser can derive no registrable domain, so those
+        // two are different sites and an app's call to the API is third-party --
+        // hence the same-origin `/_lemma` door, and the widened refresh cookie
+        // that makes it work. On a real registrable domain they are same-site
+        // already and the door buys nothing but a whole-API alias on the origin
+        // that renders user-authored HTML.
+        (
+            "APP_API_VIA_APP_ORIGIN",
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            }
+            .to_owned(),
+        ),
         (
             "APP_BASE_DOMAIN",
-            format!("apps.lemma.localhost:{backend_port}"),
+            format!("{}:{backend_port}", domain.apps_domain()),
         ),
-        ("CORS_ORIGIN_REGEX", LOCAL_CORS_ORIGIN_REGEX.to_owned()),
+        ("CORS_ORIGIN_REGEX", domain.cors_origin_regex()),
         ("STORAGE_BACKEND", "local".to_owned()),
         ("LOCAL_OBJECT_STORAGE_ROOT", path_text(&object_storage)?),
         ("LOCAL_FILE_STORAGE_ROOT", path_text(&files)?),
@@ -1384,6 +1412,66 @@ mod tests {
         assert!(paths.root.join("host.secrets.json").is_file());
     }
 
+    /// A configured domain moves every host together, and drops the workaround.
+    ///
+    /// The point of moving off `*.localhost` is that a browser can then derive
+    /// a registrable domain covering both the workspace and the app hosts, so a
+    /// framed pod app is same-site and can hold a session. That only holds if
+    /// the whole arrangement moves at once: a cookie still scoped to the old
+    /// domain, or an app host under a different one, and the frame is back to
+    /// being third-party with nothing to show for the change.
+    #[test]
+    fn a_configured_domain_moves_the_workspace_the_apps_and_the_cookie_together() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some("sslip")),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let cookie = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
+        let app_host = app_base.split(':').next().unwrap();
+        let api_host = env["API_URL"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        assert_eq!(cookie, ".127.0.0.1.sslip.io");
+        assert_eq!(app_host, "apps.127.0.0.1.sslip.io");
+        assert_eq!(api_host, "app.127.0.0.1.sslip.io");
+        // Both hosts inside the cookie's scope, or the app is signed out.
+        let scope = cookie.trim_start_matches('.');
+        assert!(app_host.ends_with(scope), "{app_host} is outside {cookie}");
+        assert!(api_host.ends_with(scope), "{api_host} is outside {cookie}");
+
+        // ...and the `*.localhost` workaround goes away with it. On a real
+        // registrable domain the app host and the API host are already
+        // same-site, so aliasing the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML -- and widening the refresh cookie to
+        // make that work -- buys nothing.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "false");
+    }
+
     /// Changing the cookie domain has to say what it replaced.
     ///
     /// A widened `SESSION_COOKIE_DOMAIN` does not replace the cookies a browser
@@ -1597,6 +1685,7 @@ mod tests {
             load_or_allocate(&paths).unwrap(),
             None,
             &mut Vec::new(),
+            &LocalDomain::default(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));

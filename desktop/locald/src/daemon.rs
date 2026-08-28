@@ -103,8 +103,14 @@ impl Daemon {
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
                 // LAN/Public desired state is deliberately not persisted.
                 // Every daemon launch starts from the private canonical origin.
-                state.url = format!("http://app.lemma.localhost:{frontend_port}");
-                state.api_url = format!("http://app.lemma.localhost:{backend_port}");
+                state.url = format!(
+                    "http://{}:{frontend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
+                state.api_url = format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
                 state.persist(&paths.state)?;
             }
         }
@@ -1168,7 +1174,12 @@ impl Daemon {
             .host_processes
             .as_ref()
             .and_then(|manager| manager.application_ports())
-            .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
+            .map(|(_, backend_port)| {
+                format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                )
+            })
             .unwrap_or_else(|| state.api_url.clone());
         state.persist(&self.paths.state)
     }

@@ -5407,6 +5407,26 @@ fn same_origin(url: &tauri::Url, target: &str) -> bool {
         && url.port_or_known_default() == target.port_or_known_default()
 }
 
+/// The local domains this build will serve a workspace under.
+///
+/// Compiled in on purpose. `trusted_workspace_urls` exists to stop a `ready`
+/// event pointing the workspace somewhere else, so deriving the acceptable
+/// hostname from that same event would answer the question with the thing being
+/// questioned. A short list the shell ships knowing keeps the gate meaning
+/// something while letting the domain move.
+///
+/// Kept in step with `lemma_locald::local_domain`, which is what actually picks
+/// one -- the shell launches locald rather than linking it, so there is no
+/// shared constant to reach for.
+const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost", "127.0.0.1.sslip.io"];
+
+/// Whether `host` is the workspace host of a domain this build knows.
+fn trusted_local_workspace_host(host: &str) -> bool {
+    TRUSTED_LOCAL_BASES
+        .iter()
+        .any(|base| host == format!("app.{base}"))
+}
+
 fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
         return false;
@@ -5424,13 +5444,17 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
         return false;
     }
 
-    if app.host_str() == Some("app.lemma.localhost") {
+    if app.host_str().is_some_and(trusted_local_workspace_host) {
         let (Some(app_port), Some(api_port)) = (app.port(), api.port()) else {
             return false;
         };
         return app.scheme() == "http"
             && api.scheme() == "http"
-            && api.host_str() == Some("app.lemma.localhost")
+            // The same host as the workspace, which the allowlist above has
+            // already vetted. Checking the literal twice let the two drift;
+            // what this arrangement actually requires is one hostname on two
+            // ports.
+            && api.host_str() == app.host_str()
             && api.path() == "/"
             && app_port >= 49_152
             && api_port >= 49_152
@@ -5523,9 +5547,11 @@ fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
     url.scheme() == "http"
         && api.scheme() == "http"
         && url.port() == api.port()
-        && url
-            .host_str()
-            .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
+        && url.host_str().is_some_and(|host| {
+            TRUSTED_LOCAL_BASES
+                .iter()
+                .any(|base| host.ends_with(&format!(".apps.{base}")))
+        })
 }
 
 /// The documents a frame renders without fetching anything: the content document
