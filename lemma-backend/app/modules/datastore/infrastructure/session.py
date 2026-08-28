@@ -25,17 +25,34 @@ def _json_serial(obj):
 def _build_datastore_connect_args() -> dict:
     """Build asyncpg connect_args with server-side session settings.
 
-    ``statement_cache_size=0`` is the one that is not about timeouts, and it is
-    here rather than on the primary engine because only this one runs SQL
+    The two cache settings are the ones that are not about timeouts, and they
+    are here rather than on the primary engine because only this one runs SQL
     against tables a person can change.
 
-    asyncpg caches prepared statements per connection, keyed on the SQL text.
+    **There are two prepared-statement caches, and both have to be off.**
+    Turning off one is what made this bug look fixed while it was not.
+
+    ``statement_cache_size=0`` is asyncpg's own. ``prepared_statement_cache_size=0``
+    is SQLAlchemy's — its asyncpg dialect keeps a second cache of its own, per
+    DBAPI connection, defaulting to **100** statements, and asyncpg's setting
+    does not touch it. SQLAlchemy documents the hazard itself: a cached
+    prepared statement goes stale "when DDL has been emitted to the PostgreSQL
+    database which modifies the tables", and it can only invalidate that cache
+    inside one process and engine — which is not the arrangement here, where
+    an API process and its workers each hold their own.
+
     A record read is ``SELECT * FROM "<schema>"."<table>"`` — the same text
     before and after a column is added or removed — so the cached plan is
     reused with a result descriptor that no longer matches the table, and
     asyncpg raises ``InvalidCachedStatementError``. Nothing caught it, so it
-    left as a 400: a person removed a column and their table stopped being
-    readable.
+    left as a 400: a person added or removed a column and their table stopped
+    being readable.
+
+    This is the second attempt at it (DEV-DATA-004, closed in #505 by setting
+    only asyncpg's knob). What found it again was the product scenario suite
+    run against a real install rather than a booted test stack — see the note
+    on ``testing`` below for why that difference decides whether it is visible
+    at all.
 
     Worse than one bad request, because the connection is pooled. Any request
     landing on it saw the same 400, and it cleared itself only when the
@@ -48,7 +65,10 @@ def _build_datastore_connect_args() -> dict:
     that belongs to users rather than to migrations: the primary engine keeps
     its cache, because its tables change only at deploy time.
     """
-    connect_args: dict = {"statement_cache_size": 0}
+    connect_args: dict = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
     server_settings: dict[str, str] = {}
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
@@ -72,7 +92,10 @@ def get_datastore_engine():
         # this bug was invisible to the whole scenario suite locally and showed
         # up only against a deployment with a real pool. Setting it in one
         # branch would have preserved that difference.
-        connect_args: dict = {"statement_cache_size": 0}
+        connect_args: dict = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool
         else:

@@ -492,3 +492,81 @@ async def test_a_binary_file_is_not_mangled(pod):
             pod.files.delete(path)
         except Exception as error:  # noqa: BLE001
             print(f"warning: could not remove the e2e file {path}: {error}")
+
+
+def _table_column(name: str) -> dict:
+    return {"name": name, "type": "TEXT", "required": False, "unique": False}
+
+
+async def test_a_table_stays_readable_after_its_shape_changes(install, account, pod):
+    """Add a column, then read the table. It used to answer 400.
+
+    A record read is `SELECT * FROM "<schema>"."<table>"` -- the same SQL text
+    before and after a column is added -- so a cached prepared statement keeps a
+    result descriptor that no longer matches, and asyncpg raises
+    `InvalidCachedStatementError`. It surfaced as a 400 on the person's own
+    table, healing only when the connection recycled.
+
+    Tested here rather than in a unit suite because it needs a real connection
+    pool. In `testing` the datastore engine pools with `NullPool`, so no
+    connection lives long enough to reuse a stale statement and the whole thing
+    is invisible -- which is how DEV-DATA-004 was closed while still broken:
+    asyncpg's own cache was turned off and SQLAlchemy's second one, defaulting
+    to 100 statements per connection, was not.
+
+    Found by running the product scenarios against a real install
+    (`make scenarios-desktop`), which is the arrangement that has a pool.
+    """
+    base = f"{install.api_url}/pods/{pod.pod_id}/datastore/tables"
+    headers = {"Authorization": f"Bearer {account.access_token}"}
+    table = f"shape_{os.getpid()}"
+
+    created = httpx.post(
+        base,
+        json={
+            "name": table,
+            "columns": [_table_column("subject"), _table_column("body")],
+        },
+        headers=headers,
+        timeout=30,
+    )
+    assert created.status_code in (200, 201), created.text
+
+    added = httpx.post(
+        f"{base}/{table}/records",
+        json={"data": {"subject": "first", "body": "hello"}},
+        headers=headers,
+        timeout=30,
+    )
+    assert added.status_code in (200, 201), added.text
+
+    # Read once first, so a prepared statement for this exact SQL exists to go
+    # stale. Without this the test can pass for the wrong reason.
+    warm = httpx.get(f"{base}/{table}/records", headers=headers, timeout=30)
+    assert warm.status_code == 200, warm.text
+
+    for change in (
+        lambda: httpx.post(
+            f"{base}/{table}/columns",
+            json={"column": _table_column("priority")},
+            headers=headers,
+            timeout=30,
+        ),
+        lambda: httpx.delete(
+            f"{base}/{table}/columns/body", headers=headers, timeout=30
+        ),
+    ):
+        response = change()
+        assert response.status_code in (200, 201, 204), response.text
+
+        # Several reads, because the pool hands out a different connection each
+        # time and only the ones holding a cached statement for this table
+        # break. One read can miss it entirely.
+        for attempt in range(8):
+            rows = httpx.get(f"{base}/{table}/records", headers=headers, timeout=30)
+            assert rows.status_code == 200, (
+                f"reading the table after its shape changed answered "
+                f"{rows.status_code} on attempt {attempt + 1}: {rows.text}"
+            )
+
+    httpx.delete(f"{base}/{table}", headers=headers, timeout=30)
