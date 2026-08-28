@@ -2534,7 +2534,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or_else(|| local_auth_url(&url, "signup"));
+                .unwrap_or_else(|| local_auth_url_returning_to(&url, "signup", "/"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -6049,6 +6049,44 @@ fn local_auth_url(base: &str, auth_mode: &str) -> String {
     format!("{}/auth?show={auth_mode}", base.trim_end_matches('/'),)
 }
 
+/// The auth portal, told where to go once it is done.
+///
+/// Without a return address the portal has nowhere to send someone who is
+/// already signed in, so it stops and offers a "Continue" button. That is the
+/// right screen when a person navigated to sign-in themselves and might mean to
+/// switch accounts. It is the wrong one on launch: the app asked for the
+/// workspace, the session is already there, and the only thing between the two
+/// was a click.
+///
+/// This is reached on every cold start, not just a first run. A launch mints a
+/// new runtime generation, so the recorded resume target never matches and the
+/// app falls back to the portal each time -- which is why the button was on
+/// screen every single launch rather than occasionally.
+///
+/// The return address stays relative on purpose. It is resolved against the
+/// portal's own origin, so it cannot point off it, and it survives locald
+/// handing out a different port than the one this launch happens to use.
+fn local_auth_url_returning_to(base: &str, auth_mode: &str, route: &str) -> String {
+    let route = if route.starts_with('/') { route } else { "/" };
+    let mut url = format!("{}/auth", base.trim_end_matches('/'));
+    match tauri::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed
+                .query_pairs_mut()
+                .append_pair("show", auth_mode)
+                .append_pair("redirect_uri", route);
+            parsed.to_string()
+        }
+        // A base this malformed will fail at navigation anyway; falling back to
+        // the plain portal keeps that the failure rather than a panic here.
+        Err(_) => {
+            url.push_str("?show=");
+            url.push_str(auth_mode);
+            url
+        }
+    }
+}
+
 #[tauri::command]
 async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     let base = app_base_url(&app)?;
@@ -9163,6 +9201,35 @@ mod tests {
         // monitors at all. Neither is evidence the saved value is wrong, and
         // refusing to restore there would look like the bug this fixes.
         assert!(placement_is_reachable(&at(100, 100), &[]));
+    }
+
+    #[test]
+    fn a_launch_tells_the_auth_portal_where_to_come_back_to() {
+        // The portal auto-continues an existing session only when it is given
+        // somewhere to go; without one it stops on a Continue button. Every
+        // cold start reached it without one, because a new runtime generation
+        // means the recorded resume target never matches.
+        let url = local_auth_url_returning_to("http://app.lemma.localhost:3711/", "signup", "/");
+        assert!(
+            url.starts_with("http://app.lemma.localhost:3711/auth?"),
+            "{url}"
+        );
+        assert!(url.contains("show=signup"), "{url}");
+        assert!(
+            url.contains("redirect_uri=%2F"),
+            "the portal needs a return address to continue without asking: {url}"
+        );
+
+        // Relative, so it resolves against the portal's own origin and cannot
+        // be aimed off it -- and so it survives locald allocating a different
+        // port than the one this launch used.
+        let sneaky = local_auth_url_returning_to(
+            "http://app.lemma.localhost:3711",
+            "signin",
+            "https://evil.example",
+        );
+        assert!(sneaky.contains("redirect_uri=%2F"), "{sneaky}");
+        assert!(!sneaky.contains("evil.example"), "{sneaky}");
     }
 
     #[test]
