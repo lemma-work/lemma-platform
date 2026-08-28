@@ -408,10 +408,14 @@ jobs:
           check "no legacy bundled uv binary" test ! -e "${app}/Contents/MacOS/uv"
 
           app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          limit=$((25 * 1024 * 1024))
-          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 25 MiB)"
+          # 25 MiB didn't have room for lemma-agent-host (added as a Desktop
+          # sidecar after this budget was set) -- v0.7.1's bundle came in at
+          # 26,423,296 bytes, 208,896 bytes over. 30 MiB gives that real
+          # addition headroom without leaving the budget meaningless.
+          limit=$((30 * 1024 * 1024))
+          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 30 MiB)"
           if [[ "${app_bytes}" -gt "${limit}" ]]; then
-            echo "::error::online app bundle is ${app_bytes} bytes, over the 25 MiB budget by $((app_bytes - limit)) bytes"
+            echo "::error::online app bundle is ${app_bytes} bytes, over the 30 MiB budget by $((app_bytes - limit)) bytes"
             failed=1
           fi
 
