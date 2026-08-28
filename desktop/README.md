@@ -177,6 +177,57 @@ global constant, so a dev run in a throwaway state root would adopt and mutate
 the distribution a real install owns. On Windows, build and install the
 installer instead.
 
+### End-to-end: does an install actually serve a working app?
+
+`make desktop-check` compiles and unit-tests. None of it opens an app. These
+three lanes do, in rising order of what they need.
+
+```bash
+make desktop-e2e-temp     # this working tree, no build, ~35s
+make desktop-e2e          # a packaged install you are running
+make scenarios-desktop    # the whole journey suite against that install
+```
+
+**`desktop-e2e-temp` is the one to run while changing locald.** It builds locald
+from the working tree, renders a host pack, borrows the running install's guest
+Postgres and Redis, publishes an app and drives a real WKWebView against it —
+top-level *and* embedded in a workspace frame. It needs the desktop app running
+(for the guest), `swift`, and `psql`.
+
+Two things it deliberately does not cover, both reported rather than hidden:
+
+- **Functions.** It runs no locald, so nothing dispatches a function into a
+  guest sandbox. That test skips, naming `make desktop-e2e` as the lane for it.
+- **The `.localhost` arrangement.** The embedded test skips there, because a
+  framed app genuinely cannot hold a session under a base domain whose hosts a
+  browser cannot derive a registrable domain from. Force it with
+  `LEMMA_LOCAL_DOMAIN=lemma.localhost` to see the fallback behave.
+
+**`desktop-e2e` runs against whatever install is running** and *hard-fails*
+rather than skipping when it cannot find one. That is on purpose — a lane that
+skips when the thing it tests is absent reports success for doing nothing — but
+it means the message, not the failure, is what tells you what is missing. No CI
+job runs it: it needs a packaged install and a guest VM.
+
+**`scenarios-desktop` is the widest coverage the desktop build has.** It points
+the product journey suite — orgs, pods, tables, files, agents, functions,
+workflows, schedules, bundles, app publishing — at the install, through the real
+host pack and the real guest. The address comes from what locald rendered, so
+there is nothing to configure.
+
+It writes real data, and the product cannot delete an organization, so:
+
+```bash
+make scenarios-desktop-provision SCENARIOS_ALLOW_NEW_CAST=1   # once per install
+```
+
+The flag is not passed for you. On a fresh install it means "yes, first time";
+on a shared deployment the same prompt means the cast already exists under other
+addresses, and answering blindly builds a second parallel one out of
+organizations nothing can remove. The run also pins
+`SCENARIOS_TARGET_INSTANCE_ID` to the install's own id, so restarting the app
+onto a different install mid-session stops the run instead of writing into it.
+
 ### Signing a local build you intend to actually use
 
 The sidecar script signs with a Developer ID when the machine has one and falls

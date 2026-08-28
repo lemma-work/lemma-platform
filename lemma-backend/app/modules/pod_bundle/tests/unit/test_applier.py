@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.errors import BadRequestError, DomainError
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
 from app.modules.pod_bundle.infrastructure.applier import (
     BundleApplier,
@@ -429,28 +431,28 @@ class FakeFunctionService:
         return self._Function()
 
 
-async def test_an_imported_agent_gets_the_memory_folder_its_toolset_needs(
+async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     tmp_path, monkeypatch
 ):
-    """Creating an agent derives the `/memory` grant, as the controller does.
+    """The applier hands the service the toolsets; the service derives from them.
 
-    `sync_memory_folder_grant` used to be called from the agent HTTP controller
-    and nowhere else, so an agent created straight through the service -- which
-    is what this applier does -- got MEMORY in its toolsets and no folder to
-    write to.
+    The `/memory` derivation used to live only in the agent HTTP controller, so
+    an agent created straight through the service -- which is what this applier
+    does -- got MEMORY in its toolsets and no folder to write to. Dormant until
+    MEMORY became a default for new agents (#476), and then fatal: exporting a
+    pod and importing it back died on `Unknown resource name(s): folder:/memory`.
 
-    Silent until MEMORY became a default for new agents (#476), and then fatal:
-    exporting a pod and importing it back died on
-    `400: Unknown resource name(s): folder:/memory`, reported only as "Apply
-    failed due to a transient error." The e2e that caught it is `workspace`
-    marked and runs in the protected lane, i.e. weekly; this asserts the same
-    thing on every pull request.
+    The floor now lives in `AgentService.create_agent` (see
+    `app.composition.agent_memory`), so what is left for the applier to get
+    right is passing the toolsets through at all -- without them the service has
+    nothing to derive from and the same bug returns by a different route.
     """
     root = tmp_path / "bundle"
     _write(
         root / "agents" / "reporter" / "reporter.json",
         {"name": "reporter", "instruction": "Report.", "toolsets": ["MEMORY"]},
     )
+    seen: dict = {}
 
     class _CreatingAgentService:
         """A pod that does not have this agent yet -- an import's own case."""
@@ -459,20 +461,24 @@ async def test_an_imported_agent_gets_the_memory_folder_its_toolset_needs(
             return None
 
         async def create_agent(self, **kwargs):
+            seen.update(kwargs)
             return FakeAgentService._Agent()
 
     monkeypatch.setattr(
         "app.composition.pod_bundle_resources.get_agent_service",
         lambda uow: _CreatingAgentService(),
     )
-    calls = _patch_grant_layer(monkeypatch)
+    _patch_grant_layer(monkeypatch)
 
     await _grant_applier(root).apply_step(
         _step(StepKind.AGENT, "reporter", action=StepAction.CREATE)
     )
 
-    assert calls.get("memory_sync"), "the agent step never derived the memory grant"
-    assert calls["memory_sync"][-1]["toolsets"] == ["MEMORY"]
+    assert [str(toolset) for toolset in (seen.get("toolsets") or [])] == [
+        str(AgentToolset.MEMORY)
+    ]
+    # ...and a ctx, without which the service skips the derivation entirely.
+    assert seen.get("ctx") is not None
 
 
 async def test_the_grants_step_puts_the_derived_memory_grant_back(
@@ -515,6 +521,68 @@ async def test_the_grants_step_puts_the_derived_memory_grant_back(
     assert calls.get("memory_sync"), (
         "the grants step replaced every grant without re-deriving memory's"
     )
+
+
+async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
+    tmp_path, monkeypatch
+):
+    """The applier propagates a grant failure rather than swallowing it.
+
+    Scoped deliberately, and narrower than it first looks. The grant layer is
+    stubbed here, so this does **not** cover the type the raise site now uses --
+    that is asserted against the real functions in
+    `pod/tests/unit/test_core_authorization_permissions.py`, which fails if
+    `resolve_resource_ids_by_names` goes back to `fastapi.HTTPException`.
+
+    What this covers is the applier's own half: that whatever grant resolution
+    raises reaches the caller with its message intact. Both halves are needed.
+    The pod bundle handlers branch on `DomainError` to mark an import FAILED
+    with the real reason; anything else is called transient, re-raised, and
+    retried by streaq against inputs that cannot change -- which is how an
+    import naming a folder the target pod did not have came back as "Apply
+    failed due to a transient error", with `Unknown resource name(s):
+    folder:/memory` logged at DEBUG and never shown.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": "/memory",
+                        "permission_ids": ["folder.write"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    async def _unresolvable(session, *, pod_id, grants):
+        raise BadRequestError(
+            "Unknown resource name(s): folder:/memory",
+            code="UNKNOWN_RESOURCE_NAME",
+        )
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.normalize_pod_resource_grants", _unresolvable
+    )
+
+    with pytest.raises(DomainError) as raised:
+        await _grant_applier(root).apply_step(
+            _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+        )
+
+    # The reason has to survive, or the import reports nothing usable.
+    assert "folder:/memory" in str(raised.value)
+    assert raised.value.status_code == 400
 
 
 async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):

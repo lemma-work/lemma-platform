@@ -192,6 +192,15 @@ class DatastoreEventHandler:
                 pod_id=event.pod_id,
             )
         except Exception:
+            # Degraded, not failed: this lookup only decides the severity of the
+            # unmatched-event record below, so nothing user-facing breaks. But
+            # "no schedules are configured" and "the database is down" must not
+            # render as the same sentence, which is what an empty list did.
+            logger.warning(
+                "schedule.datastore_event_handler.active_schedule_lookup.degraded",
+                pod_id=str(event.pod_id),
+                exc_info=True,
+            )
             active = []
         if active:
             logger.debug(

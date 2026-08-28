@@ -794,7 +794,46 @@ fn hosted_url() -> String {
 }
 
 /// The workspace origins `capabilities/workspace.json` already covers.
-const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
+/// The origins the shipped capability already covers, read from the file.
+///
+/// Restated beside it, this list was a second copy of a rule that had already
+/// drifted once in this very function -- and it silently gained a third failure
+/// mode: the shipped entries carry a `:*` port pattern, while the origins
+/// checked against them are concrete, so `contains` never matched a local
+/// workspace and an override capability was minted for an origin that did not
+/// need one.
+fn shipped_workspace_origins() -> Vec<String> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["remote"]["urls"]
+        .as_array()
+        .expect("capabilities/workspace.json lists remote urls")
+        .iter()
+        .map(|url| {
+            url.as_str()
+                .expect("a shipped remote url is a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Whether a shipped pattern already covers this concrete origin.
+///
+/// Only the port may be a wildcard, and only as the whole port: a local
+/// workspace is served on whatever port was free, so `http://host:*` has to
+/// cover `http://host:52413`. Nothing else is treated as a pattern, because a
+/// looser match here hands shell commands to a lookalike host.
+fn shipped_workspace_origin_covers(pattern: &str, origin: &str) -> bool {
+    if pattern == origin {
+        return true;
+    }
+    let Some(prefix) = pattern.strip_suffix(":*") else {
+        return false;
+    };
+    origin
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+}
 
 /// The shipped workspace capability, read at compile time so the override below
 /// cannot drift from it.
@@ -835,6 +874,7 @@ fn overridden_workspace_capability() -> Option<String> {
 }
 
 fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
+    let shipped = shipped_workspace_origins();
     let mut urls: Vec<String> = Vec::new();
     for value in configured {
         let Ok(url) = tauri::Url::parse(value.trim()) else {
@@ -847,7 +887,10 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
             Some(port) => format!("{}://{host}:{port}", url.scheme()),
             None => format!("{}://{host}", url.scheme()),
         };
-        if SHIPPED_WORKSPACE_ORIGINS.contains(&origin.as_str()) {
+        if shipped
+            .iter()
+            .any(|pattern| shipped_workspace_origin_covers(pattern, &origin))
+        {
             continue;
         }
         if !urls.contains(&origin) {
@@ -2491,7 +2534,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or_else(|| local_auth_url(&url, "signup"));
+                .unwrap_or_else(|| local_auth_url_returning_to(&url, "signup", "/"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -4841,6 +4884,57 @@ fn saved_placement(config: &Value) -> Option<WindowPlacement> {
     })
 }
 
+/// A saved placement in the units the window builder actually reads.
+///
+/// Everything else about placement is in physical pixels and consistently so:
+/// `outer_position` and `inner_size` return physical, and
+/// `placement_is_reachable` compares them against monitor geometry that is also
+/// physical. The window *builder* is the one place that is not --
+/// `WebviewWindowBuilder::position` and `inner_size` are documented as logical
+/// pixels -- and handing it physical values was silently wrong on every display
+/// that is not 1:1.
+///
+/// On a 2x screen it doubled both: a window saved at 3024x1898 came back asking
+/// for 3024x1898 *logical*, which is 6048x3796 physical, so macOS clamped the
+/// size to the visible frame, and a saved y of 66 became 132 -- the window
+/// opened lower than it was left and short of the top of the screen. Restoring
+/// looked broken in a way that reads as "the app won't remember my window".
+///
+/// Returns None when the window would come back smaller than the app's own
+/// minimum. That check belongs here rather than beside the parse, because
+/// `MIN_RESTORED` is a logical size and until this point the numbers are not.
+fn placement_in_logical(
+    placement: &WindowPlacement,
+    scale: f64,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = placement.position.to_logical::<f64>(scale);
+    let size = placement.size.to_logical::<f64>(scale);
+    if size.width < f64::from(MIN_RESTORED.0) || size.height < f64::from(MIN_RESTORED.1) {
+        return None;
+    }
+    Some((position, size))
+}
+
+/// The scale of the display a placement lands on, or the primary one.
+///
+/// Asked per placement rather than taken from the primary monitor, because a
+/// second display with a different scale is exactly the case that makes the
+/// conversion wrong in a way the user sees.
+fn placement_scale_factor(handle: &AppHandle, placement: &WindowPlacement) -> f64 {
+    handle
+        .monitor_from_point(
+            f64::from(placement.position.x),
+            f64::from(placement.position.y),
+        )
+        .ok()
+        .flatten()
+        .or_else(|| handle.primary_monitor().ok().flatten())
+        .map_or(1.0, |monitor| monitor.scale_factor())
+}
+
 /// Whether a saved placement still lands on a display that exists.
 ///
 /// The failure this prevents is the classic one: quit with the window on a
@@ -5052,16 +5146,12 @@ fn build_main_window_at(
     // guess: an unplaced window lands where the OS puts it, which is right for
     // a first-ever launch and safe for everything else.
     let placement = placement.or_else(|| remembered_placement(handle));
-    let main_builder = match placement {
-        Some(placement) => main_builder
-            .position(
-                f64::from(placement.position.x),
-                f64::from(placement.position.y),
-            )
-            .inner_size(
-                f64::from(placement.size.width),
-                f64::from(placement.size.height),
-            ),
+    let main_builder = match placement
+        .and_then(|saved| placement_in_logical(&saved, placement_scale_factor(handle, &saved)))
+    {
+        Some((position, size)) => main_builder
+            .position(position.x, position.y)
+            .inner_size(size.width, size.height),
         None => main_builder,
     };
 
@@ -5407,6 +5497,26 @@ fn same_origin(url: &tauri::Url, target: &str) -> bool {
         && url.port_or_known_default() == target.port_or_known_default()
 }
 
+/// The local domains this build will serve a workspace under.
+///
+/// Compiled in on purpose. `trusted_workspace_urls` exists to stop a `ready`
+/// event pointing the workspace somewhere else, so deriving the acceptable
+/// hostname from that same event would answer the question with the thing being
+/// questioned. A short list the shell ships knowing keeps the gate meaning
+/// something while letting the domain move.
+///
+/// Kept in step with `lemma_locald::local_domain`, which is what actually picks
+/// one -- the shell launches locald rather than linking it, so there is no
+/// shared constant to reach for.
+const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost", "127.0.0.1.sslip.io"];
+
+/// Whether `host` is the workspace host of a domain this build knows.
+fn trusted_local_workspace_host(host: &str) -> bool {
+    TRUSTED_LOCAL_BASES
+        .iter()
+        .any(|base| host == format!("app.{base}"))
+}
+
 fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
         return false;
@@ -5424,13 +5534,17 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
         return false;
     }
 
-    if app.host_str() == Some("app.lemma.localhost") {
+    if app.host_str().is_some_and(trusted_local_workspace_host) {
         let (Some(app_port), Some(api_port)) = (app.port(), api.port()) else {
             return false;
         };
         return app.scheme() == "http"
             && api.scheme() == "http"
-            && api.host_str() == Some("app.lemma.localhost")
+            // The same host as the workspace, which the allowlist above has
+            // already vetted. Checking the literal twice let the two drift;
+            // what this arrangement actually requires is one hostname on two
+            // ports.
+            && api.host_str() == app.host_str()
             && api.path() == "/"
             && app_port >= 49_152
             && api_port >= 49_152
@@ -5440,7 +5554,7 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     same_origin(&api, app_base)
         && api.path() == "/_lemma/api"
         && matches!(app.scheme(), "http" | "https")
-        && (app.scheme() == "https" || local_destination(&app))
+        && (app.scheme() == "https" || local_destination(&app, api_base))
 }
 
 fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
@@ -5457,13 +5571,45 @@ fn navigation_context(app: &AppHandle) -> (String, String, String) {
     (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 
-fn local_destination(url: &tauri::Url) -> bool {
+/// The domain this installation is served under, from the API base it was given.
+///
+/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// than compiled in, because the shell does not link locald -- it launches it --
+/// so the hostname arrives at runtime in the `ready` event and this is the only
+/// honest source for it.
+fn local_base_domain(api_base: &str) -> Option<String> {
+    let host = tauri::Url::parse(api_base)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    let (_first, rest) = host.split_once('.')?;
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
+    }
+    // The domain this installation serves itself under is a local destination
+    // whatever it resolves through.
+    //
+    // This is the security-relevant half of moving off `*.localhost`. In local
+    // mode the gate below *allows* anything that is not a local destination, on
+    // the reasoning that an ordinary internet site is not a way to reach this
+    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
+    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
+    // could be navigated to an attacker-chosen name and reach any port on the
+    // user's machine -- a hole that does not exist today, because
+    // `*.lemma.localhost` matches the check above and is denied unless it is
+    // ours.
+    if let Some(base) = local_base_domain(api_base) {
+        if host == base || host.ends_with(&format!(".{base}")) {
+            return true;
+        }
     }
     let Ok(address) = host.parse::<IpAddr>() else {
         return false;
@@ -5491,9 +5637,11 @@ fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
     url.scheme() == "http"
         && api.scheme() == "http"
         && url.port() == api.port()
-        && url
-            .host_str()
-            .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
+        && url.host_str().is_some_and(|host| {
+            TRUSTED_LOCAL_BASES
+                .iter()
+                .any(|base| host.ends_with(&format!(".apps.{base}")))
+        })
 }
 
 /// The documents a frame renders without fetching anything: the content document
@@ -5540,7 +5688,7 @@ fn navigation_disposition(
         || same_origin(url, app_base)
         || same_origin(url, api_base)
         || owned_published_app(url, api_base)
-        || !local_destination(url)
+        || !local_destination(url, api_base)
     {
         NavigationDisposition::Allow
     } else {
@@ -5899,6 +6047,44 @@ fn desktop_auth_url(base: &str, auth_mode: &str) -> String {
 
 fn local_auth_url(base: &str, auth_mode: &str) -> String {
     format!("{}/auth?show={auth_mode}", base.trim_end_matches('/'),)
+}
+
+/// The auth portal, told where to go once it is done.
+///
+/// Without a return address the portal has nowhere to send someone who is
+/// already signed in, so it stops and offers a "Continue" button. That is the
+/// right screen when a person navigated to sign-in themselves and might mean to
+/// switch accounts. It is the wrong one on launch: the app asked for the
+/// workspace, the session is already there, and the only thing between the two
+/// was a click.
+///
+/// This is reached on every cold start, not just a first run. A launch mints a
+/// new runtime generation, so the recorded resume target never matches and the
+/// app falls back to the portal each time -- which is why the button was on
+/// screen every single launch rather than occasionally.
+///
+/// The return address stays relative on purpose. It is resolved against the
+/// portal's own origin, so it cannot point off it, and it survives locald
+/// handing out a different port than the one this launch happens to use.
+fn local_auth_url_returning_to(base: &str, auth_mode: &str, route: &str) -> String {
+    let route = if route.starts_with('/') { route } else { "/" };
+    let mut url = format!("{}/auth", base.trim_end_matches('/'));
+    match tauri::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed
+                .query_pairs_mut()
+                .append_pair("show", auth_mode)
+                .append_pair("redirect_uri", route);
+            parsed.to_string()
+        }
+        // A base this malformed will fail at navigation anyway; falling back to
+        // the plain portal keeps that the failure rather than a panic here.
+        Err(_) => {
+            url.push_str("?show=");
+            url.push_str(auth_mode);
+            url
+        }
+    }
 }
 
 #[tauri::command]
@@ -8469,6 +8655,32 @@ mod tests {
         assert!(capability_for(&["https://lemma.work"]).is_none());
         assert!(capability_for(&["not a url"]).is_none());
 
+        // ...including a local workspace, whose port is not known until it is
+        // allocated. The shipped entry is `http://app.<base>:*`, and the origin
+        // checked against it is concrete, so a plain string comparison never
+        // matched one and quietly minted an override for every local launch.
+        for base in ["lemma.localhost", "127.0.0.1.sslip.io"] {
+            assert!(
+                capability_for(&[&format!("http://app.{base}:52413")]).is_none(),
+                "the shipped capability already covers app.{base} on any port",
+            );
+        }
+        // And the wildcard is the port alone. A host that merely starts the
+        // same way is a different machine, and must still be treated as an
+        // override rather than silently accepted as shipped.
+        assert!(
+            capability_for(&["http://app.lemma.localhost.evil:52413"]).is_some(),
+            "a lookalike host must not read as a shipped origin",
+        );
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost:52413/admin"
+        ));
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost"
+        ));
+
         let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
             .expect("an overridden origin produces a capability");
         let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
@@ -8495,6 +8707,30 @@ mod tests {
             "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
+    }
+
+    /// Every local base this build serves has to be an origin the workspace
+    /// capability covers.
+    ///
+    /// The failure this catches is silent and total. A workspace served on a
+    /// base the capability does not list matches no capability at all, so
+    /// opening Local settings, connecting the Agent Host and configuring a
+    /// provider each answer `not allowed by ACL` -- the whole of onboarding,
+    /// with nothing on screen to say why. Nothing else ties the two files
+    /// together: the base domain is chosen in locald and the origins are
+    /// declared in a Tauri capability, and neither imports the other.
+    #[test]
+    fn every_local_base_this_build_serves_is_a_shipped_workspace_origin() {
+        let shipped = shipped_workspace_origins();
+        for base in TRUSTED_LOCAL_BASES {
+            let origin = format!("http://app.{base}:52413");
+            assert!(
+                shipped
+                    .iter()
+                    .any(|pattern| shipped_workspace_origin_covers(pattern, &origin)),
+                "capabilities/workspace.json does not cover {origin}, so a                  workspace served there reaches no shell command at all",
+            );
+        }
     }
 
     #[test]
@@ -8965,6 +9201,80 @@ mod tests {
         // monitors at all. Neither is evidence the saved value is wrong, and
         // refusing to restore there would look like the bug this fixes.
         assert!(placement_is_reachable(&at(100, 100), &[]));
+    }
+
+    #[test]
+    fn a_launch_tells_the_auth_portal_where_to_come_back_to() {
+        // The portal auto-continues an existing session only when it is given
+        // somewhere to go; without one it stops on a Continue button. Every
+        // cold start reached it without one, because a new runtime generation
+        // means the recorded resume target never matches.
+        let url = local_auth_url_returning_to("http://app.lemma.localhost:3711/", "signup", "/");
+        assert!(
+            url.starts_with("http://app.lemma.localhost:3711/auth?"),
+            "{url}"
+        );
+        assert!(url.contains("show=signup"), "{url}");
+        assert!(
+            url.contains("redirect_uri=%2F"),
+            "the portal needs a return address to continue without asking: {url}"
+        );
+
+        // Relative, so it resolves against the portal's own origin and cannot
+        // be aimed off it -- and so it survives locald allocating a different
+        // port than the one this launch used.
+        let sneaky = local_auth_url_returning_to(
+            "http://app.lemma.localhost:3711",
+            "signin",
+            "https://evil.example",
+        );
+        assert!(sneaky.contains("redirect_uri=%2F"), "{sneaky}");
+        assert!(!sneaky.contains("evil.example"), "{sneaky}");
+    }
+
+    #[test]
+    fn a_restored_window_comes_back_the_size_it_was_left() {
+        // The numbers are a real record from a 3024x1964 Retina display: the
+        // window filled the screen below the menu bar. Handed to the builder as
+        // written they mean 3024x1898 *logical* -- twice the screen -- so macOS
+        // clamped the size and put the window 66 points too low, which is what
+        // "it doesn't open full and the top is cut off" actually was.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 66),
+            size: tauri::PhysicalSize::new(3024, 1898),
+        };
+
+        let (position, size) = placement_in_logical(&saved, 2.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 33.0));
+        assert_eq!((size.width, size.height), (1512.0, 949.0));
+
+        // A 1:1 display is the case that always worked, and must keep working.
+        let (position, size) = placement_in_logical(&saved, 1.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 66.0));
+        assert_eq!((size.width, size.height), (3024.0, 1898.0));
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_app_allows_is_not_restored() {
+        // 1200x800 physical is a legitimate record on a 1:1 screen and half the
+        // app's minimum on a 2x one. The floor is a logical size, so it can
+        // only be applied after the conversion -- applying it to the physical
+        // numbers is how a window half the allowed size gets restored and then
+        // clamped by the OS into a shape nobody chose.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 0),
+            size: tauri::PhysicalSize::new(1200, 800),
+        };
+        assert!(placement_in_logical(&saved, 1.0).is_some());
+        assert!(
+            placement_in_logical(&saved, 2.0).is_none(),
+            "600x400 logical is below the {}x{} minimum",
+            MIN_RESTORED.0,
+            MIN_RESTORED.1
+        );
+        // A monitor that reports nonsense must not produce an infinite window.
+        assert!(placement_in_logical(&saved, 0.0).is_none());
+        assert!(placement_in_logical(&saved, f64::NAN).is_none());
     }
 
     #[test]

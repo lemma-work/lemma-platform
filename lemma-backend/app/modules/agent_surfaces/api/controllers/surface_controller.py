@@ -44,9 +44,6 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
-from app.modules.agent_surfaces.platforms.slack.manifest import (
-    build_slack_app_manifest,
-)
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
@@ -59,35 +56,6 @@ from app.modules.agent_surfaces.services.surface_service import (
 from app.composition.surface_connectors import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
-
-# Deployment-wide reads that belong to no pod. The Slack manifest is the whole
-# of it: it describes this *deployment* — its event URL, its OAuth callback, the
-# scopes its code reads — and is the same document for every pod and org. It is
-# also what you need *before* you have anything to scope it to, since the app it
-# creates is what issues the client id that connects the account a surface is
-# built on. Scoping it to a pod only made it unreadable until after the point
-# where it was needed.
-platform_router = APIRouter(prefix="/surface-setup", tags=["Agent Surfaces"])
-
-
-@platform_router.get(
-    "/slack/manifest",
-    operation_id="agent.surface.slack_manifest",
-)
-async def get_slack_app_manifest(user: CurrentUser) -> dict:
-    """The Slack app manifest to paste when running your own Slack app.
-
-    Served rather than copied out of the repo so the URLs always match the
-    deployment answering this request, and the scopes always match the code
-    that will consume the events.
-
-    Signed-in access is the only gate, and that is enough: every value in here
-    is already public — this deployment's URLs and the scopes its own code
-    asks for. It carries no credential and reveals nothing about a pod.
-    """
-    del user
-    return build_slack_app_manifest()
-
 
 # A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
 # surface to exist yet, so it lives outside the surface-resource router.

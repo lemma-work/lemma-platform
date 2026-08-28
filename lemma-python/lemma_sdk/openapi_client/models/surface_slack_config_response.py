@@ -26,10 +26,12 @@ class SurfaceSlackConfigResponse:
 
         Attributes:
             app_name (None | str | Unset):
+            dedicated_to_agent (bool | Unset):  Default: False.
             dm_agent_by_user (SurfaceSlackConfigResponseDmAgentByUser | Unset):
     """
 
     app_name: None | str | Unset = UNSET
+    dedicated_to_agent: bool | Unset = False
     dm_agent_by_user: SurfaceSlackConfigResponseDmAgentByUser | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -40,6 +42,8 @@ class SurfaceSlackConfigResponse:
         else:
             app_name = self.app_name
 
+        dedicated_to_agent = self.dedicated_to_agent
+
         dm_agent_by_user: dict[str, Any] | Unset = UNSET
         if not isinstance(self.dm_agent_by_user, Unset):
             dm_agent_by_user = self.dm_agent_by_user.to_dict()
@@ -49,6 +53,8 @@ class SurfaceSlackConfigResponse:
         field_dict.update({})
         if app_name is not UNSET:
             field_dict["app_name"] = app_name
+        if dedicated_to_agent is not UNSET:
+            field_dict["dedicated_to_agent"] = dedicated_to_agent
         if dm_agent_by_user is not UNSET:
             field_dict["dm_agent_by_user"] = dm_agent_by_user
 
@@ -71,6 +77,8 @@ class SurfaceSlackConfigResponse:
 
         app_name = _parse_app_name(d.pop("app_name", UNSET))
 
+        dedicated_to_agent = d.pop("dedicated_to_agent", UNSET)
+
         _dm_agent_by_user = d.pop("dm_agent_by_user", UNSET)
         dm_agent_by_user: SurfaceSlackConfigResponseDmAgentByUser | Unset
         if isinstance(_dm_agent_by_user, Unset):
@@ -82,6 +90,7 @@ class SurfaceSlackConfigResponse:
 
         surface_slack_config_response = cls(
             app_name=app_name,
+            dedicated_to_agent=dedicated_to_agent,
             dm_agent_by_user=dm_agent_by_user,
         )
 

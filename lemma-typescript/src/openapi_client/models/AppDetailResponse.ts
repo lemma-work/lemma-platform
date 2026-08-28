@@ -15,7 +15,10 @@ export type AppDetailResponse = {
     source_archive_path?: (string | null);
     status: AppStatus;
     updated_at: any;
-    readonly url: string;
+    /**
+     * None where no app host is served -- see `public_app_url`.
+     */
+    readonly url: (string | null);
     user_id: string;
     visibility?: string;
 };

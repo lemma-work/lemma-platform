@@ -221,8 +221,12 @@ class SurfaceSteps:
             "GET", f"/pods/{in_pod['id']}/surfaces/{name}/channels"
         )
 
-    async def slack_manifest(self) -> Any:
-        return await self.api.call("GET", "/surface-setup/slack/manifest")
+    async def slack_manifest(self, *, for_agent: str | None = None) -> Any:
+        return await self.api.call(
+            "GET",
+            "/surface-setup/slack/manifest",
+            params={"agent_name": for_agent} if for_agent else None,
+        )
 
     async def makes_default_surface(self, surface: JSON, *, platform: str) -> Any:
         return await self.api.call(

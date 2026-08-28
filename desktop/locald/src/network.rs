@@ -25,11 +25,19 @@ pub struct NetworkPorts {
 
 impl NetworkPorts {
     pub fn frontend_url(self) -> String {
-        format!("http://app.lemma.localhost:{}", self.frontend_port)
+        format!(
+            "http://{}:{}",
+            crate::local_domain::LocalDomain::from_env().frontend_host(),
+            self.frontend_port
+        )
     }
 
     pub fn backend_url(self) -> String {
-        format!("http://app.lemma.localhost:{}", self.backend_port)
+        format!(
+            "http://{}:{}",
+            crate::local_domain::LocalDomain::from_env().frontend_host(),
+            self.backend_port
+        )
     }
 
     fn valid(self) -> bool {

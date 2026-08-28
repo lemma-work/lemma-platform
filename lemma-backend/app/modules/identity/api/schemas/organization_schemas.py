@@ -209,7 +209,10 @@ class HomeAppResponse(BaseSchema):
     id: UUID
     name: str
     description: str | None = None
-    url: str
+    # None where the deployment serves no app host -- a desktop stack shared
+    # over a tunnel serves the workspace and API on one public origin and no app
+    # host at all. See `apps.domain.entities.public_app_url`.
+    url: str | None = None
     status: str
 
 

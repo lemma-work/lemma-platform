@@ -17,20 +17,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::local_domain::LocalDomain;
 use crate::network::{load_or_allocate, NetworkPorts};
 use crate::paths::LocalPaths;
 
 const POSTGRES_PORT: u16 = 55432;
 const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
-const LOCAL_FRONTEND_HOST: &str = "app.lemma.localhost";
-// Safari/WKWebView blocks a response from a different hostname from setting
-// the SuperTokens session cookies used by the top-level frontend. Keep the
-// processes on separate ports, but expose both through one browser hostname.
-// The backend still binds only to loopback and sandboxes use the explicit
-// host.lemma.internal callback URLs below.
-const LOCAL_BACKEND_HOST: &str = LOCAL_FRONTEND_HOST;
-const LOCAL_CORS_ORIGIN_REGEX: &str = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$";
+// The workspace and the API share one browser hostname on two ports.
+//
+// Safari/WKWebView blocks a response from a different hostname from setting the
+// SuperTokens session cookies the top-level frontend uses, so both are exposed
+// through one name. The backend still binds only to loopback, and sandboxes use
+// the explicit host.lemma.internal callbacks below.
+//
+// Which name that is comes from `local_domain`, not from a constant here -- see
+// that module for why it is configurable and what it costs.
 
 #[derive(Clone, Debug)]
 pub(crate) struct ManagedManifestMaterial {
@@ -126,7 +128,15 @@ pub(crate) fn prepare(
     crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
     let source = source_layout()?;
-    let manifest = build(paths, pack_root, &material, ports, source.as_ref(), healed)?;
+    let manifest = build(
+        paths,
+        pack_root,
+        &material,
+        ports,
+        source.as_ref(),
+        healed,
+        &LocalDomain::from_env(),
+    )?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
@@ -232,6 +242,7 @@ fn build(
     ports: NetworkPorts,
     source: Option<&SourceLayout>,
     healed: &mut Vec<String>,
+    domain: &LocalDomain,
 ) -> io::Result<Value> {
     validate_hex_secret("postgres password", &material.postgres_password)?;
     validate_hex_secret("Redis password", &material.redis_password)?;
@@ -357,8 +368,9 @@ fn build(
     let frontend_port = ports.frontend_port;
     let backend_port = ports.backend_port;
     let runtime_instance_id = random_hex(16)?;
-    let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{frontend_port}");
-    let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{backend_port}");
+    let host = domain.frontend_host();
+    let frontend_origin = format!("http://{host}:{frontend_port}");
+    let backend_origin = format!("http://{host}:{backend_port}");
     let mut backend_env = BTreeMap::from([
         ("ENVIRONMENT", "local".to_owned()),
         ("DEBUG", "true".to_owned()),
@@ -508,18 +520,54 @@ fn build(
         // it, and every *.lemma.localhost host is served by this install's own
         // backend. An app acting as the signed-in user is the feature, and it
         // is what already happens on the web build.
-        ("SESSION_COOKIE_DOMAIN", ".lemma.localhost".to_owned()),
+        ("SESSION_COOKIE_DOMAIN", domain.cookie_domain()),
+        // Empty, and deliberately not absent: it names the scheme the line
+        // above replaced.
+        //
+        // Widening the cookie domain does not replace the cookies a browser
+        // already holds, it mints a second set beside them. An install that
+        // signed in on v0.7.0 -- which rendered `SESSION_COOKIE_DOMAIN` empty,
+        // so host-only on app.lemma.localhost -- then upgraded to this, sends
+        // both, and SuperTokens refuses the pair with `The request contains
+        // multiple session cookies`, a 500. The SDK treats a 500 as retryable
+        // and asks again per query, so the console fills and the workspace
+        // never settles. One install logged 30 of those refusals and 17 500s.
+        //
+        // SuperTokens reads the empty string as "the previous cookies were
+        // host-only" and clears them on the next refresh, which is precisely
+        // the migration being made here. `None` would mean "there was no
+        // previous scheme" and clear nothing, so the backend setting keeps a
+        // blank string rather than folding it to None like its neighbours.
+        //
+        // Removable once no install can still be carrying v0.7.0 cookies.
+        ("SESSION_COOKIE_OLDER_DOMAIN", String::new()),
         // The other half, and only meaningful together with the domain above:
         // apps call the API through their own origin so the request is
         // first-party. Off by default in the backend, because on a real domain
         // an app subdomain and the API host are already same-site and this
         // would widen the refresh cookie for nothing.
-        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
+        // Only where the app host and the API host are *not* already same-site.
+        //
+        // On `*.localhost` a browser can derive no registrable domain, so those
+        // two are different sites and an app's call to the API is third-party --
+        // hence the same-origin `/_lemma` door, and the widened refresh cookie
+        // that makes it work. On a real registrable domain they are same-site
+        // already and the door buys nothing but a whole-API alias on the origin
+        // that renders user-authored HTML.
+        (
+            "APP_API_VIA_APP_ORIGIN",
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            }
+            .to_owned(),
+        ),
         (
             "APP_BASE_DOMAIN",
-            format!("apps.lemma.localhost:{backend_port}"),
+            format!("{}:{backend_port}", domain.apps_domain()),
         ),
-        ("CORS_ORIGIN_REGEX", LOCAL_CORS_ORIGIN_REGEX.to_owned()),
+        ("CORS_ORIGIN_REGEX", domain.cors_origin_regex()),
         ("STORAGE_BACKEND", "local".to_owned()),
         ("LOCAL_OBJECT_STORAGE_ROOT", path_text(&object_storage)?),
         ("LOCAL_FILE_STORAGE_ROOT", path_text(&files)?),
@@ -1309,11 +1357,14 @@ mod tests {
         // every pod app load unauthenticated; see the note beside the value.
         assert_eq!(
             manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"],
-            ".lemma.localhost"
+            LocalDomain::from_env().cookie_domain()
         );
         assert_eq!(
             manifest["services"][0]["env"]["API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
         // And the browser-visible one is NOT widened with it. These cookies are
         // written by `document.cookie`, so a shared domain lets a pod app
@@ -1324,7 +1375,10 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_LOCAL_CALLBACK_URL"],
@@ -1364,19 +1418,166 @@ mod tests {
         assert!(paths.root.join("host.secrets.json").is_file());
     }
 
-    /// Every URL a sandbox is given resolves inside a sandbox.
+    /// A configured domain moves every host together, and drops the workaround.
     ///
-    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
-    /// is a host resolver convention, and a Linux container in the VM has never
-    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
-    /// every workload container.
+    /// The point of moving off `*.localhost` is that a browser can then derive
+    /// a registrable domain covering both the workspace and the app hosts, so a
+    /// framed pod app is same-site and can hold a session. That only holds if
+    /// the whole arrangement moves at once: a cookie still scoped to the old
+    /// domain, or an app host under a different one, and the frame is back to
+    /// being third-party with nothing to show for the change.
+    #[test]
+    fn a_configured_domain_moves_the_workspace_the_apps_and_the_cookie_together() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some("sslip")),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let cookie = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
+        let app_host = app_base.split(':').next().unwrap();
+        let api_host = env["API_URL"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        assert_eq!(cookie, ".127.0.0.1.sslip.io");
+        assert_eq!(app_host, "apps.127.0.0.1.sslip.io");
+        assert_eq!(api_host, "app.127.0.0.1.sslip.io");
+        // Both hosts inside the cookie's scope, or the app is signed out.
+        let scope = cookie.trim_start_matches('.');
+        assert!(app_host.ends_with(scope), "{app_host} is outside {cookie}");
+        assert!(api_host.ends_with(scope), "{api_host} is outside {cookie}");
+
+        // ...and the `*.localhost` workaround goes away with it. On a real
+        // registrable domain the app host and the API host are already
+        // same-site, so aliasing the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML -- and widening the refresh cookie to
+        // make that work -- buys nothing.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "false");
+    }
+
+    /// The arrangement a laptop with no network gets, asserted on its own.
     ///
-    /// Functions had no gateway URL at all, so the dispatcher fell back to
-    /// `api_url` and every schema extraction died at `getaddrinfo` --
-    /// "Temporary failure in name resolution", reported as
-    /// `FUNCTION_VALIDATION_ERROR: Function schema extraction failed", which
-    /// reads as the user's function being wrong.
+    /// `from_env` falls back here when the public wildcard does not resolve, so
+    /// this is not an exotic path -- it is every offline launch. The sibling
+    /// test above pins the same-site arrangement; without this one the fallback
+    /// would only ever be rendered by tests that happen to run offline, which
+    /// is the same as not testing it.
+    #[test]
+    fn the_offline_fallback_renders_the_workaround_that_makes_it_work() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some(crate::local_domain::LOCALHOST_BASE)),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        assert_eq!(env["SESSION_COOKIE_DOMAIN"], ".lemma.localhost");
+        assert_eq!(
+            env["APP_BASE_DOMAIN"]
+                .as_str()
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap(),
+            "apps.lemma.localhost"
+        );
+        // Here the door is the only thing that works: a browser derives no
+        // registrable domain from `*.localhost`, so an app calling the API host
+        // directly is cross-site and carries no session. Turning this off
+        // without also moving the base domain is the bug that shipped twice.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "true");
+    }
+
+    /// Changing the cookie domain has to say what it replaced.
     ///
+    /// A widened `SESSION_COOKIE_DOMAIN` does not replace the cookies a browser
+    /// already holds; it mints a second set beside them, and SuperTokens
+    /// refuses the pair on refresh with a 500 that the SDK retries for ever.
+    /// `SESSION_COOKIE_OLDER_DOMAIN` is what clears the old one, so the two
+    /// settings are only correct together -- asserted here rather than left to
+    /// whoever next edits the domain.
+    ///
+    /// Empty is the value, not a missing one: it is how SuperTokens spells
+    /// "the previous cookies were host-only", which is what v0.7.0 rendered.
+    #[test]
+    fn a_widened_cookie_domain_declares_the_scheme_it_replaced() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let domain = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        assert!(
+            !domain.is_empty(),
+            "a host-only cookie does not reach the app subdomains"
+        );
+        let older = env["SESSION_COOKIE_OLDER_DOMAIN"]
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!(
+                    "SESSION_COOKIE_DOMAIN is {domain}, so the scheme it replaced \
+                 has to be declared or an upgraded install carries both"
+                )
+            });
+        assert_eq!(
+            older, "",
+            "v0.7.0 rendered a host-only cookie, which SuperTokens spells as \
+             the empty string"
+        );
+    }
+
     /// The session cookie has to be in scope on the hosts apps are served from.
     ///
     /// Derived from `APP_BASE_DOMAIN` rather than restating `.lemma.localhost`,
@@ -1437,17 +1638,37 @@ mod tests {
             "the API at {api_host} is outside the cookie scope {cookie_domain}"
         );
 
-        // Both halves or neither. A widened cookie with apps still calling the
-        // API host is measured *not* to work -- WebKit drops it as third-party
-        // whatever the Domain says -- so shipping one alone is shipping the bug
-        // plus a wider cookie.
+        // The app-origin door exactly where it is needed, and nowhere else.
+        //
+        // On `*.localhost` a browser derives no registrable domain, so an app's
+        // call to the API is cross-site and carries no cookie whatever the
+        // Domain says -- measured. Both halves are required there: widening the
+        // cookie alone ships the bug plus a wider cookie.
+        //
+        // On a real registrable domain the two hosts are same-site already, and
+        // the door would only alias the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML, widening the refresh cookie to do it.
+        let domain = LocalDomain::from_env();
         assert_eq!(
-            env["APP_API_VIA_APP_ORIGIN"], "true",
-            "the cookie is scoped for the app hosts but apps are still pointed \
-             at the API host, where the request is cross-site and carries none"
+            env["APP_API_VIA_APP_ORIGIN"],
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            },
+            "the app-origin door has to follow whether {} is same-site with its \
+             app hosts",
+            domain.base()
         );
     }
 
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
     /// Asserted over every callback variable at once rather than one by one,
     /// because the bug was an *absent* entry: a test naming only the variables
     /// that exist cannot fail for the one that does not.
@@ -1491,11 +1712,25 @@ mod tests {
              api_url and every call dies in DNS: {sandbox_facing:?}",
         );
 
+        let base = LocalDomain::from_env().base().to_owned();
         for name in sandbox_facing {
             let value = env[name].as_str().unwrap_or_default();
             assert!(
                 !value.contains(".localhost"),
                 "{name} is {value}, and .localhost resolves only on the host",
+            );
+            // And not this install's own base domain either, whatever it is.
+            //
+            // The `.localhost` check above stopped being the whole story when
+            // the base domain became a runtime choice. A loopback wildcard is
+            // worse than an unresolvable name, not better: inside a container
+            // it resolves perfectly well, to 127.0.0.1 -- which is the
+            // container itself. The failure is then a connection refused, or
+            // worse a connection to whatever that container happens to be
+            // running, rather than a DNS error naming the problem.
+            assert!(
+                !value.contains(&base),
+                "{name} is {value}, and {base} answers this Mac's loopback --                  inside a container that address is the container",
             );
             assert!(
                 value.is_empty() || value.contains("host.lemma.internal"),
@@ -1531,6 +1766,7 @@ mod tests {
             load_or_allocate(&paths).unwrap(),
             None,
             &mut Vec::new(),
+            &LocalDomain::default(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));
