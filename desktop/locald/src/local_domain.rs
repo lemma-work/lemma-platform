@@ -27,11 +27,22 @@
 //! itself a public suffix, so it is the registrable domain and our two hosts
 //! are same-site under it.
 //!
+//! What it costs, stated plainly because it is the shipped default: the first
+//! lookup of each hostname goes to a third party's nameservers, and an app
+//! hostname contains that app's slug. Nothing else leaves the machine -- the
+//! answer is `127.0.0.1` and every request is loopback -- but the names are
+//! seen. This is the reason [`Resolution::Resolver`] exists and is where this
+//! is meant to end up; it is waiting on a domain to own rather than on code.
+//!
 //! [`Resolution::Resolver`] is a domain we own, resolved by a `/etc/resolver`
 //! file pointing at locald. It works offline, which the public route does not,
 //! and it does not put this installation's hostnames in front of a third party's
 //! nameservers. It also costs an admin prompt -- which would be the first
-//! privileged thing Lemma ever does -- so it is not the default.
+//! privileged thing Lemma ever does -- and, more to the point, a domain we
+//! actually own: pointing a resolver file at a name somebody else holds
+//! shadows the real one for anybody running this. So it is not the default
+//! yet. Everything here already accepts such a domain, so arriving at one is a
+//! value change and a responder, not a redesign.
 //!
 //! Swapping one for the other is a value change here and nothing else.
 
