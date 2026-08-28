@@ -1357,11 +1357,14 @@ mod tests {
         // every pod app load unauthenticated; see the note beside the value.
         assert_eq!(
             manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"],
-            ".lemma.localhost"
+            LocalDomain::from_env().cookie_domain()
         );
         assert_eq!(
             manifest["services"][0]["env"]["API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
         // And the browser-visible one is NOT widened with it. These cookies are
         // written by `document.cookie`, so a shared domain lets a pod app
@@ -1372,7 +1375,10 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_LOCAL_CALLBACK_URL"],
@@ -1470,6 +1476,54 @@ mod tests {
         // that renders user-authored HTML -- and widening the refresh cookie to
         // make that work -- buys nothing.
         assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "false");
+    }
+
+    /// The arrangement a laptop with no network gets, asserted on its own.
+    ///
+    /// `from_env` falls back here when the public wildcard does not resolve, so
+    /// this is not an exotic path -- it is every offline launch. The sibling
+    /// test above pins the same-site arrangement; without this one the fallback
+    /// would only ever be rendered by tests that happen to run offline, which
+    /// is the same as not testing it.
+    #[test]
+    fn the_offline_fallback_renders_the_workaround_that_makes_it_work() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some(crate::local_domain::LOCALHOST_BASE)),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        assert_eq!(env["SESSION_COOKIE_DOMAIN"], ".lemma.localhost");
+        assert_eq!(
+            env["APP_BASE_DOMAIN"]
+                .as_str()
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap(),
+            "apps.lemma.localhost"
+        );
+        // Here the door is the only thing that works: a browser derives no
+        // registrable domain from `*.localhost`, so an app calling the API host
+        // directly is cross-site and carries no session. Turning this off
+        // without also moving the base domain is the bug that shipped twice.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "true");
     }
 
     /// Changing the cookie domain has to say what it replaced.
@@ -1584,14 +1638,27 @@ mod tests {
             "the API at {api_host} is outside the cookie scope {cookie_domain}"
         );
 
-        // Both halves or neither. A widened cookie with apps still calling the
-        // API host is measured *not* to work -- WebKit drops it as third-party
-        // whatever the Domain says -- so shipping one alone is shipping the bug
-        // plus a wider cookie.
+        // The app-origin door exactly where it is needed, and nowhere else.
+        //
+        // On `*.localhost` a browser derives no registrable domain, so an app's
+        // call to the API is cross-site and carries no cookie whatever the
+        // Domain says -- measured. Both halves are required there: widening the
+        // cookie alone ships the bug plus a wider cookie.
+        //
+        // On a real registrable domain the two hosts are same-site already, and
+        // the door would only alias the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML, widening the refresh cookie to do it.
+        let domain = LocalDomain::from_env();
         assert_eq!(
-            env["APP_API_VIA_APP_ORIGIN"], "true",
-            "the cookie is scoped for the app hosts but apps are still pointed \
-             at the API host, where the request is cross-site and carries none"
+            env["APP_API_VIA_APP_ORIGIN"],
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            },
+            "the app-origin door has to follow whether {} is same-site with its \
+             app hosts",
+            domain.base()
         );
     }
 

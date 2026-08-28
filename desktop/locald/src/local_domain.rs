@@ -36,6 +36,8 @@
 //! Swapping one for the other is a value change here and nothing else.
 
 use std::env;
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::sync::OnceLock;
 
 /// The shipped default: no DNS, no privilege, and pod apps stay window-only on
 /// macOS because an embedded one cannot hold a session.
@@ -75,20 +77,60 @@ impl Default for LocalDomain {
 }
 
 impl LocalDomain {
-    /// Read the configured domain, falling back to `*.localhost`.
+    /// The domain to serve under, checked against what actually resolves.
+    ///
+    /// Defaults to the public wildcard, because that is the only mode in which
+    /// a pod app embedded in the workspace can hold a session -- see the module
+    /// docs. But it is DNS, and a laptop with no network would otherwise fail
+    /// to resolve its own workspace and open on nothing at all, which is a poor
+    /// trade for a product whose whole point is running locally.
+    ///
+    /// So the name is probed, once, and a failure falls back to `*.localhost`:
+    /// the workspace works offline exactly as it does today, and apps open in
+    /// their own window instead of embedded. Degrading rather than refusing.
+    /// Resolved once per process, because every caller has to agree.
+    ///
+    /// The rendered host pack, the URLs locald announces, and the state it
+    /// migrates all have to name the same host -- and the probe is a DNS
+    /// lookup, which `network.rs` would otherwise perform on every call that
+    /// builds a URL.
     #[must_use]
     pub fn from_env() -> Self {
-        Self::parse(env::var(OVERRIDE).ok().as_deref())
+        static RESOLVED: OnceLock<LocalDomain> = OnceLock::new();
+        RESOLVED
+            .get_or_init(|| {
+                let configured = Self::parse(env::var(OVERRIDE).ok().as_deref());
+                if configured.resolution == Resolution::Public && !configured.resolves() {
+                    return Self::default();
+                }
+                configured
+            })
+            .clone()
+    }
+
+    /// Whether this domain's workspace host answers loopback right now.
+    ///
+    /// Loopback specifically, not merely "resolves": a wildcard service that
+    /// started answering something else, or a captive portal resolving every
+    /// name to its own address, would otherwise send the workspace at somebody
+    /// else's machine.
+    fn resolves(&self) -> bool {
+        let probe = format!("{}:80", self.frontend_host());
+        probe.to_socket_addrs().is_ok_and(|mut found| {
+            found.any(|address| address.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST))
+        })
     }
 
     /// The parsing half, so it can be tested without touching the environment.
     #[must_use]
     pub fn parse(configured: Option<&str>) -> Self {
         let configured = configured.map(str::trim).unwrap_or_default();
-        if configured.is_empty() || configured.eq_ignore_ascii_case(LOCALHOST_BASE) {
+        if configured.eq_ignore_ascii_case(LOCALHOST_BASE)
+            || configured.eq_ignore_ascii_case("localhost")
+        {
             return Self::default();
         }
-        if configured.eq_ignore_ascii_case("sslip") {
+        if configured.is_empty() || configured.eq_ignore_ascii_case("sslip") {
             return Self {
                 base: SSLIP_BASE.to_owned(),
                 resolution: Resolution::Public,
@@ -173,12 +215,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_is_the_localhost_convention() {
+    fn the_default_is_a_domain_a_framed_app_can_hold_a_session_on() {
+        // Measured, not assumed. In a WKWebView an iframe on a sibling host
+        // under a *made-up* TLD gets no storage at all -- `document.cookie`
+        // reads empty and the server's Set-Cookie is not kept -- exactly as it
+        // does under `.localhost`. Under a real registrable domain both work.
+        // So a domain we could invent is not an option; the default has to be
+        // one a browser can derive a registrable domain from.
         let domain = LocalDomain::parse(None);
-        assert_eq!(domain.base(), "lemma.localhost");
+        assert_eq!(domain.base(), SSLIP_BASE);
+        assert_eq!(domain.resolution(), Resolution::Public);
+        assert!(domain.frames_carry_cookies());
+    }
+
+    #[test]
+    fn the_localhost_convention_is_still_reachable_on_purpose() {
+        // The offline fallback lands here, and so does anyone who wants the
+        // old arrangement. Apps then open in their own window rather than
+        // embedded, which works.
+        let domain = LocalDomain::parse(Some(LOCALHOST_BASE));
         assert_eq!(domain.resolution(), Resolution::Convention);
-        // ...and an app framed by the workspace cannot hold a session there,
-        // which is the whole reason the other modes exist.
         assert!(!domain.frames_carry_cookies());
     }
 
@@ -200,15 +256,19 @@ mod tests {
     }
 
     #[test]
-    fn a_localhost_domain_is_not_a_configured_one() {
-        // Accepting it would read as configured while behaving like the
-        // default: same-site would still be false, apps would still be
-        // window-only, and the setting would look like it had taken effect.
+    fn a_localhost_domain_never_reads_as_a_configured_one() {
+        // Accepting one would look like the setting had taken effect while
+        // behaving exactly like not setting it: same-site still false, apps
+        // still window-only.
         assert_eq!(
-            LocalDomain::parse(Some("other.localhost")),
-            LocalDomain::default()
+            LocalDomain::parse(Some("other.localhost")).resolution(),
+            Resolution::Convention
         );
-        assert_eq!(LocalDomain::parse(Some("  ")), LocalDomain::default());
+        // Blank means "unset", which is the default -- not the fallback.
+        assert_eq!(
+            LocalDomain::parse(Some("  ")).resolution(),
+            Resolution::Public
+        );
     }
 
     #[test]

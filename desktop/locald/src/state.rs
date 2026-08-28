@@ -248,6 +248,19 @@ impl StateSnapshot {
 }
 
 fn migrate_legacy_local_api_url(value: &str) -> String {
+    migrate_legacy_local_api_url_onto(value, &crate::local_domain::LocalDomain::from_env())
+}
+
+/// The migration with the target domain handed in.
+///
+/// Split out so a test can assert the host it produces against a literal. With
+/// `from_env()` read inside, the only expectation a test could write was that
+/// same call -- which agrees with the implementation by construction and would
+/// have kept passing had the host been wrong.
+fn migrate_legacy_local_api_url_onto(
+    value: &str,
+    domain: &crate::local_domain::LocalDomain,
+) -> String {
     const LEGACY_PREFIX: &str = "http://api.lemma.localhost";
     let Some(suffix) = value.strip_prefix(LEGACY_PREFIX) else {
         return value.to_owned();
@@ -258,10 +271,7 @@ fn migrate_legacy_local_api_url(value: &str) -> String {
     // To whatever host this installation serves now, not the one that era used:
     // a migrated URL is stored state the shell will be handed, and pointing it
     // at a hostname nothing answers just makes the next launch resume nowhere.
-    format!(
-        "http://{}{suffix}",
-        crate::local_domain::LocalDomain::from_env().frontend_host()
-    )
+    format!("http://{}{suffix}", domain.frontend_host())
 }
 
 fn string_field(event: &Value, name: &str, fallback: &str) -> String {
@@ -335,9 +345,24 @@ mod tests {
 
     #[test]
     fn persisted_api_origin_migrates_to_the_webkit_safe_cookie_host() {
+        use crate::local_domain::LocalDomain;
+
+        // Against literals, and against both arrangements: a URL stored by an
+        // older build has to land on the host *this* install serves, port and
+        // path intact, whichever domain that is.
         assert_eq!(
-            migrate_legacy_local_api_url("http://api.lemma.localhost:8711"),
-            "http://app.lemma.localhost:8711"
+            migrate_legacy_local_api_url_onto(
+                "http://api.lemma.localhost:8711",
+                &LocalDomain::parse(Some("sslip"))
+            ),
+            "http://app.127.0.0.1.sslip.io:8711"
+        );
+        assert_eq!(
+            migrate_legacy_local_api_url_onto(
+                "http://api.lemma.localhost:8711/ready",
+                &LocalDomain::parse(Some("lemma.localhost"))
+            ),
+            "http://app.lemma.localhost:8711/ready"
         );
         assert_eq!(
             migrate_legacy_local_api_url("https://api.example.com"),
