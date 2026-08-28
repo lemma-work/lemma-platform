@@ -46,6 +46,7 @@ import { cn } from '@/lib/utils';
 import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
 import { useAppPages } from '@/lib/hooks/use-app';
 import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
+import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
 import {
     tableQueryOptions,
     tableRecordsQueryOptions,
@@ -423,7 +424,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     // the `page` query, not the pathname — the only row in this sidebar that
     // needs the search string to know where you are.
     const viewingAppSlug = pathname === `${basePath}/app/view`
-        ? searchParams.get('page')
+        ? appPageSlugFromRouteParam(searchParams.get('page'))
         : null;
 
     const pods = podsData?.items || [];
