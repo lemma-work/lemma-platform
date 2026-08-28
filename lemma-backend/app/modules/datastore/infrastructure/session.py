@@ -55,6 +55,20 @@ def _build_datastore_connect_args() -> dict:
     from what was described (2)``, ``unexpected trailing 942 bytes in buffer``,
     ``cannot decode UUID, expected 16 bytes, got 554``).
 
+    Twice, now. DEV-DATA-004 was closed in #505 by setting only asyncpg's knob,
+    and the register entry was deleted in the same change -- so ``issues.md``
+    said this was fixed while every deployment with a real pool still had it.
+    SQLAlchemy documents the hazard plainly: a cached prepared statement goes
+    stale "when DDL has been emitted to the PostgreSQL database which modifies
+    the tables", and the dialect can only invalidate its cache within one
+    process and engine, which is not the arrangement here.
+
+    It was found the second time from two directions at once -- the production
+    500s above, and the product scenario suite run against a real install.
+    Nothing cheaper could have: in ``testing`` this engine pools with
+    ``NullPool``, so no connection lives long enough to reuse a stale statement
+    and the entire failure is invisible to a booted test stack.
+
     The cost is a parse per statement. That is the right trade for a schema
     that belongs to users rather than to migrations: the primary engine keeps
     its cache, because its tables change only at deploy time.

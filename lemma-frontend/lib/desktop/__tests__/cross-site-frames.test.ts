@@ -43,6 +43,17 @@ describe('whether an embedded app would still be signed in', () => {
         expect(crossSiteFramesCarryCookies()).toBe(true);
     });
 
+    it('says yes on the loopback wildcard this install actually serves', () => {
+        // The example above proves the rule; this proves the host. `sslip.io`
+        // is not itself a public suffix, so `127.0.0.1.sslip.io` is the
+        // registrable domain and the workspace and its apps are same-site
+        // under it. Named here because it is what a shipped install runs on,
+        // and a rule that holds for a made-up example but not for the real
+        // hostname would be found by a user rather than by this file.
+        pretend('macos', 'app.127.0.0.1.sslip.io');
+        expect(crossSiteFramesCarryCookies()).toBe(true);
+    });
+
     it('says yes on Windows, where WebView2 treats *.localhost as same-site', () => {
         pretend('windows', 'app.lemma.localhost');
         expect(crossSiteFramesCarryCookies()).toBe(true);

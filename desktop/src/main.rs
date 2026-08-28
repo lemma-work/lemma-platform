@@ -794,7 +794,46 @@ fn hosted_url() -> String {
 }
 
 /// The workspace origins `capabilities/workspace.json` already covers.
-const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
+/// The origins the shipped capability already covers, read from the file.
+///
+/// Restated beside it, this list was a second copy of a rule that had already
+/// drifted once in this very function -- and it silently gained a third failure
+/// mode: the shipped entries carry a `:*` port pattern, while the origins
+/// checked against them are concrete, so `contains` never matched a local
+/// workspace and an override capability was minted for an origin that did not
+/// need one.
+fn shipped_workspace_origins() -> Vec<String> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["remote"]["urls"]
+        .as_array()
+        .expect("capabilities/workspace.json lists remote urls")
+        .iter()
+        .map(|url| {
+            url.as_str()
+                .expect("a shipped remote url is a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Whether a shipped pattern already covers this concrete origin.
+///
+/// Only the port may be a wildcard, and only as the whole port: a local
+/// workspace is served on whatever port was free, so `http://host:*` has to
+/// cover `http://host:52413`. Nothing else is treated as a pattern, because a
+/// looser match here hands shell commands to a lookalike host.
+fn shipped_workspace_origin_covers(pattern: &str, origin: &str) -> bool {
+    if pattern == origin {
+        return true;
+    }
+    let Some(prefix) = pattern.strip_suffix(":*") else {
+        return false;
+    };
+    origin
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+}
 
 /// The shipped workspace capability, read at compile time so the override below
 /// cannot drift from it.
@@ -835,6 +874,7 @@ fn overridden_workspace_capability() -> Option<String> {
 }
 
 fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
+    let shipped = shipped_workspace_origins();
     let mut urls: Vec<String> = Vec::new();
     for value in configured {
         let Ok(url) = tauri::Url::parse(value.trim()) else {
@@ -847,7 +887,10 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
             Some(port) => format!("{}://{host}:{port}", url.scheme()),
             None => format!("{}://{host}", url.scheme()),
         };
-        if SHIPPED_WORKSPACE_ORIGINS.contains(&origin.as_str()) {
+        if shipped
+            .iter()
+            .any(|pattern| shipped_workspace_origin_covers(pattern, &origin))
+        {
             continue;
         }
         if !urls.contains(&origin) {
@@ -5407,6 +5450,26 @@ fn same_origin(url: &tauri::Url, target: &str) -> bool {
         && url.port_or_known_default() == target.port_or_known_default()
 }
 
+/// The local domains this build will serve a workspace under.
+///
+/// Compiled in on purpose. `trusted_workspace_urls` exists to stop a `ready`
+/// event pointing the workspace somewhere else, so deriving the acceptable
+/// hostname from that same event would answer the question with the thing being
+/// questioned. A short list the shell ships knowing keeps the gate meaning
+/// something while letting the domain move.
+///
+/// Kept in step with `lemma_locald::local_domain`, which is what actually picks
+/// one -- the shell launches locald rather than linking it, so there is no
+/// shared constant to reach for.
+const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost", "127.0.0.1.sslip.io"];
+
+/// Whether `host` is the workspace host of a domain this build knows.
+fn trusted_local_workspace_host(host: &str) -> bool {
+    TRUSTED_LOCAL_BASES
+        .iter()
+        .any(|base| host == format!("app.{base}"))
+}
+
 fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
         return false;
@@ -5424,13 +5487,17 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
         return false;
     }
 
-    if app.host_str() == Some("app.lemma.localhost") {
+    if app.host_str().is_some_and(trusted_local_workspace_host) {
         let (Some(app_port), Some(api_port)) = (app.port(), api.port()) else {
             return false;
         };
         return app.scheme() == "http"
             && api.scheme() == "http"
-            && api.host_str() == Some("app.lemma.localhost")
+            // The same host as the workspace, which the allowlist above has
+            // already vetted. Checking the literal twice let the two drift;
+            // what this arrangement actually requires is one hostname on two
+            // ports.
+            && api.host_str() == app.host_str()
             && api.path() == "/"
             && app_port >= 49_152
             && api_port >= 49_152
@@ -5440,7 +5507,7 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     same_origin(&api, app_base)
         && api.path() == "/_lemma/api"
         && matches!(app.scheme(), "http" | "https")
-        && (app.scheme() == "https" || local_destination(&app))
+        && (app.scheme() == "https" || local_destination(&app, api_base))
 }
 
 fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
@@ -5457,13 +5524,45 @@ fn navigation_context(app: &AppHandle) -> (String, String, String) {
     (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 
-fn local_destination(url: &tauri::Url) -> bool {
+/// The domain this installation is served under, from the API base it was given.
+///
+/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// than compiled in, because the shell does not link locald -- it launches it --
+/// so the hostname arrives at runtime in the `ready` event and this is the only
+/// honest source for it.
+fn local_base_domain(api_base: &str) -> Option<String> {
+    let host = tauri::Url::parse(api_base)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    let (_first, rest) = host.split_once('.')?;
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
+    }
+    // The domain this installation serves itself under is a local destination
+    // whatever it resolves through.
+    //
+    // This is the security-relevant half of moving off `*.localhost`. In local
+    // mode the gate below *allows* anything that is not a local destination, on
+    // the reasoning that an ordinary internet site is not a way to reach this
+    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
+    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
+    // could be navigated to an attacker-chosen name and reach any port on the
+    // user's machine -- a hole that does not exist today, because
+    // `*.lemma.localhost` matches the check above and is denied unless it is
+    // ours.
+    if let Some(base) = local_base_domain(api_base) {
+        if host == base || host.ends_with(&format!(".{base}")) {
+            return true;
+        }
     }
     let Ok(address) = host.parse::<IpAddr>() else {
         return false;
@@ -5491,9 +5590,11 @@ fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
     url.scheme() == "http"
         && api.scheme() == "http"
         && url.port() == api.port()
-        && url
-            .host_str()
-            .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
+        && url.host_str().is_some_and(|host| {
+            TRUSTED_LOCAL_BASES
+                .iter()
+                .any(|base| host.ends_with(&format!(".apps.{base}")))
+        })
 }
 
 /// The documents a frame renders without fetching anything: the content document
@@ -5540,7 +5641,7 @@ fn navigation_disposition(
         || same_origin(url, app_base)
         || same_origin(url, api_base)
         || owned_published_app(url, api_base)
-        || !local_destination(url)
+        || !local_destination(url, api_base)
     {
         NavigationDisposition::Allow
     } else {
@@ -8469,6 +8570,32 @@ mod tests {
         assert!(capability_for(&["https://lemma.work"]).is_none());
         assert!(capability_for(&["not a url"]).is_none());
 
+        // ...including a local workspace, whose port is not known until it is
+        // allocated. The shipped entry is `http://app.<base>:*`, and the origin
+        // checked against it is concrete, so a plain string comparison never
+        // matched one and quietly minted an override for every local launch.
+        for base in ["lemma.localhost", "127.0.0.1.sslip.io"] {
+            assert!(
+                capability_for(&[&format!("http://app.{base}:52413")]).is_none(),
+                "the shipped capability already covers app.{base} on any port",
+            );
+        }
+        // And the wildcard is the port alone. A host that merely starts the
+        // same way is a different machine, and must still be treated as an
+        // override rather than silently accepted as shipped.
+        assert!(
+            capability_for(&["http://app.lemma.localhost.evil:52413"]).is_some(),
+            "a lookalike host must not read as a shipped origin",
+        );
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost:52413/admin"
+        ));
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost"
+        ));
+
         let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
             .expect("an overridden origin produces a capability");
         let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
@@ -8495,6 +8622,30 @@ mod tests {
             "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
+    }
+
+    /// Every local base this build serves has to be an origin the workspace
+    /// capability covers.
+    ///
+    /// The failure this catches is silent and total. A workspace served on a
+    /// base the capability does not list matches no capability at all, so
+    /// opening Local settings, connecting the Agent Host and configuring a
+    /// provider each answer `not allowed by ACL` -- the whole of onboarding,
+    /// with nothing on screen to say why. Nothing else ties the two files
+    /// together: the base domain is chosen in locald and the origins are
+    /// declared in a Tauri capability, and neither imports the other.
+    #[test]
+    fn every_local_base_this_build_serves_is_a_shipped_workspace_origin() {
+        let shipped = shipped_workspace_origins();
+        for base in TRUSTED_LOCAL_BASES {
+            let origin = format!("http://app.{base}:52413");
+            assert!(
+                shipped
+                    .iter()
+                    .any(|pattern| shipped_workspace_origin_covers(pattern, &origin)),
+                "capabilities/workspace.json does not cover {origin}, so a                  workspace served there reaches no shell command at all",
+            );
+        }
     }
 
     #[test]

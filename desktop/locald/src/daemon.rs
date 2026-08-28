@@ -103,8 +103,14 @@ impl Daemon {
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
                 // LAN/Public desired state is deliberately not persisted.
                 // Every daemon launch starts from the private canonical origin.
-                state.url = format!("http://app.lemma.localhost:{frontend_port}");
-                state.api_url = format!("http://app.lemma.localhost:{backend_port}");
+                state.url = format!(
+                    "http://{}:{frontend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
+                state.api_url = format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
                 state.persist(&paths.state)?;
             }
         }
@@ -1168,7 +1174,12 @@ impl Daemon {
             .host_processes
             .as_ref()
             .and_then(|manager| manager.application_ports())
-            .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
+            .map(|(_, backend_port)| {
+                format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                )
+            })
             .unwrap_or_else(|| state.api_url.clone());
         state.persist(&self.paths.state)
     }
@@ -2297,6 +2308,22 @@ fn sharing_environment(
         ),
         ("SESSION_COOKIE_SAME_SITE".into(), "lax".into()),
         ("SESSION_COOKIE_DOMAIN".into(), String::new()),
+        // No app host is served through a tunnel, so stop claiming one.
+        //
+        // The gateway routes by *path* -- `/_lemma/api` to the backend, the rest
+        // to the frontend -- so there is no host-based route for
+        // `<slug>.apps.<domain>` and there cannot be one without wildcard DNS on
+        // the tunnel. Left set, `public_app_url` kept handing visitors
+        // `<slug>.apps.lemma.localhost`, which their browser resolves against
+        // *their own* machine: not a dead link but one pointing somewhere else
+        // entirely. Blank makes `public_app_url` return None and
+        // `app_slug_from_host` decline to route, which is the truth.
+        ("APP_BASE_DOMAIN".into(), String::new()),
+        // ...and with no app origin, the app-origin API door is meaningless.
+        // It aliases the whole API under `/_lemma` on whatever origin serves
+        // user-authored HTML, and widens the refresh cookie to `Path=/` to make
+        // that work. Neither is wanted on a public origin.
+        ("APP_API_VIA_APP_ORIGIN".into(), "false".into()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED".into(), "false".into()),
         ("CORS_ORIGIN_REGEX".into(), exact_origin),
         // Raised, not merely rewritten.
@@ -2759,6 +2786,12 @@ mod tests {
         let (backend, frontend) =
             sharing_environment("https://lemma.example.com/", SharingMode::Public);
         assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
+        // A tunnel serves one origin and no app host, so the deployment must
+        // stop advertising one. Left set, every app's URL pointed at
+        // `<slug>.apps.lemma.localhost` -- which a visitor's browser resolves
+        // against their own machine.
+        assert_eq!(backend["APP_BASE_DOMAIN"], "");
+        assert_eq!(backend["APP_API_VIA_APP_ORIGIN"], "false");
         assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
         assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
         assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");

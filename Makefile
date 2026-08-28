@@ -33,6 +33,7 @@ SHELL := /bin/bash
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-desktop scenarios-desktop-provision \
         scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
@@ -1461,6 +1462,10 @@ scenarios-replay:
 # accounts and create organizations, and an organization cannot be deleted.
 TARGET ?= $(SCENARIOS_BASE_URL)
 
+# Extra pytest arguments for the desktop lane, so a `-k` filter or `-x` does
+# not mean copying the target's body out of here to run one journey.
+SCENARIOS_ARGS ?=
+
 # Run once per environment, by a person who can see what it did. Never part of
 # a run: this is the only thing that registers anybody, and a deployment counts
 # every call to its auth routes. Idempotent — run it twice and the second run
@@ -1482,6 +1487,51 @@ scenarios-deployment:
 	@echo "→ Product scenarios against $(TARGET)…"
 	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
 	@cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" --timeout=900
+
+# The suite against the Lemma Desktop install running on this machine.
+#
+# This is the widest coverage the desktop build has by a distance: the journey
+# scenarios exercise orgs, pods, tables, files, agents, functions, workflows,
+# schedules, bundles and app publishing, and against a desktop install they do
+# it through the real host pack, the real guest VM and the real services rather
+# than a stack booted for the occasion. No new test code -- `--base-url` was
+# already plumbed; what was missing was the address, which locald allocates at
+# first launch and so cannot be written down here.
+#
+# Provisioning is separate and deliberate: a deployment run refuses to register
+# anybody (see `sessions` in tests/scenarios/conftest.py), so the standing cast
+# has to exist first. Run `make scenarios-desktop-provision` once per install.
+#
+# SCENARIOS_TARGET_INSTANCE_ID is set from the install's own id, so if the app
+# is restarted onto a different install mid-session the run stops instead of
+# writing into it -- the suite creates organizations and the product cannot
+# delete one.
+scenarios-desktop:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Product scenarios against the desktop install at $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	uv run pytest -q --base-url "$$LEMMA_DESKTOP_API_URL" --timeout=900 $(SCENARIOS_ARGS)
+
+# The standing cast, on the desktop install. Once per install, not per run.
+#
+# A never-provisioned install trips the harness's own guard, which stops before
+# making anything and asks for SCENARIOS_ALLOW_NEW_CAST=1. That is deliberate
+# and is not passed for you: on a shared deployment the same symptom means the
+# cast already exists under different addresses, and answering it blindly would
+# build a second parallel one out of organizations nothing can delete. On a
+# fresh install it just means "yes, this is the first time":
+#
+#   make scenarios-desktop-provision SCENARIOS_ALLOW_NEW_CAST=1
+scenarios-desktop-provision:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Provisioning the standing tenant on $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	SCENARIOS_ALLOW_NEW_CAST="$(SCENARIOS_ALLOW_NEW_CAST)" \
+	uv run python -m harness.provision --base-url "$$LEMMA_DESKTOP_API_URL"
 
 # The guards on the suite itself: no imports of the app under test, no mocking,
 # no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —

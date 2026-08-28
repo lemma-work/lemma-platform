@@ -7,5 +7,5 @@ export type HomeAppResponse = {
     id: string;
     name: string;
     status: string;
-    url: string;
+    url?: (string | null);
 };

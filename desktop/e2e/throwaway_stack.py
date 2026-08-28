@@ -568,7 +568,14 @@ def _command_up(root: Path, created: dict) -> None:
     process = start_backend(pack, backend_env, root, port)
     created["process"] = process
 
-    api_url = f"http://app.lemma.localhost:{port}"
+    # The URL locald rendered, not one rebuilt from a hostname spelled here.
+    #
+    # This used to hardcode `app.lemma.localhost` while reading the port out of
+    # the very same value on the line above. The moment the host pack learned to
+    # serve a different domain, this stack signed in against one hostname and
+    # served apps under another -- the session cookie was out of scope for the
+    # API, and every probe came back 401 as if the product were broken.
+    api_url = env["API_URL"]
     wait_ready(api_url, process, root)
 
     stack = {
@@ -579,6 +586,10 @@ def _command_up(root: Path, created: dict) -> None:
         "frontend_url": api_url,
         "app_base_domain": app_base,
         "session_cookie_domain": env.get("SESSION_COOKIE_DOMAIN"),
+        # Whether apps are told to call the API on their own origin. Recorded
+        # rather than assumed, because it is what decides whether an absolute
+        # API URL in an app's config is correct or is the shipped bug.
+        "api_via_app_origin": env.get("APP_API_VIA_APP_ORIGIN", "true") == "true",
         # Functions are dispatched into guest sandboxes by locald's runtime
         # bridge, and this stack has no locald -- it borrowed one long enough to
         # render an environment and stopped it. Recorded rather than left to be
