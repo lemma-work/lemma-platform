@@ -3475,16 +3475,20 @@ mod tests {
     /// gate start counting, spending the full window again on a service that
     /// had been healthy the whole time.
     ///
-    /// Timed rather than asserted structurally, because the defect is entirely
-    /// about elapsed time and a structural assertion would pass on the serial
-    /// version. Both services answer immediately, so the only thing the run can
-    /// spend seconds on is the dwell.
+    /// Asserted on the *gap* between the two services' first probes, not on how
+    /// long startup took. An absolute bound is a claim about the machine: this
+    /// began life as "under 1800ms", passed locally at 1.28s, and failed a CI
+    /// runner at 4.31s while the gates were concurrent exactly as intended. The
+    /// gap is the thing the defect is actually about, and a slow machine slows
+    /// both services together, so it stays true wherever it runs.
     #[cfg(unix)]
     #[test]
     fn one_slow_service_does_not_make_every_other_service_wait_its_dwell_again() {
         let body = Arc::new(Mutex::new(String::new()));
-        let (mut backend_health, _, backend_server) = slow_response(0, Arc::clone(&body));
-        let (mut frontend_health, _, frontend_server) = slow_response(0, Arc::clone(&body));
+        let (mut backend_health, backend_probed, backend_server) =
+            slow_response(0, Arc::clone(&body));
+        let (mut frontend_health, frontend_probed, frontend_server) =
+            slow_response(0, Arc::clone(&body));
         backend_health.stabilization_seconds = 1;
         frontend_health.stabilization_seconds = 1;
 
@@ -3501,22 +3505,31 @@ mod tests {
         let manager = manager_in(&root, value);
         *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
 
-        let started = Instant::now();
         manager.start_all().unwrap();
-        let elapsed = started.elapsed();
         manager.stop_all().unwrap();
         drop(backend_server);
         drop(frontend_server);
 
-        // Two services, one second of dwell each. Serial spends two; concurrent
-        // spends one. The bound sits between them with room for the 250ms poll
-        // and process spawning, so it fails on the serial version and is not
-        // tight enough to flap on a loaded machine.
+        let backend_probed = backend_probed.lock().unwrap().expect("backend was probed");
+        let frontend_probed = frontend_probed
+            .lock()
+            .unwrap()
+            .expect("frontend was probed");
+
+        // Both gates start watching together, so both services see their first
+        // probe at about the same moment. Serially, the second is not probed
+        // until the first has finished its whole dwell -- a second later, by
+        // construction, whatever the machine.
+        let gap = if backend_probed > frontend_probed {
+            backend_probed - frontend_probed
+        } else {
+            frontend_probed - backend_probed
+        };
         assert!(
-            elapsed < Duration::from_millis(1800),
-            "startup took {elapsed:?} for two services with a 1s dwell each -- \
-             the gates are being charged one after another rather than watched \
-             together",
+            gap < Duration::from_millis(500),
+            "the two services were first probed {gap:?} apart, which is about \
+             the 1s dwell -- the gates are being charged one after another \
+             rather than watched together",
         );
     }
 
