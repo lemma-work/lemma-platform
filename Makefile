@@ -38,7 +38,7 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint quality check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -376,7 +376,7 @@ help:
 	@echo "    make pre-push           the fast subset — run this on every push"
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
-	@echo "    make check              quality + CodeQL on this branch's changes"
+	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
 	@echo ""
@@ -1811,8 +1811,28 @@ codeql-javascript:
 codeql-all:
 	@./scripts/run_codeql.sh --all
 
+# The frontend half of the pre-PR pass.
+#
+# `quality` above is entirely Python: `format-check` covers the backend, the
+# CLI, both SDKs and the scenarios, and stops at the language boundary. So a
+# frontend-only change could pass every gate this repository offers locally and
+# still meet eslint, tsc, the design-system audit and the education-anchor
+# check for the first time in CI, ten minutes after pushing -- which is the
+# shape of gate `rust-toolchain.toml`'s own comment argues against.
+#
+# Skipped rather than failed when the dependencies are not installed. A backend
+# contributor who has never run `npm ci` should not have `make check` break on
+# them; CI is the gate, this is the shortcut.
+quality-frontend:
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
+		echo "→ Frontend gates skipped — run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR) to include them"; \
+	else \
+		echo "→ Frontend lint, types, design audit, education anchors…"; \
+		cd $(FRONTEND_DIR) && npm run --silent check; \
+	fi
+
 # Everything a PR is judged on, short of the test suites themselves.
-check: quality codeql
+check: quality quality-frontend codeql
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 
