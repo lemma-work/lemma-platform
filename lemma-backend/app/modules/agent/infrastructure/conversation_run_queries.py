@@ -33,6 +33,11 @@ from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
 
+#: How far back to look for a transcript of the file `listen` was asked for.
+#: Bounded because a long-running chat holds thousands of messages and the
+#: answer, when there is one, is nearly always the message being answered.
+_VOICE_TRANSCRIPT_LOOKBACK = 50
+
 
 class ConversationRunQueriesMixin:
     """Run lookups mixed into ``ConversationRepository``.
@@ -385,3 +390,46 @@ class ConversationRunQueriesMixin:
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def find_existing_voice_transcript(
+        self, conversation_id: UUID, paths: tuple[str, ...]
+    ) -> str | None:
+        """A transcript this conversation already holds for one of ``paths``.
+
+        Inbound voice notes are transcribed once, at ingress, before the agent
+        is asked anything -- their words arrive as the message text. The agent
+        is told so, and told not to transcribe the file again, and sometimes it
+        does anyway: on dev, five `listen` calls landed on files whose
+        transcript was already sitting in the same conversation. Each one paid a
+        speech provider to produce text the run had been handed for free.
+
+        An instruction is the wrong shape for that. A model is free to ignore
+        one, and the cost of it doing so is real money and a slower answer, so
+        this makes the second transcription unnecessary rather than discouraged
+        -- `listen` answers from here and never reaches the provider.
+
+        ``paths`` is a tuple because the agent may name the file either way: the
+        prompt block carries the stored path (``/{user}/whatsapp/audio.ogg``)
+        while a person, and a model reading a listing, would write ``/me/...``.
+        Both spellings are the same file and both must find the transcript.
+        """
+        if not paths:
+            return None
+        rows = await self.session.execute(
+            select(MessageModel.message_metadata)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.message_metadata.has_key("voice_transcripts"),
+            )
+            .order_by(MessageModel.sequence.desc())
+            .limit(_VOICE_TRANSCRIPT_LOOKBACK)
+        )
+        wanted = set(paths)
+        for (metadata,) in rows.all():
+            for item in (metadata or {}).get("voice_transcripts") or []:
+                if not isinstance(item, dict) or item.get("failed"):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text and str(item.get("path") or "") in wanted:
+                    return text
+        return None

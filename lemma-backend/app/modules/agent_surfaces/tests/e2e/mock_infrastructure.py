@@ -1013,6 +1013,30 @@ class FakeWhatsAppServer:
         )
 
 
+#: A 1x1 red PNG. Real bytes on purpose: the point of the photo test is that
+#: something downstream can tell what these are without being told, and a
+#: placeholder string would only prove the plumbing moved it.
+A_RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
+)
+
+#: What ``getFile`` answers for a given ``file_id``. Keyed the way Telegram keys
+#: it, because the *path* is where a photo's type comes from -- the update never
+#: says. A file id with no entry gets a generic document path, which is the
+#: untyped case and is meant to stay reachable.
+TELEGRAM_FILE_PATHS: dict[str, str] = {
+    "photo-large": "photos/file_42.jpg",
+    "voice-1": "voice/file_9.oga",
+}
+
+#: The bytes each path serves.
+TELEGRAM_FILE_BODIES: dict[str, bytes] = {
+    "photos/file_42.jpg": A_RED_PNG,
+    "voice/file_9.oga": b"OggS" + b"\x00" * 32,
+}
+
+
 class FakeTelegramServer:
     """Lightweight aiohttp server mimicking the Telegram Bot API.
 
@@ -1052,6 +1076,11 @@ class FakeTelegramServer:
         app.router.add_post(
             "/bot{token}/getManagedBotToken", self._get_managed_bot_token
         )
+        # Inbound files. Their absence is why no test could drive a Telegram
+        # photo end to end, and why a photo reaching the agent as an untyped
+        # blob went unnoticed through every suite the repository has.
+        app.router.add_post("/bot{token}/getFile", self._get_file)
+        app.router.add_get("/file/bot{token}/{file_path:.+}", self._download_file)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -1363,6 +1392,41 @@ class FakeTelegramServer:
         return web.json_response(
             {"ok": True, "result": f"{user_id}:FAKE-MANAGED-BOT-TOKEN-e2e"}
         )
+
+    async def _get_file(self, request: web.Request) -> web.Response:
+        """Where a file id becomes a path, and the only place its type appears.
+
+        This is the half of Telegram that matters for an inbound photo: the
+        update carries a bare ``file_id`` with no filename and no ``mime_type``,
+        and ``file_path`` is the first and only thing that says the bytes are a
+        JPEG. A fake that skipped it made the untyped case untestable, which is
+        exactly the case that broke.
+        """
+        body = await request.json()
+        file_id = str(body.get("file_id") or "")
+        self._store.add(
+            "TELEGRAM_GET_FILE", {"file_id": file_id, **_request_contract(request)}
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "file_id": file_id,
+                    "file_path": TELEGRAM_FILE_PATHS.get(
+                        file_id, f"documents/{file_id}"
+                    ),
+                },
+            }
+        )
+
+    async def _download_file(self, request: web.Request) -> web.Response:
+        file_path = request.match_info["file_path"]
+        self._store.add(
+            "TELEGRAM_FILE_DOWNLOAD",
+            {"file_path": file_path, **_request_contract(request)},
+        )
+        body = TELEGRAM_FILE_BODIES.get(file_path, b"fake telegram file")
+        return web.Response(body=body, content_type="application/octet-stream")
 
 
 class FakeResendServer:

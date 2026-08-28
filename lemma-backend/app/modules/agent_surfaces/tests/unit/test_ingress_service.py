@@ -2406,6 +2406,22 @@ async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch)
     )
     assert text2 == "fyi:\n\nschedule a meeting tomorrow"
 
+    # The type word is not a caption. WhatsApp media carries none of its own,
+    # so the parser falls back to the name of the kind of file it was -- and
+    # every voice note reached the model as "audio\n\n<what they said>", which
+    # reads as the person having typed the word "audio" first. Seven such
+    # messages on dev, every one of them.
+    text3 = await service._transcribe_voice_attachments(
+        ingested=ingested, original_text="voice", metadata={}
+    )
+    assert text3 == "schedule a meeting tomorrow"
+
+    # A word somebody really typed survives, even where it looks like one.
+    text4 = await service._transcribe_voice_attachments(
+        ingested=ingested, original_text="voice memo for you", metadata={}
+    )
+    assert text4 == "voice memo for you\n\nschedule a meeting tomorrow"
+
 
 async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch):
     import app.modules.agent.tools.speech.provider as speech_provider

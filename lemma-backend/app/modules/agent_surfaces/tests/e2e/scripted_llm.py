@@ -51,7 +51,6 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.services.progress_observer import (
@@ -171,9 +170,7 @@ async def run_scripted_agent_run(
 
 async def process_ingress_and_run_scripted(
     db_session: AsyncSession,
-    request: SurfacePlatformWebhookIngress
-    | SurfaceDirectWebhookIngress
-    | SurfaceScheduleIngress,
+    request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
     *,
     script: list[ScriptTurn] | None = None,
 ) -> SurfaceContext:

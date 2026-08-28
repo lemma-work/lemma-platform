@@ -28,6 +28,9 @@ from app.modules.agent_surfaces.platforms.whatsapp import (
 from app.modules.agent_surfaces.platforms.telegram.adapter import (
     TelegramSurfaceAdapter,
 )
+from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
+    resolve_attachment_name_and_mime,
+)
 from app.modules.agent_surfaces.platforms.telegram.parser import (
     TelegramMessageParser,
 )
@@ -879,3 +882,224 @@ async def test_base_adapter_download_and_send_file_defaults():
         )
         is False
     )
+
+
+# ---- Telegram sends files it never describes --------------------------------
+#
+# Telegram is the only surface that hands over a file with no type at all: a
+# photo is an array of sizes with a `file_id` and nothing else. Left undeclared,
+# the file is stored under a name with no extension, the datastore types it from
+# that name as `application/octet-stream`, and `view_image` refuses to open it --
+# so the agent tells the person it cannot read the photo they just sent.
+
+
+def test_a_photo_is_declared_an_image_even_though_telegram_does_not_say_so():
+    payload = _telegram_text_payload()
+    payload["message"]["photo"] = [
+        {"file_id": "small", "file_size": 100},
+        {"file_id": "large", "file_size": 5000},
+    ]
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
+
+    assert event is not None
+    [attachment] = event.metadata["attachments"]
+    assert attachment["file_id"] == "large"
+    assert attachment["mime_type"] == "image/jpeg"
+
+
+def test_a_sticker_is_typed_by_whether_it_moves():
+    for is_video, expected in ((False, "image/webp"), (True, "video/webm")):
+        payload = _telegram_text_payload()
+        payload["message"]["sticker"] = {"file_id": "S1", "is_video": is_video}
+        del payload["message"]["text"]
+
+        event = TelegramMessageParser().parse(payload)
+
+        assert event is not None
+        [attachment] = event.metadata["attachments"]
+        assert attachment["mime_type"] == expected, is_video
+
+
+def test_a_video_note_reaches_the_agent_at_all():
+    """The round camera messages. Not in the parsed set before, so a person
+    filming something watched the agent answer their caption and ignore it."""
+    payload = _telegram_text_payload()
+    payload["message"]["video_note"] = {"file_id": "VN1", "file_size": 2048}
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
+
+    assert event is not None
+    [attachment] = event.metadata["attachments"]
+    assert attachment["file_id"] == "VN1"
+    assert attachment["content_type"] == "video_note"
+    assert attachment["mime_type"] == "video/mp4"
+
+
+def test_an_animation_is_saved_once_not_twice():
+    """Telegram sets `document` alongside `animation` for old clients. Both name
+    the same file, so reading both saves the GIF twice and tells the agent about
+    two files where the person sent one."""
+    payload = _telegram_text_payload()
+    payload["message"]["animation"] = {
+        "file_id": "A1",
+        "file_name": "cat.gif",
+        "mime_type": "video/mp4",
+    }
+    payload["message"]["document"] = {
+        "file_id": "A1",
+        "file_name": "cat.gif",
+        "mime_type": "video/mp4",
+    }
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
+
+    assert event is not None
+    assert len(event.metadata["attachments"]) == 1
+    assert event.metadata["attachments"][0]["content_type"] == "animation"
+
+
+def test_a_voice_note_keeps_the_type_telegram_did_declare():
+    payload = _telegram_text_payload()
+    payload["message"]["voice"] = {"file_id": "V1", "mime_type": "audio/ogg"}
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
+
+    assert event is not None
+    [attachment] = event.metadata["attachments"]
+    assert attachment["mime_type"] == "audio/ogg"
+
+
+# ---- naming a file Telegram would not name ----------------------------------
+
+
+def test_a_photo_is_named_from_the_path_telegram_answered_with():
+    """`getFile` knows the extension even when the update did not.
+
+    The parsed name is the type word "photo", which has no extension and so told
+    the datastore nothing. Telegram's own `file_path` -- `photos/file_42.jpg` --
+    had the answer the whole time; it was simply never preferred.
+    """
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"file_id": "F", "name": "photo"},
+        file_path="photos/file_42.jpg",
+        content=b"",
+    )
+
+    assert name == "file_42.jpg"
+    assert mime == "image/jpeg"
+
+
+def test_a_real_filename_is_never_second_guessed():
+    """Declared beats derived. A document arrives properly named; leave it."""
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "quarter.csv", "mime_type": "text/csv"},
+        file_path="documents/file_9.csv",
+        content=b"a,b\n",
+    )
+
+    assert name == "quarter.csv"
+    assert mime == "text/csv"
+
+
+def test_the_bytes_settle_it_when_neither_name_does():
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "sticker"},
+        file_path="stickers/file_7",
+        content=b"RIFF\x00\x00\x00\x00WEBP",
+    )
+
+    assert mime == "image/webp"
+    assert name.endswith(".webp")
+
+
+def test_a_voice_note_keeps_an_extension_it_can_be_played_by():
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "voice", "mime_type": "audio/ogg"},
+        file_path="voice/file_3.oga",
+        content=b"OggS",
+    )
+
+    assert mime == "audio/ogg"
+    assert name == "file_3.oga"
+
+
+def test_an_unknowable_blob_is_reported_as_one_rather_than_guessed_at():
+    """Honest when nothing knows. A wrong type is worse than none: it looks
+    decided, and every layer downstream believes it."""
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "document"},
+        file_path="documents/file_1",
+        content=b"\x00\x01\x02\x03",
+    )
+
+    assert mime == "application/octet-stream"
+    assert name == "file_1"
+
+
+async def test_a_downloaded_photo_arrives_typed_end_to_end(monkeypatch):
+    """The whole of bug A's adapter half: a photo update in, an openable
+    `image/png` out, with nothing but `file_id` to start from."""
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "result": {"file_path": "photos/file_42.jpg"}}
+
+        @property
+        def text(self):
+            return ""
+
+    class _Stream:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield png
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fake_post(self, url, *, json=None, **kwargs):
+        return _Resp()
+
+    def fake_stream(self, method, url, **kwargs):
+        return _Stream()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    event = ParsedInboundSurfaceEvent(
+        platform="TELEGRAM",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="1",
+        message_text="what colour is this?",
+    )
+
+    result = await telegram_service_module.TelegramPlatformService(
+        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+    ).download_attachment_bytes(
+        event,
+        # Exactly what the parser produces for a photo, and all Telegram sends.
+        {"file_id": "large", "name": "photo", "content_type": "image"},
+    )
+
+    assert result is not None
+    content, name, mime = result
+    assert content == png
+    assert mime.startswith("image/")
+    assert name.lower().endswith((".jpg", ".jpeg", ".png"))

@@ -346,7 +346,7 @@ async def _clear_run_debris(
             continue
         ledger.did(f"removed agent {name!r} from {pod.get('name')!r}")
 
-    entries = _tree_entries(await owner.file_tree_of(pod))
+    entries = await _every_file_and_folder(owner, pod)
     # Deepest first: removing a folder takes what is inside it, so a child that
     # has already gone would otherwise 404 and stop the sweep on its way past.
     for entry in sorted(
@@ -362,19 +362,38 @@ async def _clear_run_debris(
         ledger.did(f"removed {path!r} from {pod.get('name')!r}")
 
 
-def _tree_entries(tree: Any) -> list[JSON]:
-    """Every entry in a pod's file tree, at any depth.
+async def _every_file_and_folder(owner: Person, pod: JSON) -> list[JSON]:
+    """Everything in a pod, at any depth, with nothing left off the end.
 
-    All the way down, and that is not thoroughness for its own sake. A document
-    no converter can read is retried for as long as it exists, and a worker
-    doing that for a handful of them starves the agent runs everything else is
-    waiting on — which shows up as unrelated scenarios timing out, several
-    journeys away from the file that caused it. Walking only the top level left
-    exactly those files behind whenever a run had put them in a folder.
+    Two calls doing two different jobs, and the split is the fix. The tree gives
+    the *folders*, which it never truncates. The listing gives the files in each
+    one, which it pages — where the tree returns at most twenty per folder and
+    three by default.
+
+    That cap is why this stopped keeping up. Walking the tree alone, cleanup saw
+    three files in `/me/telegram` and left everything after them, so the folder
+    grew a little every night and the sweep never caught up with it. Worse, it
+    was invisible: cleanup reported the files it removed and had no way to
+    mention the ones it had not been shown.
+
+    All the way down is not thoroughness for its own sake. A document no
+    converter can read is retried for as long as it exists, and a worker doing
+    that for a handful of them starves the agent runs everything else is waiting
+    on — which shows up as unrelated scenarios timing out, several journeys away
+    from the file that caused it.
     """
-    found: list[JSON] = []
-    _walk(tree, found)
-    return found
+    tree = await owner.file_tree_of(pod)
+    nodes: list[JSON] = []
+    _walk(tree, nodes)
+    found = {str(node.get("path")): node for node in nodes if node.get("path")}
+    for folder in [node for node in nodes if str(node.get("kind")) == "FOLDER"]:
+        for item in await owner.files_in(pod, directory=str(folder["path"])):
+            if item.get("path"):
+                found[str(item["path"])] = item
+    for item in await owner.files_in(pod, directory="/"):
+        if item.get("path"):
+            found[str(item["path"])] = item
+    return list(found.values())
 
 
 def _walk(node: Any, found: list[JSON]) -> None:

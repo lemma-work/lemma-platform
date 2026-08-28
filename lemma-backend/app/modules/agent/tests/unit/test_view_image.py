@@ -7,9 +7,10 @@ import pytest
 from pydantic_ai import BinaryContent, ToolReturn
 
 from app.core.domain.errors import DomainError
+from app.core.file_types import sniff_image_mime
 from app.modules.agent.tools.file_access import (
+    _best_mime,
     read_workspace_file_bytes,
-    sniff_image_mime,
 )
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
@@ -200,3 +201,35 @@ async def test_workspace_reader_sniffs_extensionless_png():
 
     assert mime == "image/png"
     assert content == _PNG
+
+
+# ---- octet-stream is the absence of a type, not a type ----------------------
+
+
+def test_a_stored_octet_stream_loses_to_the_bytes_themselves():
+    """The bug that made the agent refuse every Telegram photo.
+
+    The datastore types a file by its name alone, so a photo saved as bare
+    ``photo`` -- which is all Telegram gives us -- comes back claiming to be
+    ``application/octet-stream``. That claim is truthy, so it won the ``or``
+    chain and the sniffer at the end of it never ran; `view_image` then refused
+    the file for not being an image, and the agent told the person it could not
+    read their screenshot.
+    """
+    assert _best_mime("application/octet-stream", "photo", _PNG) == "image/png"
+
+
+def test_a_stored_type_that_names_something_is_believed():
+    """Declared beats derived: sniffing is the fallback, never the override."""
+    assert _best_mime("image/jpeg", "photo.jpg", _PNG) == "image/jpeg"
+
+
+def test_an_extension_is_preferred_over_reading_the_bytes():
+    assert _best_mime(None, "notes.csv", b"col_a,col_b\n1,2\n") == "text/csv"
+
+
+def test_a_genuine_blob_is_still_reported_as_one():
+    """Honest when nothing knows: a name, a path and the bytes can all fail."""
+    assert _best_mime("application/octet-stream", "blob", b"\x00\x01\x02") == (
+        "application/octet-stream"
+    )

@@ -71,6 +71,7 @@ markers = [
     "covers: OpenAPI operation ids and analytics events exercised",
     "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
+    "stack_lane: needs a deployment configured to be broken in a particular way, so it can only run on one this suite booted",
 ]
 
 [tool.ruff]

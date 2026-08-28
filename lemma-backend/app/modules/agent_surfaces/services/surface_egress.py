@@ -58,6 +58,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_ask_user_render_plan,
     build_display_resource_render_plan,
 )
+from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.services.surface_egress_target import (
@@ -531,6 +532,11 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         entity, content = loaded
 
+        # `or` was not enough: a file stored without an extension is typed
+        # `application/octet-stream`, which is truthy, so the fallback never
+        # fired and Telegram was handed a blob where sendVoice wants OGG.
+        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
+
         # Voice note, then the same bytes as an attachment (an audio player on
         # most platforms), then the link card. Three rungs that used to be
         # written out here; the envelope walks them.
@@ -540,7 +546,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 voice=EnvelopeVoice(
                     file_name=entity.name,
                     content=content,
-                    mime_type=entity.mime_type or "audio/ogg",
+                    mime_type=mime,
                     caption=caption,
                     fallback=build_display_resource_render_plan(
                         pod_id=target.surface.pod_id,

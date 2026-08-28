@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import mimetypes
 from html import escape
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +18,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
+)
+from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
+    resolve_attachment_name_and_mime,
 )
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
     put_callback_token,
@@ -492,15 +493,13 @@ class TelegramPlatformService:
                     file_response.aiter_bytes(),
                     max_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
                 )
-        file_name = (
-            str(attachment.get("name") or "").strip()
-            or Path(file_path).name
-            or "telegram_file"
-        )
-        mime_type = (
-            str(attachment.get("mime_type") or "").strip()
-            or mimetypes.guess_type(file_name)[0]
-            or "application/octet-stream"
+        # Naming is its own module because getting it wrong is silent: a photo
+        # arrives with no filename and no mime type, and every layer downstream
+        # types a file by its name. See `attachment_naming`.
+        file_name, mime_type = resolve_attachment_name_and_mime(
+            attachment=attachment,
+            file_path=file_path,
+            content=content,
         )
         return content, file_name, mime_type
 

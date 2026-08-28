@@ -768,3 +768,31 @@ def _resend_payload(
         "in_reply_to": in_reply_to,
         "references": list(references or []),
     }
+
+
+def _telegram_photo_payload(
+    *,
+    caption: str,
+    message_id: int,
+    sender_id: int,
+    file_id: str = "photo-large",
+) -> dict:
+    """A photo, shaped exactly the way Telegram shapes one.
+
+    Which is to say: an array of sizes, each carrying a ``file_id`` and its
+    dimensions, and **no filename and no ``mime_type`` anywhere**. That absence
+    is the whole point of the fixture -- it is what every other surface supplies
+    and Telegram does not, and it is what made a photo reach the agent as an
+    unopenable blob. A payload that helpfully added a mime type here would test
+    a message Telegram never sends.
+    """
+    payload = _telegram_payload(
+        text=caption, message_id=message_id, sender_id=sender_id
+    )
+    del payload["message"]["text"]
+    payload["message"]["caption"] = caption
+    payload["message"]["photo"] = [
+        {"file_id": "photo-small", "file_size": 640, "width": 90, "height": 51},
+        {"file_id": file_id, "file_size": 5000, "width": 1280, "height": 720},
+    ]
+    return payload
