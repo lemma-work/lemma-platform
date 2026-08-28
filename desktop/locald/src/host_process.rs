@@ -683,22 +683,51 @@ impl HostProcessManager {
                 spawn_failure.get_or_insert((id.clone(), error));
             }
         }
-        for id in &self.ordered_ids {
-            // Nothing to wait for on a service that never started; waiting
-            // would just spend its whole health timeout to say so.
-            if spawn_failure
-                .as_ref()
-                .is_some_and(|(failed, _)| failed == id)
-            {
-                continue;
-            }
-            if let Some(health) = self.health_spec(id) {
-                if let Err(error) = self.wait_process_health(id, &health) {
-                    let _ = self.stop_all();
-                    return Err(io::Error::other(format!(
-                        "{id} failed health gate: {error}"
-                    )));
-                }
+        // Gate every service at once, not one after another.
+        //
+        // Each gate requires `stabilization_seconds` of *continuously observed*
+        // health, and `healthy_since` is local to the call -- so a serial loop
+        // charges that dwell once per service. The frontend is ready in about
+        // 0.3s and then sits there healthy while the backend's gate runs, and
+        // only afterwards does its own gate start watching and spend a fresh
+        // two seconds confirming what was already true. Two services, four
+        // seconds, for a guard that needs two.
+        //
+        // Watching them concurrently costs nothing and weakens nothing: every
+        // service still proves the same uninterrupted dwell against the same
+        // probe. It just stops the clock starting late on services that came up
+        // early. This is the same move as spawning before gating above, applied
+        // to the half that was still serial.
+        //
+        // Results are collected in `ordered_ids` order, so the service reported
+        // on a failure does not depend on which thread lost the race.
+        let gates: Vec<(String, io::Result<()>)> = thread::scope(|scope| {
+            let running: Vec<_> = self
+                .ordered_ids
+                .iter()
+                // Nothing to wait for on a service that never started; waiting
+                // would just spend its whole health timeout to say so.
+                .filter(|id| {
+                    !spawn_failure
+                        .as_ref()
+                        .is_some_and(|(failed, _)| failed == *id)
+                })
+                .filter_map(|id| self.health_spec(id).map(|health| (id, health)))
+                .map(|(id, health)| {
+                    scope.spawn(move || (id.clone(), self.wait_process_health(id, &health)))
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|handle| handle.join().expect("health gate thread panicked"))
+                .collect()
+        });
+        for (id, result) in gates {
+            if let Err(error) = result {
+                let _ = self.stop_all();
+                return Err(io::Error::other(format!(
+                    "{id} failed health gate: {error}"
+                )));
             }
         }
         if let Some((_, error)) = spawn_failure {
@@ -3434,6 +3463,61 @@ mod tests {
                 started.saturating_duration_since(first_healthy),
             );
         }
+    }
+
+    /// A service that came up early must not restart the dwell clock late.
+    ///
+    /// Each gate requires `stabilization_seconds` of *continuously observed*
+    /// health, measured from the first probe that gate itself saw succeed. Run
+    /// one after another, that charges the dwell once per service: the frontend
+    /// is healthy within a fraction of a second and then waits, idle and
+    /// unwatched, for the backend's gate to finish -- and only then does its own
+    /// gate start counting, spending the full window again on a service that
+    /// had been healthy the whole time.
+    ///
+    /// Timed rather than asserted structurally, because the defect is entirely
+    /// about elapsed time and a structural assertion would pass on the serial
+    /// version. Both services answer immediately, so the only thing the run can
+    /// spend seconds on is the dwell.
+    #[cfg(unix)]
+    #[test]
+    fn one_slow_service_does_not_make_every_other_service_wait_its_dwell_again() {
+        let body = Arc::new(Mutex::new(String::new()));
+        let (mut backend_health, _, backend_server) = slow_response(0, Arc::clone(&body));
+        let (mut frontend_health, _, frontend_server) = slow_response(0, Arc::clone(&body));
+        backend_health.stabilization_seconds = 1;
+        frontend_health.stabilization_seconds = 1;
+
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.health = Some(backend_health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        frontend.health = Some(frontend_health);
+
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
+
+        let started = Instant::now();
+        manager.start_all().unwrap();
+        let elapsed = started.elapsed();
+        manager.stop_all().unwrap();
+        drop(backend_server);
+        drop(frontend_server);
+
+        // Two services, one second of dwell each. Serial spends two; concurrent
+        // spends one. The bound sits between them with room for the 250ms poll
+        // and process spawning, so it fails on the serial version and is not
+        // tight enough to flap on a loaded machine.
+        assert!(
+            elapsed < Duration::from_millis(1800),
+            "startup took {elapsed:?} for two services with a 1s dwell each -- \
+             the gates are being charged one after another rather than watched \
+             together",
+        );
     }
 
     #[cfg(unix)]
