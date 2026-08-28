@@ -94,7 +94,10 @@ def test_a_state_file_naming_a_host_we_do_not_serve_is_not_discovered(
     """
     (tmp_path / "state.json").write_text(
         json.dumps(
-            {"url": "http://app.evil.example:52413", "apiUrl": "http://app.evil.example:52414"}
+            {
+                "url": "http://app.evil.example:52413",
+                "apiUrl": "http://app.evil.example:52414",
+            }
         ),
         encoding="utf-8",
     )
