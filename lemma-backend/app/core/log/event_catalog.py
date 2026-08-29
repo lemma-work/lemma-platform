@@ -72,7 +72,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded': EventSpec('warning', frozenset()),
     'agent.pod_mcp_service.session_lookup.failed': EventSpec('error', frozenset()),
     'agent.pydantic_ai.agent_input_required_kind_call.observed': EventSpec('debug', frozenset({'tool_call_id'})),
-    'agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic': EventSpec('debug', frozenset()),
+    'agent.pydantic_ai.agent_run_ended_after_repeated.degraded': EventSpec('warning', frozenset()),
     'agent.pydantic_ai.agent_run_hit_usage_limit.degraded': EventSpec('warning', frozenset()),
     'agent.pydantic_ai.driver_cancelled_mid_run.failed': EventSpec('error', frozenset({'agent_run_id'})),
     'agent.pydantic_ai.dropping_non_object_tool_args.diagnostic': EventSpec('debug', frozenset()),

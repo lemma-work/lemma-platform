@@ -24,7 +24,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
+
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+    HarnessDriverCancelled,
+)
+from app.modules.agent.infrastructure.transport_errors import (
+    is_retryable_stream_error,
+)
 
 from app.core.log.log import get_logger
 
@@ -83,3 +94,76 @@ def log_model_http_error(
         provider_error_code=code,
         exc_info=True,
     )
+
+
+def user_facing_error_message(exc: Exception) -> str:
+    """Return a sanitized, actionable message for the UI.
+
+    Never forward raw provider exception text (which may contain API keys,
+    request headers, or model-internal details) into user-visible payloads.
+    """
+    if isinstance(exc, ModelHTTPError):
+        # These three are all "the provider said no", but they need different
+        # things from the reader: wait, top up, or fix the config. A single
+        # generic message sends people to the wrong place.
+        if exc.status_code == 429:
+            return (
+                "The model provider is rate limiting this workspace (HTTP 429). "
+                "The request was retried a few times without success — try "
+                "again shortly."
+            )
+        if exc.status_code == 402:
+            return (
+                "The model provider rejected the request for billing reasons "
+                "(HTTP 402). Please check the provider account's credit or quota."
+            )
+        if exc.status_code >= 500:
+            return (
+                f"The model provider is having trouble (HTTP {exc.status_code}) "
+                "and the request was retried without success. Nothing you sent "
+                "was lost — try again shortly."
+            )
+        return (
+            f"The model provider returned an error (HTTP {exc.status_code}). "
+            "Please check the agent runtime configuration."
+        )
+    if is_retryable_stream_error(exc):
+        # A transport-level drop that survived every retry. Nothing was lost —
+        # each completed message was persisted — so say so, because "check the
+        # configuration" sends people hunting a bug that isn't theirs.
+        return (
+            "The connection to the model provider kept dropping. Nothing you "
+            "sent was lost — send another message, or press Retry to pick up "
+            "where it stopped."
+        )
+    if isinstance(exc, UnexpectedModelBehavior):
+        return (
+            "A tool failed repeatedly after several attempts and the run was "
+            "stopped. Please check the agent configuration."
+        )
+    if isinstance(exc, UsageLimitExceeded):
+        return (
+            "The agent run hit a usage limit. "
+            "Please check the agent runtime configuration."
+        )
+    if isinstance(exc, HarnessDriverCancelled):
+        # Whatever the agent was doing stopped part-way, so "try again" is the
+        # honest advice. Everything it finished before that point is persisted.
+        return (
+            "The agent stopped part-way through a step and could not finish. "
+            "Nothing you sent was lost — send another message, or press Retry "
+            "to pick up where it stopped."
+        )
+    return (
+        "The model provider returned an error. "
+        "Please check the agent runtime configuration."
+    )
+
+
+# Per-tool retry budget for the in-process agent. pydantic-ai defaults to 1, which
+# turns a single bad/invalid tool call (e.g. arguments that fail schema validation)
+# into a fatal run. 5 gives the model several chances to self-correct from the
+# validation feedback before the run gives up. Execution errors are handled
+# separately by GracefulToolset and never consume this budget.
+
+# Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
