@@ -25,7 +25,7 @@ async def web_search(
     try:
         return await web_search_internal(ctx.deps, request)
     except Exception as e:
-        logger.debug("agent.web_search.failed", exc_info=True)
+        logger.warning("agent.web_search.failed.degraded", exc_info=True)
         return WebSearchResponse(
             success=False,
             error=f"Web search failed: {e}",
@@ -51,7 +51,7 @@ async def web_fetch(
     try:
         return await web_fetch_internal(ctx.deps, request)
     except Exception as exc:
-        logger.debug("agent.web_fetch.failed", exc_info=True)
+        logger.warning("agent.web_fetch.failed.degraded", exc_info=True)
         return WebFetchResponse(success=False, error=f"Web fetch failed: {exc}")
 
 

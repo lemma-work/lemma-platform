@@ -146,9 +146,16 @@ def bounded_tool_value(value: object, *, depth: int = 0) -> JsonValue:
     if isinstance(value, str):
         if len(value) <= _MAX_TOOL_STRING_CHARACTERS:
             return value
+        # Keep the head. This replaced the whole string, so a 4,097-character
+        # result lost all 4,097 -- and because this payload *is* the persisted
+        # transcript, a `carries_history=True` resume replayed
+        # `{"omitted": ...}` where the file the agent had read used to be. The
+        # collection branches below already report what they dropped; this one
+        # did not even keep a sample.
         return {
-            "omitted": "large tool payload",
+            "truncated": True,
             "character_count": len(value),
+            "preview": value[:_MAX_TOOL_STRING_CHARACTERS],
         }
     if isinstance(value, dict):
         items = list(value.items())

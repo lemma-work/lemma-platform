@@ -13,6 +13,9 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+    user_prompt_text,
+)
 from app.composition.agent_workspace import WorkspaceSandboxService
 from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
@@ -347,6 +350,24 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
+def _user_turn_text(message: Message) -> str:
+    """Everything the surface knows about one user message.
+
+    A user turn carries more than its text: who sent it, what it quotes, which
+    channel it came from, the files attached, whether it was a voice note, and
+    whether a reply has to go back as email. The in-process harness assembles all
+    of that. This path sent the bare text, so the same Slack thread answered by a
+    Codex or Claude Code host arrived with no sender, no referent for a quoted
+    reply, and no sign of the files already in the datastore -- reading as though
+    the agent had ignored the attachment. One builder now serves both paths.
+    """
+    body = user_prompt_text(message)
+    attachments = (message.metadata or {}).get("attachments")
+    if isinstance(attachments, list) and attachments:
+        body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
+    return body
+
+
 def _message_text(message: Message) -> str:
     if message.kind == MessageKind.TOOL_CALL:
         body = (
@@ -359,6 +380,8 @@ def _message_text(message: Message) -> str:
             f"({message.tool_call_id}):\n"
             f"{json.dumps(to_json_value(message.tool_result), indent=2)}"
         )
+    elif message.role == MessageRole.USER:
+        return _user_turn_text(message)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

@@ -193,6 +193,13 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
 
         return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
     except Exception:
+        # The caller falls back to text, so the user still hears back -- but a
+        # surface that has stopped accepting voice notes is worth seeing.
+        logger.warning(
+            "agent.speech.voice_note_delivery_failed.degraded",
+            platform=str(platform),
+            exc_info=True,
+        )
         return False
 
 

@@ -229,8 +229,8 @@ class ConversationMCPService:
             # model recovers and continues the turn, instead of the unknown-tool /
             # validation / execution exception surfacing as a protocol/HTTP error
             # that aborts the run.
-            logger.debug(
-                "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic",
+            logger.warning(
+                "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.degraded",
                 exc_info=True,
             )
             error = tool_call_error(tool_name, exc)
@@ -385,8 +385,8 @@ class ConversationMCPService:
             # with -- an archived or deleted profile, a missing repository, a
             # database that will not answer. Anything else is a bug and should
             # surface as one rather than be absorbed into a silent fallback.
-            logger.debug(
-                "agent.conversation_mcp.runtime_resolve_failed.diagnostic",
+            logger.warning(
+                "agent.conversation_mcp.runtime_resolve_failed.degraded",
                 exc_info=True,
             )
             return stored

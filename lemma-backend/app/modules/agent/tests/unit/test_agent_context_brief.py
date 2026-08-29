@@ -377,3 +377,87 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
 
     assert "second" in second
     assert "first" not in second
+
+
+class TestEveryCapSaysWhatItLeftOut:
+    """A silent cap is worse than a small one.
+
+    The brief caps tables, agents, functions, files, grants and columns. All six
+    were silent, so a pod's 51st table simply did not exist as far as the agent
+    was concerned -- and an agent that believes a table is absent does not go
+    looking for it, it tells the user there isn't one. The grants case is worse
+    still: the section is headed "These are pre-authorized for you", so a
+    truncated list makes the agent ask for approval it already has.
+    """
+
+    def test_nothing_is_said_when_nothing_was_dropped(self) -> None:
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        assert _more_note(shown=3, total=3, noun="tables") == []
+
+    def test_the_count_left_out_is_named(self) -> None:
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        (line,) = _more_note(shown=50, total=137, noun="tables")
+
+        assert "87 more tables" in line
+
+    def test_an_unknown_total_is_not_treated_as_nothing_more(self) -> None:
+        """A repository that does not count returns None. That is 'unknown',
+        and it must not crash prompt assembly either."""
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        assert _more_note(shown=5, total=None, noun="agents") == []
+
+    def test_hidden_columns_are_declared_on_the_table_line(self) -> None:
+        """A column the agent cannot see is one it omits from a write and is
+        then told is required, or reports to the user as not existing."""
+        from types import SimpleNamespace
+
+        from app.modules.agent.services.agent_context_brief import (
+            _MAX_COLUMNS,
+            _table_line,
+        )
+
+        table = SimpleNamespace(
+            table_name="orders",
+            primary_key_column="id",
+            columns=[
+                SimpleNamespace(name=f"c{index}", type="TEXT")
+                for index in range(_MAX_COLUMNS + 7)
+            ],
+        )
+
+        line = _table_line(table)
+
+        assert "+7 more columns" in line
+
+    def test_a_narrow_table_gets_no_note(self) -> None:
+        from types import SimpleNamespace
+
+        from app.modules.agent.services.agent_context_brief import _table_line
+
+        table = SimpleNamespace(
+            table_name="orders",
+            primary_key_column="id",
+            columns=[SimpleNamespace(name="id", type="UUID")],
+        )
+
+        assert "more columns" not in _table_line(table)
+
+    def test_extra_top_level_files_are_declared(self) -> None:
+        from app.modules.agent.services.agent_context_brief import (
+            _MAX_RESOURCES,
+            _top_level_file_entries,
+        )
+
+        tree = {
+            "children": [
+                {"path": f"/f{index}", "kind": "FILE"}
+                for index in range(_MAX_RESOURCES + 4)
+            ]
+        }
+
+        entries = _top_level_file_entries(tree)
+
+        assert any("4 more top-level entries" in entry for entry in entries)

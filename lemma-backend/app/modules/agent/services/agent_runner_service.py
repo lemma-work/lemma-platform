@@ -21,6 +21,7 @@ from app.core.observability.telemetry import (
     record_span_output,
 )
 from app.modules.agent.config import agent_settings
+from app.modules.agent.services.context_budget import context_budget_for
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
     validate_conversation_access,
@@ -30,6 +31,7 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.value_objects import (
+    RESUMABLE_AGENT_RUN_STATUSES,
     AgentEvent,
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -206,6 +208,14 @@ class AgentRunnerService:
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
         )
+        if agent_run.status in RESUMABLE_AGENT_RUN_STATUSES:
+            # The partial unique index makes this safe: if the person gave up
+            # waiting and said something else, their run holds the conversation's
+            # slot and this claim fails, which is the right outcome.
+            claimed = await self._claim_resumable_run(agent_run.id)
+            if not claimed:
+                return
+            agent_run = agent_run.model_copy(update={"status": AgentRunStatus.RUNNING})
         if agent_run.status != AgentRunStatus.RUNNING:
             await self.finalizer.finish(
                 run=run,
@@ -286,6 +296,11 @@ class AgentRunnerService:
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
             enforced_usage_limits = self.fixed_usage_limits
+            # Compaction thresholds belong to the model, not to a global
+            # constant: a 70k trigger on a million-token model compacts a run
+            # that had 900k to spare, and a 110k "ceiling" on a 128k model is
+            # not a ceiling at all.
+            context_budget = context_budget_for(resolved_runtime.model)
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
@@ -294,6 +309,10 @@ class AgentRunnerService:
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
+                history_summarization_token_limit=(
+                    context_budget.summarization_token_limit
+                ),
+                history_hard_token_ceiling=context_budget.hard_token_ceiling,
                 extra={
                     "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,
@@ -390,48 +409,49 @@ class AgentRunnerService:
                     "agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout",
                     agent_run_id=agent_run_id,
                 )
-            # Finalize the run, shielding the DB write so it completes even when
-            # we're inside a cancelled cancel scope (streaq task timeout / worker
-            # shutdown). We use anyio.CancelScope(shield=True) — same task as the
-            # surrounding anyio scope — so the write runs to completion in-task.
-            # (asyncio.shield is wrong here: it runs the coroutine in a NEW task,
-            # and the SQLAlchemy/anyio cancel scopes it touches are task-bound,
-            # raising "exit cancel scope in a different task".) The worker
-            # grace_period gives this write time before the engine is disposed;
-            # reconcile_orphaned_agent_runs is the backstop if it still loses.
+            # Shielded, so the write completes inside an already-cancelled
+            # scope (task timeout, worker shutdown), and bounded, because an
+            # uninterruptible write is how a SIGTERM'd worker hangs forever --
+            # streaq's consumer never finishes, so the grace period enforcing
+            # that cancellation is never reached. Seen on one mid-run SIGTERM in
+            # four. `anyio.CancelScope(shield=True)` and not `asyncio.shield`:
+            # the latter runs the coroutine in a new task, and the SQLAlchemy and
+            # anyio scopes it touches are task-bound.
             #
-            # We deliberately do NOT re-raise CancelledError. The run is
-            # finalized; re-raising propagates into streaq's `with scope:` block,
-            # triggering a scope-corruption RuntimeError that crashes the worker.
-            # Side effect: streaq records the interrupted job as *succeeded*
-            # (no retry). That is intentional — the app DB (this FAILED write)
-            # is the source of truth; interrupted runs fail terminally and the
-            # user re-asks rather than the job silently re-running on another pod.
-            # Shielded *and* bounded. The shield is what lets the write finish
-            # while the surrounding scope is already cancelled; without a
-            # deadline it also makes the write uninterruptible, and an
-            # uninterruptible write is how a SIGTERM'd worker hangs forever:
-            # streaq's consumer cannot finish, so its task group never exits and
-            # the lifespan teardown is never reached — no grace period applies,
-            # because the grace period is enforced by the very cancellation this
-            # scope is ignoring. Observed on roughly one mid-run SIGTERM in four.
-            #
-            # Losing the write is survivable; `reconcile_orphaned_agent_runs`
-            # already exists to finish runs that were interrupted. Losing the
-            # worker is not: the platform SIGKILLs it and every other in-flight
-            # run on that process dies with it.
+            # CancelledError is deliberately not re-raised: it propagates into
+            # streaq's `with scope:` and corrupts the scope, crashing the worker.
+            # So streaq records the job as succeeded and never redelivers it --
+            # which is why parked runs are handed on by `services/run_resume`
+            # rather than by a retry.
+            identity = run.with_runtime_profile(
+                runtime_profile_snapshot
+            ).with_reservation(usage_reservation)
+            # A cancellation is the worker going away, not the run being
+            # wrong: park it rather than failing it, and announce nothing --
+            # nothing has ended. A real exception still fails terminally,
+            # because retrying a run that threw just throws again.
+            # See `services/run_resume`.
+            interrupted = not isinstance(exc, Exception)
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                await finalize_safely(
-                    self.finalizer.finish(
-                        run=run.with_runtime_profile(
-                            runtime_profile_snapshot
-                        ).with_reservation(usage_reservation),
-                        status=AgentRunStatus.FAILED,
-                        error=run_failure_message(exc),
-                    ),
-                    agent_run_id=agent_run_id,
-                )
-                await notify_run_failed(observer, conversation, exc, agent_run_id)
+                if interrupted:
+                    await finalize_safely(
+                        self.finalizer.interrupt(run=identity),
+                        agent_run_id=agent_run_id,
+                    )
+                else:
+                    await finalize_safely(
+                        self.finalizer.finish(
+                            run=identity,
+                            status=AgentRunStatus.FAILED,
+                            error=run_failure_message(exc),
+                        ),
+                        agent_run_id=agent_run_id,
+                    )
+                    await notify_run_failed(observer, conversation, exc, agent_run_id)
+
+    async def _claim_resumable_run(self, agent_run_id: UUID) -> bool:
+        async with self.uow_factory() as uow:
+            return await ConversationRepository(uow).claim_resumable_run(agent_run_id)
 
     async def _resolve_agent_runtime(
         self,
