@@ -182,13 +182,19 @@ async def create_conversation(
         agent_name=data.agent_name,
         user_id=user.id,
         title=data.title,
+        title_is_placeholder=data.title_is_placeholder,
         instructions=data.instructions,
         agent_runtime=data.agent_runtime,
         parent_id=data.parent_id,
         type=data.type,
         metadata=data.metadata,
     )
-    return ConversationResponse.model_validate(conversation)
+    response = ConversationResponse.model_validate(conversation)
+    if data.title_is_placeholder and data.title:
+        # Not persisted (see create_conversation) so title generation still
+        # runs, but the caller's own optimistic UI still gets it back once.
+        response.title = data.title
+    return response
 
 
 @router.get(

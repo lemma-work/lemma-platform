@@ -47,6 +47,20 @@ describe("onboarding progress", () => {
     expect(readOnboardingDraft()).toBeNull();
   });
 
+  it("keeps a local install's own steps across a restart", () => {
+    // The two local-only steps used to fail the step check, so a draft saved on
+    // either was read back as no draft at all — losing the organization id it
+    // carried, on the one deployment where configuring a model can restart the
+    // process that was showing the question.
+    for (const step of ["intelligence", "sharing"] as const) {
+      updateOnboardingDraft({ step, organizationId: "org-1" });
+      expect(readOnboardingDraft()).toMatchObject({
+        step,
+        organizationId: "org-1",
+      });
+    }
+  });
+
   it("clears completed progress", () => {
     updateOnboardingDraft({ step: "start", basePodId: "pod-1" });
     clearOnboardingDraft();
