@@ -50,6 +50,12 @@ export function findDraftBasePod<T extends { id: string }>(
   return null;
 }
 
+// Every step a draft may legitimately name. The two local-only ones belong
+// here as much as the hosted ones: a draft saved on `intelligence` used to fail
+// this check and be read back as no draft at all, so a local install that
+// restarted mid-setup -- which configuring a provider can cause on its own --
+// lost the organization it had already created along with its place in the
+// flow.
 const SETUP_STEPS = new Set<SetupStep>([
   "boot",
   "identity",
@@ -57,6 +63,8 @@ const SETUP_STEPS = new Set<SetupStep>([
   "team",
   "workspace",
   "connect",
+  "intelligence",
+  "sharing",
   "start",
 ]);
 
