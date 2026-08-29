@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, true, update
 from sqlalchemy.orm import selectinload
 
 from app.modules.agent.domain.entities import (
@@ -26,6 +26,8 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
+    ACTIVE_CONVERSATION_STATUSES,
+    TERMINAL_AGENT_RUN_STATUSES,
     AgentRunStatus,
 )
 from app.modules.agent.infrastructure.models import (
@@ -34,14 +36,22 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.repository_status import (
+    conversation_status_values_for_db as _conversation_status_values_for_db,
     run_status_values_for_db as _run_status_values_for_db,
 )
 from app.modules.agent.infrastructure.run_projections import (
     ResumableAgentRunRef,
     StaleAgentRunRef,
+    StrandedConversationRef,
 )
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
+_TERMINAL_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(
+    TERMINAL_AGENT_RUN_STATUSES
+)
+_ACTIVE_CONVERSATION_STATUS_VALUES = _conversation_status_values_for_db(
+    ACTIVE_CONVERSATION_STATUSES
+)
 
 #: How far back to look for a transcript of the file `listen` was asked for.
 #: Bounded because a long-running chat holds thousands of messages and the
@@ -223,6 +233,62 @@ class ConversationRunQueriesMixin:
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]:
+        """Conversations still active whose most recent run already finished.
+
+        The blind spot in `list_stale_active_runs`, which asks only about runs:
+        where a run reached a terminal status but its conversation did not, the
+        run is no longer active, so no sweep keyed on run status can see it —
+        and nothing else will ever move it, because a terminal run is never
+        finalized again. Downstream that is not cosmetic: `schedule_run_recovery`
+        and `workflow_agent` both read `conversation.status`, so one stuck
+        conversation wedges the schedule run and the workflow step waiting on it.
+
+        `WAITING` is not selected. A run that ends by asking a question leaves
+        its conversation waiting on purpose, and that is a resting state, not a
+        stranded one.
+
+        The cutoff is applied to the run's `finished_at` so a conversation is
+        only picked up once its run has been done long enough that no
+        in-flight finalization could still be on its way.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        # LATERAL rather than a DISTINCT ON subquery, and the difference is the
+        # whole cost of this cron. DISTINCT ON has nothing to filter on before
+        # it runs, so Postgres sorts *every* row in `agent_runs` to group them —
+        # every ten minutes, forever, growing with the table. This drives from
+        # the active conversations instead, which the status index makes a small
+        # set, and fetches one run each.
+        newest_run = (
+            select(
+                AgentRunModel.status.label("status"),
+                AgentRunModel.finished_at.label("finished_at"),
+            )
+            .where(AgentRunModel.conversation_id == ConversationModel.id)
+            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+            .limit(1)
+            .lateral("newest_run")
+        )
+        result = await self.session.execute(
+            select(ConversationModel.id, newest_run.c.status)
+            .select_from(ConversationModel)
+            .join(newest_run, true())
+            .where(
+                ConversationModel.status.in_(_ACTIVE_CONVERSATION_STATUS_VALUES),
+                newest_run.c.status.in_(_TERMINAL_AGENT_RUN_STATUS_VALUES),
+                newest_run.c.finished_at.is_not(None),
+                newest_run.c.finished_at < cutoff,
+            )
+            .order_by(ConversationModel.id)
+            .limit(limit)
+        )
+        return [StrandedConversationRef(*row) for row in result.all()]
 
     async def list_agent_runs_with_messages(
         self,
