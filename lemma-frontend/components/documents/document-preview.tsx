@@ -124,10 +124,29 @@ export function DocumentPreviewBody({
     }
 
     if (previewType === 'html' && !showHtmlSource) {
+        const htmlDocument = htmlSrcDoc || buildHtmlPreviewSrcDoc(content);
         return (
+            // Keyed, so a document that arrives in two passes — the raw file,
+            // then the same file with its assets inlined a moment later — gets a
+            // fresh frame for the second pass instead of having `srcdoc`
+            // rewritten underneath it.
+            //
+            // Rewriting the attribute re-navigates a frame that is usually still
+            // loading the first document, and a frame that loses that race stays
+            // blank for good: the attribute already holds the right markup, so
+            // no later render touches it again. That is the preview that shows
+            // up only once something forces a whole-document style recalculation
+            // — switching theme, which `disableTransitionOnChange` does by
+            // design.
+            //
+            // Length is the discriminator because the alternative is hashing a
+            // document that runs to megabytes on every render. Inlining an asset
+            // only ever grows the file, so the two passes differ in length
+            // whenever they differ at all.
             <iframe
+                key={`html-${htmlDocument.length}`}
                 title={name}
-                srcDoc={htmlSrcDoc || buildHtmlPreviewSrcDoc(content)}
+                srcDoc={htmlDocument}
                 sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-top-navigation-by-user-activation"
                 className="embedded-canvas block h-full min-h-[78vh] w-full border-0"
                 referrerPolicy="strict-origin-when-cross-origin"
@@ -279,7 +298,7 @@ export function useDocumentPreview({
 
     // Assets are followed against the reader's own permissions, so one this
     // reader may not open resolves to nothing and the page renders without it.
-    const { data: htmlPreview } = useQuery({
+    const htmlQuery = useQuery({
         queryKey: ['document-preview-html', podId, path, content.length],
         queryFn: () => buildHtmlPreviewDocument({
             contentHtml: content,
@@ -322,13 +341,19 @@ export function useDocumentPreview({
     // a PDF that fails to rasterise has no result either, and waiting for one
     // that is never coming would hold the skeleton up forever instead of
     // showing the fallback that offers Download.
-    const isRenderPending = pdfQuery.isLoading || docxQuery.isLoading;
+    //
+    // HTML counts for the same reason the other two do, and was missing: the
+    // frame used to mount on the raw file and then swap to the inlined one, so
+    // every shared page flashed once with its stylesheet and images unresolved,
+    // and the swap itself is the navigation a frame can lose. Waiting means the
+    // iframe mounts once, on the document the reader is meant to see.
+    const isRenderPending = pdfQuery.isLoading || docxQuery.isLoading || htmlQuery.isLoading;
 
     return {
         previewType,
         officeKind,
         content,
-        htmlSrcDoc: htmlPreview?.srcDoc ?? null,
+        htmlSrcDoc: htmlQuery.data?.srcDoc ?? null,
         imageUrl,
         pdf: pdfQuery.data ?? null,
         docxSrcDoc: docxQuery.data?.html ? buildDocxPreviewSrcDoc(docxQuery.data.html) : '',

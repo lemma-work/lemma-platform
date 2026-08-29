@@ -267,6 +267,36 @@
   background: var(--lm-identity-tone);
 }
 
+/* The way into the room, standing in it.
+   Adding someone to a pod used to live three levels down — behind a collapsed
+   nav disclosure, inside Settings, on the third tab — which filed the most
+   social act in the product under administration. It belongs at the end of the
+   face pile, where the people already are. Dashed and unfilled so it reads as
+   an opening rather than a sixth person. */
+.pod-home-presence-add {
+  display: inline-flex;
+  width: 1.625rem;
+  height: 1.625rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--space-1);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-tertiary);
+  transition:
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard);
+}
+
+.pod-home-presence-add:hover,
+.pod-home-presence-add:focus-visible {
+  border-color: var(--text-secondary);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
 .pod-home-presence-live {
   width: 6px;
   height: 6px;

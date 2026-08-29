@@ -1,8 +1,9 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +49,21 @@ impl NetworkPorts {
     }
 }
 
+/// Whether both remembered ports are free of a live server.
+///
+/// Deliberately a connect rather than a bind: a bind cannot tell a port that is
+/// being served from one that merely held a connection recently, and it is the
+/// difference between the two that decides whether reusing the pair is safe.
+/// Loopback only, which is where the services themselves listen.
+fn nothing_is_serving(ports: NetworkPorts) -> bool {
+    [ports.frontend_port, ports.backend_port]
+        .into_iter()
+        .all(|port| {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_err()
+        })
+}
+
 pub fn load_or_allocate(paths: &LocalPaths) -> io::Result<NetworkPorts> {
     if let Some(overrides) = override_ports()? {
         return Ok(overrides);
@@ -63,6 +79,29 @@ pub fn load_or_allocate(paths: &LocalPaths) -> io::Result<NetworkPorts> {
                 // socket that is about to disappear.
                 if let Some(reserved) = reserve_pair(existing) {
                     reserved.release();
+                    return Ok(existing);
+                }
+                // A refused reservation is not proof the pair is taken.
+                //
+                // The reservation binds without SO_REUSEADDR, so it also fails
+                // on the TIME_WAIT our *own* previous run leaves behind: the
+                // backend served requests, exited, and for the next half minute
+                // nothing can bind that port even though nothing is serving on
+                // it. Every restart inside that window abandoned the remembered
+                // pair and allocated a new one.
+                //
+                // The cost was not cosmetic. The Agent Host stores its pairing
+                // as a URL with the port in it, so a reallocation left it
+                // talking to a port nothing answers -- this computer stopped
+                // being reachable until it was paired again. The recorded
+                // resume target went stale the same way, which is why every
+                // launch landed on the auth portal instead of the workspace.
+                //
+                // So ask the question the reservation was standing in for: is
+                // anything actually serving here? A listener answers a connect;
+                // a TIME_WAIT socket refuses it. Only the second is safe to
+                // reuse, and it is the common case.
+                if nothing_is_serving(existing) {
                     return Ok(existing);
                 }
             }
@@ -252,6 +291,73 @@ fn now_ms() -> u128 {
 
 #[cfg(test)]
 mod tests {
+    /// A restart must keep the ports the last run used.
+    ///
+    /// The Agent Host stores its pairing as a URL with the port in it, and the
+    /// resume target records one too. Reallocating on restart strands both --
+    /// this computer stops being reachable, and every launch lands on the auth
+    /// portal instead of the workspace.
+    ///
+    /// The trap is that the reservation binds without SO_REUSEADDR, so it fails
+    /// on the TIME_WAIT our own previous run leaves: a port that served a
+    /// connection cannot be re-bound for about half a minute even though
+    /// nothing is serving on it. This reproduces that exactly -- serve a
+    /// connection, close everything, then ask.
+    #[test]
+    fn a_port_our_last_run_used_is_still_reusable_while_it_lingers() {
+        use std::io::Read;
+        use std::net::{Ipv4Addr, TcpListener, TcpStream};
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        drop(server);
+        let mut sink = Vec::new();
+        let _ = client.read_to_end(&mut sink);
+        drop(client);
+        drop(listener);
+
+        let ports = NetworkPorts {
+            schema_version: NETWORK_SCHEMA_VERSION,
+            frontend_port: port,
+            backend_port: port,
+            allocated_at_ms: 0,
+        };
+        assert!(
+            nothing_is_serving(ports),
+            "a port whose server has gone must read as free, or every restart \
+             inside TIME_WAIT hands out new ports and strands the Agent Host",
+        );
+
+        // And a port that *is* being served must not.
+        let live = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let live_port = live.local_addr().unwrap().port();
+        let served = NetworkPorts {
+            schema_version: NETWORK_SCHEMA_VERSION,
+            frontend_port: live_port,
+            backend_port: live_port,
+            allocated_at_ms: 0,
+        };
+        assert!(!nothing_is_serving(served));
+        drop(live);
+
+        // A pair is only reusable if *both* halves are free.
+        let mixed = NetworkPorts {
+            schema_version: NETWORK_SCHEMA_VERSION,
+            frontend_port: port,
+            backend_port: TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .map(|l| {
+                    let p = l.local_addr().unwrap().port();
+                    std::mem::forget(l);
+                    p
+                })
+                .unwrap(),
+            allocated_at_ms: 0,
+        };
+        assert!(!nothing_is_serving(mixed));
+    }
+
     use super::*;
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::tempdir;

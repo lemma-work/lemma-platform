@@ -248,25 +248,52 @@ export function mergeSubagentConversationSnapshots(
     return merged;
 }
 
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-    return `${count} ${count === 1 ? singular : plural}`;
+/**
+ * The children that a given set of lifecycle calls spawned.
+ *
+ * `mergeSubagentConversationSnapshots` folds in every child of the parent
+ * conversation — including ones whose spawn call has scrolled out of the loaded
+ * window. A turn may only account for the delegation it actually performed, so
+ * the seeds decide which of them it owns.
+ */
+export function subagentActivitiesFor(
+    activities: SubagentActivity[],
+    seeds: SubagentActivity[],
+): SubagentActivity[] {
+    const spawned = new Set(
+        seeds
+            .map((seed) => seed.conversationId)
+            .filter((id): id is string => Boolean(id)),
+    );
+    return activities.filter((activity) => (
+        Boolean(activity.conversationId) && spawned.has(activity.conversationId as string)
+    ));
 }
 
-export function summarizeSubagentActivities(activities: SubagentActivity[]): string {
-    const counts = new Map<SubagentActivityPhase, number>();
-    activities.forEach((activity) => {
-        const phase = subagentActivityPhase(activity.status, activity.error);
-        counts.set(phase, (counts.get(phase) ?? 0) + 1);
-    });
+const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
-    const phrases = [
-        counts.get('working') ? `${counts.get('working')} working` : null,
-        counts.get('waiting') ? `${counts.get('waiting')} waiting` : null,
-        counts.get('complete') ? `${counts.get('complete')} complete` : null,
-        counts.get('failed') ? `${counts.get('failed')} failed` : null,
-        counts.get('stopped') ? `${counts.get('stopped')} stopped` : null,
-    ].filter((phrase): phrase is string => Boolean(phrase));
+/**
+ * A sub-agent's brief, as something a person would read.
+ *
+ * What gets passed to `spawn_subagent` is a prompt written for a machine, and
+ * its opening words are reliably the least informative part of it — a row id, a
+ * table name, a preamble addressed to the agent. Cutting that to chip width
+ * produces "Task id: 0da4bc62-ec07-4d41-…", which names nothing at all.
+ *
+ * So: drop a leading clause that exists to carry an identifier, keep the first
+ * real sentence, and give up rather than return an id or a serialized object.
+ * A sub-agent with no readable brief is better labelled by its agent's name.
+ */
+export function readableSubagentTask(task?: string): string | undefined {
+    const trimmed = task?.trim();
+    // A structured input serialized for want of a description is not a brief.
+    if (!trimmed || trimmed.startsWith('{') || trimmed.startsWith('[')) return undefined;
 
-    const total = countLabel(activities.length, 'sub-agent');
-    return phrases.length > 0 ? `${total} · ${phrases.join(' · ')}` : total;
+    const preamble = new RegExp(`^[^.!?]*${UUID_PATTERN}[^.!?]*[.!?]\\s*`, 'i');
+    const body = trimmed.replace(preamble, '').trim() || trimmed;
+    // The first sentence is the brief; everything after it is operating detail.
+    const sentence = (body.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? body).trim();
+
+    if (!sentence || new RegExp(UUID_PATTERN, 'i').test(sentence)) return undefined;
+    return sentence;
 }

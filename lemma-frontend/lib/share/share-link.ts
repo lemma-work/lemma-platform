@@ -11,11 +11,21 @@
  * cannot leak anything the link itself did not already contain.
  */
 
+import { CONTACT_PARAMS, contactCardParams, type ContactCardSpec } from '@/lib/share/contact-card';
 import type { SocialCardVariant } from '@/lib/share/social-card';
 
 /** Short, URL-friendly names for the resource types that can be shared. */
 export type ShareKind =
     | 'agent'
+    /**
+     * An agent, shared to be *messaged* rather than opened.
+     *
+     * A second kind pointing at the same resource type, because the kind is the
+     * intent and not the type: `/s/agent/…` sends someone to the workspace, and
+     * this sends them to whichever of Telegram, WhatsApp or mail the agent
+     * already answers on — for a reader who may well never sign in at all.
+     */
+    | 'contact'
     | 'app'
     | 'workflow'
     | 'function'
@@ -57,6 +67,7 @@ interface ShareKindCopy {
 
 const SHARE_KIND_COPY: Record<ShareKind, ShareKindCopy> = {
     agent: { noun: 'Agent', article: 'an agent', variant: 'agent' },
+    contact: { noun: 'Contact', article: 'an agent you can message', variant: 'contact' },
     app: { noun: 'App', article: 'an app', variant: 'app' },
     workflow: { noun: 'Workflow', article: 'a workflow', variant: 'workflow' },
     function: { noun: 'Function', article: 'a function', variant: 'function' },
@@ -116,6 +127,36 @@ export function buildShareLink(input: {
 }
 
 /**
+ * A contact link, carrying the handles the agent answers on.
+ *
+ * Minted inside the workspace, where the reach is already on hand and the
+ * minter is already authorized to see it. From then on the link is the whole
+ * card: `/s/contact/…` reads it back without asking the backend anything, which
+ * is what lets the page render for someone who will never sign in.
+ */
+export function buildContactLink(input: {
+    /** Absolute canonical URL, e.g. https://lemma.work/pod/p1/agents/triage. */
+    canonicalUrl: string;
+    card: ContactCardSpec;
+}): string | null {
+    const base = buildShareLink({
+        kind: 'contact',
+        canonicalUrl: input.canonicalUrl,
+        name: input.card.name,
+    });
+    if (!base) return null;
+
+    const url = new URL(base);
+    for (const [key, value] of contactCardParams(input.card)) {
+        url.searchParams.set(key, value);
+    }
+    return url.toString();
+}
+
+/** Params that describe the card and mean nothing to the workspace. */
+const CARD_ONLY_PARAMS = new Set<string>(Object.values(CONTACT_PARAMS));
+
+/**
  * Rebuilds the workspace path a share link points at.
  *
  * Returns null unless the result is a workspace-relative `/pod/…` path. The
@@ -132,6 +173,12 @@ export function resolveShareDestination(
 
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query ?? {})) {
+        // The rest of the query rides along verbatim because that is where apps
+        // and tables keep their identity. A card's handles are the exception:
+        // they describe the picture on the share page, and appending them to the
+        // workspace URL would put an agent's phone number in a member's address
+        // bar on the way to a page that has no use for it.
+        if (CARD_ONLY_PARAMS.has(key)) continue;
         if (key === SHARE_NAME_PARAM || value === undefined) continue;
         for (const entry of Array.isArray(value) ? value : [value]) {
             params.append(key, entry);
@@ -154,6 +201,8 @@ export interface ShareTarget {
 
 const RESOURCE_TYPE_BY_KIND: Record<ShareKind, ShareResourceType | null> = {
     agent: 'agent',
+    // A contact link points at an agent; only the intent differs.
+    contact: 'agent',
     app: 'app',
     workflow: 'workflow',
     function: 'function',
@@ -183,6 +232,20 @@ const NAME_QUERY_KEY_BY_KIND: Partial<Record<ShareKind, string>> = {
 function firstQueryValue(value: string | string[] | undefined): string | undefined {
     const candidate = Array.isArray(value) ? value[0] : value;
     return candidate?.trim() || undefined;
+}
+
+/**
+ * The pod a share link lives in, whatever it points at.
+ *
+ * `resolveShareTarget` returns null for a pod link, because a whole pod is not
+ * a previewable resource. The pod is still the thing being shared, though, and
+ * the landing page needs its id to offer the reader a way in rather than
+ * bouncing them into a wall they cannot read.
+ */
+export function resolveSharePodId(segments: string[] | undefined): string | null {
+    const parts = (segments ?? []).filter(Boolean);
+    if (parts[0] !== 'pod' || !parts[1]) return null;
+    return parts[1];
 }
 
 /**

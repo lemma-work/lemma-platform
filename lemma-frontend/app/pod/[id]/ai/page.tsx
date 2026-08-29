@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner';
 
 import { ResourceIdentity } from '@/components/shared/resource-identity';
-import { LEM_SEED } from '@/lib/identity/seeded-identity';
+import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
@@ -442,7 +442,7 @@ function AgentProfileCard({
                         label={agent.name}
                         imageClassName="object-contain p-1"
                         className="h-11 w-11 shrink-0 rounded-lg bg-transparent"
-                        identitySeed={agent.id || agent.name}
+                        identitySeed={agentIdentitySeed(agent)}
                         identitySize={44}
                         fallback={<AgentMonogram name={agent.name} />}
                     />
@@ -512,7 +512,6 @@ function AgentProfileCard({
                                 resourceName={formatAgentName(agent.name)}
                                 shareUrl={agentShareUrl}
                                 onChange={onShareVisibilityChange}
-                                className="contents"
                                 trigger={({ openShare, disabled }) => (
                                     <DropdownMenuItem
                                         disabled={disabled}
