@@ -292,10 +292,15 @@ def _build_tool_batch(
                     "proceed without an answer."
                 )
             else:
+                # Deliberately not "run it again". The tool may well have
+                # succeeded -- what is known is only that no result was
+                # recorded, and a run interrupted mid-send that is told to
+                # retry sends twice.
                 synthetic_error = (
                     "This tool call was interrupted before a result was "
-                    "recorded, so it returned nothing. Run it again if you "
-                    "still need the result."
+                    "recorded, so its outcome is unknown: it may have completed. "
+                    "Check the current state before repeating it, and only "
+                    "repeat it if it clearly did not take effect."
                 )
         elif parsed_args is None:
             synthetic_error = (
