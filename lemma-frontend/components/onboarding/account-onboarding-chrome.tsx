@@ -230,7 +230,11 @@ export function SetupProgressBar({
   steps?: SetupStep[];
   className?: string;
 }) {
-  const currentIndex = steps.indexOf(currentStep);
+  // Clamped, because a step can legitimately be off this list: the local flow
+  // falls back to asking for a name when provisioning fails, and that step is
+  // not one of the questions the bar is counting. An index of -1 used to make
+  // the fill a negative width.
+  const currentIndex = Math.max(0, steps.indexOf(currentStep));
   const percent =
     steps.length > 1 ? (currentIndex / (steps.length - 1)) * 100 : 100;
 

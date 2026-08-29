@@ -50,6 +50,7 @@ export type SocialCardVariant =
     | 'join'
     | 'app'
     | 'agent'
+    | 'contact'
     | 'workflow'
     | 'function'
     | 'table'
@@ -127,6 +128,14 @@ const VARIANT_COPY: Record<
         eyebrow: 'AN AGENT ON LEMMA',
         title: 'A Lemma agent',
         detail: 'Give it the work. Watch what it does.',
+        label: 'lemma.work',
+        accent: '#e4b52d',
+        layer: 'agents',
+    },
+    contact: {
+        eyebrow: 'AN AGENT YOU CAN MESSAGE',
+        title: 'Save the contact.',
+        detail: 'Then talk to it where you already talk.',
         label: 'lemma.work',
         accent: '#e4b52d',
         layer: 'agents',

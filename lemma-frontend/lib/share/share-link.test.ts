@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    buildContactLink,
     buildShareLink,
     isShareKind,
     humanizeResourceName,
@@ -194,5 +195,68 @@ describe('humanizeResourceName', () => {
     it('keeps a name it cannot improve', () => {
         expect(humanizeResourceName('')).toBe('');
         expect(humanizeResourceName('/')).toBe('/');
+    });
+});
+
+describe('contact links', () => {
+    const card = {
+        name: 'Support Triage',
+        seed: 'a1b2c3d4',
+        telegram: '@support_triage_bot',
+        whatsapp: '+15551234567',
+        email: 'triage@pod.lemma.work',
+    };
+
+    it('is a share link with the card riding along', () => {
+        const link = buildContactLink({
+            canonicalUrl: 'https://lemma.work/pod/p1/agents/support_triage',
+            card,
+        });
+        const url = new URL(link!);
+
+        expect(url.pathname).toBe('/s/contact/pod/p1/agents/support_triage');
+        expect(url.searchParams.get('n')).toBe('Support Triage');
+        expect(url.searchParams.get('tg')).toBe('@support_triage_bot');
+        expect(url.searchParams.get('sd')).toBe('a1b2c3d4');
+    });
+
+    it('refuses a URL that is not a workspace one', () => {
+        expect(buildContactLink({ canonicalUrl: 'https://evil.example/pod/p1', card })).not.toBeNull();
+        expect(buildContactLink({ canonicalUrl: 'https://lemma.work/blog/x', card })).toBeNull();
+        expect(buildContactLink({ canonicalUrl: 'not a url', card })).toBeNull();
+    });
+
+    it('points at an agent, so a reader can ask whether they may see it', () => {
+        expect(resolveShareTarget('contact', ['pod', 'p1', 'agents', 'support_triage'])).toEqual({
+            podId: 'p1',
+            resourceType: 'agent',
+            resourceName: 'support_triage',
+        });
+    });
+
+    it('is a kind the router will accept', () => {
+        expect(isShareKind('contact')).toBe(true);
+    });
+
+    /*
+     * The card's params describe the picture on the share page and mean nothing
+     * to the workspace. Left in, an "Open it in Lemma" click would carry the
+     * agent's phone number into a member's address bar on the way to a page with
+     * no use for it.
+     */
+    it('leaves the card behind when it hands over to the workspace', () => {
+        const destination = resolveShareDestination(['pod', 'p1', 'agents', 'support_triage'], {
+            n: 'Support Triage',
+            tg: '@support_triage_bot',
+            wa: '+15551234567',
+            em: 'triage@pod.lemma.work',
+            sd: 'a1b2c3d4',
+            ic: 'lemma-identity:3',
+            o: 'Acme',
+            d: 'Answers mail.',
+            tab: 'orders',
+        });
+
+        expect(destination).toBe('/pod/p1/agents/support_triage?tab=orders');
     });
 });

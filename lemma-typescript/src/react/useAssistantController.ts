@@ -1647,7 +1647,10 @@ export function useAssistantController({
     }
 
     const createdConversation = await sessionCreateConversation({
-      title: titleSeed.slice(0, 120),
+      // No title: the server always starts one with none, so real title
+      // generation runs unconditionally rather than depending on this caller
+      // (or any other) leaving it out. The sidebar shows titleSeed below
+      // instead -- a local display value the server never sees.
       instructions: typeof options.instructions === "undefined" ? instructions : options.instructions,
       metadata: options.metadata ?? undefined,
       model: conversationModel as unknown as never,
@@ -1655,8 +1658,16 @@ export function useAssistantController({
       ...scope,
     });
 
+    // A display-only stand-in for the sidebar until the real title lands
+    // (via the live conversation-updated event or the next refetch) --
+    // never sent to or persisted by the server.
+    const displayConversation: Conversation = {
+      ...createdConversation,
+      title: createdConversation.title ?? titleSeed.slice(0, 120),
+    };
+
     const nextConversations = sortConversationsByUpdatedAt([
-      createdConversation,
+      displayConversation,
       ...conversationsRef.current.filter((conversation) => conversation.id !== createdConversation.id),
     ]);
     // Written to the ref as well as the state, because the send that follows

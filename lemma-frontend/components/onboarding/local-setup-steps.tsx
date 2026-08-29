@@ -703,9 +703,18 @@ const ACCESS_MODES: Array<{
 
 export function LocalSharingStep({
     onContinue,
+    isCreating = false,
     onBack,
     steps,
-}: StepChrome & { onContinue: () => void }) {
+}: StepChrome & {
+    onContinue: () => void;
+    /**
+     * Whether answering this is what creates the pod. It is the last question a
+     * local install asks, so Continue is also the button that provisions — and a
+     * button that sits idle for the length of a create reads as a dead one.
+     */
+    isCreating?: boolean;
+}) {
     const hasBridge = useDesktopBridge();
     const [selected, setSelected] = useState<AccessMode>("this_computer");
 
@@ -795,10 +804,12 @@ export function LocalSharingStep({
                     <SetupPrimaryButton
                         type="button"
                         onClick={() => void handleContinue()}
-                        disabled={selected !== "this_computer" && !hasBridge}
+                        disabled={
+                            isCreating || (selected !== "this_computer" && !hasBridge)
+                        }
                         className="!mx-0"
                     >
-                        Continue
+                        {isCreating ? "Creating your pod" : "Continue"}
                         <ArrowRight className="h-4 w-4" />
                     </SetupPrimaryButton>
                 </div>

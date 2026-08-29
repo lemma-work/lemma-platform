@@ -16,15 +16,24 @@ describe("local onboarding", () => {
     expect(LOCAL_SETUP_STEPS).toContain("sharing");
   });
 
+  it("asks nothing a hosted signup is not asked", () => {
+    // A hosted account is given a name and a first pod without being asked for
+    // either. A local one knows exactly as much about its user, so asking was
+    // the difference — and it made the deployment that provisions nothing
+    // automatically also the one that made the user do it by hand.
+    expect(LOCAL_SETUP_STEPS).not.toContain("identity");
+    expect(LOCAL_SETUP_STEPS).not.toContain("start");
+    expect(LOCAL_SETUP_STEPS).not.toContain("workspace");
+  });
+
   it("asks what answers in chats before anything can depend on it", () => {
-    const intelligence = LOCAL_SETUP_STEPS.indexOf("intelligence");
-    expect(intelligence).toBeGreaterThan(LOCAL_SETUP_STEPS.indexOf("identity"));
     // Sharing is what turns a provider into a shared default, so it has to come
-    // after the user has seen which one they picked.
-    expect(intelligence).toBeLessThan(LOCAL_SETUP_STEPS.indexOf("sharing"));
-    expect(LOCAL_SETUP_STEPS.indexOf("sharing")).toBeLessThan(
-      LOCAL_SETUP_STEPS.indexOf("start"),
+    // after the user has seen which one they picked — and the pod is created on
+    // the far side of it, with that provider already chosen.
+    expect(LOCAL_SETUP_STEPS.indexOf("intelligence")).toBeLessThan(
+      LOCAL_SETUP_STEPS.indexOf("sharing"),
     );
+    expect(LOCAL_SETUP_STEPS.at(-1)).toBe("sharing");
   });
 
   it("keeps the model and the local agents on one screen", () => {
@@ -44,10 +53,21 @@ describe("local onboarding", () => {
 
   it("recovers a draft that names a step this flow does not have", () => {
     // A draft written against hosted Lemma by the same account can name
-    // `workspace` or `team`. Resuming there would strand the user on a screen
-    // the local flow never renders.
-    expect(normalizeOnboardingStep("workspace", "team", true, true)).toBe("identity");
-    expect(normalizeOnboardingStep("connect", "personal", false, true)).toBe("identity");
+    // `workspace` or `team`, and one written by an older local build names
+    // `identity` or `start`. Resuming on any of them would strand the user on a
+    // screen this flow never renders.
+    expect(normalizeOnboardingStep("workspace", "team", true, true)).toBe(
+      "intelligence",
+    );
+    expect(normalizeOnboardingStep("connect", "personal", false, true)).toBe(
+      "intelligence",
+    );
+    expect(normalizeOnboardingStep("identity", "personal", true, true)).toBe(
+      "intelligence",
+    );
+    expect(normalizeOnboardingStep("start", "personal", true, true)).toBe(
+      "intelligence",
+    );
     for (const step of LOCAL_SETUP_STEPS) {
       expect(normalizeOnboardingStep(step, "personal", true, true)).toBe(step);
     }
