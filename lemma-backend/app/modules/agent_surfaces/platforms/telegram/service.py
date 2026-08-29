@@ -171,9 +171,27 @@ class TelegramPlatformService:
                 ]
             }
 
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
-            message or ""
-        ]
+        # `chunk_text("")` is `[]`, and the `or` this replaces turned that back
+        # into a single empty chunk — so a body that arrived empty, or that
+        # sanitizing reduced to nothing, still reached the person as a blank
+        # bubble. A keyboard cannot rescue one: Telegram rejects blank text, so
+        # an approval whose body went missing would arrive as a bubble with no
+        # words and no buttons, which is exactly what the dev scenario suite
+        # saw as `Spoken(text='', choices=())`.
+        #
+        # Nothing legitimate sends an empty body — `surface_egress`,
+        # `progress_waiting` and `fallback_reply_service` each guard before
+        # calling, and the one caller that asks for a keyboard without writing
+        # its own text (`progress_observer`, `retry_action`) falls back to a
+        # literal. So this is the backstop for a body that went missing
+        # upstream, and it says so rather than posting the emptiness.
+        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
+        if not raw_chunks:
+            logger.warning(
+                "agent_surfaces.telegram.empty_message_not_sent",
+                has_reply_markup=isinstance(reply_markup, dict),
+            )
+            return
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
