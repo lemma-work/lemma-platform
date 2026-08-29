@@ -296,7 +296,7 @@ fn prune_superseded_releases(install_root: &Path, keep: &str) {
                 (modified, entry.path())
             })
             .collect();
-        superseded.sort_by(|left, right| right.0.cmp(&left.0));
+        superseded.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
         for (_, path) in superseded.into_iter().skip(1) {
             let _ = fs::remove_dir_all(path);
         }
@@ -1734,7 +1734,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let install_root = root.path().join("runtime");
 
-        let mut install = |release: &str| {
+        let install = |release: &str| {
             let host_entries = host_pack_entries(release);
             let host_zip = zip_of(
                 &host_entries

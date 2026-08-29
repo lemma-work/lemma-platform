@@ -5803,6 +5803,12 @@ fn download_disposition(url: &tauri::Url, mode: &str, app_base: &str, api_base: 
         && navigation_disposition(&source, mode, app_base, api_base) == NavigationDisposition::Allow
 }
 
+/// Hand a URL to the user's browser.
+///
+/// The failure is logged rather than dropped. Every path that decides a link
+/// belongs outside the app ends here, and a discarded error made a launch that
+/// never happened look exactly like a link that was never clicked -- nothing
+/// moves, nothing is said, and the only thing left to suspect is the link.
 fn open_external(url: &str) {
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/open");
@@ -5810,7 +5816,9 @@ fn open_external(url: &str) {
     let mut command = Command::new("explorer.exe");
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
-    let _ = command.arg(url).spawn();
+    if let Err(error) = command.arg(url).spawn() {
+        append_install_log(&format!("could not open {url} in the browser: {error}"));
+    }
 }
 
 fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
