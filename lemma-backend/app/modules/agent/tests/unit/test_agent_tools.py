@@ -1782,7 +1782,14 @@ def test_surface_history_window_trims_by_message_count(monkeypatch):
 
     # Only the most recent run survives the count budget.
     assert set(grouped) == {runs[-1].id}
-    assert len(grouped[runs[-1].id]) == 5
+    # Its own five messages. The sixth is the notice saying the older runs were
+    # dropped -- the cap announces itself rather than trimming in silence.
+    real = [m for m in grouped[runs[-1].id] if m.kind is not MessageKind.NOTIFICATION]
+    assert len(real) == 5
+    assert any(
+        (m.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
+        for m in grouped[runs[-1].id]
+    )
 
 
 def test_surface_history_window_drops_runs_older_than_window(monkeypatch):

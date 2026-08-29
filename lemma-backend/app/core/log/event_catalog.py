@@ -54,6 +54,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.history.compacted.observed': EventSpec('info', frozenset({'folded_pin_count', 'kept_count', 'pinned_count', 'size_after', 'size_before', 'summarized_count'})),
     'agent.history.summarization_failed.degraded': EventSpec('warning', frozenset({'transcript_length'})),
     'agent.history.token_ceiling_enforced.degraded': EventSpec('warning', frozenset({'dropped_count', 'size_after', 'size_before'})),
+    'agent.history.token_ceiling_unenforceable.failed': EventSpec('error', frozenset({'ceiling', 'dropped_count', 'size_after', 'size_before'})),
     'agent.history.usage_not_metered.degraded': EventSpec('warning', frozenset()),
     'agent.infrastructure.agent_host_channels.poke_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
     'agent.infrastructure.agent_host_command_remint.reaimed': EventSpec('info', frozenset({'agent_run_id', 'attempt', 'current_revision', 'dropped_selections', 'harness_key', 'host_id', 'model_cleared', 'previous_revision'})),

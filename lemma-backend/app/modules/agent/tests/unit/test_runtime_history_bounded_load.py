@@ -553,3 +553,52 @@ class TestHistoryIsBoundedForEveryConversation:
 
         run_ids = {message.agent_run_id for message in kept}
         assert len(run_ids) <= MAX_HISTORY_AGENT_RUNS
+
+
+class TestDroppedRunsAreAnnounced:
+    """`_collapsed_run` announced the work it elided; the caps above it sliced
+    in silence. So a conversation could lose three hundred whole runs without a
+    word, while losing the middle of one said so.
+    """
+
+    def test_a_capped_conversation_says_what_it_dropped(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=4)
+            for index in range(MAX_HISTORY_AGENT_RUNS + 12)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notices = [
+            message
+            for message in selected
+            if (message.metadata or {}).get("summary_kind")
+            == "conversation_runs_dropped"
+        ]
+        assert len(notices) == 1
+        assert notices[0].metadata["dropped_run_count"] == 12
+
+    def test_it_comes_before_the_history_it_explains(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=4)
+            for index in range(MAX_HISTORY_AGENT_RUNS + 3)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert (selected[0].metadata or {}).get("summary_kind") == (
+            "conversation_runs_dropped"
+        )
+
+    def test_a_conversation_that_lost_nothing_says_nothing(self) -> None:
+        conversation_id = uuid4()
+        runs = [_run(conversation_id, index, message_count=4) for index in range(3)]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert not any(
+            (message.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
+            for message in selected
+        )

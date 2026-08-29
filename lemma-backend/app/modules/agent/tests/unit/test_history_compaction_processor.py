@@ -183,15 +183,32 @@ class TestIdempotence:
 
         assert _texts(twice) == _texts(once)
 
-    async def test_an_existing_summary_is_never_re_summarized(self) -> None:
-        """Summarizing a summary is how a compacted history turns to mush."""
+    async def test_summaries_are_merged_rather_than_stacked(self) -> None:
+        """Each pass used to emit a new pinned summary beside the last. They
+        never merged, so the pin budget filled with this module's own output and
+        user turns were folded nowhere near the documented threshold."""
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            is_summary_message,
+        )
+
+        compactor = _compactor([], trigger_tokens=200, keep_messages=4)
+        history = _history()
+
+        for _ in range(4):
+            history = await compactor(_ctx(), list(history))
+
+        assert sum(1 for message in history if is_summary_message(message)) == 1
+
+    async def test_the_earlier_summary_is_handed_back_for_merging(self) -> None:
+        """It is folded into the new one rather than described by it, so the
+        result stands alone instead of becoming a summary of a summary."""
         sink: list[str] = []
         compactor = _compactor(sink, trigger_tokens=200, keep_messages=4)
         once = await compactor(_ctx(), _history())
 
         await compactor(_ctx(), list(once))
 
-        assert all(SUMMARY_MARKER not in transcript for transcript in sink)
+        assert any(SUMMARY_MARKER in transcript for transcript in sink[1:])
 
 
 class TestTheCeilingGuardRespectsIt:

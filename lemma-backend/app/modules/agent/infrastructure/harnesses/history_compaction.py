@@ -68,8 +68,14 @@ _MAX_TRANSCRIPT_CHARS = 120_000
 
 _SUMMARY_INSTRUCTIONS = """\
 You are compacting the middle of an agent's working transcript so that the agent
-can carry on without it. The user's own messages are preserved separately and
-verbatim, so you do not need to restate them -- you are summarizing the work.
+can carry on without it. Most of the user's messages are preserved verbatim
+elsewhere and are not in what follows; you are summarizing the work.
+
+Anything labelled `user:` in the transcript is something the person actually
+said that is *not* being kept verbatim -- capture it, including any constraint or
+correction in it, or it is lost. A block opening with "[earlier in this
+conversation, summarized]" is your own earlier summary: fold it into this one
+rather than describing it, so the result stands alone.
 
 Write a factual brief, addressed to the agent that will read it, covering:
 
@@ -108,10 +114,25 @@ def _clip(value: object) -> str:
     return f"{text[:keep]}\n... [{len(text) - _MAX_PART_CHARS} characters omitted] ...\n{text[-keep:]}"
 
 
+def _speaker(message: Any) -> str:
+    """Who said this, as the summarizer needs to read it.
+
+    Everything that was not a `ModelResponse` used to be labelled `system`, so a
+    folded user turn -- the one thing in the transcript the summarizer must not
+    lose -- arrived looking exactly like a tool result.
+    """
+    if type(message).__name__ == "ModelResponse":
+        return "assistant"
+    names = {type(part).__name__ for part in getattr(message, "parts", ()) or ()}
+    if "UserPromptPart" in names and not names & {"ToolReturnPart", "RetryPromptPart"}:
+        return "user"
+    return "tool"
+
+
 def _render(messages: list[Any]) -> str:
     lines: list[str] = []
     for message in messages:
-        role = "assistant" if type(message).__name__ == "ModelResponse" else "system"
+        role = _speaker(message)
         for part in getattr(message, "parts", ()) or ():
             rendered = _part_text(part)
             if rendered:
@@ -124,6 +145,24 @@ def _render(messages: list[Any]) -> str:
     head = int(_MAX_TRANSCRIPT_CHARS * 0.6)
     tail = _MAX_TRANSCRIPT_CHARS - head
     return f"{transcript[:head]}\n... [middle of the transcript omitted] ...\n{transcript[-tail:]}"
+
+
+def is_summary_message(message: object) -> bool:
+    """A summary this module wrote on an earlier pass.
+
+    `SUMMARY_MARKER` was declared so a later pass would "recognise its own work"
+    and was then never read. Two things went wrong for want of this predicate.
+    Each pass emitted a *new* pinned summary and they never merged, so the pin
+    budget filled with the module's own output and folded user turns nowhere
+    near the documented threshold. And from the pass that first exceeded the
+    budget onwards, every transcript handed to the summarizer contained an
+    earlier summary -- a summary of a summary, degrading each round.
+    """
+    for part in getattr(message, "parts", ()) or ():
+        content = getattr(part, "content", None)
+        if isinstance(content, str) and content.lstrip().startswith(SUMMARY_MARKER):
+            return True
+    return False
 
 
 def _summary_message(text: str) -> Any:
@@ -157,7 +196,15 @@ class HistoryCompactor:
         # tokens describing text that is about to be reproduced anyway. Past the
         # cap the oldest of them are folded into the summary instead -- the very
         # first one excepted, always.
-        every_pin = [message for message in head if is_pinned_message(message)]
+        # Only the person's turns compete for pin slots. An earlier summary is
+        # pinned too, but it is ours: it goes back into the transcript so the
+        # new summary subsumes it, leaving exactly one summary in the output
+        # however many passes have run.
+        every_pin = [
+            message
+            for message in head
+            if is_pinned_message(message) and not is_summary_message(message)
+        ]
         pinned = _bounded_pins(every_pin)
         kept = {id(message) for message in pinned}
         folded = len(every_pin) - len(pinned)

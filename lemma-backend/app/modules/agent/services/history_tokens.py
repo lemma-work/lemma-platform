@@ -92,7 +92,14 @@ def _is_binary_payload(value: object) -> bool:
     """
     if isinstance(value, (bytes, bytearray, memoryview)):
         return True
-    return isinstance(getattr(value, "data", None), (bytes, bytearray, memoryview))
+    # More than one field name: `BinaryContent` says `data`, but the guard being
+    # one attribute wide is how the original defect worked -- a payload whose
+    # bytes hang off any other name falls through to `json.dumps(default=str)`
+    # and is charged at its repr, which for a 129KB image is ~387k tokens.
+    return any(
+        isinstance(getattr(value, name, None), (bytes, bytearray, memoryview))
+        for name in ("data", "content", "bytes", "payload", "blob", "raw")
+    )
 
 
 def _json_default(value: object) -> str:

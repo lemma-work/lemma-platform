@@ -317,8 +317,14 @@ def test_a_known_size_does_not_change_what_the_guard_decides() -> None:
     messages = [_text("filler " * 500) for _ in range(20)]
     measured = count_model_message_tokens(messages)
 
-    assert enforce_token_ceiling(messages, ceiling=5_000) == enforce_token_ceiling(
-        messages, ceiling=5_000, known_size=measured
+    # Compared by which messages survived, not by object equality: the drop
+    # notice carries an auto-set timestamp, so two independent calls are never
+    # `==` even when they decided identically.
+    def _surviving(history):
+        return [id(message) for message in history if message in messages]
+
+    assert _surviving(enforce_token_ceiling(messages, ceiling=5_000)) == _surviving(
+        enforce_token_ceiling(messages, ceiling=5_000, known_size=measured)
     )
 
 
@@ -371,3 +377,114 @@ class TestTheHistoryOpensWithSomethingProvidersAccept:
         result = await self._guard()(history)
 
         assert result[1:] == history
+
+
+class TestTheCeilingGuardActuallyEnforces:
+    """Found by adversarial review of this branch.
+
+    The guard cut the unpinned middle, found the result still over the ceiling,
+    and returned it anyway: twelve of seventeen messages destroyed *and* a
+    prompt 43% over the window — the provider rejection it exists to prevent,
+    paid for twice — while logging that it had enforced one.
+    """
+
+    def _huge(self) -> list[object]:
+        messages: list[object] = [
+            _text("U0: reconcile the ledger"),
+            _text("U1: also check refunds — do NOT email anyone"),
+        ]
+        for index in range(7):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 240_000))
+        return messages
+
+    def test_it_gets_under_the_ceiling(self) -> None:
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        assert count_model_message_tokens(trimmed) <= 117_760
+
+    def test_every_pinned_turn_survives_not_just_the_first(self) -> None:
+        """The fallback kept exactly one pin. The turn it dropped is the kind
+        whose loss produces the incident: a mid-conversation correction, or a
+        negative constraint like 'do NOT email anyone'."""
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        kept = " ".join(
+            str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+        assert "reconcile the ledger" in kept
+        assert "do NOT email anyone" in kept
+
+    def test_the_model_is_told_messages_were_dropped(self) -> None:
+        """Every other cap on this branch announces itself. This was the largest
+        and the only silent one, so the model read a history where two unrelated
+        turns sat adjacent and reasoned confidently from it."""
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        assert any(
+            "did not fit" in str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+
+    def test_the_newest_turn_is_still_last(self) -> None:
+        """A notice after the final turn competes with the thing being answered.
+        Reachable when every surviving message is pinned."""
+        messages = [_text("filler " * 400) for _ in range(30)]
+
+        trimmed = enforce_token_ceiling(messages, ceiling=2_000)
+
+        assert trimmed[-1] is messages[-1]
+
+
+class TestCountingSurvivesUnfamiliarShapes:
+    def test_bytes_under_any_field_name_are_not_charged_as_text(self) -> None:
+        """The guard being one attribute wide is how the original defect worked.
+        A payload whose bytes hang off another name was charged at its repr —
+        387k tokens for a 240KB image, the same failure by a different route.
+        """
+        from pydantic import BaseModel
+
+        class Odd(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            payload: bytes
+
+        message = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="t",
+                    content=Odd(payload=b"\xff" * 240_000),
+                    tool_call_id="c",
+                )
+            ]
+        )
+
+        assert count_model_message_tokens([message]) < 5_000
+
+    def test_a_multimodal_user_turn_is_still_the_users(self) -> None:
+        """`_is_synthetic` only inspected string content, so a list fell through
+        to 'synthetic' — and a user turn with an attachment stopped being pinned,
+        which is the one kind of message this module exists to keep."""
+        from pydantic_ai.messages import BinaryContent
+
+        from app.modules.agent.infrastructure.harnesses.history import (
+            is_pinned_message,
+        )
+
+        message = ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[
+                        "look at this",
+                        BinaryContent(
+                            data=b"\x89PNG" + b"\x00" * 100, media_type="image/png"
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        assert is_pinned_message(message)

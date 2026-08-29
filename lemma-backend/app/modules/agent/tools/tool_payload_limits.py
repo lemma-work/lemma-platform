@@ -29,13 +29,27 @@ from typing import Any
 DEFAULT_TOOL_PAYLOAD_LIMIT = 50_000
 
 
+def _describe(value: Any) -> str:
+    """A stand-in for a value JSON cannot render, that is never its raw bytes."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"<{len(value)} bytes>"
+    for name in ("data", "content", "bytes", "payload", "blob", "raw"):
+        attribute = getattr(value, name, None)
+        if isinstance(attribute, (bytes, bytearray, memoryview)):
+            return f"<{type(value).__name__}: {len(attribute)} bytes>"
+    return str(value)
+
+
 def _rendered_length(value: Any) -> int:
     if isinstance(value, str):
         return len(value)
     try:
-        return len(json.dumps(value, default=str))
+        # Never `default=str` here: that is what renders a bytes payload as its
+        # repr, so a value being measured *for being too large* gets measured at
+        # several times its real size -- and this decides whether it is clipped.
+        return len(json.dumps(value, default=_describe))
     except TypeError, ValueError:  # pragma: no cover - defensive
-        return len(str(value))
+        return len(_describe(value))
 
 
 def bounded_tool_payload(

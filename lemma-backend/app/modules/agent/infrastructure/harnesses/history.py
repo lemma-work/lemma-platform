@@ -76,12 +76,17 @@ def _is_synthetic(message: object) -> bool:
 
     for part in getattr(message, "parts", ()) or ():
         content = getattr(part, "content", None)
-        if isinstance(content, str):
-            stripped = content.strip()
-            if stripped.startswith(SYNTHETIC_NOTICE_PREFIX):
-                continue
-            if not (stripped.startswith("<notes>") and stripped.endswith("</notes>")):
-                return False
+        if not isinstance(content, str):
+            # A list content is a person who attached something. Skipping it
+            # here meant the loop fell through to "synthetic", so a multimodal
+            # user turn was not pinned -- the one kind of message this module
+            # exists to keep.
+            return False
+        stripped = content.strip()
+        if stripped.startswith(SYNTHETIC_NOTICE_PREFIX):
+            continue
+        if not (stripped.startswith("<notes>") and stripped.endswith("</notes>")):
+            return False
     return True
 
 
@@ -114,27 +119,38 @@ def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
 def enforce_token_ceiling(
     messages: Sequence[object], *, ceiling: int, known_size: int | None = None
 ) -> list[object]:
-    """Drop the oldest messages until the history fits, keeping pairs intact.
+    """Bring a history under the ceiling, and say so when it could not.
 
-    This is the backstop, not the strategy: it runs when summarization was
-    skipped or failed. Losing old context is bad; having the provider reject the
-    request is worse, and that is the only alternative.
+    The backstop, not the strategy: it runs when compaction was skipped or
+    failed. Losing old context is bad; having the provider reject the request is
+    worse, and that is the only alternative.
 
     `known_size` lets a caller that has already measured `messages` skip the
-    first re-tokenisation. Counting a long history is the most expensive thing
-    on the request path, and doing it twice to make one decision is waste the
-    worker pays for on every model request.
+    first re-tokenisation, which is the most expensive thing on the request path.
     """
     working = list(messages)
     size = known_size if known_size is not None else count_model_message_tokens(working)
     if ceiling <= 0 or size <= ceiling:
         return working
 
-    # Advance the cut rather than walking one message at a time: each count is a
-    # full re-tokenisation, and this runs on the request path. Pinned messages
-    # are carried across every cut -- this guard used to drop the summary the
-    # compactor had just paid an LLM call to produce, because that summary sits
-    # at the front and the front is what got dropped.
+    trimmed = _fit_within(working, ceiling)
+    dropped = len(working) - len(trimmed)
+    return _with_drop_notice(trimmed, dropped=dropped) if dropped > 0 else trimmed
+
+
+def _fit_within(working: list[object], ceiling: int) -> list[object]:
+    """The largest suffix that fits, giving up the least valuable thing first.
+
+    Three stages, in order of what they cost. Cut the unpinned middle; then give
+    up pinned turns from the *second* oldest, so the request itself is the last
+    thing standing; then shrink the recent tail, which only happens when a
+    handful of messages exceed the window between them.
+
+    The stages matter because stopping early is what the previous version did:
+    it cut the middle, found the result still over, and returned it anyway --
+    twelve of seventeen messages destroyed *and* a prompt 43% over the window,
+    which is the provider rejection this exists to prevent, paid for twice.
+    """
     floor = max(1, len(working) - _MIN_TAIL_MESSAGES)
     cut = max(1, len(working) // 2)
     while cut < floor:
@@ -148,18 +164,63 @@ def enforce_token_ceiling(
     if count_model_message_tokens(candidate) <= ceiling:
         return candidate
 
-    # Even every user turn together is over the ceiling. Keep the first thing
-    # they asked for -- the one message whose loss changes what the agent does --
-    # and the most recent turns, and let the rest go.
+    # The pinned turns do not fit together. Give them up oldest-first, but never
+    # the first one: an agent that has lost the request does not stop and ask.
+    pins = [message for message in working[:tail_start] if is_pinned_message(message)]
     tail = list(working[tail_start:])
-    first_pinned = next(
-        (message for message in working if is_pinned_message(message)), None
+    while len(pins) > 1:
+        pins = [pins[0], *pins[2:]]
+        candidate = [*pins, *tail]
+        if count_model_message_tokens(candidate) <= ceiling:
+            return candidate
+
+    # Even the request plus the newest few is too much. Shrink the tail. A single
+    # message larger than the whole window cannot be fixed here -- `_trim_to_ceiling`
+    # reports that rather than pretending otherwise.
+    candidate = [*pins, *tail]
+    while len(tail) > 1 and count_model_message_tokens(candidate) > ceiling:
+        tail = tail[find_safe_cutoff(tail, 1) :]
+        candidate = [*pins, *tail]
+    return candidate
+
+
+def _with_drop_notice(messages: list[object], *, dropped: int) -> list[object]:
+    """Tell the model what this cost it.
+
+    Every other cap on this branch announces itself; this was the largest one
+    and the only silent one. Without it the model reads a history where two
+    unrelated turns sit adjacent and a tool result answers a question it has no
+    memory of asking -- and reasons confidently from that.
+
+    Placed after the pinned prefix, which `_with_pinned` guarantees is
+    self-contained, so it cannot land between a tool call and its result.
+    """
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from app.modules.agent.services.runtime_history import SYNTHETIC_NOTICE_PREFIX
+
+    leading_pins = 0
+    for message in messages:
+        if not is_pinned_message(message):
+            break
+        leading_pins += 1
+    # Never past the last message: a model answers the newest turn, and a notice
+    # sitting after it competes with the thing being answered. Reachable when
+    # every surviving message is pinned.
+    leading_pins = min(leading_pins, max(0, len(messages) - 1))
+    notice = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    f"{SYNTHETIC_NOTICE_PREFIX} {dropped} earlier message(s) did "
+                    "not fit the model's context window and are not shown. Work "
+                    "from what remains; re-read a file or re-run a command if you "
+                    "need something from the part that is missing."
+                )
+            )
+        ]
     )
-    if first_pinned is not None and not any(
-        message is first_pinned for message in tail
-    ):
-        return [first_pinned, *tail]
-    return tail or working[-1:]
+    return [*messages[:leading_pins], notice, *messages[leading_pins:]]
 
 
 def _trim_to_ceiling(
@@ -276,12 +337,24 @@ def build_history_processors(
                 return list(messages)
             # Field names avoid "token"/"message", which the logging contract
             # reserves for things that could carry secrets or user text.
-            logger.warning(
-                "agent.history.token_ceiling_enforced.degraded",
-                size_before=before,
-                size_after=after,
-                dropped_count=len(messages) - len(trimmed),
-            )
+            if after > ceiling:
+                # Say so. The previous version logged enforcement it had not
+                # achieved, so a request 43% over the window looked in the logs
+                # exactly like one brought safely under it.
+                logger.error(
+                    "agent.history.token_ceiling_unenforceable.failed",
+                    size_before=before,
+                    size_after=after,
+                    ceiling=ceiling,
+                    dropped_count=len(messages) - len(trimmed),
+                )
+            else:
+                logger.warning(
+                    "agent.history.token_ceiling_enforced.degraded",
+                    size_before=before,
+                    size_after=after,
+                    dropped_count=len(messages) - len(trimmed),
+                )
             return trimmed
 
         processors.append(_ceiling_guard)

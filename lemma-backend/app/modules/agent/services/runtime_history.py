@@ -158,15 +158,44 @@ def runtime_full_run_ids(
     return {run.id for run in trimmed[-FULL_HISTORY_AGENT_RUN_COUNT:]}
 
 
+def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
+    """Say that whole runs are missing, not just the middle of one.
+
+    `_collapsed_run` announces the work it elides; the run caps above it sliced
+    silently, so a conversation could lose three hundred runs without a word
+    while losing the middle of one said so.
+    """
+    return Message(
+        conversation_id=run.conversation_id,
+        sequence=max(0, run.messages[0].sequence - 1) if run.messages else 0,
+        agent_run_id=run.id,
+        role=MessageRole.USER.value,
+        kind=MessageKind.NOTIFICATION,
+        text=(
+            f"{SYNTHETIC_NOTICE_PREFIX} {dropped} earlier exchange(s) in this "
+            "conversation are older than what is carried here and are not shown."
+        ),
+        metadata={
+            "synthetic": True,
+            "summary_kind": "conversation_runs_dropped",
+            "dropped_run_count": dropped,
+        },
+    )
+
+
 def select_runtime_history(
     runs: list[AgentRun], conversation: Conversation | None = None
 ) -> list[Message]:
     # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
     # history reaches the model by age + count. Trim at run granularity first
     # so tool-call/tool-return pairs (which live within a run) stay intact.
+    original_count = len(runs)
     runs = apply_surface_history_window(runs, conversation)
+    prefix: list[Message] = []
+    if runs and len(runs) < original_count:
+        prefix = [_dropped_runs_notice(runs[0], original_count - len(runs))]
     if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
-        return [message for run in runs for message in run.ordered_messages()]
+        return prefix + [message for run in runs for message in run.ordered_messages()]
 
     recent_run_ids = {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
     selected: list[Message] = []
@@ -178,7 +207,7 @@ def select_runtime_history(
             selected.extend(messages)
             continue
         selected.extend(_collapsed_run(run, messages))
-    return selected
+    return prefix + selected
 
 
 def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
