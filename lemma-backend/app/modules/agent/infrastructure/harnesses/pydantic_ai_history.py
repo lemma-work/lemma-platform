@@ -63,7 +63,7 @@ def history_and_prompt(
         and ordered[-1].role is MessageRole.USER
         and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
     ):
-        user_prompt = _user_prompt_text(ordered[-1])
+        user_prompt = user_prompt_text(ordered[-1])
         history_messages = ordered[:-1]
 
     return _to_pydantic_ai_messages(history_messages, protocol), user_prompt
@@ -91,7 +91,7 @@ def _to_pydantic_ai_messages(
         if role == MessageRole.USER:
             pending.drop()
             converted.append(
-                ModelRequest(parts=[UserPromptPart(content=_user_prompt_text(msg))])
+                ModelRequest(parts=[UserPromptPart(content=user_prompt_text(msg))])
             )
             index += 1
             continue
@@ -310,7 +310,7 @@ def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
 
 
-def _user_prompt_text(msg: object) -> str:
+def user_prompt_text(msg: object) -> str:
     """What the model actually reads for one user message.
 
     The stored text plus everything the surface knows about it: who sent it,
