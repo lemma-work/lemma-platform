@@ -295,6 +295,35 @@ Example prompts once connected:
 - "Pull up the full prompt and response for the most recent LLM call."
 - "Is there anything unusual in the logs in the last 15 minutes?"
 
+## The Phoenix MCP server
+
+Phoenix ships one too, at `/mcp` on the same port as its UI. It answers
+questions the ClickStack one cannot: what was actually in a model request, how
+the prompt grew turn by turn, which spans belong to one conversation.
+
+The local Phoenix runs unauthenticated — the compose service sets only
+`PHOENIX_WORKING_DIR`, with no `PHOENIX_ENABLE_AUTH` and no secret — so unlike
+ClickStack there is no key to export and no OAuth to complete. `.mcp.json`
+registers it as `phoenix-local`:
+
+```json
+"phoenix-local": { "type": "http", "url": "http://localhost:16006/mcp" }
+```
+
+Nothing else is needed beyond `make observability-up`. For other clients:
+
+```shell
+# Codex CLI
+codex mcp add phoenix-local --url http://localhost:16006/mcp
+
+# Claude Code, manual registration
+claude mcp add --transport http phoenix-local http://localhost:16006/mcp
+```
+
+Prefer this over pointing an agent at a deployed Phoenix. A remote one needs an
+interactive OAuth flow that a headless session cannot complete, and you are
+then querying production data to debug a local change.
+
 ## Local debug Collector (CI-safe correctness check, not for dashboards)
 
 Separate from the real stack above, the repository includes a pinned

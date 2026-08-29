@@ -82,6 +82,26 @@ def _record_transcripts(
     return transcripts
 
 
+def _is_a_type_word(text: str, ingested: list[IngestedAttachment]) -> bool:
+    """Is this "caption" only the parser's name for the kind of file it was?
+
+    WhatsApp media carries its caption on the media object and often carries
+    none at all, so the parser falls back to the type word -- "audio", "image" --
+    to keep a media-only message from arriving as empty text and being dropped.
+    That fallback is right where nothing else says anything, and wrong the moment
+    a transcript does: every voice note reached the model as
+    ``audio\n\n<what they said>``, which reads as the person having typed the
+    word "audio" first. Seven such messages on dev, every one of them.
+
+    Matched against what this message actually carried rather than a list of
+    words, so a person who really did type "audio" alongside a photo keeps it.
+    """
+    lowered = text.strip().lower()
+    return any(
+        lowered == str(item.content_type or "").strip().lower() for item in ingested
+    )
+
+
 def _combined_voice_text(transcripts: list[str]) -> str:
     """One block of text from however many voice notes arrived.
 
@@ -217,7 +237,7 @@ class SurfaceInboundMessageMixin:
             ]
         )
         combined = _combined_voice_text(_record_transcripts(results, metadata))
-        if original:
+        if original and not _is_a_type_word(original, ingested):
             return f"{original}\n\n{combined}"
         return combined
 

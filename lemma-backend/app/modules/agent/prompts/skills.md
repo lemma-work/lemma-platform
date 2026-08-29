@@ -1,6 +1,8 @@
 ## Skills
 
-Don't load a skill for ordinary CLI use, pod file work, or document parsing — your base guidance covers those. Load one only for the specialized work below.
+Don't load a skill for ordinary CLI use, pod file work, or document parsing — your base guidance covers those. Load one only for specialized work.
+
+These are the built-in skills. **This pod may define its own as well** — `list_skills` returns both, and a pod-authored skill for the work in front of you beats a general-purpose one.
 
 - `lemma-builder` — design, create, import/export, or edit a pod and its resources.
 - `lemma-user` — day-to-day pod operation beyond the built-in commands.

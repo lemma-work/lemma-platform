@@ -218,14 +218,6 @@ def build_agent_instructions(
             )
         )
 
-    # The task list the conversation already has, if any. Without this a run
-    # starts blind: the list lives in conversation metadata, and the tool return
-    # that last showed it is an old message that history trimming can drop. An
-    # agent that cannot see its own plan cannot tick anything off it, which is
-    # exactly how a checklist written in turn one stays unchecked forever.
-    # Appended unconditionally; the join below drops it when it is empty.
-    sections.append(_task_list_section(conversation, enabled=enabled))
-
     if agent.instruction.strip():
         sections.append("# Agent Instructions\n" + agent.instruction.strip())
     if conversation.instructions and conversation.instructions.strip():
@@ -233,10 +225,24 @@ def build_agent_instructions(
             "# Conversation Instructions\n" + conversation.instructions.strip()
         )
     # Runtime context (pod, user, granted resources) built once per run and
-    # carried on the context; always appended last so it grounds the agent.
+    # carried on the context.
     context_brief = getattr(ctx, "context_brief", None)
     if isinstance(context_brief, str) and context_brief.strip():
         sections.append(context_brief.strip())
+
+    # The task list the conversation already has, if any. Without this a run
+    # starts blind: the list lives in conversation metadata, and the tool return
+    # that last showed it is an old message that history trimming can drop. An
+    # agent that cannot see its own plan cannot tick anything off it, which is
+    # exactly how a checklist written in turn one stays unchecked forever.
+    #
+    # Last on purpose. This is the most volatile thing in the prompt -- every
+    # `write_todos` rewrites it -- and an OpenAI-compatible provider caches on
+    # the literal prefix, so whatever sits after the first changed byte is what
+    # gets re-read. Anything ahead of this stays cached across a checklist
+    # update; anything behind it would not. Appended unconditionally; the join
+    # below drops it when it is empty.
+    sections.append(_task_list_section(conversation, enabled=enabled))
     return "\n\n---\n\n".join(
         section.strip() for section in sections if section.strip()
     )

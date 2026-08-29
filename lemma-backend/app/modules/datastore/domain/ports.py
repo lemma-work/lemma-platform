@@ -316,7 +316,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         enable_rls: bool = True,
         is_pod_admin: bool = False,
-    ) -> Tuple[list[dict], int]: ...
+    ) -> Tuple[list[dict], int, bool]: ...
 
     async def list_records(
         self,

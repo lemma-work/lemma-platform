@@ -159,6 +159,37 @@ async def test_app_assets_support_private_and_public_asset_routes(
         public_missing_res.text
     )
 
+    # An app whose markdown links to a pod file has that link resolved against
+    # its own origin, so the click lands here. Code still gets JSON; a person
+    # following a link gets a page that says what happened and offers the
+    # workspace, because the file it names does live there.
+    linked_file_res = await async_client.get(
+        "/public/apps/library/rust/rustbook-ownership.md",
+        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+    )
+    assert linked_file_res.status_code == status.HTTP_404_NOT_FOUND
+    assert linked_file_res.headers["content-type"].startswith("text/html")
+    assert "library/rust/rustbook-ownership.md" in linked_file_res.text
+    assert f"/pod/{pod_id}/files?file=" in linked_file_res.text
+    assert 'target="_top"' in linked_file_res.text
+
+    # The same path fetched rather than navigated to keeps the JSON error every
+    # existing client already handles.
+    fetched_file_res = await async_client.get(
+        "/public/apps/library/rust/rustbook-ownership.md",
+        headers={"X-App-Public-Slug": public_slug, "accept": "application/json"},
+    )
+    assert fetched_file_res.status_code == status.HTTP_404_NOT_FOUND
+    assert fetched_file_res.json()["code"] == "APP_NOT_FOUND"
+
+    # A missing chunk is a broken build, not a document: no workspace offer.
+    missing_chunk_res = await async_client.get(
+        "/public/apps/assets/missing.js",
+        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+    )
+    assert missing_chunk_res.status_code == status.HTTP_404_NOT_FOUND
+    assert "/files?file=" not in missing_chunk_res.text
+
     public_js_res = await async_client.get(
         "/public/apps/assets/app.js",
         headers={"X-App-Public-Slug": public_slug},

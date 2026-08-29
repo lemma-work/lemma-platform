@@ -221,6 +221,55 @@ async def test_send_message_chunks_long_text_under_limit():
     assert "reply_parameters" not in recorder.calls[1][1]
 
 
+async def test_send_message_refuses_an_empty_body():
+    """An empty body is not a message; posting it shows a blank bubble.
+
+    `chunk_text("")` is `[]`, and this used to be turned back into one empty
+    chunk, so a body that arrived empty — or that sanitizing reduced to
+    nothing — reached the person as an empty Telegram message. The dev
+    scenario suite saw exactly that as `Spoken(text='', choices=())`.
+    """
+    recorder = _RecordingClient()
+    service = _service(recorder)
+
+    await service.send_message(_event(), "")
+
+    assert recorder.calls == []
+
+
+async def test_send_message_refuses_an_empty_body_even_with_a_keyboard():
+    """A keyboard cannot rescue an empty body — Telegram rejects blank text.
+
+    Worth its own test because this is the shape the failure actually took: an
+    approval whose body went missing would otherwise be posted as a bubble with
+    no words *and* no buttons, which reads as the product having said nothing.
+    """
+    recorder = _RecordingClient()
+    service = _service(recorder)
+
+    await service.send_message(
+        _event(),
+        "",
+        metadata={"reply_markup": {"inline_keyboard": [[{"text": "Approve"}]]}},
+    )
+
+    assert recorder.calls == []
+
+
+async def test_send_message_still_sends_a_body_that_is_only_whitespace_significant():
+    """Guard the guard: only a genuinely empty body is dropped.
+
+    `chunk_text` returns a chunk for any non-empty string, so a one-character
+    reply is still a reply and must go out.
+    """
+    recorder = _RecordingClient()
+    service = _service(recorder)
+
+    await service.send_message(_event(), ".")
+
+    assert len(recorder.calls) == 1
+
+
 async def test_send_message_sets_forum_topic_thread_id():
     recorder = _RecordingClient()
     service = _service(recorder)

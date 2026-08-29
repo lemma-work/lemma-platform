@@ -54,6 +54,9 @@ from app.modules.agent.infrastructure.repository_status import (
 )
 
 
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    reconcile_conversation_to_terminal,
+)
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
     ConversationApprovalQueriesMixin,
 )
@@ -519,10 +522,21 @@ class ConversationRepository(
             current_status.value
         )
         if current_status in TERMINAL_AGENT_RUN_STATUSES:
+            # Nothing to end — but this used to report a `conversation_status`
+            # it had only *inferred* from the run row and never written, so a
+            # conversation out of step stayed that way. Nothing else recovers
+            # one: the orphan sweep keys on `agent_runs.status`, so a terminal
+            # run is invisible to it. This is the only place seeing both rows.
+            repaired = await reconcile_conversation_to_terminal(
+                self.session,
+                conversation_id=model.conversation_id,
+                status=resolved_conversation_status,
+            )
             return AgentRunFinishResult(
                 status=current_status,
                 conversation_status=resolved_conversation_status,
                 updated=False,
+                conversation_repaired=repaired,
             )
 
         next_status = status

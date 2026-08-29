@@ -260,7 +260,50 @@ pub fn install_from_manifest(
             "installed runtime artifact identity does not match the signed manifest",
         ));
     }
+    prune_superseded_releases(install_root, &manifest.version);
     Ok(installed)
+}
+
+/// Stop the runtime cache growing by one whole release per update.
+///
+/// Every release extracts into `releases/<version>` -- 1.7 GiB of host pack and
+/// guest images -- and until now nothing ever removed the one it replaced. That
+/// was survivable while a version arrived every few weeks. A build that updates
+/// itself nightly turns it into 1.7 GiB a day, silently, in Application
+/// Support, which is the sort of thing a user discovers from a full disk.
+///
+/// The release just installed is never a candidate. The most recent of the rest
+/// is kept, so stepping back -- to stable, or to yesterday's nightly -- does not
+/// have to download it all again. Everything older goes.
+///
+/// Failures are deliberately ignored: this is housekeeping that runs after the
+/// install has already succeeded, and a file that will not delete is not a
+/// reason to fail an install that worked.
+fn prune_superseded_releases(install_root: &Path, keep: &str) {
+    for parent in [
+        install_root.join("releases"),
+        install_root.join("downloads"),
+    ] {
+        let Ok(entries) = fs::read_dir(&parent) else {
+            continue;
+        };
+        let mut superseded: Vec<(SystemTime, PathBuf)> = entries
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy() != keep)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| {
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                (modified, entry.path())
+            })
+            .collect();
+        superseded.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        for (_, path) in superseded.into_iter().skip(1) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
 }
 
 pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
@@ -1663,6 +1706,7 @@ mod tests {
         bytes: &[u8],
         expanded: u64,
         platform: &str,
+        release: &str,
     ) -> serde_json::Value {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
@@ -1674,8 +1718,100 @@ mod tests {
             "format": "zip",
             "platform": platform,
             "architecture": host_architecture(),
-            "runtime_version": "1.2.3",
+            "runtime_version": release,
         })
+    }
+
+    /// Installing a release must not leave the one before last on disk.
+    ///
+    /// A release directory is 1.7 GiB. Nothing used to remove it, which a
+    /// version every few weeks hid; a nightly that updates itself would have
+    /// added that much every day. The contract is bounded, not empty: the
+    /// release in use always survives, and so does the most recent other one,
+    /// so a step back to stable or to yesterday's nightly is free.
+    ///
+    /// Serialised with the other env-var tests in this module.
+    #[test]
+    fn installing_a_release_prunes_all_but_the_one_it_replaced() {
+        let _guard = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let install_root = root.path().join("runtime");
+
+        let install = |release: &str| {
+            let host_entries = host_pack_entries(release);
+            let host_zip = zip_of(
+                &host_entries
+                    .iter()
+                    .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                    .collect::<Vec<_>>(),
+            );
+            let host_expanded: u64 = host_entries.iter().map(|(_, b)| b.len() as u64).sum();
+            let host_path = root.path().join(format!("host-{release}.zip"));
+            fs::write(&host_path, &host_zip).unwrap();
+
+            let guest_entries = guest_runtime_entries();
+            let guest_zip = zip_of(
+                &guest_entries
+                    .iter()
+                    .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                    .collect::<Vec<_>>(),
+            );
+            let guest_expanded: u64 = guest_entries.iter().map(|(_, b)| b.len() as u64).sum();
+            let guest_path = root.path().join(format!("guest-{release}.zip"));
+            fs::write(&guest_path, &guest_zip).unwrap();
+
+            let manifest = serde_json::json!({
+                "schema_version": 1,
+                "version": release,
+                "host_packs": {
+                    host_target(): artifact_for_bytes(
+                        &host_path, &host_zip, host_expanded, host_platform(), release),
+                },
+                "guest_runtimes": {
+                    guest_target(): artifact_for_bytes(
+                        &guest_path, &guest_zip, guest_expanded, "linux", release),
+                },
+            });
+            let manifest_path = root.path().join(format!("lemma-local-{release}.json"));
+            fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            std::env::set_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS", "1");
+            std::env::set_var("LEMMA_DESKTOP_RELEASE_MANIFEST", &manifest_path);
+            install_from_manifest(&manifest_path, &install_root, release, &mut |_| {})
+                .unwrap_or_else(|error| panic!("{release} installs: {error}"));
+        };
+
+        // Three nightlies in a row, the way a self-updating build arrives at
+        // them. Each install is stamped a little later than the last so "most
+        // recent" is decided by real timestamps, not by filesystem ordering.
+        let releases = ["0.7.1-nightly.1", "0.7.1-nightly.2", "0.7.1-nightly.3"];
+        for release in releases {
+            install(release);
+        }
+
+        let present = |release: &str| install_root.join("releases").join(release).is_dir();
+        assert!(present(releases[2]), "the release just installed is kept");
+        assert!(
+            present(releases[1]),
+            "the release it replaced is kept, so stepping back is free",
+        );
+        assert!(
+            !present(releases[0]),
+            "the release before that is gone, or the cache grows forever",
+        );
+
+        // And the one still there has to be usable, not just a surviving name:
+        // pruning must never reach into a release it decided to keep.
+        let kept = installed_runtime(
+            &install_root.join("releases").join(releases[1]),
+            releases[1],
+        );
+        assert!(
+            kept.is_complete() && kept.has_recorded_artifact_identity(),
+            "the kept release is still a runtime that could be launched",
+        );
+
+        std::env::remove_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS");
+        std::env::remove_var("LEMMA_DESKTOP_RELEASE_MANIFEST");
     }
 
     /// The whole install, end to end, with no network and no VM.
@@ -1727,11 +1863,11 @@ mod tests {
             "version": release,
             "host_packs": {
                 host_target(): artifact_for_bytes(
-                    &host_path, &host_zip, host_expanded, host_platform()),
+                    &host_path, &host_zip, host_expanded, host_platform(), release),
             },
             "guest_runtimes": {
                 guest_target(): artifact_for_bytes(
-                    &guest_path, &guest_zip, guest_expanded, "linux"),
+                    &guest_path, &guest_zip, guest_expanded, "linux", release),
             },
         });
         let manifest_path = root.path().join("lemma-local.json");

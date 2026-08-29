@@ -31,6 +31,29 @@ the module suites may cover it — but it is untested *as product*.
 | OpenAPI operations | 235 | 235 |
 | Product events | 28 | 28 |
 
+## Covered, but only in a lane that is not routinely run
+
+Every test proving these carries a mark that takes it out of the
+default selection — `sandbox` and `live` are excluded by the suite's
+own `-m` expression, and `stack_lane` is dropped whenever the run
+targets a deployment the suite does not own. That is legitimate: a
+promise about an unconfigured deployment cannot be proved against a
+working one. It is listed because `covered` otherwise reads as
+`demonstrated recently`, and for these it does not.
+
+| Scenario | Lane |
+| --- | --- |
+| `PS-FUNC-002` A function runs isolated from everything else | `sandbox` |
+| `PS-FUNC-010` A quick function answers immediately | `sandbox` |
+| `PS-FUNC-011` A long function is queued and reports progress | `sandbox` |
+| `PS-FUNC-012` A run that cannot finish does not hang forever | `sandbox` |
+| `PS-FLOW-014` A workflow run carries the authority of whoever started it | `sandbox` |
+| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `stack_lane` |
+| `PS-OPS-030` The platform reports its own health honestly | `stack_lane` |
+| `PS-PACK-010` A person sees the plan before anything changes | `sandbox` |
+| `PS-PACK-012` Applying an import either finishes or can be safely retried | `sandbox` |
+| `PS-PACK-014` An imported pod works without further wiring | `sandbox` |
+
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
 | Scenario | Status | Proven by |

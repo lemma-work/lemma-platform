@@ -240,6 +240,7 @@ class AgentRuntimeProfileRepository:
                     profile_id=str(instance.id),
                     organization_id=str(organization_id),
                     error=str(error),
+                    exc_info=True,
                 )
         return profiles
 

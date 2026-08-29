@@ -377,6 +377,8 @@ export default function AgentDetailPage({
                                     ) : null}
                                     <AgentHome
                                         podId={podId}
+                                        agentId={localAgent.id}
+                                        agentSlug={localAgent.name}
                                         agentName={displayName}
                                         description={localAgent.description}
                                         iconUrl={localAgent.icon_url}

@@ -26,7 +26,7 @@ SHELL := /bin/bash
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
-        version-check \
+        version-check local-domain-check script-portability-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -379,6 +379,7 @@ help:
 	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
+	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -1331,6 +1332,23 @@ version-check:
 	@echo "→ Component versions…"
 	@python3 scripts/check_version_consistency.py
 
+# The base domain an install serves under is decided at runtime and spelled out
+# in four places, in three languages. Nothing tied them together, and the cost
+# was a shipped build where this computer could not pair with its own workspace:
+# two loopback checks still said `.localhost` after the base had moved, so the
+# refusal was silent and onboarding waited for ever.
+local-domain-check:
+	@echo "→ Local domain lists…"
+	@python3 scripts/check_local_domain_consistency.py
+
+# CI runs scripts/ with a bare `python`, which on the Windows and macOS runners
+# is not the 3.14 the backend pins. Syntax they cannot parse is not a failing
+# step, it is a SyntaxError before the first line -- which is how one
+# unparenthesised `except` stopped every Windows host pack from building.
+script-portability-check:
+	@echo "→ Script portability…"
+	@python3 scripts/check_script_portability.py
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
@@ -1767,6 +1785,10 @@ quality:
 	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
 	@echo "→ E2E wait patterns…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
+	@echo "→ Local domain lists…"
+	@$(MAKE) --no-print-directory local-domain-check
+	@echo "→ Script portability…"
+	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
 	@echo "→ Test census (no suite has quietly stopped running)…"

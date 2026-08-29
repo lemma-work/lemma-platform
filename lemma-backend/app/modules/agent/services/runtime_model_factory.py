@@ -103,8 +103,8 @@ async def _aclose_quietly(client: httpx.AsyncClient) -> None:
     try:
         await client.aclose()
     except Exception:  # pragma: no cover - eviction is best-effort
-        logger.debug(
-            "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+        logger.warning(
+            "agent.runtime_model_factory.provider_client_close_failed.degraded",
             exc_info=True,
         )
 
@@ -193,8 +193,8 @@ async def close_agent_provider_clients() -> None:
         try:
             await client.aclose()
         except Exception:  # pragma: no cover - shutdown is best-effort
-            logger.debug(
-                "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+            logger.warning(
+                "agent.runtime_model_factory.provider_client_close_failed.degraded",
                 exc_info=True,
             )
 

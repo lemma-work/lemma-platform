@@ -9,6 +9,9 @@ from uuid import UUID
 
 import anyio
 
+from app.modules.agent.infrastructure.harnesses.tool_returns import (
+    OutstandingToolCalls,
+)
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     build_mock_model,
     is_mock_llm_enabled,
@@ -24,7 +27,6 @@ from pydantic_ai.messages import (
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
-    HarnessDriverCancelled,
     drive_with_retry,
     reraise_driver_failure,
 )
@@ -51,10 +53,8 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+    user_facing_error_message,
     log_model_http_error,
-)
-from app.modules.agent.infrastructure.transport_errors import (
-    is_retryable_stream_error,
 )
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.runtime_model_factory import (
@@ -73,78 +73,7 @@ logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
 
 
-def _user_facing_error_message(exc: Exception) -> str:
-    """Return a sanitized, actionable message for the UI.
-
-    Never forward raw provider exception text (which may contain API keys,
-    request headers, or model-internal details) into user-visible payloads.
-    """
-    if isinstance(exc, ModelHTTPError):
-        # These three are all "the provider said no", but they need different
-        # things from the reader: wait, top up, or fix the config. A single
-        # generic message sends people to the wrong place.
-        if exc.status_code == 429:
-            return (
-                "The model provider is rate limiting this workspace (HTTP 429). "
-                "The request was retried a few times without success — try "
-                "again shortly."
-            )
-        if exc.status_code == 402:
-            return (
-                "The model provider rejected the request for billing reasons "
-                "(HTTP 402). Please check the provider account's credit or quota."
-            )
-        if exc.status_code >= 500:
-            return (
-                f"The model provider is having trouble (HTTP {exc.status_code}) "
-                "and the request was retried without success. Nothing you sent "
-                "was lost — try again shortly."
-            )
-        return (
-            f"The model provider returned an error (HTTP {exc.status_code}). "
-            "Please check the agent runtime configuration."
-        )
-    if is_retryable_stream_error(exc):
-        # A transport-level drop that survived every retry. Nothing was lost —
-        # each completed message was persisted — so say so, because "check the
-        # configuration" sends people hunting a bug that isn't theirs.
-        return (
-            "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message, or press Retry to pick up "
-            "where it stopped."
-        )
-    if isinstance(exc, UnexpectedModelBehavior):
-        return (
-            "A tool failed repeatedly after several attempts and the run was "
-            "stopped. Please check the agent configuration."
-        )
-    if isinstance(exc, UsageLimitExceeded):
-        return (
-            "The agent run hit a usage limit. "
-            "Please check the agent runtime configuration."
-        )
-    if isinstance(exc, HarnessDriverCancelled):
-        # Whatever the agent was doing stopped part-way, so "try again" is the
-        # honest advice. Everything it finished before that point is persisted.
-        return (
-            "The agent stopped part-way through a step and could not finish. "
-            "Nothing you sent was lost — send another message, or press Retry "
-            "to pick up where it stopped."
-        )
-    return (
-        "The model provider returned an error. "
-        "Please check the agent runtime configuration."
-    )
-
-
-# Per-tool retry budget for the in-process agent. pydantic-ai defaults to 1, which
-# turns a single bad/invalid tool call (e.g. arguments that fail schema validation)
-# into a fatal run. 5 gives the model several chances to self-correct from the
-# validation feedback before the run gives up. Execution errors are handled
-# separately by GracefulToolset and never consume this budget.
 DEFAULT_TOOL_RETRIES = 5
-
-# Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
 
 
 def _instructions(
@@ -203,9 +132,14 @@ class PydanticAIHarness:
         options: HarnessOptions,
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
-        malformed_tool_call_ids: set[str] = set()
-        emitted_tool_response_ids: set[str] = set()
-        terminal_event_seen = False
+        # Every tool this run announces, until its result is recorded. A run
+        # that dies in between leaves an orphaned call, and the next run is told
+        # the tool never ran and invited to repeat it -- a duplicate email, a
+        # duplicate record write.
+        outstanding = OutstandingToolCalls()
+        terminal: AgentEvent | None = None
+        pause_tool_call_id: str | None = None
+        already_yielded = False
 
         try:
             async for event in self._execute(
@@ -215,49 +149,45 @@ class PydanticAIHarness:
                 ctx=ctx,
                 options=options,
                 agent_run_id=agent_run_id,
-                malformed_tool_call_ids=malformed_tool_call_ids,
-                emitted_tool_response_ids=emitted_tool_response_ids,
                 should_stop=options.should_stop,
             ):
+                outstanding.observe(event)
                 yield event
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
-                    terminal_event_seen = True
+                    terminal, already_yielded = event, True
         except ModelHTTPError as exc:
             log_model_http_error(
                 exc,
                 agent_run_id=agent_run_id,
                 model_name=getattr(options, "model_name", None),
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UnexpectedModelBehavior as exc:
             # Reached only when a tool genuinely failed every retry (default 5) —
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
-            logger.debug(
-                "agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic",
+            logger.warning(
+                "agent.pydantic_ai.agent_run_ended_after_repeated.degraded",
                 exc_info=True,
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UsageLimitExceeded as exc:
             logger.warning(
                 "agent.pydantic_ai.agent_run_hit_usage_limit.degraded", exc_info=True
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except AgentInputRequired as exc:
             # The agent called ask_user / request_approval: pause the run cleanly
             # rather than failing. The tool call is already persisted; the runner
@@ -267,7 +197,8 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_input_required_kind_call.observed",
                 tool_call_id=exc.tool_call_id,
             )
-            yield AgentEvent(
+            pause_tool_call_id = exc.tool_call_id
+            terminal = AgentEvent(
                 type=AgentEventType.WAITING,
                 data={
                     "tool_call_id": exc.tool_call_id,
@@ -276,26 +207,32 @@ class PydanticAIHarness:
                 },
                 agent_run_id=agent_run_id,
             )
-            return
         except Exception as exc:
             logger.error(
                 "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
 
-        if terminal_event_seen:
-            return
-
-        yield AgentEvent(
-            type=AgentEventType.COMPLETED,
-            data={"conversation_id": str(conversation.id)},
-            agent_run_id=agent_run_id,
-        )
+        if terminal is None:
+            terminal = AgentEvent(
+                type=AgentEventType.COMPLETED,
+                data={"conversation_id": str(conversation.id)},
+                agent_run_id=agent_run_id,
+            )
+            already_yielded = False
+        # Close whatever is still open before the run ends, whichever way it
+        # ended. The pausing call is excluded: its real return is appended when
+        # the user answers, so a synthetic one would duplicate it.
+        for closing in outstanding.closing_events(
+            terminal, skip_tool_call_id=pause_tool_call_id
+        ):
+            yield closing
+        if not already_yielded:
+            yield terminal
 
     async def _execute(
         self,
@@ -306,8 +243,6 @@ class PydanticAIHarness:
         ctx: AgentContext,
         options: HarnessOptions,
         agent_run_id: UUID,
-        malformed_tool_call_ids: set[str],
-        emitted_tool_response_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
         with run_phase("history_convert") as history_span:

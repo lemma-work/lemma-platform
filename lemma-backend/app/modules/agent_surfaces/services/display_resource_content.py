@@ -28,6 +28,7 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.composition.surface_datastore import (
@@ -175,6 +176,15 @@ async def deliver_pod_file(
             # The page image carried the caption; repeating it on the document
             # below would print the same line twice in a row.
             caption = None
+    # What the file is decides how it arrives: every platform picks a photo
+    # bubble, a voice note or a grey file row from this one string
+    # (`media_kind_for_mime`). The datastore types a file by its name alone, so
+    # anything stored without an extension claims to be a blob and reaches the
+    # person as a download rather than as the picture they were sent — and the
+    # bytes that would have said otherwise are already in hand here.
+    mime_type = entity.mime_type
+    if is_untyped_mime(mime_type):
+        mime_type = sniff_media_mime(content) or "application/octet-stream"
     # No connection held for the platform call; see `connection_released`.
     async with connection_released(getattr(uow, "session", None)):
         sent = await target.adapter.send_file_attachment(
@@ -182,14 +192,14 @@ async def deliver_pod_file(
             event=target.event,
             file_name=entity.name,
             file_bytes=content,
-            mime_type=entity.mime_type or "application/octet-stream",
+            mime_type=mime_type,
             caption=caption,
         )
     return PodFileDelivery(
         delivered=bool(sent),
         name=entity.name,
         size_bytes=entity.size_bytes,
-        mime_type=entity.mime_type,
+        mime_type=mime_type,
     )
 
 
@@ -283,7 +293,7 @@ async def _read_table_rows(
     record_service = build_record_service(uow)
     table_service = build_table_service(uow)
     if request.query:
-        rows, total = await record_service.execute_readonly_query(
+        rows, total, _truncated = await record_service.execute_readonly_query(
             pod_id=pod_id,
             query=request.query,
             user_id=user_id,
