@@ -90,8 +90,8 @@ class PodMCPService:
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.debug(
-                "agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic",
+            logger.warning(
+                "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded",
                 exc_info=True,
             )
             return tool_call_error(tool_name, exc)

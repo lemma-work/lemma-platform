@@ -503,9 +503,10 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
         # Most often "renders with JavaScript", sometimes a 403 at a site that
         # refuses scripted clients. Escalate rather than reporting an empty
         # article as a success.
-        logger.debug(
-            "agent.web_fetch.http_path_failed.diagnostic",
+        logger.warning(
+            "agent.web_fetch.http_path_failed.degraded",
             error_type=type(exc).__name__,
+            exc_info=True,
         )
         return None
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch

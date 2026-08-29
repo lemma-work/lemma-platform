@@ -389,12 +389,25 @@ class ModelRequestStreamer:
                         continue
                     tool_output = result_part.content
                     if isinstance(tool_output, BinaryContent):
+                        # Images are not carried into later runs -- only this
+                        # stub is persisted. Say so in words the model reads,
+                        # rather than leaving it to infer from a shape: a bare
+                        # `{"type": "binary_content"}` beside a successful
+                        # result reads as "you have seen this", and the model
+                        # then answers questions about a picture it can no
+                        # longer see.
                         tool_output = {
                             "type": "binary_content",
                             "media_type": tool_output.media_type,
                             "size_bytes": len(tool_output.data)
                             if tool_output.data
                             else 0,
+                            "note": (
+                                "An image was shown to you here when this tool "
+                                "ran. It is not carried into later turns, so it "
+                                "is no longer in your context -- open it again "
+                                "if you need to look at it."
+                            ),
                         }
                     elif hasattr(tool_output, "model_dump"):
                         tool_output = to_json_value(tool_output)

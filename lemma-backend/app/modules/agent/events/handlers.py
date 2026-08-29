@@ -43,6 +43,7 @@ from app.modules.datastore.contracts import (
     DatastoreFileDeletedEvent,
     DatastoreFileUpdatedEvent,
 )
+from app.modules.agent.services.run_resume import resume_parked_agent_runs
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
@@ -427,15 +428,30 @@ async def process_conversation_title(
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
 
 
+@streaq_cron("*/2 * * * *", name="resume_interrupted_agent_runs")
+async def resume_interrupted_agent_runs() -> None:
+    """Hand runs parked by a departing worker to a live one."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await resume_parked_agent_runs(
+        uow_factory=worker_ctx.uow_factory,
+        job_queue=worker_ctx.job_queue,
+    )
+
+
 @streaq_cron("5-59/10 * * * *", name="reconcile_orphaned_agent_runs")
 async def reconcile_orphaned_agent_runs() -> None:
-    """Self-heal agent runs stuck non-terminal after a worker crash/restart.
+    """Self-heal agent runs stuck RUNNING after a hard crash.
 
-    The grace_period on the worker lets a SIGTERM-interrupted run finalize
-    itself; this cron is the backstop for hard crashes (SIGKILL/OOM) and any
-    residual race where finalization lost to engine disposal. Marking the run
-    FAILED here publishes the same lifecycle + SSE events a normal finish does,
-    so the UI updates and any waiting workflow is unblocked.
+    Narrower than it used to be. A worker shut down with SIGTERM now parks its
+    runs INTERRUPTED and `resume_interrupted_agent_runs` hands them on, so this
+    is left with what a worker never got the chance to park: SIGKILL, OOM, and
+    the residual race where finalization lost to engine disposal.
+
+    Those runs cannot be resumed safely -- nothing closed their outstanding tool
+    calls, and staleness alone cannot tell a dead worker from a live peer without
+    a heartbeat. So they still fail terminally, which publishes the same
+    lifecycle + SSE events a normal finish does: the UI updates and any waiting
+    workflow is unblocked.
     """
     worker_ctx: AppWorkerContext = streaq_worker.context
     try:

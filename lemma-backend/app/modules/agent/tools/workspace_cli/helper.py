@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, List
 import re
 
 from app.modules.agent.tools.workspace_entities import (
@@ -8,7 +8,6 @@ from app.modules.agent.tools.workspace_entities import (
 CHARACTER_LIMIT_STDOUT = 30000
 CHARACTER_LIMIT_STDERR = 10000
 CHARACTER_LIMIT_OUTPUT = 10000
-CHARACTER_LIMIT_DATASTORE_RESULT = 50000  # Approximately 10k tokens (1 token ≈ 4 chars)
 
 # CSI (colours, cursor moves), OSC (window title), and single-character escapes.
 # A PTY emits these constantly; to a model they are noise that costs tokens and
@@ -103,4 +102,33 @@ def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
         error_in_exec=result.error_in_exec,  # Keep error_in_exec as is
         execution_count=result.execution_count,
         data=result.data,  # Keep data as is (rich outputs)
+    )
+
+
+def render_terminal_result(
+    result: dict[str, Any], *, tty: bool
+) -> tuple[str | None, str | None]:
+    """Make command output readable, keeping the end rather than the start.
+
+    Both streams are capped on both paths. Only the PTY path was capped before,
+    and `tty` defaults to False -- so `exec_command`, the tool an agent reaches
+    for most, was the uncapped one. A single `npm ci` or `pytest -v` then landed
+    whole in the conversation and was replayed on every later turn of it.
+
+    The end is the half worth keeping: a build's errors are at the bottom, and
+    head-truncating hands the agent the banner and hides what it must act on.
+    """
+
+    stdout = result.get("stdout")
+    stderr = result.get("stderr")
+    if tty:
+        # Escape sequences are noise a PTY emits constantly; strip before
+        # measuring so the cap is spent on text rather than colour codes.
+        stdout = normalize_terminal_output(stdout or "")
+        stderr = normalize_terminal_output(stderr or "")
+    return (
+        tail_truncate(stdout, CHARACTER_LIMIT_STDOUT),
+        # stderr has always had its own, smaller limit; this path was passing
+        # the stdout one.
+        tail_truncate(stderr, CHARACTER_LIMIT_STDERR),
     )

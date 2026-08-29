@@ -293,7 +293,7 @@ async def _read_table_rows(
     record_service = build_record_service(uow)
     table_service = build_table_service(uow)
     if request.query:
-        rows, total = await record_service.execute_readonly_query(
+        rows, total, _truncated = await record_service.execute_readonly_query(
             pod_id=pod_id,
             query=request.query,
             user_id=user_id,

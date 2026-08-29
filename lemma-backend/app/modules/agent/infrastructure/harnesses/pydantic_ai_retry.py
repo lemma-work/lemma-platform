@@ -164,6 +164,7 @@ async def drive_with_retry(
                 attempt=attempt,
                 max_attempts=max_attempts,
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
             # Tell the client to drop the half-streamed bubble; the replacement
             # response streams from scratch.
