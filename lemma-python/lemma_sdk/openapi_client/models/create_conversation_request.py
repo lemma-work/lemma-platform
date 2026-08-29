@@ -30,6 +30,7 @@ class CreateConversationRequest:
         metadata (CreateConversationRequestMetadataType0 | None | Unset):
         parent_id (None | Unset | UUID):
         title (None | str | Unset):
+        title_is_placeholder (bool | Unset):  Default: False.
         type_ (ConversationType | Unset): User-visible conversation behavior.
     """
 
@@ -39,6 +40,7 @@ class CreateConversationRequest:
     metadata: CreateConversationRequestMetadataType0 | None | Unset = UNSET
     parent_id: None | Unset | UUID = UNSET
     title: None | str | Unset = UNSET
+    title_is_placeholder: bool | Unset = False
     type_: ConversationType | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -90,6 +92,8 @@ class CreateConversationRequest:
         else:
             title = self.title
 
+        title_is_placeholder = self.title_is_placeholder
+
         type_: str | Unset = UNSET
         if not isinstance(self.type_, Unset):
             type_ = self.type_.value
@@ -109,6 +113,8 @@ class CreateConversationRequest:
             field_dict["parent_id"] = parent_id
         if title is not UNSET:
             field_dict["title"] = title
+        if title_is_placeholder is not UNSET:
+            field_dict["title_is_placeholder"] = title_is_placeholder
         if type_ is not UNSET:
             field_dict["type"] = type_
 
@@ -203,6 +209,8 @@ class CreateConversationRequest:
 
         title = _parse_title(d.pop("title", UNSET))
 
+        title_is_placeholder = d.pop("title_is_placeholder", UNSET)
+
         _type_ = d.pop("type", UNSET)
         type_: ConversationType | Unset
         if isinstance(_type_, Unset):
@@ -217,6 +225,7 @@ class CreateConversationRequest:
             metadata=metadata,
             parent_id=parent_id,
             title=title,
+            title_is_placeholder=title_is_placeholder,
             type_=type_,
         )
 
