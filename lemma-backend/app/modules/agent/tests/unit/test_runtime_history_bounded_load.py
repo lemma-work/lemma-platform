@@ -93,11 +93,20 @@ def _as_bounded(runs: list[AgentRun], conversation=None) -> list[AgentRun]:
     bounded: list[AgentRun] = []
     for run, digest in zip(runs, digests):
         ordered = run.ordered_messages()
-        keep = (
-            ordered
-            if run.id in full_ids or len(ordered) <= 2
-            else [ordered[0], ordered[-1]]
-        )
+        if run.id in full_ids or len(ordered) <= 2:
+            keep = list(ordered)
+        else:
+            # Three reads in production: the run's first, its last, and every
+            # user message in it. Anything less here and the double certifies a
+            # shape the database never returns.
+            by_id = {
+                message.id: message
+                for message in (
+                    [ordered[0], ordered[-1]]
+                    + [m for m in ordered if m.role is MessageRole.USER]
+                )
+            }
+            keep = sorted(by_id.values(), key=lambda message: message.sequence)
         bounded.append(digest.model_copy(update={"messages": list(keep)}))
     return bounded
 
@@ -349,3 +358,89 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
 
         from_old = [m for m in selected if m.agent_run_id == old.id]
         assert len(from_old) == 3, from_old
+
+
+class TestTheUsersOwnMessagesAreNeverElided:
+    """The request is the one thing a later turn cannot reconstruct.
+
+    An agent that has lost it does not stop and ask -- it invents a plausible
+    substitute from whatever context is left and reports that as the thing it
+    was asked for. In the incident this suite grew from, a request for a
+    3Blue1Brown explainer became an hour spent building an unrelated promo reel,
+    and the agent then told the user that reel was what they had asked for.
+    """
+
+    def _conversation_with_a_mid_run_question(self) -> tuple[UUID, list[AgentRun]]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        # A follow-up the person typed while the run was still working. It is
+        # not the run's first message and not its last, so first-and-last
+        # elision dropped it entirely.
+        oldest = runs[0]
+        # The enum member, not its value: `model_copy` skips validation, and
+        # `MessageRole` is a str enum, so a raw "user" would compare unequal to
+        # the member every `is` check in production uses.
+        oldest.messages[4] = oldest.messages[4].model_copy(
+            update={
+                "role": MessageRole.USER,
+                "text": "actually make it about the Qwen architecture",
+            }
+        )
+        return conversation_id, runs
+
+    def test_a_mid_run_user_message_survives_elision(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert any(
+            message.role is MessageRole.USER
+            and "Qwen architecture" in (message.text or "")
+            for message in selected
+        )
+
+    def test_every_user_message_of_an_elided_run_is_kept_verbatim(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        kept = [
+            message.text
+            for message in selected
+            if message.agent_run_id == oldest_id and message.role is MessageRole.USER
+        ]
+        assert kept == [
+            "run 0 message 0",
+            "actually make it about the Qwen architecture",
+        ]
+
+    def test_the_step_count_does_not_count_what_was_kept(self) -> None:
+        """The notice stands in for work that was dropped, so counting the
+        messages still present would overstate what the model cannot see."""
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notice = next(
+            message
+            for message in selected
+            if message.agent_run_id == oldest_id
+            and (message.metadata or {}).get("summary_kind")
+            == "agent_run_middle_elision"
+        )
+        # 9 messages: two the user wrote, one final answer, six elided.
+        assert notice.metadata["elided_message_count"] == 6
+
+    def test_the_final_answer_still_closes_the_run(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert for_run[-1].text == "run 0 message 8"

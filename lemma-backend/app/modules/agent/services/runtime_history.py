@@ -147,33 +147,66 @@ def select_runtime_history(
         if run.id in recent_run_ids or run.message_count <= 2:
             selected.extend(messages)
             continue
-
-        # Counted from the run's real size. The loader already reduced this
-        # run to its first and last message, so len(messages) is 2 here and
-        # would report nothing was skipped.
-        skipped_count = max(0, run.message_count - 2)
-        if not _is_unpaired_tool_call(messages[0]):
-            selected.append(messages[0])
-        selected.append(
-            Message(
-                conversation_id=run.conversation_id,
-                sequence=messages[0].sequence,
-                agent_run_id=run.id,
-                role=MessageRole.SYSTEM.value,
-                kind=MessageKind.NOTIFICATION,
-                text=(
-                    "Earlier agent run summarized: "
-                    f"worked through {skipped_count} intermediate messages."
-                ),
-                metadata={
-                    "synthetic": True,
-                    "summary_kind": "agent_run_middle_elision",
-                    "elided_message_count": skipped_count,
-                },
-            )
-        )
-        selected.append(messages[-1])
+        selected.extend(_collapsed_run(run, messages))
     return selected
+
+
+def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
+    """An old run reduced to what still matters about it.
+
+    What the person asked for, how much work it took, and what came back.
+
+    Every user message survives verbatim, however old the run. The request is
+    the one thing a later turn cannot reconstruct and cannot work without: an
+    agent that has lost it does not stop, it invents a plausible substitute from
+    whatever context remains and reports that as the thing it was asked for.
+    Everything the agent did in between collapses to a single line counting the
+    steps, which is all a later turn needs to know about work already finished.
+
+    The run's final message closes it -- that is the answer the user actually
+    saw, and the one they may ask about next. It is dropped when it is an
+    unpaired tool call, for the reason `_is_unpaired_tool_call` gives: the
+    history builder would otherwise tell the model that a side effect which
+    succeeded never happened, and instruct it to repeat it.
+    """
+    kept = [message for message in messages if message.role is MessageRole.USER]
+    kept_ids = {message.id for message in kept}
+
+    final = messages[-1]
+    include_final = final.id not in kept_ids and not _is_unpaired_tool_call(final)
+
+    # Counted from the run's real size. The loader hands us the user messages
+    # plus the run's first and last, so len(messages) would report that almost
+    # nothing was skipped.
+    skipped_count = max(0, run.message_count - len(kept) - (1 if include_final else 0))
+
+    collapsed = list(kept)
+    collapsed.append(
+        Message(
+            conversation_id=run.conversation_id,
+            # Ordered after the last thing kept and before the final answer, so
+            # the global sort by sequence puts the notice where it belongs.
+            sequence=max(
+                kept[-1].sequence if kept else messages[0].sequence,
+                final.sequence - 1,
+            ),
+            agent_run_id=run.id,
+            role=MessageRole.SYSTEM.value,
+            kind=MessageKind.NOTIFICATION,
+            text=(
+                "Earlier agent run summarized: "
+                f"worked through {skipped_count} intermediate messages."
+            ),
+            metadata={
+                "synthetic": True,
+                "summary_kind": "agent_run_middle_elision",
+                "elided_message_count": skipped_count,
+            },
+        )
+    )
+    if include_final:
+        collapsed.append(final)
+    return collapsed
 
 
 def _is_unpaired_tool_call(message: Message) -> bool:

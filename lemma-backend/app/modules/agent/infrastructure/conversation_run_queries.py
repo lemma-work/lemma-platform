@@ -248,6 +248,27 @@ class ConversationRunQueriesMixin:
                 .all()
             )
         if elided_ids:
+            # The user's own messages are never elided, however old the run. An
+            # agent that cannot see what it was asked drifts onto a different
+            # task and then reports that task as the one requested -- which is
+            # exactly how a request for one video became an hour spent building
+            # another. Answered by (agent_run_id, sequence) like its neighbours.
+            messages.extend(
+                (
+                    await self.session.execute(
+                        select(MessageModel)
+                        .where(
+                            MessageModel.agent_run_id.in_(elided_ids),
+                            MessageModel.role == MessageRole.USER.value,
+                        )
+                        .order_by(
+                            MessageModel.agent_run_id, MessageModel.sequence.asc()
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for order in (MessageModel.sequence.asc(), MessageModel.sequence.desc()):
                 messages.extend(
                     (
