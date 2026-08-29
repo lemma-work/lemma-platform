@@ -341,6 +341,16 @@ export function describeHarness(
     logo: string | undefined;
     /** The agent's version and model count — the two facts a reader can act on. */
     facts: string[];
+    /**
+     * The same two facts, apart, for a caller that wants only one of them.
+     *
+     * The models ledger wants the model count and not the version: the version
+     * string an agent publishes routinely carries its own name — "2.1.233
+     * (Claude Code)" — so printing it beside a row already titled Claude Code
+     * said the name twice and buried the one fact worth reading.
+     */
+    version: string | null;
+    modelCount: number;
     statusLabel: string;
     usable: boolean;
     /** What to say when the row cannot take work and the status alone won't explain it. */
@@ -355,6 +365,8 @@ export function describeHarness(
             harness.upstream_version ? `agent ${harness.upstream_version}` : null,
             modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
         ].filter((fact): fact is string => fact !== null),
+        version: harness.upstream_version ?? null,
+        modelCount,
         // Reachability decides first: a healthy agent on a sleeping laptop is
         // not "Ready", whatever the harness itself last reported.
         statusLabel: hostOnline ? health.label : 'Computer offline',

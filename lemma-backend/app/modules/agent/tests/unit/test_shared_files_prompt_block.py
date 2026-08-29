@@ -31,7 +31,11 @@ def test_transcribed_voice_note_is_not_offered_as_a_file_to_read():
     joined = "\n\n".join(blocks)
 
     assert "already transcribed" in joined
-    assert "do NOT call `listen`" in joined
+    # Says the call is pointless rather than forbidden. It used to read "do NOT
+    # call `listen`", which a model is free to ignore and sometimes did; the
+    # tool now answers from the stored transcript, so this is a fact about what
+    # would happen rather than a rule.
+    assert "returns this same text" in joined
     # The path is still named — the audio stays available — but never under the
     # "shared files" framing that reads as "go and open this".
     assert "/me/whatsapp/voice-1.ogg" in joined
@@ -46,7 +50,7 @@ def test_failed_transcription_leaves_the_audio_listed_for_listen():
     # to be reachable.
     assert "The user shared files" in joined
     assert "/me/whatsapp/voice-1.ogg" in joined
-    assert "do NOT call `listen`" not in joined
+    assert "returns this same text" not in joined
 
 
 def test_other_attachments_survive_alongside_a_voice_note():

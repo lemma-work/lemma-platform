@@ -1,5 +1,7 @@
 import { normalizeAgentToolName } from 'lemma-sdk';
 
+import { normalizeAppPageSlug } from '@/lib/utils/app-page-slugs';
+
 export type DisplayResourceType =
     | 'FILE'
     | 'TABLE'
@@ -357,8 +359,13 @@ export function buildDisplayResourceHref({
                 ? `${podBase}/flows/${encodeURIComponent(name)}`
                 : `${podBase}/flows`, conversationId);
         case 'APP':
+            // An agent names the app, not the page: `name` is the pod resource
+            // name ("Expense Tracker") and the app index addresses its page by
+            // the slug of that name. Linking the name verbatim pointed at a page
+            // no index entry has, which the workspace reports as "App
+            // unavailable" — the app it just built, missing on arrival.
             return appendAssistantConversation(name
-                ? `${podBase}/app/view?page=${encodeURIComponent(name)}`
+                ? `${podBase}/app/view?page=${encodeURIComponent(normalizeAppPageSlug(name))}`
                 : `${podBase}/app/pages`, conversationId);
         case 'SCHEDULE':
             // A schedule has no page of its own — it is a row on the pod's

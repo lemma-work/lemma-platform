@@ -16,6 +16,7 @@ from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
+from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.authorization.delegation import (
     WorkloadPrincipalType,
@@ -89,8 +90,8 @@ class PodMCPService:
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.debug(
-                "agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic",
+            logger.warning(
+                "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded",
                 exc_info=True,
             )
             return tool_call_error(tool_name, exc)
@@ -114,7 +115,19 @@ class PodMCPService:
                 anti_csrf_check=False,
                 session_required=True,
             )
+        except SuperTokensSessionError:
+            # The token is not valid: expected traffic, and the denial below is
+            # the whole answer.
+            return None
         except Exception:
+            # The auth backend could not answer. Same denial — a caller holding
+            # a good token must not be let through because SuperTokens is down —
+            # but this is an outage, not a bad token, and catching both as one
+            # made the two indistinguishable from outside.
+            logger.error(
+                "agent.pod_mcp_service.session_lookup.failed",
+                exc_info=True,
+            )
             return None
         if session is None:
             return None

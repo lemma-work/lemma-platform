@@ -9,6 +9,7 @@ from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreConflictError,
     DatastoreFileNotFoundError,
+    DatastoreTableNotFoundError,
 )
 from app.modules.datastore.domain.events import (
     DATASTORE_EVENTS_STREAM,
@@ -35,6 +36,12 @@ __all__ = [
     "DatastoreAccessDeniedError",
     "DatastoreConflictError",
     "DatastoreFileNotFoundError",
+    # Exported so a consumer asking "does this table exist" can catch the one
+    # error that means "no" instead of everything. `get_table` checks
+    # authorization *after* the lookup, so a broad catch there turns a denial
+    # into "absent" -- and the pod bundle applier answers that by creating a
+    # second table.
+    "DatastoreTableNotFoundError",
     "DatastoreFileUpdateEntity",
     "RecordFilter",
     "ColumnSchema",

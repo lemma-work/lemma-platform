@@ -32,6 +32,8 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -72,6 +74,14 @@ _MAX_COLUMNS = 40
 _BriefKey = tuple[UUID, UUID, UUID, bool]
 _brief_cache: RedisJsonCache | None = None
 
+logger = get_logger(__name__)
+# Read and written on every conversation's context assembly, so a Redis outage
+# would be one record per run for a condition that is uniform. This emits one
+# degraded/recovered pair per incident instead — the alternative, staying
+# silent, is how a cache that has been down for hours degrades every
+# conversation with nothing to show for it.
+_brief_cache_incident = DependencyIncident("agent_context_brief_cache", logger=logger)
+
 
 def _get_brief_cache() -> RedisJsonCache | None:
     global _brief_cache
@@ -96,10 +106,13 @@ async def _get_cached_brief(key: _BriefKey) -> str | None:
     if cache is None:
         return None
     try:
-        return await cache.get_raw(_cache_suffix(key))
-    except Exception:
+        cached = await cache.get_raw(_cache_suffix(key))
+    except Exception as exc:
         # Redis unavailable -> treat as a cache miss; never fail a run.
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
         return None
+    _brief_cache_incident.record_success()
+    return cached
 
 
 async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
@@ -108,9 +121,11 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
         return
     try:
         await cache.set_raw(_cache_suffix(key), brief)
-    except Exception:
+    except Exception as exc:
         # Redis unavailable -> skip caching; never fail a run.
-        pass
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
+        return
+    _brief_cache_incident.record_success()
 
 
 class AgentContextBriefBuilder:
@@ -218,10 +233,11 @@ class AgentContextBriefBuilder:
             )
             token = set_current_context(ctx)
             try:
-                tables, _ = await build_table_service(uow).list_tables(
+                tables, table_total = await build_table_service(uow).list_tables(
                     pod_id, ctx, limit=_MAX_TABLES
                 )
                 table_lines = [_table_line(table) for table in tables]
+                table_lines.extend(_more_note(len(tables), table_total, "tables"))
             finally:
                 reset_current_context(token)
         if table_lines:
@@ -230,7 +246,7 @@ class AgentContextBriefBuilder:
 
         # Agents (plain query).
         async with self.uow_factory() as uow:
-            agents, _ = await AgentRepository(uow).list_by_pod(
+            agents, agent_total = await AgentRepository(uow).list_by_pod(
                 pod_id=pod_id, limit=_MAX_RESOURCES
             )
         named = [a for a in agents if a.id != DEFAULT_POD_AGENT_ID]
@@ -240,12 +256,13 @@ class AgentContextBriefBuilder:
                 f"- {a.name}" + (f" — {a.description}" if a.description else "")
                 for a in named
             )
+            lines.extend(_more_note(len(agents), agent_total, "agents"))
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, _ = await create_function_repository(uow).list_by_pod(
-                pod_id, limit=_MAX_RESOURCES
-            )
+            functions, function_total = await create_function_repository(
+                uow
+            ).list_by_pod(pod_id, limit=_MAX_RESOURCES)
         if functions:
             lines.append("\n## Functions")
             lines.extend(
@@ -253,6 +270,7 @@ class AgentContextBriefBuilder:
                 + (f" — {f.description}" if f.description else "")
                 for f in functions
             )
+            lines.extend(_more_note(len(functions), function_total, "functions"))
 
         # Files — best-effort grounding, isolated in its own uow so the storage
         # walk never extends the spans above. (Removing the storage hold inside
@@ -274,8 +292,14 @@ class AgentContextBriefBuilder:
                 lines.append("\n## Files (top level)")
                 lines.extend(f"- {entry}" for entry in entries)
         except Exception:
-            # Files are best-effort context; never fail prompt assembly on them.
-            pass
+            # Files are best-effort context; never fail prompt assembly on them
+            # -- but say so. A silently missing "Files (top level)" section reads
+            # to the model as a pod with no files in it.
+            logger.warning(
+                "agent.context_brief.file_inventory_unavailable.degraded",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
         return lines
 
     async def _granted_resources(
@@ -340,9 +364,15 @@ class AgentContextBriefBuilder:
             "tool returns a permission error (403), or for an explicitly "
             "destructive action.",
         ]
-        for (resource_type, resource_id), perms in list(perms_by_ref.items())[
-            :_MAX_RESOURCES
-        ]:
+        granted = list(perms_by_ref.items())
+        # Truncating a section headed "These are pre-authorized for you" without
+        # saying so means the agent asks for approval it already has.
+        lines.extend(
+            _more_note(
+                min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"
+            )
+        )
+        for (resource_type, resource_id), perms in granted[:_MAX_RESOURCES]:
             try:
                 ref_type = ResourceType(resource_type)
             except ValueError:
@@ -358,12 +388,37 @@ class AgentContextBriefBuilder:
         return lines
 
 
+def _more_note(shown: int, total: object, noun: str) -> list[str]:
+    """One line saying what the cap left out, or nothing when it left nothing.
+
+    Every cap in this brief used to be silent, so a pod's 51st table simply did
+    not exist as far as the agent was concerned -- and an agent that believes a
+    table is absent does not go looking for it, it tells the user there isn't
+    one.
+    """
+    # A repository that does not count returns None rather than a total; that is
+    # "unknown", not "nothing more", and must not crash prompt assembly.
+    if not isinstance(total, int) or total <= shown:
+        return []
+    return [
+        f"- … and {total - shown} more {noun} not listed here "
+        f"(showing {shown}). Use your tools to list them all."
+    ]
+
+
 def _table_line(table) -> str:
+    shown = table.columns[:_MAX_COLUMNS]
     columns = ", ".join(
         f"{c.name}:{c.type.value if hasattr(c.type, 'value') else c.type}"
-        for c in table.columns[:_MAX_COLUMNS]
+        for c in shown
     )
-    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}"
+    # A column the agent cannot see is a column it will omit from a write and
+    # then be told is required, or will report to the user as not existing.
+    hidden = len(table.columns) - len(shown)
+    suffix = (
+        f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
+    )
+    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}{suffix}"
 
 
 def _top_level_file_entries(tree: object) -> list[str]:
@@ -379,4 +434,9 @@ def _top_level_file_entries(tree: object) -> list[str]:
             kind = child.get("kind") or child.get("type")
             if name:
                 entries.append(f"{name}" + (f" [{kind}]" if kind else ""))
+    if len(children) > _MAX_RESOURCES:
+        entries.append(
+            f"… and {len(children) - _MAX_RESOURCES} more top-level entries "
+            "not listed here"
+        )
     return entries

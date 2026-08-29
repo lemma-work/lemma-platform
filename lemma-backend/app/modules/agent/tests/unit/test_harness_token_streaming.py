@@ -78,8 +78,6 @@ async def _timed_events(model, *, monkeypatch) -> list[tuple[float, AgentEventTy
             history_summarization_enabled=False,
         ),
         agent_run_id=uuid4(),
-        malformed_tool_call_ids=set(),
-        emitted_tool_response_ids=set(),
         should_stop=None,
     ):
         timeline.append((loop.time() - started, event.type))

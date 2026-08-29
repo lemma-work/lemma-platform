@@ -74,11 +74,11 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         # reads the same as one the run started with -- sender label, quoted
         # message, the paths of whatever they attached.
         from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
-            _user_prompt_text,
+            user_prompt_text,
         )
 
         for message in messages:
-            ctx.enqueue(_user_prompt_text(message))
+            ctx.enqueue(user_prompt_text(message))
         logger.info(
             "agent.pending_user_messages.steered_into_run.observed",
             agent_run_id=self._agent_run_id,

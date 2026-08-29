@@ -25,6 +25,7 @@ import {
     projectConversationMetadata,
     type ProjectSelection,
 } from '@/lib/assistant/project-selection';
+import { normalizeAppPageSlug } from '@/lib/utils/app-page-slugs';
 
 interface ConversationScope {
     podId?: string | null;
@@ -472,7 +473,9 @@ export function AIAssistantProvider({
             function: `/pod/${podId}/functions/${encodedResourceId}`,
             flow: `/pod/${podId}/flows/${encodedResourceId}`,
             datastore: `/pod/${podId}/data?datastore=${encodedResourceId}`,
-            app_page: `/pod/${podId}/app/view?page=${encodeURIComponent(resourceId)}`,
+            // The app index addresses a page by the slug of the app's name, so
+            // the resource name is slugged rather than linked verbatim.
+            app_page: `/pod/${podId}/app/view?page=${encodeURIComponent(normalizeAppPageSlug(resourceId))}`,
             table: `/pod/${podId}/data?datastore=${encodeURIComponent(a)}&tab=${encodeURIComponent(b)}`,
         };
 

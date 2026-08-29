@@ -15,19 +15,32 @@ from app.modules.agent.tools.feedback.models import (
 from app.modules.agent.tools.web.web import (
     web_search_internal,
 )
-from app.core.authorization.delegation import WorkloadPrincipalType
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_ID,
+    WorkloadPrincipalType,
+)
 from app.core.web_search.web_search import WebSearchRequest, WebSearchResponse
 
 router = APIRouter(prefix="/tools", tags=["agent-tools"])
 
 
 def _delegated_agent_id(request: Request) -> UUID | None:
+    """The agent this call is delegated for, when it is a real one.
+
+    ``DEFAULT_POD_AGENT_ID`` is a sentinel for "the pod's default agent" and has
+    no row in ``agents``, so storing it violated
+    ``agent_feedback_agent_id_fkey`` and turned reporting feedback from a
+    default-agent conversation into a 500. ``agent_id`` is nullable for exactly
+    this case: no specific agent to attribute it to.
+    """
     claims = getattr(request.state, "delegation_claims", None)
     if not claims:
         return None
-    if claims.actor_type == WorkloadPrincipalType.AGENT:
-        return claims.actor_id
-    return None
+    if claims.actor_type != WorkloadPrincipalType.AGENT:
+        return None
+    if claims.actor_id == DEFAULT_POD_AGENT_ID:
+        return None
+    return claims.actor_id
 
 
 @router.post(

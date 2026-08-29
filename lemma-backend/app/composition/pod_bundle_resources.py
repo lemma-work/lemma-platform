@@ -77,6 +77,10 @@ async def sync_agent_memory_grant(*args, **kwargs):
     step: an inline grant list *replaces* every grant the agent holds, so a
     derived one applied first is the first thing wiped. That is the ordering the
     agent controller documents on its own two call sites.
+
+    The applier's *pre*-replace call is gone: `AgentService.create_agent` now
+    derives it for every caller, so only the re-derivation is the applier's own
+    business.
     """
     from app.modules.agent.services.agent_memory_grant import (
         sync_memory_folder_grant as factory,

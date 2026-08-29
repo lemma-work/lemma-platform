@@ -10,3 +10,14 @@ class StaleAgentRunRef:
 
     id: UUID
     conversation_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ResumableAgentRunRef:
+    """A parked run, plus what enqueueing it again requires."""
+
+    id: UUID
+    conversation_id: UUID
+    user_id: UUID
+    pod_id: UUID
+    resume_attempts: int

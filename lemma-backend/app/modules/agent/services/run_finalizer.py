@@ -122,6 +122,29 @@ class RunFinalizer:
         self.uow_factory = uow_factory
         self.usage_recorder = usage_recorder
 
+    async def interrupt(self, *, run: RunIdentity) -> bool:
+        """Park a run for another worker to pick up. Announces nothing.
+
+        `finish` declares that a run ended: a lifecycle event and an SSE
+        `completed` frame, which unblocks anything waiting and tells the person
+        the work stopped. An interrupted run has not ended -- the worker went
+        away and the work is being handed on -- so saying so would be false, and
+        the conversation deliberately stays RUNNING.
+
+        The usage reservation is released because the run that resumes this work
+        takes its own; holding both would double-count the same conversation.
+        """
+        async with self.uow_factory() as uow:
+            result = await ConversationRepository(uow).finish_agent_run(
+                agent_run_id=run.agent_run_id,
+                status=AgentRunStatus.INTERRUPTED,
+                conversation_status=ConversationStatus.RUNNING,
+            )
+        if result is None or not result.updated:
+            return False
+        await self.usage_recorder.release(run.usage_reservation)
+        return True
+
     async def finish(
         self,
         *,
@@ -192,9 +215,14 @@ class RunFinalizer:
             try:
                 await self.usage_recorder.release(run.usage_reservation)
             except Exception:
-                logger.debug(
-                    "agent.agent_runner_service.release_usage_reservation_run_s.diagnostic",
+                # A reservation that is never released permanently overstates
+                # usage against the customer's quota, and nothing self-heals it.
+                # The finalization error is re-raised below regardless; this is
+                # its own failure and needs its own record.
+                logger.error(
+                    "agent.run_finalizer.usage_reservation_release.failed",
                     agent_run_id=run.agent_run_id,
+                    exc_info=True,
                 )
             raise
 

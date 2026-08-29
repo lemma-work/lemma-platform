@@ -59,8 +59,8 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
         def __init__(self, model, system_prompt=None):
             pass
 
-        async def run(self, prompt, *, usage_limits=None):
-            del usage_limits
+        async def run(self, prompt, *, usage_limits=None, model_settings=None):
+            del usage_limits, model_settings
             return SimpleNamespace(output=output)
 
     async def _noop_reserve(*, organization_id, user_id, runtime_profile):

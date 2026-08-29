@@ -389,12 +389,25 @@ class ModelRequestStreamer:
                         continue
                     tool_output = result_part.content
                     if isinstance(tool_output, BinaryContent):
+                        # Images are not carried into later runs -- only this
+                        # stub is persisted. Say so in words the model reads,
+                        # rather than leaving it to infer from a shape: a bare
+                        # `{"type": "binary_content"}` beside a successful
+                        # result reads as "you have seen this", and the model
+                        # then answers questions about a picture it can no
+                        # longer see.
                         tool_output = {
                             "type": "binary_content",
                             "media_type": tool_output.media_type,
                             "size_bytes": len(tool_output.data)
                             if tool_output.data
                             else 0,
+                            "note": (
+                                "An image was shown to you here when this tool "
+                                "ran. It is not carried into later turns, so it "
+                                "is no longer in your context -- open it again "
+                                "if you need to look at it."
+                            ),
                         }
                     elif hasattr(tool_output, "model_dump"):
                         tool_output = to_json_value(tool_output)
@@ -421,15 +434,24 @@ class ModelRequestStreamer:
     async def stop_requested(self) -> bool:
         """Whether the user has asked this run to stop.
 
-        Swallows a failing checker on purpose: the checker is a database read,
-        and a run that cannot be asked whether to stop should keep going rather
-        than stop for a reason nobody chose.
+        Keeps going when the checker fails, on purpose: the checker is a
+        database read, and a run that cannot be asked whether to stop should
+        keep going rather than stop for a reason nobody chose.
+
+        What is *not* on purpose is doing that silently. A checker that fails
+        every time means the stop button does nothing, and the failure it is
+        answering "no" from is exactly the thing an operator needs to see.
         """
         if self.should_stop is None:
             return False
         try:
             return await self.should_stop()
         except Exception:
+            logger.error(
+                "agent.pydantic_ai_streaming.stop_check.failed",
+                agent_run_id=str(self.agent_run_id),
+                exc_info=True,
+            )
             return False
 
     def stopped_event(self) -> AgentEvent:

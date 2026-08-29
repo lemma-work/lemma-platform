@@ -15,6 +15,7 @@ import {
     Search,
     Share2,
     Upload,
+    UserPlus,
     X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -24,6 +25,7 @@ import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { Logo } from '@/components/brand/logo';
 import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
+import { AddPeopleDialog } from '@/components/members/add-people-dialog';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
@@ -46,6 +48,7 @@ import { cn } from '@/lib/utils';
 import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
 import { useAppPages } from '@/lib/hooks/use-app';
 import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
+import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
 import {
     tableQueryOptions,
     tableRecordsQueryOptions,
@@ -55,7 +58,7 @@ import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import { identityHueClass } from '@/lib/utils/resource-icon-value';
-import { LEM_SEED } from '@/lib/identity/seeded-identity';
+import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 import {
     filterSidebarConversations,
     getConversationMark,
@@ -228,6 +231,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const [assistantCreationKind, setAssistantCreationKind] = useState<AssistantCreationKind | null>(null);
     const [assistantCreationPrompt, setAssistantCreationPrompt] = useState('');
     const [bundleShareOpen, setBundleShareOpen] = useState(false);
+    const [addPeopleOpen, setAddPeopleOpen] = useState(false);
     const [bundleImportOpen, setBundleImportOpen] = useState(false);
     const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const [conversationFilter, setConversationFilter] = useState('');
@@ -266,6 +270,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canCreateWorkflows = podAccess.can('workflow.create');
     const canCreateTables = podAccess.can('datastore.table.create');
     const canUpdatePod = podAccess.can('pod.update');
+    const canAddPeople = podAccess.can('pod.member.manage');
     const basePath = `/pod/${podId}`;
     const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
@@ -423,7 +428,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     // the `page` query, not the pathname — the only row in this sidebar that
     // needs the search string to know where you are.
     const viewingAppSlug = pathname === `${basePath}/app/view`
-        ? searchParams.get('page')
+        ? appPageSlugFromRouteParam(searchParams.get('page'))
         : null;
 
     const pods = podsData?.items || [];
@@ -655,6 +660,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             router={router}
                             side="bottom"
                             onShare={() => setBundleShareOpen(true)}
+                            onAddPeople={canAddPeople ? () => setAddPeopleOpen(true) : undefined}
                         />
                     </DropdownMenu.Root>
                 </div>
@@ -898,7 +904,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                     title={displayName}
                                     className={cn(
                                         'lemma-sidebar-row workspace-sidebar-resource-row custom-focus-ring',
-                                        identityHueClass(agent.icon_url, agent.name),
+                                        identityHueClass(agent.icon_url, agentIdentitySeed(agent)),
                                     )}
                                 >
                                     <ResourceIcon
@@ -906,7 +912,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         alt={`${displayName} icon`}
                                         label={displayName}
                                         identityKind="being"
-                                        identitySeed={agent.name}
+                                        identitySeed={agentIdentitySeed(agent)}
                                         identitySize={32}
                                         className="workspace-sidebar-resource-icon h-8 w-8 shrink-0 rounded-md"
                                     />
@@ -1008,6 +1014,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 onOpenChange={setBundleShareOpen}
                 canPublish={canUpdatePod}
             />
+            {canAddPeople ? (
+                <AddPeopleDialog podId={podId} open={addPeopleOpen} onOpenChange={setAddPeopleOpen} />
+            ) : null}
             {canUpdatePod ? (
                 <ImportDialog
                     podId={podId}
@@ -1374,6 +1383,8 @@ type PodSwitcherMenuProps = {
     router: ReturnType<typeof useRouter>;
     side: 'top' | 'bottom';
     onShare: () => void;
+    /** Absent when this member cannot manage the roster. */
+    onAddPeople?: () => void;
 };
 
 function PodSwitcherMenu(props: PodSwitcherMenuProps) {
@@ -1397,6 +1408,7 @@ function PodSwitcherPanel({
     router,
     side,
     onShare,
+    onAddPeople,
 }: PodSwitcherMenuProps) {
     const [podFilter, setPodFilter] = useState('');
     const contentRef = useRef<HTMLDivElement>(null);
@@ -1439,6 +1451,15 @@ function PodSwitcherPanel({
                 setPodFilter((current) => current + event.key);
             }}
         >
+            {onAddPeople ? (
+                <DropdownMenu.Item
+                    onSelect={onAddPeople}
+                    className="lemma-menu-row shrink-0"
+                >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Add people
+                </DropdownMenu.Item>
+            ) : null}
             <DropdownMenu.Item
                 onSelect={onShare}
                 className="lemma-menu-row shrink-0"

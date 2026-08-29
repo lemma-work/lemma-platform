@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-__all__ = ["capability", "covers", "journey", "proves", "scenario"]
+__all__ = ["capability", "covers", "journey", "proves", "scenario", "stack_lane"]
 
 
 def journey(title: str):
@@ -62,3 +62,26 @@ def covers(*contract_names: str):
     second list that could itself drift.
     """
     return pytest.mark.covers(*contract_names)
+
+
+def stack_lane(why: str):
+    """This scenario needs a deployment configured to be *broken* a certain way.
+
+    Three of these, and they are not second-class: a converter that is not
+    installed, a search provider that is not configured, an organization capped
+    at zero spend. Each is a real promise about how the product behaves when
+    something it depends on is missing, and each one runs and proves that
+    promise in the fast lane, where `harness/stack.py` boots exactly that
+    deployment on purpose.
+
+    What they cannot do is run against somebody else's Lemma, because a healthy
+    deployment is by definition not in the state under test — and nobody is going
+    to break dev so a scenario can watch. Before this mark they reported as
+    skips there, which put three permanent entries on a skip list people are
+    meant to read. A skip is supposed to mean "this could have run and did not".
+
+    So they are deselected rather than skipped when the suite did not boot the
+    target. `why` is for the reader of the source, not for a report: nothing is
+    reported, which is the point.
+    """
+    return pytest.mark.stack_lane(why)

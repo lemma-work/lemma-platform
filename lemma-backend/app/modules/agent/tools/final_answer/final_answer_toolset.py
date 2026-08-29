@@ -209,7 +209,9 @@ def _is_validatable_schema(schema: JsonObject | None) -> bool:
     except SchemaError:
         # A stored schema we cannot compile means we cannot validate against it —
         # which is a reason to skip validation, never to fail the run.
-        logger.debug("agent.final_answer.unusable_output_schema.diagnostic")
+        logger.warning(
+            "agent.final_answer.unusable_output_schema.degraded", exc_info=True
+        )
         return False
     return True
 
@@ -252,7 +254,7 @@ async def _persist(
         # See docstring: losing the authoritative copy is survivable (the event
         # stream still carries the answer); turning a good final answer into a
         # tool error is not.
-        logger.debug("agent.final_answer.persist_failed.diagnostic", exc_info=True)
+        logger.warning("agent.final_answer.persist_failed.degraded", exc_info=True)
 
 
 __all__ = [

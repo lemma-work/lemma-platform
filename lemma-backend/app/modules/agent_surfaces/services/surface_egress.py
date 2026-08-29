@@ -51,6 +51,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_display_resource_render_plan,
     render_questions_as_text,
 )
+from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.services.surface_egress_target import (
@@ -317,9 +318,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         try:
             request = AskUserRequest.model_validate(raw_request)
         except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic",
+            # Stored tool_args that will not validate is a bug in whatever wrote
+            # them, not a transient — and the question is dropped here.
+            logger.warning(
+                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return False
         if not request.questions:
@@ -345,9 +349,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 ):
                     return True
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic",
+                # Degraded, not failed: the text fallback below still delivers
+                # the question. But a persistently broken platform adapter was
+                # indistinguishable from a routine fallback.
+                logger.warning(
+                    "agent_surfaces.ingress_service.surface_ask_user_native_render.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
             # Fallback: a well-formatted text message; the user replies in chat and the
             # typed-reply path in start_agent_chat resumes the run with their answer.
@@ -362,9 +370,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     metadata=metadata,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic",
+                # The comment above says "surface it loudly"; this used to be a
+                # debug record that production never emitted. The question has
+                # now reached nobody and the run sits WAITING forever.
+                logger.error(
+                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.failed",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
                 return False
             return True
@@ -442,9 +454,11 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 ):
                     return True
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic",
+                # The text fallback below still delivers the approval.
+                logger.warning(
+                    "agent_surfaces.ingress_service.surface_request_approval_native_render.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
             # Fallback: a text prompt; the user replies "approve"/"deny" and the
             # typed-reply path resumes the run with their decision.
@@ -456,9 +470,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     metadata=metadata,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic",
+                # The docstring above promises this is "reported rather than
+                # swallowed"; at debug it was neither. The run is now stuck on
+                # an approval nobody saw.
+                logger.error(
+                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.failed",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
                 return False
             return True
@@ -496,7 +514,10 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         entity, content = loaded
 
-        mime = entity.mime_type or "audio/ogg"
+        # `or` was not enough: a file stored without an extension is typed
+        # `application/octet-stream`, which is truthy, so the fallback never
+        # fired and Telegram was handed a blob where sendVoice wants OGG.
+        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:

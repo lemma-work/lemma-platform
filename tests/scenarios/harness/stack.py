@@ -1092,8 +1092,29 @@ def start_stack():
                     "-m",
                     "uvicorn",
                     "app.app:app",
+                    # 0.0.0.0, not 127.0.0.1, and this is the whole reason the
+                    # sandbox lane failed every night in CI while passing on
+                    # every developer's machine.
+                    #
+                    # A sandbox is a container and the backend it calls back to
+                    # is this process, reached as `host.docker.internal` --
+                    # which the stack asks Docker to map with
+                    # WORKSPACE_ADD_HOST_GATEWAY above. On Linux that maps to
+                    # the bridge gateway, 172.17.0.1, and a server bound to
+                    # loopback is not listening there: every function got
+                    # `ConnectError: All connection attempts failed` while its
+                    # container sat up, healthy, with its port published. On
+                    # Docker Desktop the same name is proxied to the host's
+                    # loopback, so the bind was invisibly fine locally.
+                    #
+                    # `base_url` below stays on 127.0.0.1: the suite is the
+                    # client on this machine, and only the containers need the
+                    # wider bind. Matches `backend_server` in
+                    # app/modules/test_support/e2e/runtime.py, which binds
+                    # 0.0.0.0 for exactly this reason and whose sandbox shard
+                    # has been green throughout.
                     "--host",
-                    "127.0.0.1",
+                    "0.0.0.0",
                     "--port",
                     str(port),
                     "--log-level",

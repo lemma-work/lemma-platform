@@ -15,6 +15,7 @@ from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
+from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -79,7 +80,19 @@ class ConversationMCPService:
                 anti_csrf_check=False,
                 session_required=True,
             )
+        except SuperTokensSessionError:
+            # The token is not valid: expected traffic, and the denial below is
+            # the whole answer.
+            return False
         except Exception:
+            # The auth backend could not answer. Same denial — a caller holding
+            # a good token must not be let through because SuperTokens is down —
+            # but this is an outage, not a bad token, and catching both as one
+            # made the two indistinguishable from outside.
+            logger.error(
+                "agent.conversation_mcp_service.session_lookup.failed",
+                exc_info=True,
+            )
             return False
         if session is None:
             return False
@@ -216,8 +229,8 @@ class ConversationMCPService:
             # model recovers and continues the turn, instead of the unknown-tool /
             # validation / execution exception surfacing as a protocol/HTTP error
             # that aborts the run.
-            logger.debug(
-                "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic",
+            logger.warning(
+                "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.degraded",
                 exc_info=True,
             )
             error = tool_call_error(tool_name, exc)
@@ -372,8 +385,8 @@ class ConversationMCPService:
             # with -- an archived or deleted profile, a missing repository, a
             # database that will not answer. Anything else is a bug and should
             # surface as one rather than be absorbed into a silent fallback.
-            logger.debug(
-                "agent.conversation_mcp.runtime_resolve_failed.diagnostic",
+            logger.warning(
+                "agent.conversation_mcp.runtime_resolve_failed.degraded",
                 exc_info=True,
             )
             return stored
