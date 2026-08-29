@@ -17,6 +17,8 @@ ratchet's size limit.
 
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -205,8 +207,65 @@ def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
         )
     )
     if include_final:
-        collapsed.append(final)
+        collapsed.append(_replayable_final(run, messages, final))
     return collapsed
+
+
+def _replayable_final(
+    run: AgentRun, messages: list[Message], final: Message
+) -> Message:
+    """The run's last message, in a form the history builder can actually replay.
+
+    A pausing run ends on the tool return carrying what the person typed in
+    answer to `ask_user`, and that answer lives *only* there -- no user message
+    is written for it. Its matching call sits in the middle of the run, which is
+    exactly what elision drops, and `_to_pydantic_ai_messages` discards a tool
+    return whose call is missing as an orphan.
+
+    So the answer disappeared once the run was six turns back, replaced by
+    "worked through N intermediate messages". Carried as a note instead: no
+    orphan for the builder to drop, no second query, and the words survive.
+    """
+    if final.kind is not MessageKind.TOOL_RETURN:
+        return final
+    call_ids = {
+        message.tool_call_id
+        for message in messages
+        if message.kind is MessageKind.TOOL_CALL
+    }
+    if final.tool_call_id in call_ids:
+        return final
+    return Message(
+        conversation_id=run.conversation_id,
+        sequence=final.sequence,
+        agent_run_id=run.id,
+        role=MessageRole.SYSTEM.value,
+        kind=MessageKind.NOTIFICATION,
+        text=(
+            f"That run ended with the result of {final.tool_name or 'a tool'}: "
+            f"{_short_result(final)}"
+        ),
+        metadata={
+            "synthetic": True,
+            "summary_kind": "elided_run_final_tool_return",
+            "tool_name": final.tool_name,
+        },
+    )
+
+
+#: Long enough for an answer to a question, short enough not to reopen the
+#: budget elision exists to protect.
+_FINAL_RESULT_MAX_CHARS = 2_000
+
+
+def _short_result(message: Message) -> str:
+    try:
+        rendered = json.dumps(message.tool_result, default=str)
+    except TypeError, ValueError:  # pragma: no cover - defensive
+        rendered = str(message.tool_result)
+    if len(rendered) <= _FINAL_RESULT_MAX_CHARS:
+        return rendered
+    return rendered[:_FINAL_RESULT_MAX_CHARS] + " … [truncated]"
 
 
 def _is_unpaired_tool_call(message: Message) -> bool:

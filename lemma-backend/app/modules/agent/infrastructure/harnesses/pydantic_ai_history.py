@@ -66,12 +66,22 @@ def history_and_prompt(
         user_prompt = user_prompt_text(ordered[-1])
         history_messages = ordered[:-1]
 
-    return _to_pydantic_ai_messages(history_messages, protocol), user_prompt
+    # The trailing user turn is carried as the prompt rather than in history,
+    # so the builder cannot see it -- and it is exactly what tells an unanswered
+    # question apart from one still being asked.
+    return (
+        _to_pydantic_ai_messages(
+            history_messages, protocol, user_turn_follows=user_prompt is not None
+        ),
+        user_prompt,
+    )
 
 
 def _to_pydantic_ai_messages(
     messages: Iterable[object],
     protocol: str | None = None,
+    *,
+    user_turn_follows: bool = False,
 ) -> list[ModelMessage]:
     items = list(messages)
     converted: list[ModelMessage] = []
@@ -129,7 +139,12 @@ def _to_pydantic_ai_messages(
                     request_message,
                     next_index,
                     consumed_indexes,
-                ) = _build_tool_batch(items, index, consumed_tool_return_indexes)
+                ) = _build_tool_batch(
+                    items,
+                    index,
+                    consumed_tool_return_indexes,
+                    user_turn_follows=user_turn_follows,
+                )
                 if response_message is not None:
                     response_message.parts = [
                         *pending.take(),
@@ -209,10 +224,27 @@ def _match_tool_returns(
     return matched
 
 
+def _user_moved_on(messages: list[object], after_index: int) -> bool:
+    """Whether the person sent something new instead of answering.
+
+    An unmatched `ask_user` normally means the conversation is still waiting on
+    a human, and telling the model its question failed while the person is
+    still being asked it would be a lie. But a user message *after* the
+    question means they did not answer it -- they said something else, and that
+    is the turn being responded to.
+    """
+    return any(
+        getattr(message, "role", None) is MessageRole.USER
+        for message in messages[after_index:]
+    )
+
+
 def _build_tool_batch(
     messages: list[object],
     start_index: int,
     consumed_tool_return_indexes: set[int],
+    *,
+    user_turn_follows: bool = False,
 ) -> tuple[ModelResponse | None, ModelRequest | None, int, set[int]]:
     call_entries, index = _collect_tool_calls(messages, start_index)
     matched_returns = _match_tool_returns(messages, index, consumed_tool_return_indexes)
@@ -243,16 +275,28 @@ def _build_tool_batch(
         synthetic_error: str | None = None
         if matched is None:
             if getattr(msg, "tool_name", None) in PAUSING_TOOL_NAMES:
-                logger.debug(
-                    "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
-                    tool_call_id=msg.tool_call_id,
+                if not (user_turn_follows or _user_moved_on(messages, index)):
+                    logger.debug(
+                        "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
+                        tool_call_id=msg.tool_call_id,
+                    )
+                    continue
+                # They were asked and said something else. Dropping the call
+                # here leaves no record of having asked, so the model asks the
+                # same question again instead of reading what they actually
+                # sent.
+                synthetic_error = (
+                    "The user did not answer this. They sent a new message "
+                    "instead, which is the turn you are responding to now. "
+                    "Read it and carry on; ask again only if you still cannot "
+                    "proceed without an answer."
                 )
-                continue
-            synthetic_error = (
-                "This tool call was interrupted before a result was recorded, "
-                "so it returned nothing. Run it again if you still need the "
-                "result."
-            )
+            else:
+                synthetic_error = (
+                    "This tool call was interrupted before a result was "
+                    "recorded, so it returned nothing. Run it again if you "
+                    "still need the result."
+                )
         elif parsed_args is None:
             synthetic_error = (
                 "The arguments recorded for this call could not be parsed, so "

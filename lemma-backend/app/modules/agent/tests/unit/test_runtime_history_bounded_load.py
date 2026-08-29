@@ -444,3 +444,63 @@ class TestTheUsersOwnMessagesAreNeverElided:
 
         for_run = [m for m in selected if m.agent_run_id == oldest_id]
         assert for_run[-1].text == "run 0 message 8"
+
+
+class TestAPausingRunsAnswerSurvivesElision:
+    """What the person typed in answer to `ask_user` lives only in a tool return.
+
+    No user message is written for it. Its matching call sits in the middle of
+    the run, which is what elision drops -- and a tool return whose call is
+    missing is discarded by the history builder as an orphan. So the answer
+    disappeared once the run was six turns back, replaced by "worked through N
+    intermediate messages".
+    """
+
+    def _conversation_ending_on_an_answer(self) -> list[AgentRun]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        oldest = runs[0]
+        oldest.messages[-1] = oldest.messages[-1].model_copy(
+            update={
+                "role": MessageRole.TOOL,
+                "kind": MessageKind.TOOL_RETURN,
+                "tool_name": "ask_user",
+                "tool_call_id": "q1",
+                "tool_result": {"answer": "ship it on the 14th"},
+                "text": None,
+            }
+        )
+        return runs
+
+    def test_the_answer_is_still_there(self) -> None:
+        runs = self._conversation_ending_on_an_answer()
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert any("ship it on the 14th" in (m.text or "") for m in selected)
+
+    def test_it_is_not_left_as_an_orphan_tool_return(self) -> None:
+        """An orphan is dropped by the builder, so carrying it as one loses it
+        just as surely as eliding it did."""
+        runs = self._conversation_ending_on_an_answer()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert all(m.kind is not MessageKind.TOOL_RETURN for m in for_run)
+
+    def test_a_run_ending_on_ordinary_text_is_untouched(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == runs[0].id]
+        assert for_run[-1].text == "run 0 message 8"

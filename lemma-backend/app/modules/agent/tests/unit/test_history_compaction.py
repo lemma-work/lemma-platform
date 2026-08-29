@@ -159,7 +159,14 @@ def test_the_ceiling_guard_is_wired_after_the_summarizer() -> None:
         HarnessOptions(model_name="glm-4.6"), summarization_model="openai:gpt-4.1"
     )
 
-    assert processors[-1].__name__ == "_ceiling_guard"
+    # Compaction first, the ceiling backstop after it, and the provider shape
+    # guarantee last so it sees whatever those produced.
+    names = [
+        getattr(processor, "__name__", type(processor).__name__)
+        for processor in processors
+    ]
+    assert names.index("_ceiling_guard") > names.index("HistoryCompactor")
+    assert names[-1] == "_ensure_leading_user_message"
 
 
 @pytest.mark.asyncio
@@ -180,7 +187,7 @@ async def test_the_guard_trims_when_summarization_returned_oversized_history() -
         ),
         summarization_model="openai:gpt-4.1",
     )
-    guard = processors[-1]
+    guard = processors[-2]
 
     oversized = [_text("filler " * 400) for _ in range(30)]
     result = await guard(oversized)
@@ -313,3 +320,54 @@ def test_a_known_size_does_not_change_what_the_guard_decides() -> None:
     assert enforce_token_ceiling(messages, ceiling=5_000) == enforce_token_ceiling(
         messages, ceiling=5_000, known_size=measured
     )
+
+
+class TestTheHistoryOpensWithSomethingProvidersAccept:
+    """Anthropic requires the first message to be a user turn.
+
+    Trimming and compaction both cut at a point that is safe for tool pairing,
+    which says nothing about role -- so the backstop that exists to prevent a
+    provider rejection could cause one.
+    """
+
+    def _guard(self):
+        from app.modules.agent.domain.value_objects import HarnessOptions
+        from app.modules.agent.infrastructure.harnesses.history import (
+            build_history_processors,
+        )
+
+        processors = build_history_processors(
+            HarnessOptions(model_name="claude-sonnet-4"),
+            summarization_model="openai:gpt-4.1",
+        )
+        return processors[-1]
+
+    @pytest.mark.asyncio
+    async def test_a_history_starting_with_an_assistant_turn_is_fixed(self) -> None:
+        history = [*_tool_exchange("c1", "out")]
+
+        result = await self._guard()(history)
+
+        assert isinstance(result[0], ModelRequest)
+
+    @pytest.mark.asyncio
+    async def test_a_history_already_starting_with_a_user_turn_is_untouched(
+        self,
+    ) -> None:
+        history = [_text("go"), *_tool_exchange("c1", "out")]
+
+        result = await self._guard()(history)
+
+        assert result == history
+
+    @pytest.mark.asyncio
+    async def test_an_empty_history_is_left_alone(self) -> None:
+        assert await self._guard()([]) == []
+
+    @pytest.mark.asyncio
+    async def test_the_tool_pair_is_not_disturbed(self) -> None:
+        history = [*_tool_exchange("c1", "out")]
+
+        result = await self._guard()(history)
+
+        assert result[1:] == history

@@ -209,6 +209,33 @@ def build_history_processors(
             )
         )
 
+    async def _ensure_leading_user_message(
+        messages: Sequence[object],
+    ) -> list[object]:
+        """Guarantee the history opens with something a provider will accept.
+
+        Anthropic requires the first message to be a user turn. Trimming and
+        compaction both cut at a safe point for tool pairing, which says nothing
+        about role -- so the backstop that exists to prevent a provider
+        rejection could produce one. Pinned user turns usually sit at the front
+        already; this covers the case where none survived.
+        """
+        working = list(messages)
+        if not working or type(working[0]).__name__ != "ModelResponse":
+            return working
+        from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+        return [
+            ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        content=("[earlier turns of this conversation are not shown]")
+                    )
+                ]
+            ),
+            *working,
+        ]
+
     if ceiling > 0:
         # Runs last, so it also catches the case the summarizer cannot: it
         # swallows its own failures and returns the ORIGINAL history with
@@ -235,4 +262,6 @@ def build_history_processors(
 
         processors.append(_ceiling_guard)
 
+    # Last, so it sees whatever the stages above produced.
+    processors.append(_ensure_leading_user_message)
     return processors

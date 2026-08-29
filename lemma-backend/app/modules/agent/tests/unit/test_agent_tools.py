@@ -1837,9 +1837,17 @@ def test_history_processors_compact_then_enforce_a_hard_ceiling():
         summarization_model="openai:gpt-4.1",
     )
 
-    # Three: detach stale images, compact, then the ceiling backstop.
-    assert len(processors) == 3
-    assert processors[0].__name__ == "_detach_stale_images"
+    # Detach stale images, compact, the ceiling backstop, then the provider
+    # shape guarantee.
+    assert [
+        getattr(processor, "__name__", type(processor).__name__)
+        for processor in processors
+    ] == [
+        "_detach_stale_images",
+        "HistoryCompactor",
+        "_ceiling_guard",
+        "_ensure_leading_user_message",
+    ]
     compactor = processors[1]
     # Thresholds come from what the run's model affords
     # (services/context_budget), so assert against the resolved default rather
@@ -1852,7 +1860,6 @@ def test_history_processors_compact_then_enforce_a_hard_ceiling():
     # it with one argument when that annotation is anything else. Without the
     # context the summarization call is unbilled -- which is what it was.
     assert takes_run_context(compactor)
-    assert processors[-1].__name__ == "_ceiling_guard"
 
 
 def test_disabling_summarization_keeps_the_ceiling_guard():
@@ -1868,6 +1875,7 @@ def test_disabling_summarization_keeps_the_ceiling_guard():
     assert [processor.__name__ for processor in processors] == [
         "_detach_stale_images",
         "_ceiling_guard",
+        "_ensure_leading_user_message",
     ]
 
 
@@ -1885,7 +1893,10 @@ def test_compaction_can_be_disabled_but_image_detachment_always_runs():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert [processor.__name__ for processor in processors] == ["_detach_stale_images"]
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ensure_leading_user_message",
+    ]
 
 
 def test_conversation_instructions_are_appended_to_agent_prompt():
