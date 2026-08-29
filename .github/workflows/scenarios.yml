@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           # This workflow had no uv caching anywhere, so every one of its jobs
           # resolved and downloaded from scratch -- including the two gate jobs
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Scenario coverage gates
@@ -126,7 +126,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           # This workflow had no uv caching anywhere, so every one of its jobs
           # resolved and downloaded from scratch -- including the two gate jobs
@@ -135,7 +135,7 @@ jobs:
           cache-dependency-glob: |
             tests/scenarios/uv.lock
             lemma-backend/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
       # The suite boots the backend with the backend's own interpreter, so its
@@ -155,7 +155,7 @@ jobs:
       # waited for, and the reason it never happened is in the worker's log.
       - name: Keep the stack log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
           path: /tmp/lemma-scenarios-*.log
@@ -167,7 +167,7 @@ jobs:
       # the reporting plugin being involved.
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scenarios-${{ strategy.job-index }}
           path: tests/scenarios/results.xml
@@ -191,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           # This workflow had no uv caching anywhere, so every one of its jobs
           # resolved and downloaded from scratch -- including the two gate jobs
@@ -200,7 +200,7 @@ jobs:
           cache-dependency-glob: |
             tests/scenarios/uv.lock
             lemma-backend/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
       - name: Sync backend
@@ -235,7 +235,7 @@ jobs:
       # waited for, and the reason it never happened is in the worker's log.
       - name: Keep the stack log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
           path: /tmp/lemma-scenarios-*.log
@@ -244,7 +244,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scenarios-sandbox
           path: tests/scenarios/sandbox-results.xml
@@ -267,7 +267,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           # This workflow had no uv caching anywhere, so every one of its jobs
           # resolved and downloaded from scratch -- including the two gate jobs
@@ -276,10 +276,10 @@ jobs:
           cache-dependency-glob: |
             tests/scenarios/uv.lock
             lemma-backend/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -308,7 +308,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scenarios-clients
           path: tests/scenarios/clients-results.xml
@@ -319,7 +319,7 @@ jobs:
       # waited for, and the reason it never happened is in the worker's log.
       - name: Keep the stack log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
           path: /tmp/lemma-scenarios-*.log
@@ -388,7 +388,7 @@ jobs:
         if: >-
           steps.report.outputs.written == 'true' &&
           github.event_name == 'pull_request'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
