@@ -55,14 +55,6 @@ export interface UseAssistantSessionOptions {
 
 export interface CreateConversationInput {
   title?: string | null;
-  /**
-   * `title` is a UX seed (e.g. the first message, shown immediately so the
-   * conversation is never blank) rather than a title actually chosen for
-   * this conversation. The server does not persist a seed, so title
-   * generation still runs once the conversation has content; the caller
-   * still gets it back once, for its own optimistic display.
-   */
-  titleIsPlaceholder?: boolean;
   instructions?: string | null;
   metadata?: Record<string, unknown> | null;
   model?: ConversationModel | null;
@@ -600,7 +592,6 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
       const payload = {
         title: input.title ?? undefined,
-        title_is_placeholder: input.titleIsPlaceholder ?? undefined,
         instructions: typeof input.instructions === "undefined"
           ? defaultInstructions ?? undefined
           : input.instructions,

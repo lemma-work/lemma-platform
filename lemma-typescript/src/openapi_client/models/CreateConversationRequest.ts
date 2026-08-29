@@ -11,6 +11,5 @@ export type CreateConversationRequest = {
     metadata?: (Record<string, any> | null);
     parent_id?: (string | null);
     title?: (string | null);
-    title_is_placeholder?: boolean;
     type?: ConversationType;
 };
