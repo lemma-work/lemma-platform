@@ -7,6 +7,7 @@ import {
     isShareKind,
     resolveShareDestination,
     resolveShareName,
+    resolveSharePodId,
     resolveShareTarget,
     SHARE_NAME_PARAM,
     type ShareKind,
@@ -46,8 +47,9 @@ async function readShare({ params, searchParams }: SharePageProps) {
     // Resolved on the server from the link alone — no backend call, so this page
     // still renders for a crawler that will never hold a session.
     const target = resolveShareTarget(kind, raw.path, query);
+    const podId = resolveSharePodId(raw.path);
 
-    return { kind, copy, destination, name, card, target };
+    return { kind, copy, destination, name, card, target, podId };
 }
 
 export async function generateMetadata(props: SharePageProps): Promise<Metadata> {
@@ -96,6 +98,7 @@ export default async function SharePage(props: SharePageProps) {
             name={share.name}
             kind={share.kind}
             target={share.target}
+            podId={share.podId}
             article={share.copy.article}
             detail={share.card.detail}
             cardPath={socialCardPath({

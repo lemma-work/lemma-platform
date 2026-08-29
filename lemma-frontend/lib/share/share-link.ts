@@ -186,6 +186,20 @@ function firstQueryValue(value: string | string[] | undefined): string | undefin
 }
 
 /**
+ * The pod a share link lives in, whatever it points at.
+ *
+ * `resolveShareTarget` returns null for a pod link, because a whole pod is not
+ * a previewable resource. The pod is still the thing being shared, though, and
+ * the landing page needs its id to offer the reader a way in rather than
+ * bouncing them into a wall they cannot read.
+ */
+export function resolveSharePodId(segments: string[] | undefined): string | null {
+    const parts = (segments ?? []).filter(Boolean);
+    if (parts[0] !== 'pod' || !parts[1]) return null;
+    return parts[1];
+}
+
+/**
  * Resolve what a share link points at, so a viewer who is not a pod member can
  * ask whether they may read it.
  *

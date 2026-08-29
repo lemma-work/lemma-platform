@@ -10,7 +10,6 @@ import {
     CopyCheck,
     Download,
     Eye,
-    File as FileIcon,
     FileText,
     Maximize2,
     Minimize2,
@@ -30,6 +29,7 @@ import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { isPersonalPath } from '@/lib/files/doc-sections';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
+import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import {
     MarkdownAttachmentControl,
     canAttachDocumentMarkdown,
@@ -705,7 +705,7 @@ export function DocumentViewer({
 
         topbar?.setTopbar({
             title: doc?.name || documentPath,
-            icon: <FileIcon className="h-4 w-4" />,
+            icon: <FileTypeIcon filename={doc?.name || documentPath} size="sm" />,
             meta: doc ? <FileIndexStatusBadge file={doc} /> : undefined,
             backHref: topbarBackHref,
             backLabel: topbarBackLabel || backLabel,

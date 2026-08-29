@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
@@ -113,6 +114,7 @@ export function SocialCardPanel({
     className,
 }: SocialCardPanelProps) {
     const [busy, setBusy] = useState<'copy' | 'download' | null>(null);
+    const [cardState, setCardState] = useState<'loading' | 'ready'>('loading');
 
     const cardPath = useMemo(
         () =>
@@ -183,20 +185,36 @@ export function SocialCardPanel({
         }
     }
 
+    /* `/api/social-card` renders the PNG per request — measured at ~1.3s cold
+       and ~0.6s warm, and every distinct title is a fresh render, so the cold
+       number is the usual one. The intrinsic size already reserves the right
+       box, so nothing moves; what was missing was any sign the box was going to
+       fill. An empty bordered rectangle for a second reads as broken. */
     const preview = (
         <div
             className={cn(
-                'overflow-hidden rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-2)]',
+                'relative overflow-hidden rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-2)]',
                 layout === 'compact' ? 'w-40 shrink-0 self-start' : 'rounded-lg',
             )}
         >
+            {cardState === 'loading' ? (
+                <Skeleton shape="block" className="absolute inset-0 rounded-none" />
+            ) : null}
             {/* eslint-disable-next-line @next/next/no-img-element -- the card is a dynamic route response, not a static asset for the image optimizer. */}
             <img
                 src={cardPath}
                 alt={`Share card for ${name || 'this pod'}`}
                 width={1200}
                 height={630}
-                className="block h-auto w-full"
+                onLoad={() => setCardState('ready')}
+                // `ready` rather than a third state: a card that will not render
+                // is not worth a message inside a share popover, and pulsing
+                // forever would claim it is still coming.
+                onError={() => setCardState('ready')}
+                className={cn(
+                    'block h-auto w-full transition-opacity duration-200',
+                    cardState === 'loading' && 'opacity-0',
+                )}
             />
         </div>
     );

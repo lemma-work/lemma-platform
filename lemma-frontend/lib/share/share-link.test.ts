@@ -7,6 +7,7 @@ import {
     prettifySlug,
     resolveShareDestination,
     resolveShareName,
+    resolveSharePodId,
     resolveShareTarget,
     shareKindForResourceType,
 } from './share-link';
@@ -77,6 +78,17 @@ describe('share links', () => {
             resourceName: 'open_orders',
         });
         expect(resolveShareName({ segments: ['pod', 'p1', 'tables'], query })).toBe('Open Orders');
+    });
+
+    it('names the pod behind a link that points at no resource', () => {
+        // A pod link has no target — there is nothing inside it to preview — but
+        // the landing page still needs the pod so it can offer a way in rather
+        // than redirecting a non-member into an access wall.
+        expect(resolveShareTarget('pod', ['pod', 'p1'])).toBeNull();
+        expect(resolveSharePodId(['pod', 'p1'])).toBe('p1');
+        expect(resolveSharePodId(['pod', 'p1', 'agents', 'triage'])).toBe('p1');
+        expect(resolveSharePodId(['pod'])).toBeNull();
+        expect(resolveSharePodId(undefined)).toBeNull();
     });
 
     it('prettifies slugs without dragging extensions along', () => {
