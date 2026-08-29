@@ -30,6 +30,11 @@ EXPECTED = [
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
     ("history_summarization_model", "HISTORY_SUMMARIZATION_MODEL", None),
+    (
+        "agent_default_context_window_tokens",
+        "AGENT_DEFAULT_CONTEXT_WINDOW_TOKENS",
+        200_000,
+    ),
     ("agent_model_stream_max_attempts", "AGENT_MODEL_STREAM_MAX_ATTEMPTS", 3),
     (
         "agent_model_http_connect_timeout_seconds",

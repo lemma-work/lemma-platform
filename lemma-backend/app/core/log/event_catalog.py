@@ -26,6 +26,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_runner_service.agent_run_quota_exhausted.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_s.failed': EventSpec('error', frozenset()),
     'agent.agent_runner_service.finalize_agent_run_run_s.propagated': EventSpec('debug', frozenset({'agent_run_id'})),
+    'agent.context_budget.invalid_env_window.degraded': EventSpec('warning', frozenset({'configured_value'})),
+    'agent.context_budget.invalid_model_window.degraded': EventSpec('warning', frozenset({'configured_value', 'model_name'})),
     'agent.conversation_controller.agent_realtime_subscription.failed': EventSpec('error', frozenset({'agent_run_id', 'conversation_id'})),
     'agent.conversation_mcp.runtime_resolve_failed.diagnostic': EventSpec('debug', frozenset()),
     'agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic': EventSpec('debug', frozenset()),

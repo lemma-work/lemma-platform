@@ -1831,8 +1831,18 @@ def test_history_processors_summarize_then_enforce_a_hard_ceiling():
         summarization_model="openai:gpt-4.1",
     )
 
+    # The threshold is whatever the run's model affords (services/context_budget),
+    # so assert against the resolved default rather than a literal that has to be
+    # chased every time a window changes.
+    from app.modules.agent.domain.value_objects import (
+        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
+    )
+
     assert len(processors) == 2
-    assert processors[0].trigger == ("tokens", 70_000)
+    assert processors[0].trigger == (
+        "tokens",
+        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
+    )
     assert processors[0].keep == ("messages", 40)
     # A real tokenizer, not the library's len(text)/4 estimate — and an async
     # one, because tokenizing a large history is ~30ms of CPU per model request

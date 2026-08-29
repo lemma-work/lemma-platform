@@ -21,6 +21,7 @@ from app.core.observability.telemetry import (
     record_span_output,
 )
 from app.modules.agent.config import agent_settings
+from app.modules.agent.services.context_budget import context_budget_for
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
     validate_conversation_access,
@@ -286,6 +287,11 @@ class AgentRunnerService:
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
             enforced_usage_limits = self.fixed_usage_limits
+            # Compaction thresholds belong to the model, not to a global
+            # constant: a 70k trigger on a million-token model compacts a run
+            # that had 900k to spare, and a 110k "ceiling" on a 128k model is
+            # not a ceiling at all.
+            context_budget = context_budget_for(resolved_runtime.model)
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
@@ -294,6 +300,10 @@ class AgentRunnerService:
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
+                history_summarization_token_limit=(
+                    context_budget.summarization_token_limit
+                ),
+                history_hard_token_ceiling=context_budget.hard_token_ceiling,
                 extra={
                     "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,
