@@ -654,6 +654,8 @@ const informationalChecks = [
         /\blemma-sidebar-icon-button\b/.test(match) ||
         /\blemma-shell-icon-button\b/.test(match) ||
         /\bworkspace-sidebar-trigger-button\b/.test(match) ||
+        /\bpod-home-presence-add\b/.test(match) ||
+        /\bpod-home-presence-link\b/.test(match) ||
         /\bworkspace-sidebar-inline-action-button\b/.test(match) ||
         /\bflow-execution-row-button\b/.test(match) ||
         /\bflow-execution-trace-button\b/.test(match) ||
@@ -682,6 +684,8 @@ const informationalChecks = [
         /\bagent-runtime-model-button\b/.test(match) ||
         /\bagent-runtime-scope-button\b/.test(match) ||
         /\bmodel-picker-choice-button\b/.test(match) ||
+        /\bresource-share-choice-button\b/.test(match) ||
+        /\bresource-share-nav-button\b/.test(match) ||
         /\bmodels-settings-scope-button\b/.test(match) ||
         /\bmodels-settings-provider-button\b/.test(match) ||
         /\bworkspace-sidebar-suggestion-chip-button\b/.test(match) ||
