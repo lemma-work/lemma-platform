@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent.domain.events import (
     AgentDomainEvent,
     ConversationStartedEvent,
@@ -23,7 +24,9 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
 )
 from app.modules.agent.domain.value_objects import (
+    ACTIVE_CONVERSATION_STATUSES,
     TERMINAL_AGENT_RUN_STATUSES,
+    TERMINAL_CONVERSATION_STATUSES,
     AgentRuntimeConfig,
     AgentRunFinishResult,
     AgentRunStatus,
@@ -57,6 +60,8 @@ from app.modules.agent.infrastructure.repository_status import (
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
     ConversationApprovalQueriesMixin,
 )
+
+logger = get_logger(__name__)
 
 _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
 
@@ -519,10 +524,25 @@ class ConversationRepository(
             current_status.value
         )
         if current_status in TERMINAL_AGENT_RUN_STATUSES:
+            # The run is finished, so there is nothing to end. But this used to
+            # return a `conversation_status` it had only *inferred* from the run
+            # row and never written — and where the two had fallen out of step,
+            # that left a conversation stuck non-terminal with no way back.
+            #
+            # Nothing else recovers it. `reconcile_orphaned_agent_runs` keys on
+            # `agent_runs.status` alone, so a terminal run is invisible to it
+            # however wrong its conversation is; and a stuck conversation wedges
+            # whatever reads it, including a schedule run and a workflow step.
+            # This is the only place that sees both rows, so it repairs them.
+            repaired = await self._reconcile_conversation_to_terminal(
+                conversation_id=model.conversation_id,
+                status=resolved_conversation_status,
+            )
             return AgentRunFinishResult(
                 status=current_status,
                 conversation_status=resolved_conversation_status,
                 updated=False,
+                conversation_repaired=repaired,
             )
 
         next_status = status
@@ -569,6 +589,37 @@ class ConversationRepository(
             conversation_id=conversation_id,
             status=status,
         )
+
+    async def _reconcile_conversation_to_terminal(
+        self,
+        *,
+        conversation_id: UUID,
+        status: ConversationStatus,
+    ) -> bool:
+        """Put a conversation back in step with its already-finished run.
+
+        Only moves one that is still *active*. `WAITING` is left alone on
+        purpose: a run that ended by asking a question leaves its conversation
+        waiting, and that is the correct resting state, not a stuck one —
+        "repairing" it would collapse the pause `request_approval` and
+        `ask_user` are built on. A conversation that is already terminal is
+        left alone too, so an ordinary second finalize writes nothing and
+        reports nothing.
+        """
+        if status not in TERMINAL_CONVERSATION_STATUSES:
+            return False
+        conversation = await self.session.get(ConversationModel, conversation_id)
+        if conversation is None:
+            return False
+        if ConversationStatus(conversation.status) not in ACTIVE_CONVERSATION_STATUSES:
+            return False
+        conversation.status = status.value
+        await self.session.flush()
+        logger.warning(
+            "agent.conversation_repository.conversation_status_reconciled.degraded",
+            conversation_id=str(conversation_id),
+        )
+        return True
 
     async def _update_conversation_status(
         self,
