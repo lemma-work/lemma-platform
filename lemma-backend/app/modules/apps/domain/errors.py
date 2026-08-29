@@ -1,5 +1,7 @@
 """App module domain errors."""
 
+from uuid import UUID
+
 from app.core.domain.errors import DomainError
 
 
@@ -21,6 +23,21 @@ class AppAccessDeniedError(AppDomainError):
 class AppNotFoundError(AppDomainError):
     def __init__(self, message: str = "App not found"):
         super().__init__(message=message, code="APP_NOT_FOUND", status_code=404)
+
+
+class AppAssetNotFoundError(AppNotFoundError):
+    """A path the app itself does not serve.
+
+    Carries where the request was aimed, because the answer a person needs is
+    not "404" -- it is what to do instead. An app whose markdown links to a pod
+    file lands here, and the pod is the only thing that makes the alternative
+    offer possible.
+    """
+
+    def __init__(self, message: str, *, pod_id: UUID | None, asset_path: str):
+        super().__init__(message=message)
+        self.pod_id = pod_id
+        self.asset_path = asset_path
 
 
 class AppConflictError(AppDomainError):
