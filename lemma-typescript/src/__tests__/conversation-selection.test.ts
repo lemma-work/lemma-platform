@@ -311,6 +311,45 @@ describe("explicit conversation selection", () => {
     expect(controller.get().openedConversationId).toBe("created");
   });
 
+  it("shows the first message as a local title seed without sending it to the server", async () => {
+    // Regression for a real conversation that stayed titled as its raw,
+    // unsanitized first message forever: create() used to be sent `title`
+    // seeded from the message, and generate_title_if_absent treats any
+    // non-empty title as already chosen, so it never ran. The fix keeps the
+    // seed purely local -- create() must not receive it, and the real title
+    // (server starts it at null) still has to appear once it lands.
+    const { client, create } = fakeClient([]);
+    create.mockImplementationOnce(async () => ({
+      ...conversation("created", "2026-07-16T12:00:00.000Z"),
+      title: null,
+    }));
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness() {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await settle();
+
+    await act(async () => {
+      await controller.get().sendMessage("plan a trip to Kyoto");
+    });
+
+    expect(create).toHaveBeenCalledOnce();
+    // Serialized, not just undefined locally: JSON.stringify drops an
+    // undefined-valued key, but a literal `null` would still go over the
+    // wire as an explicit (wrong) instruction to blank the title.
+    expect(JSON.parse(JSON.stringify(create.mock.calls[0][0]))).not.toHaveProperty("title");
+    const created = controller.get().conversations.find((item) => item.id === "created");
+    expect(created?.title).toBe("plan a trip to Kyoto");
+  });
+
   it("keeps commands available while automatic controller loading is deferred", async () => {
     const { client, create, list, listModels, sendMessageStream } = fakeClient([]);
     const controller = captureHookResult<UseAssistantControllerResult>();
