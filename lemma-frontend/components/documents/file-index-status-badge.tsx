@@ -55,6 +55,17 @@ const STATE_CONFIG: Record<
     },
 };
 
+/**
+ * Says something only when there is something to say.
+ *
+ * "Searchable" is the steady state of every document in the pod, so a green
+ * pill announcing it appeared on every file, in every list, next to every
+ * title — a badge that is always on is not a status, it is decoration, and it
+ * sat in the doc header competing with the filename for the eye. The three
+ * states worth a badge are the ones that break the expectation: still
+ * indexing, indexing failed, or stored without being indexed at all — that
+ * last one being the answer to "why can't the agent find this file?".
+ */
 export function FileIndexStatusBadge({
     file,
     className,
@@ -65,6 +76,7 @@ export function FileIndexStatusBadge({
     if (!file?.status) return null;
 
     const state = resolveIndexState(file.status);
+    if (state === 'searchable') return null;
     const config = STATE_CONFIG[state];
     const Icon = config.icon;
     const title = state === 'failed' && file.last_processing_error

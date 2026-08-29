@@ -512,7 +512,6 @@ function AgentProfileCard({
                                 resourceName={formatAgentName(agent.name)}
                                 shareUrl={agentShareUrl}
                                 onChange={onShareVisibilityChange}
-                                className="contents"
                                 trigger={({ openShare, disabled }) => (
                                     <DropdownMenuItem
                                         disabled={disabled}

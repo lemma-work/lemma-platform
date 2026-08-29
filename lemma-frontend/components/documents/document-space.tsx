@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 
 import { DocumentViewer } from '@/components/documents/document-viewer';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
+import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import {
     FolderUploadConfirmDialog,
     FolderUploadProgress,
@@ -810,7 +811,6 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             resourceName={entry.name}
                             shareUrl={buildShareableHref(entry)}
                             onChange={(visibility) => handleShareEntryVisibilityChange(entry, visibility)}
-                            className="contents"
                             trigger={({ openShare, disabled }) => (
                                 <DropdownMenuItem
                                     disabled={disabled}
@@ -848,7 +848,9 @@ export function DocumentSpace({ podId }: { podId: string }) {
                         className="document-space-entry-button custom-focus-ring flex min-w-0 flex-1 items-center gap-2.5 rounded text-left"
                     >
                         <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                            <ProductIcon kind={folder ? 'folders' : 'docs'} size="sm" />
+                            {folder
+                                ? <ProductIcon kind="folders" size="sm" />
+                                : <FileTypeIcon filename={entry.name} size="sm" />}
                         </span>
                         <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">{entry.name}</span>
                         {/* What a row is, how big it is, whether the pod can read

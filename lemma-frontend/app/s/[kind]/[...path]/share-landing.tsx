@@ -26,6 +26,8 @@ interface ShareLandingProps {
     kind: ShareKind;
     /** What the link points at, or null when it names no readable resource. */
     target: ShareTarget | null;
+    /** The pod the link lives in — set for a pod link, which has no target. */
+    podId: string | null;
 }
 
 /**
@@ -44,9 +46,17 @@ interface ShareLandingProps {
  * it points at, and bouncing a member into the workspace answered a question
  * they had not asked — losing the document they came for, and their place in a
  * long one. Members get the same page with an "Open in pod" button on it, which
- * is the workspace offered rather than imposed. Two cases still redirect: a pod
- * link, which names no resource to render, and a member who cannot read this
- * particular resource, where only the pod can explain itself.
+ * is the workspace offered rather than imposed. One case still redirects: a
+ * member who cannot read this particular resource, where only the pod can
+ * explain itself.
+ *
+ * A pod link is the other half of that. It names no resource, so a member is
+ * still sent straight into the workspace — but everyone else used to be sent
+ * there too, and landed on an access wall. That made the one link you would
+ * actually paste into a group chat the one link that could not let anybody in,
+ * while `/s/agent/…` two routes over has offered `JoinPodPanel` all along. A
+ * pod link now makes the same offer, and the pod's own join policy decides
+ * whether it lands instantly or waits for an admin.
  */
 export function ShareLanding({
     destination,
@@ -56,24 +66,28 @@ export function ShareLanding({
     cardPath,
     kind,
     target,
+    podId,
 }: ShareLandingProps) {
     const router = useRouter();
     const { isAuthenticated, isLoading } = useLemmaAuth();
+    // A link naming a pod and nothing inside it.
+    const isPodLink = !target && Boolean(podId);
+    const accessPodId = target?.podId ?? podId;
 
     // Does this reader have the pod itself? `pods.get` is the cheapest honest
     // question — it is exactly what the workspace shell asks first, so agreeing
     // with it means no one is redirected into a wall.
     const { data: hasPodAccess, isPending: isCheckingPod } = useQuery({
-        queryKey: ['share-pod-access', target?.podId],
+        queryKey: ['share-pod-access', accessPodId],
         queryFn: async () => {
             try {
-                await getLemmaClient().pods.get(target!.podId);
+                await getLemmaClient().pods.get(accessPodId!);
                 return true;
             } catch {
                 return false;
             }
         },
-        enabled: Boolean(isAuthenticated && target),
+        enabled: Boolean(isAuthenticated && accessPodId),
         retry: false,
         staleTime: 30_000,
     });
@@ -107,8 +121,14 @@ export function ShareLanding({
 
     useEffect(() => {
         if (isLoading || !isAuthenticated) return;
-        // No addressable resource (a pod link) — keep the old behaviour and let
-        // the workspace explain itself.
+        if (isPodLink) {
+            // A member already has the workspace; anyone else is shown the ask
+            // rather than the wall.
+            if (hasPodAccess === true) router.replace(destination);
+            return;
+        }
+        // A malformed link that names neither a resource nor a pod. Nothing to
+        // render, so the workspace explains itself as it always did.
         if (!target) {
             router.replace(destination);
             return;
@@ -117,12 +137,15 @@ export function ShareLanding({
         // rendered here and the pod is the only place that can say why, so this
         // is the one case that still redirects.
         if (hasPodAccess && preview === null) router.replace(destination);
-    }, [isAuthenticated, isLoading, destination, router, target, hasPodAccess, preview]);
+    }, [isAuthenticated, isLoading, destination, router, target, isPodLink, hasPodAccess, preview]);
 
     // The pod check only decides whether an "Open in pod" button appears, so it
     // no longer holds the document up — except when there is no preview to show,
     // where it is what separates "redirect a member" from "ask to join".
     const isResolving = isLoading
+        // A pod link has nothing to draw until the membership answer is in: the
+        // card and the join ask would only flash before the redirect.
+        || (isAuthenticated && isPodLink && (isCheckingPod || hasPodAccess === true))
         || (isAuthenticated && Boolean(target) && isCheckingPreview)
         || (isAuthenticated && Boolean(target) && !preview && isCheckingPod)
         || (isAuthenticated && Boolean(target) && !preview && hasPodAccess === true);
@@ -150,6 +173,15 @@ export function ShareLanding({
     }
 
     const isDeniedToSignedInReader = isAuthenticated && Boolean(target) && !preview;
+    // Who to offer the way in to, and null when there is nothing to ask for —
+    // a signed-out reader signs in first, and a member is already through.
+    const joinPodId = !isAuthenticated
+        ? null
+        : isPodLink && hasPodAccess === false
+            ? podId
+            : isDeniedToSignedInReader
+                ? target?.podId ?? null
+                : null;
 
     return (
         <main className="flex min-h-dvh items-center justify-center px-6 py-16">
@@ -172,6 +204,8 @@ export function ShareLanding({
                     <p className="mt-1 text-sm text-[var(--text-secondary)]">
                         {isDeniedToSignedInReader ? (
                             'This isn’t shared with you. It may have been deleted, or it may only be open to the pod it lives in.'
+                        ) : joinPodId ? (
+                            `${name ? `${name} is a pod` : 'This is a pod'} on Lemma — the people, agents and work inside one boundary.`
                         ) : (
                             <>
                                 {name ? `${name} is ${article} on Lemma. ` : ''}
@@ -181,11 +215,16 @@ export function ShareLanding({
                     </p>
                 </div>
 
-                {isDeniedToSignedInReader && target ? (
+                {joinPodId ? (
                     // The ask belongs at the refusal, not somewhere else in the
                     // product the reader has no way to find.
                     <div className="mt-6">
-                        <JoinPodPanel podId={target.podId} />
+                        <JoinPodPanel
+                            podId={joinPodId}
+                            intro={isPodLink
+                                ? 'You’re not in this pod yet. Join it to open the workspace and everything the pod shares.'
+                                : undefined}
+                        />
                     </div>
                 ) : (
                     <div className="mt-6 flex flex-col items-center gap-3">
