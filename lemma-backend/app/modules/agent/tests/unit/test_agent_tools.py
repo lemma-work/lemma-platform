@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-import inspect
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -1819,36 +1818,39 @@ def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch
     assert len(grouped) == 4
 
 
-def test_history_processors_summarize_then_enforce_a_hard_ceiling():
+def test_history_processors_compact_then_enforce_a_hard_ceiling():
     """Two processors, in this order, for two different failure modes.
 
-    The summarizer keeps the prompt small on the happy path. The ceiling guard
-    exists because the summarizer swallows its own failures and returns the
-    ORIGINAL history — safe for the data, fatal for the request that follows.
+    The compactor keeps the prompt small on the happy path. The ceiling guard is
+    the backstop for what it cannot cover -- a tail that is over the ceiling on
+    its own.
     """
+    from pydantic_ai._utils import takes_run_context
+
+    from app.modules.agent.domain.value_objects import (
+        DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES,
+        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
+    )
+
     processors = build_history_processors(
         HarnessOptions(model_name="kimi-k2.6"),
         summarization_model="openai:gpt-4.1",
     )
 
-    # The threshold is whatever the run's model affords (services/context_budget),
-    # so assert against the resolved default rather than a literal that has to be
-    # chased every time a window changes.
-    from app.modules.agent.domain.value_objects import (
-        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
-    )
-
     assert len(processors) == 2
-    assert processors[0].trigger == (
-        "tokens",
-        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
-    )
-    assert processors[0].keep == ("messages", 40)
-    # A real tokenizer, not the library's len(text)/4 estimate — and an async
-    # one, because tokenizing a large history is ~30ms of CPU per model request
-    # and the worker runs many agent runs on a single core.
-    assert processors[0].token_counter.__name__ == "_count_tokens_off_loop"
-    assert inspect.iscoroutinefunction(processors[0].token_counter)
+    compactor = processors[0]
+    # Thresholds come from what the run's model affords
+    # (services/context_budget), so assert against the resolved default rather
+    # than a literal that has to be chased every time a window changes.
+    assert compactor.trigger_tokens == DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
+    assert compactor.keep_messages == DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
+    assert compactor.model == "openai:gpt-4.1"
+    # Load-bearing: pydantic-ai decides whether to hand the processor the run
+    # context by inspecting the first parameter's annotation, and silently calls
+    # it with one argument when that annotation is anything else. Without the
+    # context the summarization call is unbilled -- which is what it was.
+    assert takes_run_context(compactor)
+    assert processors[-1].__name__ == "_ceiling_guard"
 
 
 def test_disabling_summarization_keeps_the_ceiling_guard():

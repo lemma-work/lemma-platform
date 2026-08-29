@@ -33,24 +33,59 @@ logger = get_logger(__name__)
 _MIN_TAIL_MESSAGES = 4
 
 
-async def _count_tokens_off_loop(messages: Sequence[object]) -> int:
-    """Tokenize on a worker thread, never on the event loop.
-
-    Counting a 100k-token history is ~30ms of pure CPU, and it runs on every
-    model request. The worker is a single core running up to
-    ``worker_concurrency`` agent runs, and its event loop already logs lag
-    breaches — twenty runs each blocking 30ms serialize into a visible stall in
-    every other run's token streaming and stop-checks. `run_blocking` is the
-    house pattern for exactly this (see `app/core/concurrency/offload`).
-    """
-    return await run_blocking(count_model_message_tokens, messages)
-
-
 def _starts_with_tool_returns(message: object) -> bool:
     return any(
         type(part).__name__ == "ToolReturnPart"
         for part in getattr(message, "parts", ()) or ()
     )
+
+
+def is_pinned_message(message: object) -> bool:
+    """Whether this message may never be dropped to make room.
+
+    Two kinds qualify: something the person actually said, and the summary that
+    stands in for everything dropped around it. Both are irreplaceable. A later
+    turn can re-read a file or re-run a command, but it cannot recover the
+    request -- and an agent that has lost the request does not stop and ask, it
+    substitutes a plausible one and reports that as the thing it was asked for.
+
+    A tool's own content arrives as a `UserPromptPart` as well, in the same
+    message as its `ToolReturnPart`. That is a tool result wearing a user's
+    clothes, not something anybody said, so it does not qualify.
+    """
+    names = {type(part).__name__ for part in getattr(message, "parts", ()) or ()}
+    if "UserPromptPart" not in names:
+        return False
+    if names & {"ToolReturnPart", "RetryPromptPart"}:
+        return False
+    return not _is_only_runtime_note(message)
+
+
+def _is_only_runtime_note(message: object) -> bool:
+    """A bare `<notes>` block, which is rebuilt every request and pins nothing.
+
+    A note prepended to real user text is a different thing: that message is the
+    user's, and it stays.
+    """
+    for part in getattr(message, "parts", ()) or ():
+        content = getattr(part, "content", None)
+        if isinstance(content, str):
+            stripped = content.strip()
+            if not (stripped.startswith("<notes>") and stripped.endswith("</notes>")):
+                return False
+    return True
+
+
+def _with_pinned(messages: Sequence[object], start: int) -> list[object]:
+    """The tail from ``start``, with the pinned messages before it kept in front.
+
+    Safe to reorder this way because a pinned message is self-contained -- a user
+    turn or a summary -- so moving one ahead of the cut cannot orphan a tool
+    result from its call.
+    """
+    return [
+        message for message in messages[:start] if is_pinned_message(message)
+    ] + list(messages[start:])
 
 
 def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
@@ -86,19 +121,36 @@ def enforce_token_ceiling(
     if ceiling <= 0 or size <= ceiling:
         return working
 
-    # Halve the head repeatedly rather than walk one message at a time: each
-    # count is a full re-tokenisation, and this runs on the request path.
-    while len(working) > _MIN_TAIL_MESSAGES:
-        drop_to = find_safe_cutoff(working, max(1, len(working) // 2))
-        if drop_to >= len(working) - _MIN_TAIL_MESSAGES:
-            break
-        working = working[drop_to:]
-        if count_model_message_tokens(working) <= ceiling:
-            return working
+    # Advance the cut rather than walking one message at a time: each count is a
+    # full re-tokenisation, and this runs on the request path. Pinned messages
+    # are carried across every cut -- this guard used to drop the summary the
+    # compactor had just paid an LLM call to produce, because that summary sits
+    # at the front and the front is what got dropped.
+    floor = max(1, len(working) - _MIN_TAIL_MESSAGES)
+    cut = max(1, len(working) // 2)
+    while cut < floor:
+        candidate = _with_pinned(working, find_safe_cutoff(working, cut))
+        if count_model_message_tokens(candidate) <= ceiling:
+            return candidate
+        cut += max(1, (floor - cut) // 2)
 
-    # Still over: keep the smallest well-formed tail we are willing to send.
-    tail_start = find_safe_cutoff(working, max(0, len(working) - _MIN_TAIL_MESSAGES))
-    return working[tail_start:] or working[-1:]
+    tail_start = find_safe_cutoff(working, floor)
+    candidate = _with_pinned(working, tail_start)
+    if count_model_message_tokens(candidate) <= ceiling:
+        return candidate
+
+    # Even every user turn together is over the ceiling. Keep the first thing
+    # they asked for -- the one message whose loss changes what the agent does --
+    # and the most recent turns, and let the rest go.
+    tail = list(working[tail_start:])
+    first_pinned = next(
+        (message for message in working if is_pinned_message(message)), None
+    )
+    if first_pinned is not None and not any(
+        message is first_pinned for message in tail
+    ):
+        return [first_pinned, *tail]
+    return tail or working[-1:]
 
 
 def _trim_to_ceiling(
@@ -131,17 +183,19 @@ def build_history_processors(
         options.history_summarization_enabled
         and options.history_summarization_token_limit > 0
     ):
-        from pydantic_ai_summarization import create_summarization_processor
-
-        summarizer = create_summarization_processor(
-            model=summarization_model,
-            trigger=("tokens", options.history_summarization_token_limit),
-            keep=("messages", options.history_summarization_keep_messages),
-            # Without this the library estimates len(text)/4, which under-counts
-            # code, logs and JSON by 25-65% — see services/history_tokens.
-            token_counter=_count_tokens_off_loop,
+        # Imported here rather than at module scope: the compactor imports this
+        # module back for the pinning predicate and the cutoff.
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            HistoryCompactor,
         )
-        processors.append(summarizer)
+
+        processors.append(
+            HistoryCompactor(
+                model=summarization_model,
+                trigger_tokens=options.history_summarization_token_limit,
+                keep_messages=options.history_summarization_keep_messages,
+            )
+        )
 
     if ceiling > 0:
         # Runs last, so it also catches the case the summarizer cannot: it

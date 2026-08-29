@@ -66,7 +66,10 @@ def _encoder() -> Any:
         import tiktoken
 
         return tiktoken.get_encoding("cl100k_base")
-    except Exception:  # pragma: no cover - tiktoken is a hard dependency
+    # tiktoken is a hard dependency, so the only realistic failures are the
+    # import going missing and the vocabulary name being wrong. Anything else is
+    # a bug worth seeing rather than silently degrading the count for.
+    except ImportError, ValueError:  # pragma: no cover
         return None
 
 
