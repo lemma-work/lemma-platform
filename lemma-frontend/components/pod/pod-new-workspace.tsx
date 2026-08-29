@@ -21,7 +21,6 @@ import {
     Workflow,
 } from '@/components/ui/icons';
 
-import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ConnectorIcon } from '@/components/connectors/connector-icon';
 import { formatRelativeTime } from '@/components/pod/recent-conversations';
 import { THEME_LOGOS } from '@/components/recipes/starter-theme-card';
@@ -351,15 +350,13 @@ export function PodNewWorkspace({
     // nothing sits above the panel for a height change to disturb.
     const isBelowComposer = placement === 'below-composer';
     const panelHeight = isBelowComposer ? PANEL_HEIGHT_NATURAL : PANEL_HEIGHT;
-    const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
     const podName = formatPodName(pod?.name);
     const { launchRecipe } = useLaunchRecipe(podId, { podName });
     const { signals, recentConversations, isLoading } = usePodStartSignals(podId);
     const canWriteConversations = podAccess.can('conversation.write');
-    const isBusy = assistant.isLoading || assistant.isOpenedConversationRunning;
-    const disabled = !canWriteConversations || isBusy;
+    const disabled = !canWriteConversations;
 
     const facts = useMemo(() => buildPodFacts(signals), [signals]);
     const doActions = useMemo(() => buildPodDoActions(signals), [signals]);
