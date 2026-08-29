@@ -225,8 +225,10 @@ class ConversationRunQueriesMixin:
     ) -> list[AgentRunEntity]:
         """Fill in messages: whole for ``full_run_ids``, first and last for the rest.
 
-        Two ``DISTINCT ON`` reads serve the elided runs, both answered by the
-        (agent_run_id, sequence) index rather than by reading the runs.
+        Three reads serve the elided runs -- two ``DISTINCT ON`` for each run's
+        first and last message, and one for every user message in them, since
+        those are never elided. All are answered by the (agent_run_id, sequence)
+        index rather than by reading the runs.
         """
         if not runs:
             return runs

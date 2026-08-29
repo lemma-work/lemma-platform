@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_text
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
@@ -75,11 +76,14 @@ async def load_skill(
                 success=True,
                 name=request.name,
                 resource_path=request.resource_path,
-                content=await read_workspace_skill_resource(
-                    request.name,
-                    request.resource_path,
-                    pod_id=ctx.deps.pod_id,
-                    user_id=ctx.deps.user_id,
+                content=bounded_tool_text(
+                    await read_workspace_skill_resource(
+                        request.name,
+                        request.resource_path,
+                        pod_id=ctx.deps.pod_id,
+                        user_id=ctx.deps.user_id,
+                    ),
+                    what="skill resource",
                 ),
             )
         except Exception as exc:
@@ -98,10 +102,13 @@ async def load_skill(
             )
 
     try:
-        content = await read_workspace_skill(
-            request.name,
-            pod_id=ctx.deps.pod_id,
-            user_id=ctx.deps.user_id,
+        content = bounded_tool_text(
+            await read_workspace_skill(
+                request.name,
+                pod_id=ctx.deps.pod_id,
+                user_id=ctx.deps.user_id,
+            ),
+            what="skill",
         )
     except Exception as exc:
         logger.warning(

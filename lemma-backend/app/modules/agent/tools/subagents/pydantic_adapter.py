@@ -94,14 +94,19 @@ async def interact_subagent(
                     "success": False,
                     "error": "run_id is required when action='await'.",
                 }
+            # A child run's whole output, which carries its own tool results.
+            awaited = await _service().await_run(
+                ctx.deps,
+                conversation_id=conversation_id,
+                run_id=UUID(request.run_id),
+                timeout_seconds=request.timeout_seconds,
+            )
             return {
                 "success": True,
-                **await _service().await_run(
-                    ctx.deps,
-                    conversation_id=conversation_id,
-                    run_id=UUID(request.run_id),
-                    timeout_seconds=request.timeout_seconds,
-                ),
+                **{
+                    key: bounded_tool_payload(value, what="sub-agent output")
+                    for key, value in awaited.items()
+                },
             }
         # action == "stop"
         return {

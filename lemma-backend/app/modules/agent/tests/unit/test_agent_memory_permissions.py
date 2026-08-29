@@ -122,14 +122,26 @@ class TestOneUserCannotWriteIntoAnothersTree:
         user_id = uuid4()
         paths = agent_memory_paths_for_name("butler")
         raw = f"/{user_id}{paths.personal_agent_index.removeprefix('/me')}"
+        resolver = PathResolver()
 
-        PathResolver()._ensure_personal_write_path(path=raw, requester_user_id=user_id)
+        resolver._ensure_personal_write_path(path=raw, requester_user_id=user_id)
+
+        # And it lands where `/me` would have put it, personal to them.
+        assert resolver._default_visibility_for_path(raw, user_id) == (
+            ResourceVisibility.PERSONAL.value
+        )
 
     def test_a_shared_path_is_not_mistaken_for_a_personal_one(self) -> None:
         paths = agent_memory_paths_for_name("butler")
+        user_id = uuid4()
+        resolver = PathResolver()
 
-        PathResolver()._ensure_personal_write_path(
-            path=paths.pod_index, requester_user_id=uuid4()
+        resolver._ensure_personal_write_path(
+            path=paths.pod_index, requester_user_id=user_id
+        )
+
+        assert resolver._default_visibility_for_path(paths.pod_index, user_id) == (
+            ResourceVisibility.POD.value
         )
 
 

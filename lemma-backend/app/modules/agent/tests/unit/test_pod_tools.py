@@ -837,6 +837,10 @@ def test_a_durable_workspace_fault_does_not_invite_a_retry():
 
 
 def _query_services(rows: list[dict], row_count: int, truncated: bool):
+    # The repository returns `rows, len(rows), truncated` -- a fake that lets
+    # those two drift certifies a shape production cannot produce.
+    assert row_count == len(rows), "row_count must match the rows returned"
+
     return SimpleNamespace(
         table=SimpleNamespace(),
         record=SimpleNamespace(

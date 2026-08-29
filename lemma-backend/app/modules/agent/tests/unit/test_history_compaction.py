@@ -244,7 +244,11 @@ class TestImagesAreNotCountedAsText:
     """
 
     def test_an_image_costs_what_a_vision_model_charges_not_its_bytes(self) -> None:
-        assert count_model_message_tokens(_image_exchange("Read image")) < 3_000
+        """Bounded on both sides. One-sided, this passed with the per-image
+        price set to 1 — and a wrong per-image price is the entire incident."""
+        cost = count_model_message_tokens(_image_exchange("Read image"))
+
+        assert 1_000 < cost < 3_000
 
     def test_image_cost_does_not_grow_with_file_size(self) -> None:
         """The old counter billed per byte. A vision model bills per image."""
@@ -292,7 +296,10 @@ class TestImagesAreNotCountedAsText:
             ]
         )
 
-        assert count_model_message_tokens([pages]) < 25_000
+        # Two-sided: charging *nothing* for ten images also passed before, so
+        # deleting the dict recursion in `_binary_tokens` went unnoticed.
+        cost = count_model_message_tokens([pages])
+        assert 10 * 1_000 < cost < 25_000
 
     def test_structured_tool_results_are_still_counted(self) -> None:
         """Excluding binary must not excuse the counter from structured text --
@@ -311,72 +318,48 @@ class TestImagesAreNotCountedAsText:
         assert count_model_message_tokens([message]) > 1_000
 
 
-def test_a_known_size_does_not_change_what_the_guard_decides() -> None:
-    """`known_size` exists to skip one re-tokenisation on the request path, so
-    it must be an optimisation and never a behaviour change."""
-    messages = [_text("filler " * 500) for _ in range(20)]
-    measured = count_model_message_tokens(messages)
+def test_a_known_size_skips_the_measurement_it_was_given(monkeypatch) -> None:
+    """`known_size` exists to skip one re-tokenisation on the request path.
 
-    # Compared by which messages survived, not by object equality: the drop
-    # notice carries an auto-set timestamp, so two independent calls are never
-    # `==` even when they decided identically.
-    def _surviving(history):
-        return [id(message) for message in history if message in messages]
-
-    assert _surviving(enforce_token_ceiling(messages, ceiling=5_000)) == _surviving(
-        enforce_token_ceiling(messages, ceiling=5_000, known_size=measured)
-    )
-
-
-class TestTheHistoryOpensWithSomethingProvidersAccept:
-    """Anthropic requires the first message to be a user turn.
-
-    Trimming and compaction both cut at a point that is safe for tool pairing,
-    which says nothing about role -- so the backstop that exists to prevent a
-    provider rejection could cause one.
+    Comparing two calls to each other cannot show that: both sides move
+    together, so deleting the short-circuit entirely left the old version of
+    this test passing. Count the measurements instead.
     """
+    from app.modules.agent.infrastructure.harnesses import history as history_module
 
-    def _guard(self):
-        from app.modules.agent.domain.value_objects import HarnessOptions
-        from app.modules.agent.infrastructure.harnesses.history import (
-            build_history_processors,
-        )
+    calls: list[int] = []
+    real = history_module.count_model_message_tokens
 
-        processors = build_history_processors(
-            HarnessOptions(model_name="claude-sonnet-4"),
-            summarization_model="openai:gpt-4.1",
-        )
-        return processors[-1]
+    def counted(messages):
+        calls.append(1)
+        return real(messages)
 
-    @pytest.mark.asyncio
-    async def test_a_history_starting_with_an_assistant_turn_is_fixed(self) -> None:
-        history = [*_tool_exchange("c1", "out")]
+    monkeypatch.setattr(history_module, "count_model_message_tokens", counted)
+    messages = [_text("filler " * 500) for _ in range(20)]
+    measured = real(messages)
 
-        result = await self._guard()(history)
+    calls.clear()
+    enforce_token_ceiling(messages, ceiling=5_000)
+    without = len(calls)
+    calls.clear()
+    enforce_token_ceiling(messages, ceiling=5_000, known_size=measured)
+    with_known = len(calls)
 
-        assert isinstance(result[0], ModelRequest)
+    assert with_known == without - 1
 
-    @pytest.mark.asyncio
-    async def test_a_history_already_starting_with_a_user_turn_is_untouched(
-        self,
-    ) -> None:
-        history = [_text("go"), *_tool_exchange("c1", "out")]
 
-        result = await self._guard()(history)
+def test_a_known_size_under_the_ceiling_short_circuits(monkeypatch) -> None:
+    """The contract callers rely on: pass a size and it is believed."""
+    from app.modules.agent.infrastructure.harnesses import history as history_module
 
-        assert result == history
+    monkeypatch.setattr(
+        history_module,
+        "count_model_message_tokens",
+        lambda messages: pytest.fail("should not have measured"),
+    )
+    messages = [_text("filler " * 500) for _ in range(20)]
 
-    @pytest.mark.asyncio
-    async def test_an_empty_history_is_left_alone(self) -> None:
-        assert await self._guard()([]) == []
-
-    @pytest.mark.asyncio
-    async def test_the_tool_pair_is_not_disturbed(self) -> None:
-        history = [*_tool_exchange("c1", "out")]
-
-        result = await self._guard()(history)
-
-        assert result[1:] == history
+    assert enforce_token_ceiling(messages, ceiling=5_000, known_size=10) == messages
 
 
 class TestTheCeilingGuardActuallyEnforces:
@@ -429,6 +412,59 @@ class TestTheCeilingGuardActuallyEnforces:
             for part in message.parts
             if isinstance(part, UserPromptPart)
         )
+
+    def test_it_gives_up_pinned_turns_when_they_alone_do_not_fit(self) -> None:
+        """Stage two. Replacing it with `pins[:1]` left the whole class passing,
+        including the test written for exactly that."""
+        messages: list[object] = [
+            _text(f"U{index}: " + "word " * 1_600) for index in range(20)
+        ]
+        # Enough trailing tool traffic that the kept tail holds no user turn at
+        # all, so the newest one can only survive by being pinned. Without this
+        # it sits inside the tail and survives even when stage two is gutted.
+        for index in range(4):
+            messages.extend(_tool_exchange(f"c{index}", "small"))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=30_000)
+
+        assert count_model_message_tokens(trimmed) <= 30_000
+        kept = " ".join(
+            str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+        # The first is the request; the newest is what they just said.
+        assert "U0:" in kept
+        assert "U19:" in kept
+
+    def test_it_shrinks_the_recent_tail_when_that_is_all_that_is_left(self) -> None:
+        """Stage three. Deleting the loop left the class passing."""
+        messages: list[object] = [_text("U0: the request")]
+        for index in range(4):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 400_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=60_000)
+
+        assert count_model_message_tokens(trimmed) <= 60_000
+
+    def test_the_notice_never_lands_between_a_call_and_its_result(self) -> None:
+        """Providers require a tool result to follow its call. Moving the notice
+        one slot later put it between them."""
+        messages: list[object] = [_text("U0: the request")]
+        for index in range(9):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 200_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=117_760)
+
+        for position, message in enumerate(trimmed[:-1]):
+            calls = [p for p in message.parts if isinstance(p, ToolCallPart)]
+            if not calls:
+                continue
+            following = trimmed[position + 1].parts
+            assert any(isinstance(p, ToolReturnPart) for p in following), (
+                "a tool call is not immediately followed by its result"
+            )
 
     def test_the_newest_turn_is_still_last(self) -> None:
         """A notice after the final turn competes with the thing being answered.

@@ -602,3 +602,75 @@ class TestDroppedRunsAreAnnounced:
             (message.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
             for message in selected
         )
+
+
+class TestTheUnpairedCallGuardActuallyRuns:
+    """`_is_unpaired_tool_call` could be replaced with `return False` and the
+    whole suite still passed: every fixture put the call at index 0, where the
+    user-only filter drops it anyway. The guard fires only when the run's *last*
+    message is the unpaired call, which nothing built.
+    """
+
+    def _run_ending_on_an_unpaired_call(self) -> list[AgentRun]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=6)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        oldest = runs[0]
+        oldest.messages[-1] = oldest.messages[-1].model_copy(
+            update={
+                "role": MessageRole.ASSISTANT,
+                "kind": MessageKind.TOOL_CALL,
+                "tool_name": "send_email",
+                "tool_call_id": "e1",
+                "text": None,
+            }
+        )
+        return runs
+
+    def test_the_unpaired_call_is_not_carried_forward(self) -> None:
+        """Kept, the history builder synthesizes 'this was interrupted... run it
+        again' — so a send that succeeded is reported as never having happened,
+        and the model is told to repeat it."""
+        runs = self._run_ending_on_an_unpaired_call()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert all(m.kind is not MessageKind.TOOL_CALL for m in for_run)
+
+    def test_the_run_still_reports_that_it_did_work(self) -> None:
+        runs = self._run_ending_on_an_unpaired_call()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert any(
+            (m.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
+            for m in for_run
+        )
+
+
+class TestElisionNoticesStayOutOfTheSystemChannel:
+    def test_a_notice_is_user_role_not_system(self) -> None:
+        """A `SystemPromptPart` is hoisted by Anthropic to the front of the
+        system prompt, ahead of the whole cacheable prefix — and this text
+        changes as runs age out."""
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notices = [
+            m
+            for m in selected
+            if (m.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
+        ]
+        assert notices
+        assert all(m.role is MessageRole.USER for m in notices)

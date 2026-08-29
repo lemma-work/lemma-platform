@@ -139,13 +139,37 @@ class TestWhatGetsSummarized:
     async def test_the_whole_span_is_summarized_not_just_its_tail(self) -> None:
         """The library read only the last 16,000 characters of what it was
         discarding, so its summary described the most recent tool call and never
-        the work. The beginning is the half that matters."""
-        sink: list[str] = []
+        the work. The beginning is the half that matters.
 
-        await _compactor(sink)(_ctx(), _history())
+        Big enough to actually cross `_MAX_TRANSCRIPT_CHARS`: below it nothing
+        is truncated, and this passed with the literal library bug in place.
+        """
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            _MAX_TRANSCRIPT_CHARS,
+        )
+
+        sink: list[str] = []
+        history: list[object] = [_user(THE_REQUEST)]
+        for index in range(60):
+            marker = "FIRST_STEP" if index == 0 else f"step-{index}"
+            history.extend(_work(f"c{index}", f"{marker} " + "output " * 900))
+
+        await _compactor(sink)(_ctx(), history)
 
         assert sink, "the summarizer was never called"
-        assert "FIRST_STEP" in sink[0]
+        rendered = sink[0]
+        assert len(rendered) <= _MAX_TRANSCRIPT_CHARS + 200
+        # Both ends of the summarized span survive; only its middle goes. The
+        # very last steps are not here at all -- they are in the kept tail.
+        import re
+
+        assert "middle of the transcript omitted" in rendered
+        assert "FIRST_STEP" in rendered
+        seen = [int(match) for match in re.findall(r"step-(\d+)", rendered)]
+        assert seen and max(seen) > 40, (
+            "the end of the summarized span was dropped, which is the library "
+            "bug this replaced"
+        )
 
     async def test_the_summary_is_marked_so_a_later_pass_knows_its_own_work(
         self,

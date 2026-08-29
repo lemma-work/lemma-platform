@@ -229,6 +229,14 @@ class TestAgentMemoryIsolation:
 
         assert note["visibility"] == "PERSONAL"
 
+        # Positive control. Without one, every denial below passes just as well
+        # when the other member has lost all access to the pod — the sibling
+        # test guards its own vacuity the same way.
+        shared = await owner.upload_file(
+            "readable.md", b"pod-visible", directory_path="/"
+        )
+        assert (await other.get_file("/readable.md"))["id"] == shared["id"]
+
         # A different member's `/me` is a different tree entirely.
         await other.get_file(
             "/me/agents/butler/AGENTS.md",

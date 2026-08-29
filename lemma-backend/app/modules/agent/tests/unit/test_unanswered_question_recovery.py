@@ -112,7 +112,14 @@ class TestWhenThePersonAnswersSomethingElse:
         assert "carry on" in answers
 
     def test_the_question_itself_is_still_in_the_history(self) -> None:
-        """Dropping the call left no record of having asked."""
+        """Dropping the call left no record of having asked.
+
+        Asserted on the `ToolCallPart`, not on the string "ask_user" appearing
+        somewhere: the synthesized return carries that name too, so a substring
+        match is satisfied even when every call has been stripped.
+        """
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+
         messages = [
             *_asked_but_unanswered(),
             _msg(3, MessageRole.USER, MessageKind.TEXT, text="actually cancel it"),
@@ -120,7 +127,35 @@ class TestWhenThePersonAnswersSomethingElse:
 
         history, _ = history_and_prompt(messages)
 
-        assert any("ask_user" in str(message) for message in history)
+        calls = [
+            (part.tool_name, part.tool_call_id)
+            for message in history
+            if isinstance(message, ModelResponse)
+            for part in message.parts
+            if isinstance(part, ToolCallPart)
+        ]
+        assert calls == [("ask_user", "q1")]
+
+    def test_a_question_abandoned_mid_conversation_is_reported_too(self) -> None:
+        """The moved-on turn is usually the newest, where it becomes the prompt
+        and a different code path covers it. This is the other case: they
+        answered something else and the conversation carried on past it."""
+        messages = [
+            *_asked_but_unanswered(),
+            _msg(3, MessageRole.USER, MessageKind.TEXT, text="actually cancel it"),
+            _msg(
+                4,
+                MessageRole.ASSISTANT,
+                MessageKind.TEXT,
+                text="Cancelled the booking.",
+            ),
+            _msg(5, MessageRole.USER, MessageKind.TEXT, text="thanks"),
+        ]
+
+        history, _ = history_and_prompt(messages)
+
+        answers = " ".join(str(part.content) for part in _tool_returns(history))
+        assert "did not answer" in answers
 
 
 class TestWhenTheConversationIsStillWaiting:

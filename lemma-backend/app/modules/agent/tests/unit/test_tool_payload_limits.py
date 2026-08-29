@@ -54,10 +54,16 @@ class TestBoundedToolPayload:
 
         assert "narrower" in note or "Narrow" in note
 
-    def test_the_limit_is_honoured(self) -> None:
-        value = "a" * (DEFAULT_TOOL_PAYLOAD_LIMIT - 1)
+    def test_a_value_exactly_at_the_limit_is_kept(self) -> None:
+        """The boundary itself: `<=` keeps it, `<` would clip it."""
+        value = "a" * DEFAULT_TOOL_PAYLOAD_LIMIT
 
         assert bounded_tool_payload(value) == value
+
+    def test_one_character_past_the_limit_is_clipped(self) -> None:
+        value = "a" * (DEFAULT_TOOL_PAYLOAD_LIMIT + 1)
+
+        assert bounded_tool_payload(value)["truncated"] is True
 
     def test_what_it_is_gets_named(self) -> None:
         """`what` distinguishes 'the connector said too much' from 'your
@@ -68,11 +74,18 @@ class TestBoundedToolPayload:
 
         assert "connector response" in result["note"]
 
-    def test_unserializable_values_are_still_measured(self) -> None:
+    def test_a_value_json_cannot_render_is_still_measured(self) -> None:
+        """Measured through the fallback, not charged at a bytes repr."""
+
         class Opaque:
             def __repr__(self) -> str:
                 return "o" * (DEFAULT_TOOL_PAYLOAD_LIMIT + 10)
 
-        result = bounded_tool_payload({"x": Opaque()})
+        assert bounded_tool_payload({"x": Opaque()})["truncated"] is True
 
-        assert result["truncated"] is True
+    def test_a_bytes_payload_is_not_measured_at_its_repr(self) -> None:
+        """`default=str` here would render bytes as their escaped repr, so a
+        value gets clipped for a size it does not have."""
+        assert bounded_tool_payload({"image": b"\xff" * 40_000}) == {
+            "image": b"\xff" * 40_000
+        }

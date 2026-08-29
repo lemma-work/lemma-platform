@@ -81,3 +81,21 @@ def bounded_tool_payload(
             "narrower slice of it -- fewer items, or one field at a time."
         ),
     }
+
+
+def bounded_tool_text(
+    value: str, *, limit: int = DEFAULT_TOOL_PAYLOAD_LIMIT, what: str = "content"
+) -> str:
+    """A string bounded in place, for a field typed `str`.
+
+    `bounded_tool_payload` swaps an oversized value for a marked dict, which a
+    typed response field cannot hold. This keeps the head — where a document or
+    a skill introduces itself — and says what it cut, in the text itself, since
+    there is no sibling field to carry a flag.
+    """
+    if len(value) <= limit:
+        return value
+    return (
+        f"{value[:limit]}\n\n[{len(value) - limit} more characters of this "
+        f"{what} are not shown. Read it directly if you need the rest.]"
+    )

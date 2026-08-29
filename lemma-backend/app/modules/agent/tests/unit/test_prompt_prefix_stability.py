@@ -20,7 +20,10 @@ import pytest
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
+from app.modules.agent.capabilities.prompt_caching import (
+    _ANTHROPIC_CACHE_TTL,
+    PromptCachingCapability,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -65,7 +68,11 @@ class TestTheTaskListComesLast:
         start = text.index("This conversation already has a task list")
 
         assert "# Agent Instructions" not in text[start:]
-        assert "# Runtime Context" not in text[start:]
+        # And it is genuinely the final section, not merely ahead of one other
+        # marker. The previous version asserted on `# Runtime Context`, which
+        # appears nowhere in this prompt, so it could never have failed.
+        sections = text.split("\n\n---\n\n")
+        assert "This conversation already has a task list" in sections[-1]
 
     def test_the_agent_instruction_still_arrives(self) -> None:
         assert "Answer briefly." in self._instructions()
@@ -94,12 +101,14 @@ class TestAnthropicCachesToolDefinitionsToo:
         which is the entire point of deferring them."""
         settings = self._settings(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
 
-        assert "anthropic_cache_tool_definitions" in settings
+        # The value, not just the key: `False` or `None` would pass a presence
+        # check and disable the very thing being asserted.
+        assert settings["anthropic_cache_tool_definitions"] == _ANTHROPIC_CACHE_TTL
 
     def test_the_instruction_breakpoint_is_still_there(self) -> None:
         settings = self._settings(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
 
-        assert "anthropic_cache_instructions" in settings
+        assert settings["anthropic_cache_instructions"] == _ANTHROPIC_CACHE_TTL
 
     def test_an_openai_compatible_run_gets_affinity_keys_instead(self) -> None:
         """Those providers cache on the literal prefix; what they need is sticky
