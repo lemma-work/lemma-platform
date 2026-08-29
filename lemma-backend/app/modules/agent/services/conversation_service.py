@@ -103,7 +103,6 @@ class ConversationService:
         agent_name: str | None,
         user_id: UUID,
         title: str | None = None,
-        title_is_placeholder: bool = False,
         instructions: str | None = None,
         agent_runtime: AgentRuntimeConfig | None = None,
         parent_id: UUID | None = None,
@@ -148,19 +147,12 @@ class ConversationService:
         else:
             conversation_type = type
 
-        # A placeholder is a client-side UX seed (typically the first message,
-        # so the sidebar is never blank), not a title the caller chose. It is
-        # never persisted: ConversationTitleService.generate_title_if_absent
-        # skips any conversation that already has a title, so persisting the
-        # seed would make it permanent and the LLM/fallback title would never
-        # run. The caller still gets it back for its own optimistic UI --
-        # see the controller, which overlays it onto the create response.
         conversation = Conversation(
             user_id=user_id,
             pod_id=pod_id,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
-            title=None if title_is_placeholder else title,
+            title=title,
             instructions=instructions,
             agent_runtime=agent_runtime,
             parent_id=parent_id,

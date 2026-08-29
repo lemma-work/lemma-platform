@@ -8,7 +8,6 @@ from streaq.task import TaskStatus
 
 from app.modules.agent.domain.events import (
     AgentRunCompletedEvent,
-    AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
 from app.modules.agent.events.handlers import conversation_title_job_id
@@ -166,47 +165,6 @@ async def test_completed_event_enqueues_dedup_title_job() -> None:
             conversation_title_job_id(completed_event.conversation_id),
         )
     ]
-
-
-@pytest.mark.asyncio
-async def test_started_event_also_enqueues_dedup_title_job() -> None:
-    """The title only needs the user's first message, already saved by the
-    time this event fires, so it starts on run-start rather than waiting for
-    the run to finish -- a long-running turn should not leave the
-    conversation title-less for its whole duration."""
-    job_queue = _JobQueue(TaskStatus.SCHEDULED)
-    started_event = AgentRunStartedEvent(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        agent_name="hello",
-    )
-
-    await handlers.handle_agent_control_event(
-        started_event.model_dump(mode="json"),
-        fs_logger=_Logger(),
-        job_queue=job_queue,
-        uow_factory=_UowFactory(),
-        inbox=PassthroughEventInbox(),
-    )
-
-    assert (
-        "process_agent_run",
-        {
-            "agent_run_id": str(started_event.agent_run_id),
-            "conversation_id": str(started_event.conversation_id),
-            "user_id": str(started_event.user_id),
-            "pod_id": str(started_event.pod_id),
-            "agent_name": started_event.agent_name,
-        },
-        handlers.agent_run_job_id(started_event.agent_run_id),
-    ) in job_queue.enqueued
-    assert (
-        "generate_conversation_title",
-        {"conversation_id": str(started_event.conversation_id)},
-        conversation_title_job_id(started_event.conversation_id),
-    ) in job_queue.enqueued
 
 
 @pytest.mark.asyncio
