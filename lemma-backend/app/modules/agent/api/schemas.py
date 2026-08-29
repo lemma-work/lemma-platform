@@ -216,13 +216,6 @@ class ApprovalDecisionResponse(BaseModel):
 class CreateConversationRequest(BaseModel):
     agent_name: str | None = None
     title: str | None = None
-    # True when `title` is a client-side UX seed (e.g. the first message,
-    # shown immediately so the sidebar is never blank) rather than a title the
-    # caller actually chose. A seed is not persisted as the conversation's
-    # title -- see ConversationService.create_conversation -- so
-    # ConversationTitleService still generates a real one. Ignored when
-    # `title` is unset.
-    title_is_placeholder: bool = False
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     parent_id: UUID | None = None

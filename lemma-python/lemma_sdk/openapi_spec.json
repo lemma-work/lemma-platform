@@ -4688,11 +4688,6 @@
             ],
             "title": "Title"
           },
-          "title_is_placeholder": {
-            "default": false,
-            "title": "Title Is Placeholder",
-            "type": "boolean"
-          },
           "type": {
             "$ref": "#/components/schemas/ConversationType",
             "default": "CHAT"
