@@ -58,19 +58,28 @@ def is_pinned_message(message: object) -> bool:
         return False
     if names & {"ToolReturnPart", "RetryPromptPart"}:
         return False
-    return not _is_only_runtime_note(message)
+    return not _is_synthetic(message)
 
 
-def _is_only_runtime_note(message: object) -> bool:
-    """A bare `<notes>` block, which is rebuilt every request and pins nothing.
+def _is_synthetic(message: object) -> bool:
+    """Scaffolding wearing a user turn's clothes, which pins nothing.
+
+    Two kinds reach here. A bare `<notes>` block, rebuilt every request. And the
+    elision notices `runtime_history` writes, which are user-role so Anthropic
+    does not hoist them out of the history -- but are ours, not the person's,
+    and pinning them would keep every one of them forever.
 
     A note prepended to real user text is a different thing: that message is the
     user's, and it stays.
     """
+    from app.modules.agent.services.runtime_history import SYNTHETIC_NOTICE_PREFIX
+
     for part in getattr(message, "parts", ()) or ():
         content = getattr(part, "content", None)
         if isinstance(content, str):
             stripped = content.strip()
+            if stripped.startswith(SYNTHETIC_NOTICE_PREFIX):
+                continue
             if not (stripped.startswith("<notes>") and stripped.endswith("</notes>")):
                 return False
     return True

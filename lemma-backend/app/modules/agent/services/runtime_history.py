@@ -30,8 +30,23 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 
+#: Opens every message this module synthesizes. Two jobs: the model reads it as
+#: scaffolding rather than as something a person said, and the compactor can tell
+#: these apart from real user turns so it does not pin them forever.
+SYNTHETIC_NOTICE_PREFIX = "[conversation history]"
+
 #: Runs kept with every message. Older runs are elided to first and last.
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+#: The oldest runs a conversation carries at all, elided ones included.
+#:
+#: Surface conversations have always had an age and message-count window. Every
+#: other kind -- the web UI, tasks, sub-agents -- had none, so a long-lived
+#: conversation loaded *every* run it had ever had: a 400-turn one arrives as
+#: ~400 elided runs before compaction has seen a single message, and pays for
+#: the notice on each of them every turn. Elision bounds a run's size; nothing
+#: bounded how many runs there were.
+MAX_HISTORY_AGENT_RUNS = 60
 
 
 def _newest_message_time(run: AgentRun) -> datetime | None:
@@ -66,16 +81,23 @@ def _newest_message_time(run: AgentRun) -> datetime | None:
 def apply_surface_history_window(
     runs: list[AgentRun], conversation: Conversation | None
 ) -> list[AgentRun]:
-    """For surface conversations, bound history by age + message count.
+    """Bound how much history a conversation carries.
+
+    Every conversation is capped at ``MAX_HISTORY_AGENT_RUNS`` runs. Surface
+    conversations are bounded further, by age + message count.
 
     Trims at run granularity (a tool-call and its return live in the same run,
     so whole-run trimming never splits a pair) and always keeps at least the
     most recent run. No-op for non-surface conversations or when a limit is
     disabled. Runs are assumed chronologically ordered.
     """
-    if conversation is None or not runs:
+    if not runs:
         return runs
-    metadata = conversation.metadata or {}
+    # Applies to every conversation, surface or not: the oldest runs are the
+    # least useful and there is no upper bound on how many of them there can be.
+    if len(runs) > MAX_HISTORY_AGENT_RUNS:
+        runs = runs[-MAX_HISTORY_AGENT_RUNS:]
+    metadata = (conversation.metadata or {}) if conversation is not None else {}
     if not metadata.get("surface_platform"):
         return runs
 
@@ -193,10 +215,14 @@ def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
                 final.sequence - 1,
             ),
             agent_run_id=run.id,
-            role=MessageRole.SYSTEM.value,
+            # User role, not system. A `SystemPromptPart` is hoisted by
+            # Anthropic to the front of the system prompt, ahead of the whole
+            # cacheable prefix -- and this text changes as runs age out, so it
+            # invalidated the breakpoint on every turn.
+            role=MessageRole.USER.value,
             kind=MessageKind.NOTIFICATION,
             text=(
-                "Earlier agent run summarized: "
+                f"{SYNTHETIC_NOTICE_PREFIX} earlier agent run summarized: "
                 f"worked through {skipped_count} intermediate messages."
             ),
             metadata={
@@ -239,11 +265,11 @@ def _replayable_final(
         conversation_id=run.conversation_id,
         sequence=final.sequence,
         agent_run_id=run.id,
-        role=MessageRole.SYSTEM.value,
+        role=MessageRole.USER.value,
         kind=MessageKind.NOTIFICATION,
         text=(
-            f"That run ended with the result of {final.tool_name or 'a tool'}: "
-            f"{_short_result(final)}"
+            f"{SYNTHETIC_NOTICE_PREFIX} that run ended with the result of "
+            f"{final.tool_name or 'a tool'}: {_short_result(final)}"
         ),
         metadata={
             "synthetic": True,

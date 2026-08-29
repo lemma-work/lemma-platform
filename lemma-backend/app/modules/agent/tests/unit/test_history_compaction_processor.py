@@ -386,3 +386,88 @@ class TestStaleImagesAreDetached:
             if hasattr(part, "tool_call_id")
         ]
         assert before == after
+
+
+class TestThePinnedSetIsBounded:
+    """Keeping every user turn is right until there are a thousand of them.
+
+    At that point the pinned set alone fills the budget and the agent has no
+    room left to do the work. When it has to give, the first message stays: it
+    is the request, and losing it is the failure this module exists to prevent.
+    """
+
+    def _many_questions(self, count: int) -> list[object]:
+        messages: list[object] = [_user(THE_REQUEST)]
+        for index in range(count):
+            messages.append(_user(f"follow-up number {index}"))
+            messages.extend(_work(f"c{index}", "output " * 50))
+        return messages
+
+    async def test_the_original_request_survives_the_bound(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+        )
+
+        history = self._many_questions(MAX_PINNED_USER_MESSAGES * 3)
+
+        compacted = await _compactor([])(_ctx(), history)
+
+        assert any(THE_REQUEST in text for text in _texts(compacted))
+
+    async def test_the_most_recent_questions_survive_too(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+        )
+
+        count = MAX_PINNED_USER_MESSAGES * 3
+        history = self._many_questions(count)
+
+        compacted = await _compactor([])(_ctx(), history)
+
+        assert any(f"follow-up number {count - 1}" in t for t in _texts(compacted))
+
+    async def test_the_pinned_set_stops_growing(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+        )
+
+        history = self._many_questions(MAX_PINNED_USER_MESSAGES * 3)
+
+        compacted = await _compactor([])(_ctx(), history)
+
+        # The bound is on what the compacted head carries. The recent tail is
+        # kept whole by design, so its own user turns are on top of it.
+        pinned = [m for m in compacted if is_pinned_message(m)]
+        assert len(pinned) <= MAX_PINNED_USER_MESSAGES + 1 + 6  # summary + tail
+
+    async def test_folding_a_users_words_is_declared(self) -> None:
+        """Silently turning what somebody said into prose about what they said
+        is the drop this whole module removes."""
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+        )
+
+        history = self._many_questions(MAX_PINNED_USER_MESSAGES * 3)
+
+        compacted = await _compactor([])(_ctx(), history)
+
+        assert any("earlier message(s) from the user" in t for t in _texts(compacted))
+
+    async def test_nothing_is_declared_when_nothing_was_folded(self) -> None:
+        compacted = await _compactor([])(_ctx(), _history())
+
+        assert not any(
+            "earlier message(s) from the user" in t for t in _texts(compacted)
+        )
+
+    async def test_folded_turns_are_summarized_not_simply_lost(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+        )
+
+        sink: list[str] = []
+        history = self._many_questions(MAX_PINNED_USER_MESSAGES * 3)
+
+        await _compactor(sink)(_ctx(), history)
+
+        assert "follow-up number 0" in sink[0]

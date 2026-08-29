@@ -51,7 +51,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.harnesses.agent_host.credential_refresh_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'error_type'})),
     'agent.harnesses.agent_host.event_stream_read.degraded': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'error_type'})),
     'agent.harnesses.agent_host.run_deadline_capped_by_credential.degraded': EventSpec('warning', frozenset({'agent_run_id', 'timeout_seconds'})),
-    'agent.history.compacted.observed': EventSpec('info', frozenset({'kept_count', 'pinned_count', 'size_after', 'size_before', 'summarized_count'})),
+    'agent.history.compacted.observed': EventSpec('info', frozenset({'folded_pin_count', 'kept_count', 'pinned_count', 'size_after', 'size_before', 'summarized_count'})),
     'agent.history.summarization_failed.degraded': EventSpec('warning', frozenset({'transcript_length'})),
     'agent.history.token_ceiling_enforced.degraded': EventSpec('warning', frozenset({'dropped_count', 'size_after', 'size_before'})),
     'agent.history.usage_not_metered.degraded': EventSpec('warning', frozenset()),

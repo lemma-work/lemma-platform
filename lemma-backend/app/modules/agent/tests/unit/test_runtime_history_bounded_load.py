@@ -28,6 +28,10 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
+from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.services.runtime_history import (
+    apply_surface_history_window,
+)
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
 
@@ -408,10 +412,14 @@ class TestTheUsersOwnMessagesAreNeverElided:
 
         selected = select_runtime_history(_as_bounded(runs))
 
+        # Real user turns only: the elision notice is user-role too, so that
+        # Anthropic does not hoist it out of the history, but it is ours.
         kept = [
             message.text
             for message in selected
-            if message.agent_run_id == oldest_id and message.role is MessageRole.USER
+            if message.agent_run_id == oldest_id
+            and message.role is MessageRole.USER
+            and message.kind is MessageKind.TEXT
         ]
         assert kept == [
             "run 0 message 0",
@@ -504,3 +512,44 @@ class TestAPausingRunsAnswerSurvivesElision:
 
         for_run = [m for m in selected if m.agent_run_id == runs[0].id]
         assert for_run[-1].text == "run 0 message 8"
+
+
+class TestHistoryIsBoundedForEveryConversation:
+    """Surface conversations always had an age and count window. Nothing else
+    did — so the web UI, tasks and sub-agents loaded every run a conversation
+    had ever had. Elision bounds how big a run is; nothing bounded how many.
+    """
+
+    def _long_conversation(self, run_count: int) -> list[AgentRun]:
+        conversation_id = uuid4()
+        return [
+            _run(conversation_id, index, message_count=4) for index in range(run_count)
+        ]
+
+    def test_a_very_long_conversation_stops_growing(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 3)
+
+        assert len(apply_surface_history_window(runs, None)) == MAX_HISTORY_AGENT_RUNS
+
+    def test_it_is_the_oldest_runs_that_go(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 5)
+
+        kept = apply_surface_history_window(runs, None)
+
+        assert kept[-1] is runs[-1]
+        assert runs[0] not in kept
+
+    def test_an_ordinary_conversation_is_untouched(self) -> None:
+        runs = self._long_conversation(3)
+
+        assert apply_surface_history_window(runs, None) == runs
+
+    def test_the_cap_applies_before_the_surface_window(self) -> None:
+        """A surface conversation is bounded by both, not by whichever it
+        happens to hit first."""
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 2)
+
+        kept = select_runtime_history(_as_bounded(runs))
+
+        run_ids = {message.agent_run_id for message in kept}
+        assert len(run_ids) <= MAX_HISTORY_AGENT_RUNS

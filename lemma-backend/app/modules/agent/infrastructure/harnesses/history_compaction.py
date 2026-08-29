@@ -50,6 +50,12 @@ SUMMARY_MARKER = "[earlier in this conversation, summarized]"
 #: middle silently is what the failure mode above looks like from the inside.
 FAILED_MARKER = "[earlier in this conversation, omitted]"
 
+#: How many user turns stay verbatim. Pinning every one is right until a
+#: conversation has a thousand of them, at which point the pinned set alone can
+#: fill the budget and leave the agent no room to work. The first is always kept:
+#: it is the request, and losing it is the failure this module exists to prevent.
+MAX_PINNED_USER_MESSAGES = 20
+
 #: Per-part cap when rendering the transcript to summarize. Bounds the cost of a
 #: single enormous tool result without dropping the step it belongs to -- every
 #: step stays represented, just less verbosely.
@@ -148,25 +154,37 @@ class HistoryCompactor:
         head, tail = working[:cutoff], working[cutoff:]
 
         # Pinned messages survive as themselves, so summarizing them would spend
-        # tokens describing text that is about to be reproduced anyway.
-        pinned = [message for message in head if is_pinned_message(message)]
-        to_summarize = [message for message in head if not is_pinned_message(message)]
+        # tokens describing text that is about to be reproduced anyway. Past the
+        # cap the oldest of them are folded into the summary instead -- the very
+        # first one excepted, always.
+        every_pin = [message for message in head if is_pinned_message(message)]
+        pinned = _bounded_pins(every_pin)
+        kept = {id(message) for message in pinned}
+        folded = len(every_pin) - len(pinned)
+        to_summarize = [
+            message
+            for message in head
+            if not is_pinned_message(message) or id(message) not in kept
+        ]
         if not to_summarize:
             return [*pinned, *tail]
 
-        summary = await self._summarize(ctx, _render(to_summarize))
+        summary = await self._summarize(ctx, _render(to_summarize), folded=folded)
         compacted = [*pinned, _summary_message(summary), *tail]
         logger.info(
             "agent.history.compacted.observed",
             size_before=size,
             size_after=count_model_message_tokens(compacted),
             pinned_count=len(pinned),
+            folded_pin_count=folded,
             summarized_count=len(to_summarize),
             kept_count=len(tail),
         )
         return compacted
 
-    async def _summarize(self, ctx: RunContext, transcript: str) -> str:
+    async def _summarize(
+        self, ctx: RunContext, transcript: str, *, folded: int = 0
+    ) -> str:
         from pydantic_ai import Agent
 
         try:
@@ -208,7 +226,17 @@ class HistoryCompactor:
                 logger.warning(
                     "agent.history.usage_not_metered.degraded", exc_info=True
                 )
-        return f"{SUMMARY_MARKER}\n{result.output}"
+        # Said out loud when it happens. Folding a person's earlier words into
+        # prose without a word about it is the silent drop this module removes.
+        preamble = (
+            f"{SUMMARY_MARKER}\n"
+            if not folded
+            else (
+                f"{SUMMARY_MARKER} — including {folded} earlier message(s) from "
+                "the user, described below rather than quoted.\n"
+            )
+        )
+        return f"{preamble}{result.output}"
 
 
 #: How many trailing messages keep their images live. A model that has just
@@ -288,3 +316,17 @@ def _replaced(obj: Any, **changes: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         return dataclasses.replace(obj, **changes)
     return obj.model_copy(update=changes)
+
+
+def _bounded_pins(pinned: list[Any]) -> list[Any]:
+    """The pinned turns that still fit, the first one always among them.
+
+    Keeping every user message is right for every realistic conversation and
+    wrong for the one with a thousand of them, where the pinned set alone would
+    leave no room for the work. When it has to give, the first message stays: it
+    is the request, and an agent that has lost it does not stop and ask -- it
+    invents a plausible substitute and reports that as the thing it was asked for.
+    """
+    if len(pinned) <= MAX_PINNED_USER_MESSAGES:
+        return pinned
+    return [pinned[0], *pinned[-(MAX_PINNED_USER_MESSAGES - 1) :]]
