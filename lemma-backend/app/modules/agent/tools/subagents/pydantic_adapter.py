@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -134,9 +135,13 @@ async def query_subagents(
                 after_sequence=request.after_sequence,
                 limit=request.limit,
             )
+            # A child run's transcript, its own large tool results included.
             return {
                 "success": True,
-                "messages": [message_to_payload(message) for message in messages],
+                "messages": bounded_tool_payload(
+                    [message_to_payload(message) for message in messages],
+                    what="sub-agent transcript",
+                ),
             }
         # mode == "list"
         children = await _service().list_children(

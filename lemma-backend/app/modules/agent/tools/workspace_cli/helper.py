@@ -8,7 +8,6 @@ from app.modules.agent.tools.workspace_entities import (
 CHARACTER_LIMIT_STDOUT = 30000
 CHARACTER_LIMIT_STDERR = 10000
 CHARACTER_LIMIT_OUTPUT = 10000
-CHARACTER_LIMIT_DATASTORE_RESULT = 50000  # Approximately 10k tokens (1 token ≈ 4 chars)
 
 # CSI (colours, cursor moves), OSC (window title), and single-character escapes.
 # A PTY emits these constantly; to a model they are noise that costs tokens and

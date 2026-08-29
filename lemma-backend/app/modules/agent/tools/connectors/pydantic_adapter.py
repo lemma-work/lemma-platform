@@ -24,6 +24,7 @@ import jsonschema
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import to_json_value
@@ -155,7 +156,8 @@ async def describe_connector_operation(
             )
         except DomainError as exc:
             return _error(exc.code or "connector_error", safe_error_text(exc))
-    return to_json_value(detail)
+    # Whole input and output schemas; some connectors publish very large ones.
+    return bounded_tool_payload(to_json_value(detail), what="operation schema")
 
 
 def _validate_arguments(
@@ -239,4 +241,4 @@ async def run_connector_operation(
             # Connector failures are information for the model (wrong argument,
             # account needs reconnecting), not a reason to end the run.
             return _error(exc.code or "connector_error", safe_error_text(exc))
-    return to_json_value(response)
+    return bounded_tool_payload(to_json_value(response), what="connector response")

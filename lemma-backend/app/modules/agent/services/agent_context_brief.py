@@ -233,10 +233,11 @@ class AgentContextBriefBuilder:
             )
             token = set_current_context(ctx)
             try:
-                tables, _ = await build_table_service(uow).list_tables(
+                tables, table_total = await build_table_service(uow).list_tables(
                     pod_id, ctx, limit=_MAX_TABLES
                 )
                 table_lines = [_table_line(table) for table in tables]
+                table_lines.extend(_more_note(len(tables), table_total, "tables"))
             finally:
                 reset_current_context(token)
         if table_lines:
@@ -245,7 +246,7 @@ class AgentContextBriefBuilder:
 
         # Agents (plain query).
         async with self.uow_factory() as uow:
-            agents, _ = await AgentRepository(uow).list_by_pod(
+            agents, agent_total = await AgentRepository(uow).list_by_pod(
                 pod_id=pod_id, limit=_MAX_RESOURCES
             )
         named = [a for a in agents if a.id != DEFAULT_POD_AGENT_ID]
@@ -255,12 +256,13 @@ class AgentContextBriefBuilder:
                 f"- {a.name}" + (f" — {a.description}" if a.description else "")
                 for a in named
             )
+            lines.extend(_more_note(len(agents), agent_total, "agents"))
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, _ = await create_function_repository(uow).list_by_pod(
-                pod_id, limit=_MAX_RESOURCES
-            )
+            functions, function_total = await create_function_repository(
+                uow
+            ).list_by_pod(pod_id, limit=_MAX_RESOURCES)
         if functions:
             lines.append("\n## Functions")
             lines.extend(
@@ -268,6 +270,7 @@ class AgentContextBriefBuilder:
                 + (f" — {f.description}" if f.description else "")
                 for f in functions
             )
+            lines.extend(_more_note(len(functions), function_total, "functions"))
 
         # Files — best-effort grounding, isolated in its own uow so the storage
         # walk never extends the spans above. (Removing the storage hold inside
@@ -361,9 +364,15 @@ class AgentContextBriefBuilder:
             "tool returns a permission error (403), or for an explicitly "
             "destructive action.",
         ]
-        for (resource_type, resource_id), perms in list(perms_by_ref.items())[
-            :_MAX_RESOURCES
-        ]:
+        granted = list(perms_by_ref.items())
+        # Truncating a section headed "These are pre-authorized for you" without
+        # saying so means the agent asks for approval it already has.
+        lines.extend(
+            _more_note(
+                min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"
+            )
+        )
+        for (resource_type, resource_id), perms in granted[:_MAX_RESOURCES]:
             try:
                 ref_type = ResourceType(resource_type)
             except ValueError:
@@ -379,12 +388,37 @@ class AgentContextBriefBuilder:
         return lines
 
 
+def _more_note(shown: int, total: object, noun: str) -> list[str]:
+    """One line saying what the cap left out, or nothing when it left nothing.
+
+    Every cap in this brief used to be silent, so a pod's 51st table simply did
+    not exist as far as the agent was concerned -- and an agent that believes a
+    table is absent does not go looking for it, it tells the user there isn't
+    one.
+    """
+    # A repository that does not count returns None rather than a total; that is
+    # "unknown", not "nothing more", and must not crash prompt assembly.
+    if not isinstance(total, int) or total <= shown:
+        return []
+    return [
+        f"- … and {total - shown} more {noun} not listed here "
+        f"(showing {shown}). Use your tools to list them all."
+    ]
+
+
 def _table_line(table) -> str:
+    shown = table.columns[:_MAX_COLUMNS]
     columns = ", ".join(
         f"{c.name}:{c.type.value if hasattr(c.type, 'value') else c.type}"
-        for c in table.columns[:_MAX_COLUMNS]
+        for c in shown
     )
-    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}"
+    # A column the agent cannot see is a column it will omit from a write and
+    # then be told is required, or will report to the user as not existing.
+    hidden = len(table.columns) - len(shown)
+    suffix = (
+        f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
+    )
+    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}{suffix}"
 
 
 def _top_level_file_entries(tree: object) -> list[str]:
@@ -400,4 +434,9 @@ def _top_level_file_entries(tree: object) -> list[str]:
             kind = child.get("kind") or child.get("type")
             if name:
                 entries.append(f"{name}" + (f" [{kind}]" if kind else ""))
+    if len(children) > _MAX_RESOURCES:
+        entries.append(
+            f"… and {len(children) - _MAX_RESOURCES} more top-level entries "
+            "not listed here"
+        )
     return entries
