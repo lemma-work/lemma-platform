@@ -107,7 +107,9 @@ async def adopt_recorded_final_answer(
         record = await read_final_answer(uow_factory, agent_run_id=agent_run_id)
     except SQLAlchemyError:
         # The stream-inferred answer, if any, still stands.
-        logger.debug("agent.agent_host.final_answer_read_failed.diagnostic")
+        logger.warning(
+            "agent.agent_host.final_answer_read_failed.degraded", exc_info=True
+        )
         return
     normalizer.adopt_final_answer(record)
 

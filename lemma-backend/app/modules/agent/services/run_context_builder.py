@@ -11,11 +11,14 @@ to be written down before any tool can resolve a relative path against it.
 
 from __future__ import annotations
 
-from contextlib import suppress
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import HarnessKind
@@ -36,6 +39,16 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.tool_assembler import load_agent_grant_summary
 from app.modules.agent.tools.toolset_selection import resolve_toolset_names
 from app.modules.agent.services.vision_service import vision_delegate_available
+
+
+logger = get_logger(__name__)
+
+_CONTEXT_BRIEF_UNAVAILABLE = (
+    "## Runtime Context\n\n"
+    "This section could not be assembled for this run, so the pod's tables, "
+    "agents, files and your memory are not listed here. They still exist -- "
+    "list them with your tools rather than concluding the pod is empty."
+)
 
 
 async def build_run_context(
@@ -110,7 +123,7 @@ async def build_run_context(
         grant_summary=grant_summary,
         **surface_context,
     )
-    with suppress(Exception):
+    try:
         ctx.context_brief = await AgentContextBriefBuilder(uow_factory).build(
             agent=agent,
             conversation=conversation,
@@ -118,6 +131,21 @@ async def build_run_context(
             user_id=user_id,
             pod_id=conversation.pod_id,
         )
+    # The failures a run should survive: a denied grant, a missing file, a
+    # database or storage blip. Not a TypeError -- `agent_memory_brief` says a
+    # real authorization failure "should fail the brief, not hide as an empty
+    # memory section", and the `suppress(Exception)` this replaces hid exactly
+    # that. A run could lose the pod's name, its tables, its grants and its
+    # memory at once, with nothing logged and nothing said to the model, which
+    # then saw a pod that appeared to be empty.
+    except DomainError, SQLAlchemyError, OSError, TimeoutError:
+        logger.warning(
+            "agent.run.context_brief_unavailable.degraded",
+            agent_id=str(agent.id),
+            conversation_id=str(conversation.id),
+            exc_info=True,
+        )
+        ctx.context_brief = _CONTEXT_BRIEF_UNAVAILABLE
     # How image-returning tools answer on this run. Settled before the
     # toolset is built, because the assembler needs it: `view_image` is
     # offered whenever the mode can answer at all, and withholding it on

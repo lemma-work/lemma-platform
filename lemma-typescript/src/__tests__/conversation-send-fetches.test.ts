@@ -71,6 +71,7 @@ function fakeClient(items: Conversation[], streamLines: string[] = CLEAN_TURN) {
   const create = vi.fn(async () => conversation("c-new", "WAITING"));
   const messagesList = vi.fn(async () => ({ items: [], limit: 100, next_page_token: null }));
   const sendMessageStream = vi.fn(async () => sse([...streamLines]));
+  const stopRun = vi.fn();
 
   const client = {
     podId: "pod-1",
@@ -86,12 +87,12 @@ function fakeClient(items: Conversation[], streamLines: string[] = CLEAN_TURN) {
       sendMessageStream,
       retryFailedRun: vi.fn(),
       resumeStream: vi.fn(),
-      stopRun: vi.fn(),
+      stopRun,
       update: vi.fn(),
     },
   } as unknown as LemmaClient;
 
-  return { client, list, get, create, messagesList, sendMessageStream };
+  return { client, list, get, create, messagesList, sendMessageStream, stopRun };
 }
 
 async function settle() {
@@ -342,5 +343,51 @@ describe("a conversation opened as the controller mounts", () => {
 
     expect(controller.current?.activeConversationId).toBe("c1");
     expect(messagesList).toHaveBeenCalled();
+  });
+});
+
+describe("starting a new conversation while one is running", () => {
+  // Pod home starts a fresh conversation on every send, and the assistant is
+  // one instance for the whole pod — so the turn it is holding is usually one
+  // the person is still watching somewhere else. Leaving it must not end it.
+  it("creates the new conversation and leaves the running one alone", async () => {
+    const { client, create, stopRun } = fakeClient([conversation("c1", "RUNNING")]);
+    const controller = await mount(client);
+
+    await act(async () => controller.current?.openConversation("c1"));
+    await settle();
+
+    // The order a caller has to keep: close first, then send. Closing drops the
+    // active id and the live stream, so the reset inside the forced-new send
+    // finds nothing to stop. Skip the close and the send is refused outright —
+    // `sendMessage` returns early while it believes a run is live — so this
+    // pins the order as much as the outcome.
+    await act(async () => controller.current?.closeConversation());
+    await settle();
+    await act(async () => {
+      await controller.current?.sendMessage("something else", { forceNewConversation: true });
+    });
+    await settle();
+
+    expect(stopRun).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  // The other half of the contract, and the reason the order above matters:
+  // `clearMessages` is not a cheaper `closeConversation`. It resets the shared
+  // session, and the reset ends the run. Pod home used to call it before every
+  // send, which killed whatever turn the assistant still had open.
+  it("stops the run when the session is reset instead of closed", async () => {
+    const { client, stopRun } = fakeClient([conversation("c1", "RUNNING")]);
+    const controller = await mount(client);
+
+    await act(async () => controller.current?.openConversation("c1"));
+    await settle();
+
+    await act(async () => controller.current?.clearMessages());
+    await settle();
+
+    expect(stopRun).toHaveBeenCalledOnce();
+    expect(stopRun.mock.calls[0]?.[0]).toBe("c1");
   });
 });

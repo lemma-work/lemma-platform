@@ -299,7 +299,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         enable_rls: bool = True,
         is_pod_admin: bool = False,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, bool]:
         """Execute a pre-validated read-only SQL query inside the pod schema.
 
         Callers must validate the statement (single, read-only, no cross-schema
@@ -351,13 +351,19 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     if len(rows) > max_rows:
                         break
                 await result.close()
-                if len(rows) > max_rows:
+                # The extra row is the only evidence the result was cut, and it
+                # used to be dropped here -- so a caller was handed exactly
+                # `max_rows` rows and a count equal to them, which reads as a
+                # complete result. An agent then reports "you have 1000 orders"
+                # to someone with forty thousand.
+                truncated = len(rows) > max_rows
+                if truncated:
                     rows = rows[:max_rows]
                 if enable_rls:
                     await verify_rls_context(
                         session, user_id, is_pod_admin=is_pod_admin
                     )
-                return rows, len(rows)
+                return rows, len(rows), truncated
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query execution")

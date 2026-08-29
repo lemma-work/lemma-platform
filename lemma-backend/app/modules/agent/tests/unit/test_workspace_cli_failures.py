@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.workspace_cli import helper as workspace_helper
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -421,3 +422,68 @@ async def test_list_processes_internal_hides_another_conversations_processes(
     # The unowned process is claimed; the one another session owns is untouched.
     assert runtime.bound_processes == [("mine", "session-1")]
     assert runtime.process_sessions["theirs"] == "session-other"
+
+
+class TestCommandOutputIsAlwaysBounded:
+    """One `npm ci` must not cost a conversation its context.
+
+    Only the PTY path was capped, and `tty` defaults to False -- so
+    `exec_command`, the tool an agent reaches for most often, was the uncapped
+    one. A large build log landed whole in the tool result, was persisted, and
+    was replayed on every subsequent turn of that conversation.
+    """
+
+    def _rendered(self, *, tty: bool, stdout: str = "", stderr: str = ""):
+        return workspace_helper.render_terminal_result(
+            {"stdout": stdout, "stderr": stderr}, tty=tty
+        )
+
+    def test_the_default_non_tty_path_is_capped(self) -> None:
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        stdout, _ = self._rendered(tty=False, stdout="x" * (CHARACTER_LIMIT_STDOUT * 3))
+
+        assert stdout is not None
+        assert len(stdout) < CHARACTER_LIMIT_STDOUT * 2
+
+    def test_truncation_says_so(self) -> None:
+        """Silently keeping the tail reads as a complete log, so an agent
+        reports 'no errors' for a build whose errors scrolled off."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        stdout, _ = self._rendered(tty=False, stdout="x" * (CHARACTER_LIMIT_STDOUT * 3))
+
+        assert "truncated" in stdout
+
+    def test_the_end_is_what_survives(self) -> None:
+        """A build's errors are at the bottom."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        noise = "warning\n" * CHARACTER_LIMIT_STDOUT
+        stdout, _ = self._rendered(tty=False, stdout=noise + "FATAL: build failed")
+
+        assert "FATAL: build failed" in stdout
+
+    def test_stderr_gets_its_own_smaller_limit(self) -> None:
+        """`CHARACTER_LIMIT_STDERR` existed and this path passed the stdout one."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDERR,
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        _, stderr = self._rendered(tty=True, stderr="e" * (CHARACTER_LIMIT_STDOUT * 2))
+
+        assert stderr is not None
+        assert len(stderr) < CHARACTER_LIMIT_STDERR * 2
+
+    def test_output_under_the_cap_is_untouched(self) -> None:
+        stdout, stderr = self._rendered(tty=False, stdout="all good", stderr="")
+
+        assert stdout == "all good"
+        assert stderr == ""

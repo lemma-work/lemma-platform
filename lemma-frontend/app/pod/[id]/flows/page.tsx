@@ -760,7 +760,6 @@ function WorkflowCard({
                                 resourceName={flow.name}
                                 shareUrl={workflowShareUrl}
                                 onChange={onShareVisibilityChange}
-                                className="contents"
                                 trigger={({ openShare, disabled }) => (
                                     <DropdownMenuItem
                                         disabled={disabled}

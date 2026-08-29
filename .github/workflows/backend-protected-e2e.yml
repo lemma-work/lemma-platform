@@ -19,7 +19,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync protected dependencies
@@ -55,7 +55,7 @@ jobs:
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
       - name: Publish commit-linked evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-protected-e2e-${{ github.sha }}
           path: lemma-backend/protected-e2e.xml

@@ -24,8 +24,10 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentEventType, HarnessOptions
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
+)
+from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     PydanticAIHarness,
 )
 
@@ -98,8 +100,6 @@ async def _execute_events(harness: PydanticAIHarness, **overrides):
     return [
         event
         async for event in harness._execute(
-            malformed_tool_call_ids=set(),
-            emitted_tool_response_ids=set(),
             should_stop=None,
             **arguments,  # type: ignore[arg-type]
         )

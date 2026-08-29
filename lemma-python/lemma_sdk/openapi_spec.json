@@ -1771,7 +1771,8 @@
           "STOP_REQUESTED",
           "COMPLETED",
           "FAILED",
-          "STOPPED"
+          "STOPPED",
+          "INTERRUPTED"
         ],
         "title": "AgentRunStatus",
         "type": "string"

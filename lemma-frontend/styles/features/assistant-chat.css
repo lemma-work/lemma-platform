@@ -356,10 +356,6 @@
     margin: var(--space-1) 0 var(--space-2);
 }
 
-.lchat-tr-subagents {
-    margin-top: var(--space-1-5);
-}
-
 /* --- the doc card: the answer, typeset --------------------------------------- */
 
 /* One assistant voice: the document is the same flat object as every other
