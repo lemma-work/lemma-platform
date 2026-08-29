@@ -161,7 +161,11 @@ function PodBlankChatHome({ podId }: { podId: string }) {
 
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
-    const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
+    // Only what *this* composer is doing. The assistant is one instance for the
+    // whole pod, so gating on its shared streaming state let a conversation
+    // running anywhere freeze the one control whose entire job is to start a
+    // different one.
+    const isBusy = isSending || isBlankingHome || assistant.isUploadingFiles;
     const podDefaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const isLoadingHomeState =
@@ -345,7 +349,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         startComposerLaunchAnimation(message);
         setIsSending(true);
         try {
-            assistant.clearMessages();
+            // Not `clearMessages()`: it resets the shared session, and the reset
+            // calls `stop()` — a real `stopRun` against whatever conversation was
+            // still open. So sending from home killed a turn that was still
+            // running, and cleared the files just attached to this one.
+            // `forceNewConversation` closes the open conversation first, which
+            // detaches from it without stopping it, and keeps the attachments.
             await assistant.sendMessage(message, {
                 forceNewConversation: true,
                 instructions: launchInstructionsRef.current || undefined,
