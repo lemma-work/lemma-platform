@@ -48,7 +48,7 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_memory_section_max_chars: int = Field(
-        default=6000,
+        default=8000,
         description=(
             "Cap on the whole rendered memory section of the runtime brief, "
             "spent narrowest-scope-first."
