@@ -280,7 +280,10 @@ pub fn install_from_manifest(
 /// install has already succeeded, and a file that will not delete is not a
 /// reason to fail an install that worked.
 fn prune_superseded_releases(install_root: &Path, keep: &str) {
-    for parent in [install_root.join("releases"), install_root.join("downloads")] {
+    for parent in [
+        install_root.join("releases"),
+        install_root.join("downloads"),
+    ] {
         let Ok(entries) = fs::read_dir(&parent) else {
             continue;
         };
@@ -1798,7 +1801,10 @@ mod tests {
 
         // And the one still there has to be usable, not just a surviving name:
         // pruning must never reach into a release it decided to keep.
-        let kept = installed_runtime(&install_root.join("releases").join(releases[1]), releases[1]);
+        let kept = installed_runtime(
+            &install_root.join("releases").join(releases[1]),
+            releases[1],
+        );
         assert!(
             kept.is_complete() && kept.has_recorded_artifact_identity(),
             "the kept release is still a runtime that could be launched",
