@@ -1837,8 +1837,10 @@ def test_history_processors_compact_then_enforce_a_hard_ceiling():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 2
-    compactor = processors[0]
+    # Three: detach stale images, compact, then the ceiling backstop.
+    assert len(processors) == 3
+    assert processors[0].__name__ == "_detach_stale_images"
+    compactor = processors[1]
     # Thresholds come from what the run's model affords
     # (services/context_budget), so assert against the resolved default rather
     # than a literal that has to be chased every time a window changes.
@@ -1863,11 +1865,17 @@ def test_disabling_summarization_keeps_the_ceiling_guard():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 1
-    assert processors[0].__name__ == "_ceiling_guard"
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ceiling_guard",
+    ]
 
 
-def test_everything_can_be_disabled_explicitly():
+def test_compaction_can_be_disabled_but_image_detachment_always_runs():
+    """The two compaction stages are policy and can be turned off. Detaching
+    images the model has already read is not: pydantic-ai re-uploads every image
+    on every model request for the life of the run, whatever the thresholds say.
+    """
     processors = build_history_processors(
         HarnessOptions(
             model_name="kimi-k2.6",
@@ -1877,7 +1885,7 @@ def test_everything_can_be_disabled_explicitly():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert processors == []
+    assert [processor.__name__ for processor in processors] == ["_detach_stale_images"]
 
 
 def test_conversation_instructions_are_appended_to_agent_prompt():

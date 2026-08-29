@@ -256,3 +256,133 @@ class TestBilling:
         await _compactor([])(ctx, _history())
 
         assert ctx.usage.requests >= 1
+
+
+class TestStaleImagesAreDetached:
+    """An image the model has already read must stop costing on every step.
+
+    pydantic-ai keeps a tool's image content in the run's in-memory history, so
+    every image is re-uploaded on every model request for the rest of the run. A
+    ten-page document viewed at step 2 of a fifteen-step run is sent fourteen
+    more times, and the model reads it once.
+    """
+
+    def _history_with_image_at(self, position: int, length: int = 20) -> list[object]:
+        from pydantic_ai.messages import BinaryContent
+
+        messages: list[object] = [_user(THE_REQUEST)]
+        for index in range(length):
+            if index == position:
+                messages.append(
+                    ModelRequest(
+                        parts=[
+                            ToolReturnPart(
+                                tool_name="view_image",
+                                content=[
+                                    "Successfully read image",
+                                    BinaryContent(
+                                        data=b"\x89PNG" + b"\x01" * 40_000,
+                                        media_type="image/png",
+                                    ),
+                                ],
+                                tool_call_id=f"img{index}",
+                            )
+                        ]
+                    )
+                )
+            else:
+                messages.extend(_work(f"c{index}", "output " * 20))
+        return messages
+
+    def _has_binary(self, messages: list[object]) -> bool:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            _is_binary,
+        )
+
+        def _items(part):
+            content = getattr(part, "content", None)
+            return content if isinstance(content, list) else [content]
+
+        return any(
+            _is_binary(item)
+            for message in messages
+            for part in message.parts
+            for item in _items(part)
+        )
+
+    def test_a_recent_image_keeps_its_pixels(self) -> None:
+        """The model may still be looking at it."""
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            strip_stale_images,
+        )
+
+        history = self._history_with_image_at(position=19, length=20)
+
+        assert self._has_binary(strip_stale_images(history))
+
+    def test_an_old_image_is_detached(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            strip_stale_images,
+        )
+
+        history = self._history_with_image_at(position=1, length=20)
+
+        assert not self._has_binary(strip_stale_images(history))
+
+    def test_the_detached_image_leaves_a_marker(self) -> None:
+        """Silence would read as though the tool returned nothing."""
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            STALE_IMAGE_MARKER,
+            strip_stale_images,
+        )
+
+        stripped = strip_stale_images(self._history_with_image_at(position=1))
+
+        assert any(
+            STALE_IMAGE_MARKER in str(getattr(part, "content", ""))
+            for message in stripped
+            for part in message.parts
+        )
+
+    def test_it_is_idempotent(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            strip_stale_images,
+        )
+
+        history = self._history_with_image_at(position=1)
+        once = strip_stale_images(history)
+
+        assert strip_stale_images(once) == once
+
+    def test_a_short_history_is_untouched(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            strip_stale_images,
+        )
+
+        history = [_user(THE_REQUEST)]
+
+        assert strip_stale_images(history) is history
+
+    def test_tool_pairing_survives(self) -> None:
+        """Rewriting content must not disturb which call a result belongs to."""
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            strip_stale_images,
+        )
+
+        history = self._history_with_image_at(position=1)
+
+        stripped = strip_stale_images(history)
+
+        before = [
+            part.tool_call_id
+            for message in history
+            for part in message.parts
+            if hasattr(part, "tool_call_id")
+        ]
+        after = [
+            part.tool_call_id
+            for message in stripped
+            for part in message.parts
+            if hasattr(part, "tool_call_id")
+        ]
+        assert before == after

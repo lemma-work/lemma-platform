@@ -179,6 +179,18 @@ def build_history_processors(
     processors: list[object] = []
     ceiling = options.history_hard_token_ceiling
 
+    # First: detach images the model has already had several turns to read.
+    # pydantic-ai re-uploads every image on every model request for the life of
+    # the run, so this runs before anything measures the history.
+    from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        strip_stale_images,
+    )
+
+    async def _detach_stale_images(messages: Sequence[object]) -> list[object]:
+        return strip_stale_images(list(messages))
+
+    processors.append(_detach_stale_images)
+
     if (
         options.history_summarization_enabled
         and options.history_summarization_token_limit > 0

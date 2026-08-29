@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
@@ -58,7 +59,7 @@ async def spawn_subagent(
             input_data=request.input,
         )
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
     return _handle_payload(handle)
 
 
@@ -107,7 +108,7 @@ async def interact_subagent(
             **await _service().stop(ctx.deps, conversation_id=conversation_id),
         }
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
 
 
 async def query_subagents(
@@ -145,7 +146,7 @@ async def query_subagents(
         )
         return {"success": True, "children": children}
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
 
 
 subagents_toolset = FunctionToolset[BaseAgentContext](

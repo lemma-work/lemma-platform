@@ -24,6 +24,7 @@ import jsonschema
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.tools.connectors.connector_access import connector_services
@@ -76,7 +77,7 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
             # The other three tools already return failures as data. Raising
             # here instead would end the agent's run over something it could
             # simply report -- an org it cannot read is not a crash.
-            return _error(exc.code or "connector_error", str(exc))
+            return _error(exc.code or "connector_error", safe_error_text(exc))
         items = [
             {
                 "auth_config": config.name,
@@ -127,7 +128,7 @@ async def search_connector_operations(
                     limit=request.limit,
                 )
         except DomainError as exc:
-            return _error(exc.code or "connector_error", str(exc))
+            return _error(exc.code or "connector_error", safe_error_text(exc))
     return to_json_value(found)
 
 
@@ -153,7 +154,7 @@ async def describe_connector_operation(
                 operation_name=request.operation,
             )
         except DomainError as exc:
-            return _error(exc.code or "connector_error", str(exc))
+            return _error(exc.code or "connector_error", safe_error_text(exc))
     return to_json_value(detail)
 
 
@@ -237,5 +238,5 @@ async def run_connector_operation(
         except DomainError as exc:
             # Connector failures are information for the model (wrong argument,
             # account needs reconnecting), not a reason to end the run.
-            return _error(exc.code or "connector_error", str(exc))
+            return _error(exc.code or "connector_error", safe_error_text(exc))
     return to_json_value(response)

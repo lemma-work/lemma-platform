@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.speech.models import (
@@ -37,7 +38,7 @@ async def listen(
         return await listen_internal(ctx.deps, request)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("agent.speech.listen_failed.degraded", exc_info=True)
-        return ListenResponse(success=False, error=str(exc))
+        return ListenResponse(success=False, error=safe_error_text(exc))
 
 
 async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResponse:
@@ -59,7 +60,7 @@ async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResp
         return await say_internal(ctx.deps, request)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("agent.speech.say_failed.degraded", exc_info=True)
-        return SayResponse(success=False, error=str(exc))
+        return SayResponse(success=False, error=safe_error_text(exc))
 
 
 speech_toolset = FunctionToolset[BaseAgentContext](tools=[listen, say])

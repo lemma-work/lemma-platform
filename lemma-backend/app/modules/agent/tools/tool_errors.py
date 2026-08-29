@@ -27,6 +27,8 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
+from app.core.errors.describe import describe_exception
+from app.core.redaction import redact_text
 from app.core.domain.errors import DomainError
 
 # DomainError codes that mean "the agent lacks a grant/approval for this
@@ -79,6 +81,34 @@ def is_control_flow_exception(exc: BaseException) -> bool:
     return isinstance(exc, _CONTROL_FLOW_EXCEPTIONS)
 
 
+def safe_error_text(exc: BaseException) -> str:
+    """An exception's text with anything secret-shaped stripped out.
+
+    This string goes two places at once: into the model's context, and into the
+    durable conversation transcript a person reads. `httpx.HTTPStatusError`
+    stringifies with the full URL, so a signed storage link or a connector
+    callback carrying a token in its query lands in both; `describe_exception`
+    additionally appends the cause, "because for a wrapped transport failure the
+    cause is the part that identifies the host, port or timeout involved".
+
+    Logs, telemetry, API exception handlers, connector errors and function
+    runtime logs all run their free text through `redact_text`. Agent tools were
+    the one surface that did not, and the only one that writes into a transcript
+    a user reads back.
+    """
+    return redact_text(str(exc) or exc.__class__.__name__)
+
+
+def safe_described_error(exc: BaseException) -> str:
+    """`describe_exception`'s text, redacted.
+
+    The cause chain is worth keeping -- for a wrapped transport failure it is the
+    part that names the host, port or timeout involved -- which is exactly why it
+    needs redacting rather than dropping.
+    """
+    return redact_text(describe_exception(exc))
+
+
 def format_tool_error(name: str, exc: BaseException) -> dict[str, object]:
     """Render a tool failure as a structured, model-readable result.
 
@@ -93,7 +123,7 @@ def format_tool_error(name: str, exc: BaseException) -> dict[str, object]:
     """
     return {
         "success": False,
-        "error": str(exc) or exc.__class__.__name__,
+        "error": safe_error_text(exc),
         "error_type": exc.__class__.__name__,
         "tool": name,
     }

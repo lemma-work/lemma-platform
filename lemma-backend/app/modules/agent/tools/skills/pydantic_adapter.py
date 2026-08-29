@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.skills.models import (
@@ -54,7 +55,7 @@ async def list_skills(
     except Exception as exc:
         return SkillListResult(
             success=False,
-            error=str(exc),
+            error=safe_error_text(exc),
             message="Failed to list skills",
         )
 
@@ -92,7 +93,7 @@ async def load_skill(
                 success=False,
                 name=request.name,
                 resource_path=request.resource_path,
-                error=str(exc),
+                error=safe_error_text(exc),
                 message=f"Failed to load skill resource: {request.name}/{request.resource_path}",
             )
 
@@ -109,7 +110,7 @@ async def load_skill(
         return SkillContentResult(
             success=False,
             name=request.name,
-            error=str(exc),
+            error=safe_error_text(exc),
             message=f"Unknown or unavailable skill: {request.name}",
         )
 

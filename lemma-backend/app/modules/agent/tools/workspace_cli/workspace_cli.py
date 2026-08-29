@@ -5,7 +5,6 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
-from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
@@ -16,7 +15,11 @@ from app.modules.agent.tools.file_access import (
     read_workspace_file_bytes,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.agent.tools.tool_errors import (
+    approval_error_result,
+    safe_described_error,
+    safe_error_text,
+)
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -101,7 +104,7 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{describe_exception(exc)}." + retry_advice(exc)
+            f"{safe_described_error(exc)}." + retry_advice(exc)
         ),
     )
 
@@ -123,7 +126,7 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{describe_exception(exc)}." + retry_advice(exc)
+                f"{safe_described_error(exc)}." + retry_advice(exc)
             ),
             "traceback": [],
         },
@@ -441,7 +444,7 @@ async def list_processes_internal(
             processes=[],
             error=(
                 f"Workspace list_processes failed before the tool could complete: "
-                f"{describe_exception(exc)}. Treat this as a recoverable tool "
+                f"{safe_described_error(exc)}. Treat this as a recoverable tool "
                 "failure and retry if the operation is still needed."
             ),
         )
@@ -507,7 +510,7 @@ async def view_image_internal(
             exc, tool_name="view_image", args=request.model_dump()
         )
     except Exception as exc:
-        return ExecCommandResult(success=False, error=str(exc))
+        return ExecCommandResult(success=False, error=safe_error_text(exc))
 
     media_type = detected_mime or mimetypes.guess_type(file_path)[0]
     if not media_type or not media_type.startswith("image/"):
