@@ -146,11 +146,57 @@ fn updates_enabled() -> bool {
 
 /// Whether a build with these three properties may update itself.
 ///
-/// A conjunction, and each term is load-bearing: a nightly has no durable feed
-/// and is never given the signing key, a debug build is not a release, and a
-/// build with no public key cannot verify what it downloads.
+/// A debug build is not a release, and a build with no public key cannot verify
+/// what it downloads. Both remain disqualifying.
+///
+/// Nightly used to be, on two grounds stated here: it had no durable feed and
+/// was never given the signing key. Both are now false. Nightly builds are
+/// signed with the same key as a release -- so the committed public key
+/// verifies them, and `key_configured` is a real check for them too -- and they
+/// publish to a tag that does not move, which is what makes a feed durable.
+///
+/// The point is not convenience. An update path nobody walks until release day
+/// is an update path nobody has tested; letting nightly update to nightly means
+/// the mechanism is exercised continuously, by people who can report what broke
+/// rather than discovering it in a stable rollout.
 fn updates_allowed(channel: &str, debug: bool, key_configured: bool) -> bool {
-    channel == "stable" && !debug && key_configured
+    matches!(channel, "stable" | "nightly") && !debug && key_configured
+}
+
+/// `updater_endpoints` for this build, parsed, for the plugin's builder.
+///
+/// A malformed constant here would be a build-time mistake, not a runtime
+/// condition, so an unparseable entry is dropped rather than failing the check
+/// -- leaving the plugin with whatever `tauri.conf.json` configured, which is
+/// the stable feed.
+fn parsed_updater_endpoints() -> Vec<tauri::Url> {
+    updater_endpoints(release_channel())
+        .into_iter()
+        .filter_map(|endpoint| tauri::Url::parse(&endpoint).ok())
+        .collect()
+}
+
+/// Where this build looks for its update feed.
+///
+/// Stable reads the `latest` release, which GitHub resolves to the newest
+/// non-prerelease. Nightlies are prereleases and never appear there, so a
+/// nightly pointed at it would either see nothing or be offered a *stable*
+/// build -- neither of which tests anything. They read a tag that is rewritten
+/// in place instead, so the address stays constant while its contents move.
+///
+/// Returned rather than baked into `tauri.conf.json` because the config is one
+/// file shared by every build, and the channel is a compile-time stamp. One
+/// place decides, and the tests below can ask it.
+fn updater_endpoints(channel: &str) -> Vec<String> {
+    const OWNER_REPO: &str = "lemma-work/lemma-platform";
+    match channel {
+        "nightly" => vec![format!(
+            "https://github.com/{OWNER_REPO}/releases/download/desktop-nightly/latest.json"
+        )],
+        _ => vec![format!(
+            "https://github.com/{OWNER_REPO}/releases/latest/download/latest.json"
+        )],
+    }
 }
 
 /// Whether this build carries a public key that can verify an update.
@@ -3599,7 +3645,10 @@ async fn check_for_app_update(window: Webview, app: AppHandle) -> Result<AppUpda
         return Ok(status);
     }
     let update = app
-        .updater()
+        .updater_builder()
+        .endpoints(parsed_updater_endpoints())
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .build()
         .map_err(|error| format!("could not check for updates: {error}"))?
         .check()
         .await
@@ -3671,7 +3720,10 @@ async fn install_app_update(
         );
     }
     let update = app
-        .updater()
+        .updater_builder()
+        .endpoints(parsed_updater_endpoints())
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .build()
         .map_err(|error| format!("could not check for updates: {error}"))?
         .check()
         .await
@@ -7740,10 +7792,48 @@ mod tests {
     /// The channel stamp fails closed, and only stable self-updates.
     ///
     /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
+    /// Each channel must read the feed that actually carries its builds.
+    ///
+    /// GitHub resolves `releases/latest` to the newest *non-prerelease*.
+    /// Nightlies are prereleases, so a nightly pointed there sees either
+    /// nothing or a stable build -- and an update path that only ever runs on
+    /// release day is one nobody has tested. The nightly tag is rewritten in
+    /// place so the address stays put while its contents move; that fixed
+    /// address is the whole reason a nightly feed can be called durable.
+    #[test]
+    fn each_channel_reads_its_own_feed() {
+        let nightly = updater_endpoints("nightly");
+        let stable = updater_endpoints("stable");
+
+        assert_eq!(nightly.len(), 1);
+        assert!(
+            nightly[0].ends_with("/releases/download/desktop-nightly/latest.json"),
+            "a nightly must read a tag that does not move: {nightly:?}",
+        );
+        assert!(
+            !nightly[0].contains("/releases/latest/"),
+            "`releases/latest` skips prereleases, so it never lists a nightly",
+        );
+
+        assert_eq!(stable, updater_endpoints("dev"), "dev falls back to stable");
+        assert!(stable[0].ends_with("/releases/latest/download/latest.json"));
+
+        // Whatever they are, the plugin has to be able to parse them, and a
+        // typo here would otherwise be a silently empty endpoint list.
+        for channel in ["stable", "nightly", "dev"] {
+            for endpoint in updater_endpoints(channel) {
+                assert!(
+                    tauri::Url::parse(&endpoint).is_ok(),
+                    "{channel} endpoint is not a URL: {endpoint}",
+                );
+            }
+        }
+    }
+
     /// developer's `cargo tauri dev` -- must never follow an update feed, and
     /// must say so rather than appearing configured.
     #[test]
-    fn only_a_stable_build_updates_itself() {
+    fn a_released_build_updates_itself_and_an_unstamped_one_does_not() {
         // Both halves of this used to be true by construction: tests are a
         // debug build so `updates_enabled()` is false whatever the channel is,
         // and `matches!` against the same closed set the `match` produces
@@ -7764,7 +7854,7 @@ mod tests {
 
         // And the gate is a conjunction, so nightly cannot update itself even
         // in a release build.
-        assert!(!updates_allowed("nightly", false, true));
+        assert!(updates_allowed("nightly", false, true));
         assert!(!updates_allowed("dev", false, true));
         assert!(
             !updates_allowed("stable", true, true),
