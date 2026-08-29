@@ -1648,6 +1648,9 @@ export function useAssistantController({
 
     const createdConversation = await sessionCreateConversation({
       title: titleSeed.slice(0, 120),
+      // A seed for the sidebar while the real title generates, not a chosen
+      // one -- see CreateConversationInput.titleIsPlaceholder.
+      titleIsPlaceholder: true,
       instructions: typeof options.instructions === "undefined" ? instructions : options.instructions,
       metadata: options.metadata ?? undefined,
       model: conversationModel as unknown as never,

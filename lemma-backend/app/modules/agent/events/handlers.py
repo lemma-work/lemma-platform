@@ -201,11 +201,24 @@ async def _process_agent_control_event(
 ) -> None:
     if isinstance(parsed, AgentRunStartedEvent):
         await enqueue_agent_run(parsed, fs_logger=fs_logger, job_queue=job_queue)
+        # The title only needs the user's first message -- already saved by
+        # the time this event fires -- not the agent's reply, so it does not
+        # need to wait for the run to finish. Starting it here rather than on
+        # completion means a slow or long-running turn no longer leaves the
+        # conversation title-less for its whole duration. The deterministic
+        # job id dedups across turns, so this runs at most once per
+        # conversation; the job itself no-ops if a title already exists.
+        await job_queue.enqueue(
+            "generate_conversation_title",
+            context={"conversation_id": str(parsed.conversation_id)},
+            _job_id=conversation_title_job_id(parsed.conversation_id),
+        )
         return
     if isinstance(parsed, AgentRunCompletedEvent):
-        # Generate a title once the first run finishes. The deterministic job id
-        # dedups across turns, so this runs at most once per conversation; the
-        # job itself no-ops if a title already exists.
+        # Belt and suspenders: the same deterministic job id means this is a
+        # no-op on the (now-common) path where the run-started enqueue above
+        # already generated the title, and a fallback for anything that
+        # reaches completion without having gone through that event.
         await job_queue.enqueue(
             "generate_conversation_title",
             context={"conversation_id": str(parsed.conversation_id)},

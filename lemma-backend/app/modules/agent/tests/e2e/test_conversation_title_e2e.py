@@ -173,6 +173,54 @@ class TestConversationTitleServiceAgainstRealDb:
         )
         assert fetched_again.json()["title"] == "Tokyo Vegetarian Food Tour"
 
+    async def test_placeholder_title_is_not_persisted_and_generation_still_runs(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        monkeypatch,
+    ):
+        """The frontend seeds `title` with the first message so the sidebar is
+        never blank, marked `title_is_placeholder` because it is a UX seed, not
+        a choice. Real conversation 01a04c1c-57cb-73a0-b346-922cc0f54264 showed
+        what happens when that seed is trusted as final: the conversation's
+        title stayed the raw, unsanitized first message forever, because
+        `generate_title_if_absent` treats any non-empty title as already done.
+        """
+        _stub_llm(monkeypatch, output='  "Tokyo Vegetarian Food Tour".  ')
+        pod_id = await _create_pod(authenticated_client, fixed_test_org)
+        seed = "help me plan a 3-day vegetarian food tour of tokyo"
+
+        create = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations",
+            json={
+                "agent_runtime": {"profile_id": "system:lemma"},
+                "title": seed,
+                "title_is_placeholder": True,
+            },
+        )
+        assert create.status_code == 201, create.text
+        conversation_id = UUID(create.json()["id"])
+        # The create response still carries the seed, for the caller's own
+        # optimistic UI -- it is just never written to Postgres.
+        assert create.json()["title"] == seed
+
+        fetched = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+        )
+        assert fetched.json()["title"] is None
+
+        await _seed_opening_exchange(conversation_id)
+        service = ConversationTitleService(
+            uow_factory=SessionUnitOfWorkFactory(async_session_maker)
+        )
+        title = await service.generate_title_if_absent(conversation_id)
+        assert title == "Tokyo Vegetarian Food Tour"
+
+        fetched_after = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+        )
+        assert fetched_after.json()["title"] == "Tokyo Vegetarian Food Tour"
+
     async def test_skips_when_no_user_message(
         self,
         authenticated_client,
