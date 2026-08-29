@@ -51,7 +51,10 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
-from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
+from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    settle_stranded_conversations,
+)
 from app.modules.agent.infrastructure.harnesses import (
     HarnessRegistry,
     PydanticAIHarness,
@@ -484,26 +487,11 @@ async def reconcile_orphaned_agent_runs() -> None:
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
-            # The other half, and the one nothing covered: a conversation left
-            # active by a run that already finished. The sweep above cannot see
-            # it — that run is terminal, so it is not stale — and no other path
-            # will ever move it, because a terminal run is never finalized
-            # again. It is not cosmetic either: `schedule_run_recovery` and
-            # `workflow_agent` both decide an outcome from `conversation.status`,
-            # so one of these wedges whatever is waiting on it.
-            stranded = await repo.list_conversations_stranded_by_a_finished_run(
-                cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
+            # The other half: a conversation left active by a run that already
+            # finished, which a sweep keyed on run status cannot see.
+            await settle_stranded_conversations(
+                repo, cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS
             )
-            for conversation in stranded:
-                await repo.set_conversation_status(
-                    conversation_id=conversation.id,
-                    status=ConversationStatus(conversation.run_status),
-                )
-            if stranded:
-                logger.warning(
-                    "agent.handlers.stranded_conversations_reconciled.degraded",
-                    count=len(stranded),
-                )
     except Exception:
         logger.error(
             "agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True

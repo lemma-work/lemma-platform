@@ -160,31 +160,16 @@ class TelegramPlatformService:
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            retry_token = await put_callback_token(
-                {
-                    "action": "retry",
-                }
-            )
+            retry_token = await put_callback_token({"action": "retry"})
             reply_markup = {
                 "inline_keyboard": [
                     [{"text": "Try again", "callback_data": retry_token}]
                 ]
             }
 
-        # `chunk_text("")` is `[]`, and the `or` this replaces turned that back
-        # into a single empty chunk — so a body that arrived empty, or that
-        # sanitizing reduced to nothing, still reached the person as a blank
-        # bubble. A keyboard cannot rescue one: Telegram rejects blank text, so
-        # an approval whose body went missing would arrive as a bubble with no
-        # words and no buttons, which is exactly what the dev scenario suite
-        # saw as `Spoken(text='', choices=())`.
-        #
-        # Nothing legitimate sends an empty body — `surface_egress`,
-        # `progress_waiting` and `fallback_reply_service` each guard before
-        # calling, and the one caller that asks for a keyboard without writing
-        # its own text (`progress_observer`, `retry_action`) falls back to a
-        # literal. So this is the backstop for a body that went missing
-        # upstream, and it says so rather than posting the emptiness.
+        # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
+        # made that one empty chunk: a blank bubble, and for an approval one
+        # with no words and no buttons.
         raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
         if not raw_chunks:
             logger.warning(

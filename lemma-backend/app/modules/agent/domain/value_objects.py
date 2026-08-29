@@ -247,19 +247,12 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
-    #: The run was already terminal but its conversation had been left
-    #: non-terminal, and this call put the two back in step. Reported
-    #: separately from ``updated`` because the *run* did not move: callers key
-    #: their event publishing and usage accounting off ``updated``, and a
-    #: repair must not be mistaken for this call having ended the run.
+    #: An already-terminal run whose conversation this call put back in step.
     conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
-    {
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.STOP_REQUESTED,
-    }
+    {AgentRunStatus.RUNNING, AgentRunStatus.STOP_REQUESTED}
 )
 
 RESUMABLE_AGENT_RUN_STATUSES = frozenset({AgentRunStatus.INTERRUPTED})
@@ -268,26 +261,6 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
         AgentRunStatus.COMPLETED,
         AgentRunStatus.FAILED,
         AgentRunStatus.STOPPED,
-    }
-)
-
-# A conversation that is still going, as opposed to one that has finished or is
-# resting. `WAITING` is deliberately in neither set: a conversation whose run
-# ended by asking a question is *correctly* waiting, so it is neither active nor
-# finished, and treating it as either would tear down the pause that
-# `request_approval` and `ask_user` are built on.
-ACTIVE_CONVERSATION_STATUSES = frozenset(
-    {
-        ConversationStatus.RUNNING,
-        ConversationStatus.STOP_REQUESTED,
-    }
-)
-
-TERMINAL_CONVERSATION_STATUSES = frozenset(
-    {
-        ConversationStatus.COMPLETED,
-        ConversationStatus.FAILED,
-        ConversationStatus.STOPPED,
     }
 )
 
