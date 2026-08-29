@@ -246,8 +246,12 @@ class RecordService:
         table_service: "TableService",
         ctx: Context,
         admin_mode: bool = False,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, bool]:
         """Validate, authorize, and run an ad-hoc read-only SQL query.
+
+        Returns the rows, how many came back, and whether the row cap cut the
+        result short. The third value matters: without it a capped result is
+        indistinguishable from a complete one.
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via

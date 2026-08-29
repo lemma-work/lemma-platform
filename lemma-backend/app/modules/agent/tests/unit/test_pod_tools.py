@@ -25,6 +25,7 @@ from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
 from app.modules.agent.tools.pod.models import (
     GetFileUrlRequest,
     PodGetRecordsRequest,
+    QueryRequest,
     PodReadFileRequest,
     PodTablesRequest,
     PodWriteFileRequest,
@@ -833,3 +834,63 @@ def test_a_durable_workspace_fault_does_not_invite_a_retry():
     durable = retry_advice(RuntimeError("managed workspace runtime is gone"))
     assert "not expected to succeed on retry" in durable
     assert "recoverable tool failure" not in durable
+
+
+def _query_services(rows: list[dict], row_count: int, truncated: bool):
+    return SimpleNamespace(
+        table=SimpleNamespace(),
+        record=SimpleNamespace(
+            execute_readonly_query=AsyncMock(return_value=(rows, row_count, truncated))
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+
+
+class TestPodQueryNeverOverstatesItsResult:
+    """A capped result used to be indistinguishable from a complete one.
+
+    The repository pulled one row past the cap purely to learn the result had
+    been cut, then dropped that row and returned `len(rows)` as the total. So an
+    agent asked "how many orders do we have", got a thousand rows and a total of
+    a thousand, and told the user they had a thousand orders when they had forty
+    thousand. Missing data is recoverable; a confident wrong number is not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_complete_result_is_reported_as_complete(self, monkeypatch):
+        _patch_services(monkeypatch, _query_services([{"n": 1}], 1, False))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select 1 as n")
+        )
+
+        assert result["row_count"] == 1
+        assert result["truncated"] is False
+        assert "note" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_capped_result_says_it_was_capped(self, monkeypatch):
+        rows = [{"n": index} for index in range(1000)]
+        _patch_services(monkeypatch, _query_services(rows, 1000, True))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select * from orders")
+        )
+
+        assert result["truncated"] is True
+        assert result["row_count"] == 1000
+        # In the payload, not only in a flag: the model has to be able to read
+        # this without knowing to look for a boolean.
+        assert "note" in result
+        assert "cut" in result["note"]
+
+    @pytest.mark.asyncio
+    async def test_the_capped_count_is_not_offered_as_a_total(self, monkeypatch):
+        rows = [{"n": index} for index in range(1000)]
+        _patch_services(monkeypatch, _query_services(rows, 1000, True))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select * from orders")
+        )
+
+        assert "total" not in result
