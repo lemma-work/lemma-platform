@@ -129,6 +129,7 @@ impl ManagedRuntimeBootstrap {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
         }))
     }
 }
@@ -234,6 +235,11 @@ pub struct ManagedRuntimeController {
     /// said once rather than twice a minute for as long as the stack runs.
     last_clock_error: Mutex<Option<String>>,
     sandbox_images: Mutex<SandboxImageStatus>,
+    /// The auth service, still coming up while the backend boots.
+    ///
+    /// See `start_with_progress`. Joined by `await_private_services` before
+    /// anything reports ready, so this is a reordering and not a weakening.
+    pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
 }
 
 impl ManagedRuntimeController {
@@ -268,6 +274,9 @@ impl ManagedRuntimeController {
             "images": self.spec.images,
             "credentials": self.spec.credentials,
         });
+        // Postgres and Redis first, and waited for: migrations run against the
+        // database before the backend starts, and the backend reaches for both
+        // as it boots.
         for (operation, component, label, percentage, detail) in [
             (
                 "core.images",
@@ -290,13 +299,6 @@ impl ManagedRuntimeController {
                 58,
                 "preparing local streams, cache, and pub/sub",
             ),
-            (
-                "core.supertokens",
-                "supertokens",
-                "Starting local authentication",
-                64,
-                "preparing the private auth service",
-            ),
         ] {
             progress(component, label, percentage, detail);
             if let Err(error) = self.runtime.request(operation, parameters.clone()) {
@@ -305,17 +307,46 @@ impl ManagedRuntimeController {
                 return Err(error);
             }
         }
+
+        // The auth service starts here and is *waited for* later, because the
+        // backend does not need it to boot.
+        //
+        // `core.supertokens` does not return when the container starts; it
+        // returns when the service answers, and getting a JVM to answer took
+        // 5.13s of a 19.9s cold start on the machine this was measured on. That
+        // wait sat on the critical path in front of a backend that spends its
+        // own ~4s importing and binding, and `initialize_supertokens` only
+        // writes local configuration -- the first call to the auth service
+        // happens on the first authenticated request, long after.
+        //
+        // On a thread rather than by reordering the request, because the guest
+        // control channel is single: the host bridge holds one vsock connection
+        // behind a process-wide mutex and guestd handles connections inline on
+        // its accept loop, so this request occupies that channel either way.
+        // What it must not also occupy is *this* thread, which is what the
+        // daemon needs back in order to start the backend at all.
         progress(
-            "infrastructure-health",
-            "Checking private services",
-            66,
-            "waiting for the Mac-to-VM database, cache, and auth routes",
+            "supertokens",
+            "Starting local authentication",
+            64,
+            "preparing the private auth service",
         );
-        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
-            let _ = self.runtime.capture_diagnostics();
-            let _ = self.runtime.stop();
-            return Err(error);
-        }
+        let auth = {
+            let controller = Arc::clone(self);
+            let parameters = parameters.clone();
+            thread::Builder::new()
+                .name("lemma-locald-supertokens".into())
+                .spawn(move || {
+                    controller
+                        .runtime
+                        .request("core.supertokens", parameters)
+                        .map(|_| ())
+                })?
+        };
+        *self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned") = Some(auth);
         if let Err(error) = self.ensure_forwarders(&status) {
             let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
@@ -323,6 +354,61 @@ impl ManagedRuntimeController {
         }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
         self.start_clock_keeper();
+        Ok(())
+    }
+
+    /// Wait for everything `start_with_progress` left in flight.
+    ///
+    /// The auth service is started there and joined here, so it comes up beside
+    /// the backend instead of in front of it. Nothing may report ready before
+    /// this returns: a workspace whose first action is signing in would meet an
+    /// auth service that is not answering yet, which is a worse failure than
+    /// the wait this removes.
+    ///
+    /// Called after the host processes are up rather than before, which is the
+    /// whole point -- and it is also why a failure here has to stop them. The
+    /// caller owns that, because it owns the processes.
+    pub fn await_private_services(&self) -> io::Result<()> {
+        let pending = self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned")
+            .take();
+        if let Some(handle) = pending {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(error);
+                }
+                // A panicked worker is not a runtime the caller should keep
+                // using, and joining loses the payload, so say which thread.
+                Err(_) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(io::Error::other(
+                        "the private auth service failed to start (worker panicked)",
+                    ));
+                }
+            }
+        }
+        let status = self
+            .status
+            .lock()
+            .expect("managed runtime status poisoned")
+            .clone();
+        let Some(status) = status else {
+            return Ok(());
+        };
+        // The same check as before, in the same place in the sequence relative
+        // to anything that uses these services -- only now the services had the
+        // backend's boot to finish coming up in, so it usually finds them ready.
+        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -1370,6 +1456,7 @@ mod tests {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
@@ -1455,6 +1542,7 @@ mod tests {
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

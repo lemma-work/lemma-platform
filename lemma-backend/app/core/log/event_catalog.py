@@ -97,6 +97,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.snooze.woke': EventSpec('debug', frozenset({'conversation_id', 'woke_because'})),
     'agent.speech.listen_failed': EventSpec('debug', frozenset()),
     'agent.speech.say_failed': EventSpec('debug', frozenset()),
+    'agent.speech.transcript_reuse_lookup_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
+    'agent.speech.transcript_reused.observed': EventSpec('info', frozenset({'conversation_id'})),
     'agent.summarization_model.resolution_failed.observed': EventSpec('warning', frozenset({'model_name'})),
     'agent.tools.image_payload.downscale_skipped.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'agent.vision_service.description_failed.diagnostic': EventSpec('debug', frozenset()),

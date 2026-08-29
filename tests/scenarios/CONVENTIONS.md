@@ -107,6 +107,7 @@ covering its promises.
 | `@covers` | Operation ids and events it exercises. Gated |
 | `sandbox` | Needs the workspace images. Excluded from the fast lane |
 | `live` | Needs real providers. Excluded from both. See [LIVE.md](LIVE.md) |
+| `stack_lane` | Needs the target configured a particular way — a converter absent, a spend cap set — so it only runs on one the suite booted. Deselected, not skipped, against `--base-url` |
 
 ---
 
@@ -123,8 +124,13 @@ that read a payload must fail loudly when the shape is not what they expect.*
 
 **Asserting on the wrong surface.** Three of these, each of which reported a
 working feature as broken:
-- The file *list* returns the root directory only, so an attachment landing in a
-  folder is invisible to it. The tree is where to look.
+- The file *tree* returns a handful of files per folder — three by default,
+  twenty at most, and no way to page — because it draws a sidebar rather than
+  enumerating a pod. Asked whether an attachment had arrived, it said no for
+  four consecutive nightly runs about a file that was saved every time; three
+  older photos sorted above it were the entire cap. The *list* is where to look,
+  and it takes a `directory_path`. (This entry used to say the opposite, which
+  is how the bug got written.)
 - A filtered trigger produces no run — there was no work — so it is recorded on
   the schedule as its last fire status, not in the run history.
 - A change frame carries its operation twice, as `operation` and inside the
@@ -132,6 +138,30 @@ working feature as broken:
 
 *Before concluding the product is broken, check you are asking the right
 question.*
+
+**Reading one page and calling it the list.** Three times now: conversations,
+pods, and the files in a folder. A `limit` that defaults to 100 reads as "all of
+them" and is not, and on a tenant that stands between runs the thing this run
+just made is on the last page rather than the first.
+
+The half that goes red is the lucky half. A step that asks "is it *not* there"
+against one page fails **open** — a pod still visible on page two reads as
+correctly hidden, so every deletion and access-boundary scenario built on it
+passes while proving nothing. Route list reads through `every_item`;
+`test_a_step_that_reads_a_paginated_list_follows_the_pages` now enforces it.
+
+**Skipping on your own precondition.** A connector scenario skipped with "this
+connector discovered no operations, so there is nothing to read the shape of" —
+which is to say it stood down at exactly the moment the thing it exists to catch
+had happened. Discovery returning nothing is the bug, and it was reported as
+*not run*. If the precondition failing is itself interesting, assert it.
+
+**Asserting on words a previous run left behind.** A person has one chat with a
+bot and it stands between runs, so last night's "first thing" is still in the
+conversation. A scenario sending that literal and then looking for it finds the
+old one, passes before its own message has arrived, and would pass with the
+product switched off. `run.name()` is for message text too, not only for pods
+and tables.
 
 **Racing the thing under test.** A conversation is created before its message is
 persisted, so reading messages immediately finds an empty thread. A change

@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from scripts.build_local_host_pack import (
+    _resolve_rpath_libraries,
     copy_browser_assets,
     copy_node_runtime,
     npm_executable,
@@ -85,9 +86,12 @@ def test_the_node_binary_lands_where_the_app_starts_it(tmp_path: Path) -> None:
     directory over is an install that downloads half a gigabyte and then cannot
     start.
     """
-    fake_node_root = tmp_path / "node-v22"
+    fake_node_root = tmp_path / "node-v24"
     (fake_node_root / "bin").mkdir(parents=True)
-    (fake_node_root / "bin" / "node").write_bytes(b"#!/bin/sh\nexit 0\n")
+    fake_node = fake_node_root / "bin" / "node"
+    # Executable, because `copy_node_runtime` now starts what it copied.
+    fake_node.write_text("#!/bin/sh\nexit 0\n")
+    fake_node.chmod(0o755)
     frontend = tmp_path / "pack" / "frontend"
 
     copy_node_runtime(frontend, fake_node_root)
@@ -108,6 +112,52 @@ def test_the_node_binary_lands_where_the_app_starts_it(tmp_path: Path) -> None:
         f"node was staged at {sorted(landed)}, and the app looks in "
         f"{sorted(candidates)}"
     )
+
+
+def test_a_node_that_cannot_start_is_refused_at_build_time(tmp_path: Path) -> None:
+    """The failure this pack has no other way of noticing.
+
+    A Node copied out of a build that links `@rpath/libnode.<abi>.dylib` --
+    which the GitHub tool-cache build of 22.23.1 does, and Homebrew's does with
+    a dozen kegs -- lands as a file of the right name, the right size and the
+    right permissions, and dies in dyld the first time the app serves a page.
+    Every check that reads the pack rather than running it says the pack is
+    fine. So the copy is started, and refused here rather than on a user's
+    machine four minutes into a first run.
+    """
+    fake_node_root = tmp_path / "node-broken"
+    (fake_node_root / "bin").mkdir(parents=True)
+    fake_node = fake_node_root / "bin" / "node"
+    fake_node.write_text("#!/bin/sh\necho 'dyld: Library not loaded' >&2\nexit 6\n")
+    fake_node.chmod(0o755)
+
+    with pytest.raises(SystemExit) as refusal:
+        copy_node_runtime(tmp_path / "pack" / "frontend", fake_node_root)
+
+    assert "cannot start" in str(refusal.value)
+
+
+def test_the_libraries_node_carries_an_rpath_to_are_packed_beside_it(
+    tmp_path: Path,
+) -> None:
+    """`bin/node` resolves `@rpath` through `@loader_path/../lib`.
+
+    So a library that has to travel with the executable travels to
+    `frontend/node/lib`, not next to the binary and not left behind. Asserted
+    on the resolver rather than on a real Mach-O binary, because the whole
+    point is that most builds have nothing here and one build did.
+    """
+    root = tmp_path / "node-shared"
+    (root / "bin").mkdir(parents=True)
+    (root / "lib").mkdir()
+    (root / "bin" / "node").write_text("")
+    (root / "lib" / "libnode.127.dylib").write_text("")
+
+    resolved = _resolve_rpath_libraries(
+        root, root / "bin" / "node", ["@rpath/libnode.127.dylib", "/usr/lib/libz.1.dylib"]
+    )
+
+    assert resolved == [root / "lib" / "libnode.127.dylib"]
 
 
 def test_the_browser_bundles_land_where_the_backend_serves_them(

@@ -189,6 +189,19 @@ export function getDocumentPreviewType(filePath: string): DocumentPreviewType {
 }
 
 /**
+ * Whether this file is read as text rather than as bytes.
+ *
+ * The four types whose stored form *is* the thing a person edits — which is
+ * also, and not coincidentally, the set the viewer can save.
+ */
+export function isTextPreviewType(previewType: DocumentPreviewType): boolean {
+    return previewType === 'markdown'
+        || previewType === 'json'
+        || previewType === 'html'
+        || previewType === 'code';
+}
+
+/**
  * Whether this document has a printable page behind it.
  *
  * Markdown only, and the restraint is the point. Print here means "lay the

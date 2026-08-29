@@ -170,10 +170,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
+    # Inherits the workflow's `contents: read` / `pull-requests: read`. This
+    # job asked for `pull-requests: write` and `issues: write` back when it
+    # posted the coverage table as a PR comment; that moved to the job summary
+    # and then to backend-coverage.yml, and the grant stayed behind. Nothing
+    # here writes anything to GitHub but an artifact.
     defaults:
       run:
         working-directory: lemma-backend
@@ -872,9 +873,25 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build and codesign online DMG
+      # The .app always; the .dmg only where a broken one would be caught.
+      #
+      # The same trade the Windows job already makes for NSIS, for the same
+      # reason: wrapping the .app in a disk image is the one step here whose
+      # output is discarded, and nothing outside `desktop_packaging` can change
+      # its result. It is also the flakiest thing in this job -- `bundle_dmg.sh`
+      # fails on a busy `hdiutil` often enough to have shown up twice in the
+      # last twenty runs -- so on an ordinary Rust pull request it is pure
+      # noise. Everything this job actually asserts (it compiles, it codesigns,
+      # the sidecars are embedded, the refusal marker survives) is asserted on
+      # the .app, which is built either way.
+      - name: Build and codesign the online app
         working-directory: desktop
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+        env:
+          BUNDLES: >-
+            ${{ (github.event_name == 'push'
+            || needs.changes.outputs.desktop_packaging == 'true')
+            && 'app,dmg' || 'app' }}
+        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
 
       - name: Verify application signature
         shell: bash
@@ -934,7 +951,11 @@ jobs:
               )
           ' "${manifest}"
 
+      # Only exists when the step above was asked for it.
       - name: Upload macOS build-check DMG
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: lemma-desktop-macos-buildcheck-${{ github.sha }}
@@ -981,9 +1002,18 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - uses: actions/setup-node@v4
+      # `.nvmrc`, like every other Node job here and — the reason this matters
+      # — like release-local-images.yml, which builds the pack that actually
+      # ships. This said `node-version: 22`, the one literal pin left in the
+      # repository, and the two facts it hid took three days of red main to
+      # surface: both package.json files declare `engines: node >=24 <25`, so
+      # the frontend was built by an interpreter it does not support, and the
+      # runner's tool-cache build of 22.23.1 links `@rpath/libnode.127.dylib`
+      # while 24.x is a single static executable. `copy_node_runtime` copies
+      # the executable alone, so the packed Node could not start at all.
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # Digests nobody resolves. The pack embeds a release manifest, and this
       # job is about the pack's own layout and interpreters -- not about which

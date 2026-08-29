@@ -53,6 +53,50 @@ regexes = [
   '''whsec_c2NlbmFyaW9zLXJlc2VuZC1zaWduaW5nLXNlY3JldA==''',
 ]
 
+[[allowlists]]
+description = '''
+A fabricated Resend signing secret in the surfaces e2e test. It decodes to
+"resend-e2e-signing-secret" and no Resend account has ever held it; the test
+needs a value of production shape so the verifier under test is exercised
+rather than short-circuited.
+
+By exact value, in the style of the two entries above, so any other
+high-entropy string in that file is still a finding.
+'''
+regexes = [
+  '''whsec_cmVzZW5kLWUyZS1zaWduaW5nLXNlY3JldA==''',
+]
+
+[[allowlists]]
+description = '''
+The fabricated Figma file key used throughout the figma connector skill's
+worked examples. `file_key` is a public identifier -- it appears in the URL of
+every Figma file -- and this particular one is invented, but eighteen mixed-case
+alphanumerics next to a quoted key is exactly what `generic-api-key` is built to
+notice.
+
+By exact value rather than by path: the skill files describe credential-bearing
+operations, and a real token pasted into one of them must still be caught.
+'''
+regexes = [
+  '''D2e3F4g5H6i7J8k9L0''',
+]
+
+[[allowlists]]
+description = '''
+Atlassian's own API documentation, copied verbatim into the docstrings of the
+generated Jira client. Every Jira attachment operation carries the same worked
+example, `curl ... -u 'email@example.com:<api_token>'`, and `<api_token>` is the
+literal placeholder Atlassian prints -- there is no credential here, only the
+word for one.
+
+Matched on the placeholder pair, so a real token substituted into the same
+docstring shape is still a finding.
+'''
+regexes = [
+  '''email@example\.com:<api_token>''',
+]
+
 [[rules]]
 id = "minisign-secret-key"
 description = '''

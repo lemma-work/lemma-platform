@@ -48,7 +48,7 @@ wrong interpreter does not fail with "module not found", it reports a
 - **[docs/testing.md](docs/testing.md)** — the three suites, which one your
   change needs, and what gates what.
 
-## The four that get broken most
+## The five that get broken most
 
 **The specification is not a description.** If the system does not behave the
 way a scenario says, do not edit the scenario to match. Mark it `gap`, record
@@ -58,6 +58,15 @@ cannot fail is documentation.
 **Behaviour changes need a test, in the right suite.** A promise to a user gets
 a scenario in `tests/scenarios/`. A failure path gets a module e2e test. One
 function gets a unit test. `docs/testing.md` covers choosing.
+
+**Never leave a background process behind.** Anything that spawns load — a
+stress loop, a dev server, a CPU hog used to reproduce a flake — tears it down
+from a `trap`, not from the last line of the script, which is not reached when
+the command times out or the session ends. Orphans pin a core each until
+somebody notices, and it has already happened more than once. Use
+`desktop/scripts/stress_test_under_load.sh` rather than writing the loop again;
+[docs/testing.md](docs/testing.md#rules-that-apply-everywhere) has the rule and
+the two ways the hand-rolled version fails silently under `zsh`.
 
 **Generated code is generated.** The OpenAPI spec, the route inventory, the
 module contracts and the scenario coverage document are all produced by scripts
@@ -74,6 +83,11 @@ produces them.
 ```bash
 make quality
 ```
+
+`make quality` is Python only, all the way down. If you touched the frontend or
+the TypeScript SDK, add `make quality-frontend` — eslint, `tsc`, the
+design-system audit and the education anchors, the four gates CI runs that
+`quality` cannot see. (`make check` is both, plus CodeQL.)
 
 Then the checks for the component you touched, from the table in
 `CONTRIBUTING.md`. The pull request template lists what the description needs —
