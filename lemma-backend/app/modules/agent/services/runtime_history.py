@@ -78,6 +78,15 @@ def _newest_message_time(run: AgentRun) -> datetime | None:
     return newest
 
 
+def _capped_run_count(runs: list[AgentRun]) -> list[AgentRun]:
+    """The newest runs, however many the conversation actually has.
+
+    Applies to every conversation, surface or not: the oldest runs are the least
+    useful and nothing else put a ceiling on how many of them there could be.
+    """
+    return runs[-MAX_HISTORY_AGENT_RUNS:]
+
+
 def apply_surface_history_window(
     runs: list[AgentRun], conversation: Conversation | None
 ) -> list[AgentRun]:
@@ -93,10 +102,7 @@ def apply_surface_history_window(
     """
     if not runs:
         return runs
-    # Applies to every conversation, surface or not: the oldest runs are the
-    # least useful and there is no upper bound on how many of them there can be.
-    if len(runs) > MAX_HISTORY_AGENT_RUNS:
-        runs = runs[-MAX_HISTORY_AGENT_RUNS:]
+    runs = _capped_run_count(runs)
     metadata = (conversation.metadata or {}) if conversation is not None else {}
     if not metadata.get("surface_platform"):
         return runs
