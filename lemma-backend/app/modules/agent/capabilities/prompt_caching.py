@@ -52,9 +52,19 @@ class PromptCachingCapability(AbstractCapability[object]):
 
     def get_model_settings(self) -> dict[str, object]:
         if self._protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
-            # Marks a cache breakpoint after the last static instruction block —
-            # for us, the block ending in the runtime context brief.
-            return {"anthropic_cache_instructions": _ANTHROPIC_CACHE_TTL}
+            return {
+                # Marks a cache breakpoint after the last static instruction
+                # block — for us, the block ending in the task list.
+                "anthropic_cache_instructions": _ANTHROPIC_CACHE_TTL,
+                # And one after the tool definitions. Anthropic's cache is a
+                # prefix over [tools, system, messages], so a changed tool array
+                # invalidates every breakpoint behind it — and the tool array
+                # *does* change mid-run: `search_tools` reveals deferred tools on
+                # demand, which is the whole point of deferring them. Without
+                # this, the first search costs a full re-read of the system
+                # prompt for the rest of the run.
+                "anthropic_cache_tool_definitions": _ANTHROPIC_CACHE_TTL,
+            }
         affinity = self._conversation_id
         return {
             # OpenAI `user` field — used by compatible providers for sticky
