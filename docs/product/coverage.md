@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 235 | 235 |
+| OpenAPI operations | 235 | 236 |
 | Product events | 28 | 28 |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
