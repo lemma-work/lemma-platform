@@ -100,6 +100,7 @@ async def refresh_credential(
             "agent.harnesses.agent_host.credential_refresh_failed.degraded",
             agent_run_id=str(agent_run_id),
             error_type=type(exc).__name__,
+            exc_info=True,
         )
         return None
     if command is None:

@@ -37,9 +37,7 @@ from app.modules.agent.tools.workspace_cli.github_project import (
     prepare_project_directory,
 )
 from app.modules.agent.tools.workspace_cli.helper import (
-    CHARACTER_LIMIT_STDOUT,
-    normalize_terminal_output,
-    tail_truncate,
+    render_terminal_result,
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
@@ -178,21 +176,6 @@ def _with_notice(text: str | None, *, notice: str | None) -> str | None:
     return f"{notice}\n{text or ''}"
 
 
-def _render_terminal_result(
-    result: dict[str, Any], *, tty: bool
-) -> tuple[str | None, str | None]:
-    """Make raw PTY output readable, keeping the end rather than the start."""
-
-    stdout = result.get("stdout")
-    stderr = result.get("stderr")
-    if not tty:
-        return stdout, stderr
-    return (
-        tail_truncate(normalize_terminal_output(stdout or ""), CHARACTER_LIMIT_STDOUT),
-        tail_truncate(normalize_terminal_output(stderr or ""), CHARACTER_LIMIT_STDOUT),
-    )
-
-
 async def _process_control_tool(
     ctx: BaseAgentContext,
     *,
@@ -317,7 +300,7 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
-        stdout, stderr = _render_terminal_result(result, tty=request.tty)
+        stdout, stderr = render_terminal_result(result, tty=request.tty)
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )
@@ -371,7 +354,7 @@ async def write_stdin_internal(
             )
         # write_stdin only ever targets an interactive process, so its output is
         # terminal output and is rendered as such.
-        stdout, stderr = _render_terminal_result(result, tty=True)
+        stdout, stderr = render_terminal_result(result, tty=True)
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,
@@ -449,8 +432,8 @@ async def list_processes_internal(
             processes=[ProcessInfo.model_validate(process) for process in visible],
         )
     except Exception as exc:
-        logger.debug(
-            "agent.workspace_cli.workspace_cli_list_processes_s.diagnostic",
+        logger.warning(
+            "agent.workspace_cli.workspace_cli_list_processes_s.degraded",
             exc_info=True,
         )
         return ListProcessesResult(

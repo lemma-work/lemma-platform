@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.skills.models import (
     ListSkillsRequest,
@@ -29,6 +30,9 @@ workspace injects Lemma environment variables for the current user and pod. Do
 not run raw localhost API/Auth probes from workspace exec: workspace
 `localhost` is the isolated workspace container, not the host Lemma app.
 """
+
+
+logger = get_logger(__name__)
 
 
 async def list_skills(
@@ -78,6 +82,12 @@ async def load_skill(
                 ),
             )
         except Exception as exc:
+            # Telling the agent is not telling whoever operates the system.
+            logger.warning(
+                "agent.skills.resource_load_failed.degraded",
+                skill_name=request.name,
+                exc_info=True,
+            )
             return SkillContentResult(
                 success=False,
                 name=request.name,
@@ -93,6 +103,9 @@ async def load_skill(
             user_id=ctx.deps.user_id,
         )
     except Exception as exc:
+        logger.warning(
+            "agent.skills.load_failed.degraded", skill_name=request.name, exc_info=True
+        )
         return SkillContentResult(
             success=False,
             name=request.name,

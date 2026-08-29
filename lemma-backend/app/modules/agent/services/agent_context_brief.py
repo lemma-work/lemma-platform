@@ -289,8 +289,14 @@ class AgentContextBriefBuilder:
                 lines.append("\n## Files (top level)")
                 lines.extend(f"- {entry}" for entry in entries)
         except Exception:
-            # Files are best-effort context; never fail prompt assembly on them.
-            pass
+            # Files are best-effort context; never fail prompt assembly on them
+            # -- but say so. A silently missing "Files (top level)" section reads
+            # to the model as a pod with no files in it.
+            logger.warning(
+                "agent.context_brief.file_inventory_unavailable.degraded",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
         return lines
 
     async def _granted_resources(

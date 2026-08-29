@@ -68,6 +68,7 @@ class StreamReader:
                 agent_run_id=str(self.run_id),
                 attempt=self.failures,
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
             if self.failures >= MAX_CONSECUTIVE_STREAM_FAILURES:
                 raise StreamUnavailable(STREAM_UNAVAILABLE_MESSAGE) from exc
