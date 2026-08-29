@@ -206,6 +206,9 @@ class RunEventPump:
         The outcome is filled in as they arrive rather than returned, so a
         caller unwinding through an exception still sees everything that had
         been produced up to that point.
+
+        A stream that simply stops without a terminal event is finalized here
+        rather than left: see the end of this method.
         """
         async for raw_event in events:
             if outcome.terminal_seen:
@@ -228,6 +231,32 @@ class RunEventPump:
                     break
             if should_stop:
                 outcome.terminal_seen = True
+
+        if outcome.terminal_seen:
+            return
+        # The stream ended without ever saying how the run turned out. Nothing
+        # had finalized and nothing raised, so both the run and its conversation
+        # were left RUNNING with nothing that would move them: the orphan cron
+        # waits an hour and only repairs the run, and whatever is waiting on the
+        # conversation — a schedule run, a workflow step — waits forever.
+        #
+        # FAILED rather than COMPLETED because there is no answer here. The
+        # model never said it was done, and handing back an empty result as
+        # though it were one is worse than saying the turn did not finish.
+        logger.warning(
+            "agent.run_event_pump.stream_ended_without_a_terminal_event.degraded",
+            agent_run_id=run.agent_run_id,
+        )
+        outcome.terminal_seen = True
+        outcome.final_status = ConversationStatus.FAILED
+        await self.finalizer.finish(
+            run=run,
+            status=AgentRunStatus.FAILED,
+            conversation_status=ConversationStatus.FAILED,
+            error="The agent stopped without producing a result. Please try again.",
+            output_data=outcome.output_data,
+            usage_data=outcome.usage_data,
+        )
 
     def _classify_token(self, kind: str, text: str) -> list[tuple[str, str]]:
         """Re-tag reasoning a model wrote into the text stream.

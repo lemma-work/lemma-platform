@@ -84,16 +84,36 @@ async def _a_connector_anyone_can_connect(alice) -> str:
     the deployment it was written against and skip on every other.
 
     One kind only, so installing it without saying which is unambiguous; not
-    OAuth2, because connecting one of those means a person in a browser; and
-    `telegram` first where the catalogue has it.
+    OAuth2, because connecting one of those means a person in a browser; and —
+    the part this file needs — one that actually *offers* operations.
 
-    That preference is not cosmetic. Installing a connector *discovers* what it
-    offers, and for a brokered one that means a live call to the broker —
-    which turns a fixture into a dependency on somebody else's uptime, and
-    fails outright where that broker cannot be reached. Telegram's operations
-    are built in, so installing it asks nobody anything. The suite already
-    depends on it standing (`tenant.STANDING_CONNECTORS`), so preferring it
-    here assumes nothing new.
+    That last filter replaces a preference for `telegram`, which was chosen
+    because installing it asks nobody anything: its kind declares
+    `discovery: none`, so there is no live call to a broker and no dependency
+    on somebody else's uptime. True, and it selected the one connector in the
+    catalogue guaranteed to be useless here — Telegram is a bot-messaging
+    *surface*, and it ships zero operations. `test_an_operation_is_readable`
+    went red against dev for it, reporting a discovery failure that had not
+    happened.
+
+    `discovery` is the wrong question, in both directions. It says where a
+    connector's operations come from, not whether it has any: `none` means the
+    catalogue already holds every one of them, which is the property worth
+    keeping, not a sign of emptiness. So ask for what is actually wanted — a
+    connector whose catalogue entry carries operations — and rank the survivors
+    by how little installing one has to ask of anybody else.
+
+    Two things make an install reach outside, and they are independent. A kind
+    that discovers on install (`openapi`, `mcp`) calls out to read its own
+    shape. A kind that is brokered — one naming a `toolkit_slug` or a
+    `package_name` — is fronted by somebody else's service even when its
+    operations are already catalogued. Preferring neither is what the old
+    Telegram preference was reaching for, and stating it this way gets it
+    without also selecting for zero operations.
+
+    `operations` is on the detail response and not on the list, so this costs
+    one GET per candidate. The two filters above run first, so that is a
+    handful of connectors rather than the whole catalogue.
     """
     catalogue = items_of(await alice.api.get("/connectors"))
     connectable = [
@@ -102,15 +122,26 @@ async def _a_connector_anyone_can_connect(alice) -> str:
         if len(connector.get("kinds") or []) == 1
         and str((connector["kinds"][0]).get("auth_scheme", "")).upper() != "OAUTH2"
     ]
-    for preferred in ("telegram",):
-        if preferred in connectable:
-            return preferred
-    if connectable:
-        return connectable[0]
+
+    ranked: list[tuple[int, str]] = []
+    for connector_id in connectable:
+        detail = await alice.api.get(f"/connectors/{connector_id}")
+        if not (detail.get("operations") or {}):
+            continue
+        kind = (detail.get("kinds") or [{}])[0]
+        brokered = bool(kind.get("toolkit_slug") or kind.get("package_name"))
+        discovers_on_install = str(kind.get("discovery", "")).lower() != "none"
+        # Lowest rank wins: built in and already catalogued comes first, a
+        # broker's uptime last. Ties break on the id, so a given catalogue
+        # always yields the same choice.
+        ranked.append((brokered + 2 * discovers_on_install, connector_id))
+    if ranked:
+        return min(ranked)[1]
+
     pytest.skip(
         "this deployment's catalogue has no single-kind connector that can be "
-        "connected without consent, so there is nothing to install that a "
-        "scenario could also connect an account to"
+        "connected without consent *and* offers any operation, so there is "
+        "nothing to install whose operations a scenario could then read"
     )
 
 
