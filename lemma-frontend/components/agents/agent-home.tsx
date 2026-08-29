@@ -28,7 +28,8 @@ import type { AssistantSurface, Conversation, Schedule } from '@/lib/types';
 import { describeScheduleConfig } from '@/lib/utils/schedules';
 import { formatRelativeTime } from '@/lib/utils/relative-time';
 import { formatAgentName } from '@/lib/utils/agents';
-import { LEM_SEED } from '@/lib/identity/seeded-identity';
+import { AgentContactShare } from '@/components/agents/agent-contact-share';
+import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 
 /**
  * One place someone can start talking to this agent, outside this app.
@@ -120,6 +121,8 @@ function reachTargets(surfaces: AssistantSurface[]): AgentReachTarget[] {
  */
 export function AgentHome({
     podId,
+    agentId,
+    agentSlug,
     agentName,
     description,
     iconUrl,
@@ -130,6 +133,17 @@ export function AgentHome({
     isAssistant,
 }: {
     podId: string;
+    /**
+     * The agent's id, which is what its face is seeded from.
+     *
+     * Separate from `agentName` because the name arriving here is already a
+     * *display* name — so seeding on it drew this page a different creature from
+     * the one in the sidebar, which seeds on the stored name, and a third from
+     * the header, which seeds on the id. See `agentIdentitySeed`.
+     */
+    agentId?: string | null;
+    /** The stored name, which is what `/pod/…/agents/…` routes on. */
+    agentSlug?: string | null;
     agentName: string;
     description?: string | null;
     iconUrl?: string | null;
@@ -158,9 +172,14 @@ export function AgentHome({
         router.push(`/pod/${encodeURIComponent(podId)}/conversations/new?${params.toString()}`);
     };
 
-    const reach = reachTargets(surfaces.filter((surface) => (isAssistant
+    /* Matched on the *stored* name, not the display one. `surfaceDefaultAgent`
+       compares against `surface.agent_name`, which is what the pod typed — so
+       an agent named `support_triage` was asking whether a surface answers for
+       "Support Triage" and getting no for every chip on the row. */
+    const reachableSurfaces = surfaces.filter((surface) => (isAssistant
         ? surfaceReachesDefaultAgent(surface)
-        : surfaceReachesAgent(surface, agentName))));
+        : surfaceReachesAgent(surface, agentSlug || agentName)));
+    const reach = reachTargets(reachableSurfaces);
 
     return (
         <div className="agent-home">
@@ -189,7 +208,7 @@ export function AgentHome({
                     alt=""
                     label={label}
                     identityKind="being"
-                    identitySeed={agentName}
+                    identitySeed={agentIdentitySeed({ id: agentId, name: agentName })}
                     identitySize={64}
                     className="agent-home-face h-16 w-16 rounded-2xl"
                 />
@@ -344,6 +363,25 @@ export function AgentHome({
                             </Link>
                         );
                     })}
+                    {/* Last in the row. Lem is included: it answers on the pod's
+                        own surfaces, which is an address worth handing out — and
+                        the card says which pod, since Lem's name does not. */}
+                    {isAssistant || agentSlug ? (
+                        <AgentContactShare
+                            podId={podId}
+                            workspacePath={
+                                isAssistant
+                                    ? `/pod/${encodeURIComponent(podId)}/ai/assistant`
+                                    : `/pod/${encodeURIComponent(podId)}/agents/${encodeURIComponent(agentSlug!)}`
+                            }
+                            agentName={label}
+                            seed={isAssistant ? LEM_SEED : agentIdentitySeed({ id: agentId, name: agentSlug })}
+                            iconUrl={iconUrl}
+                            description={description}
+                            isAssistant={isAssistant}
+                            surfaces={reachableSurfaces}
+                        />
+                    ) : null}
                 </div>
             ) : null}
 

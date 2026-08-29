@@ -124,6 +124,27 @@ export function identitySeed(...parts: Array<string | null | undefined>): string
 }
 
 /**
+ * The one seed an agent is drawn from, wherever it is drawn.
+ *
+ * The rule above — id when there is one, name only as a fallback — was left to
+ * each call site to remember, and the sidebar forgot: it seeded its rows on
+ * `agent.name` while the agent's own header seeded on `agent.id`, so the same
+ * agent wore two different faces on two halves of one screen. Nothing catches
+ * that, because both faces are valid output for the seed each was handed.
+ *
+ * So the rule lives here now, and a caller passes the agent rather than a
+ * string. The fallback is still worth keeping: an agent being composed in the
+ * "new agent" flow has a name before it has an id, and a face that appears only
+ * after the first save would be worse than one that settles on it.
+ */
+export function agentIdentitySeed(agent: {
+    id?: string | null;
+    name?: string | null;
+}): string {
+    return agent.id?.trim() || agent.name?.trim() || '';
+}
+
+/**
  * The pod's default responder is the same creature in every pod, so its genes
  * are written down rather than rolled.
  *

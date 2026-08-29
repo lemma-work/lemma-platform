@@ -30,6 +30,13 @@ export const CLIENT_CATALOG = {
     /** A shared link opened. `kind` and `viewer_is_member` must stay identical to
      *  the backend entry of the same name. */
     "share_link.viewed": { properties: ["bundle_id", "kind", "viewer_is_member"] },
+    /** A contact card's channel row pressed — the moment the reader leaves for
+     *  Telegram, WhatsApp or their mail client. `channel` is the bounded
+     *  `ContactChannel` key and never the handle behind it, which is an address. */
+    "share_link.contact_opened": { properties: ["channel"] },
+    /** The vCard saved. The card's real conversion, and the last thing we can
+     *  see: everything after it happens in an address book we have no view of. */
+    "share_link.contact_saved": { properties: [] },
     /** The import button pressed — the step the server never sees, because an
      *  abandoned import makes no API call. */
     "import.started": { properties: ["bundle_id", "is_remix"] },

@@ -56,7 +56,7 @@ import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import { identityHueClass } from '@/lib/utils/resource-icon-value';
-import { LEM_SEED } from '@/lib/identity/seeded-identity';
+import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 import {
     filterSidebarConversations,
     getConversationMark,
@@ -899,7 +899,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                     title={displayName}
                                     className={cn(
                                         'lemma-sidebar-row workspace-sidebar-resource-row custom-focus-ring',
-                                        identityHueClass(agent.icon_url, agent.name),
+                                        identityHueClass(agent.icon_url, agentIdentitySeed(agent)),
                                     )}
                                 >
                                     <ResourceIcon
@@ -907,7 +907,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         alt={`${displayName} icon`}
                                         label={displayName}
                                         identityKind="being"
-                                        identitySeed={agent.name}
+                                        identitySeed={agentIdentitySeed(agent)}
                                         identitySize={32}
                                         className="workspace-sidebar-resource-icon h-8 w-8 shrink-0 rounded-md"
                                     />
