@@ -87,6 +87,15 @@ class AgentSettings(BaseSettings):
             "usually the better choice."
         ),
     )
+    agent_model_context_windows: str = Field(
+        default="",
+        description=(
+            "Per-model context windows an operator declares, as comma-separated "
+            "`name=tokens` pairs (e.g. 'claude-sonnet-4=200000,kimi-k3=131072'). "
+            "Used where a provider's /models payload does not advertise one, "
+            "which is most of them. Unlisted models use the default below."
+        ),
+    )
     agent_default_context_window_tokens: int = Field(
         default=128_000,
         description=(

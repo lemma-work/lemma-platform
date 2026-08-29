@@ -30,6 +30,7 @@ EXPECTED = [
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
     ("history_summarization_model", "HISTORY_SUMMARIZATION_MODEL", None),
+    ("agent_model_context_windows", "AGENT_MODEL_CONTEXT_WINDOWS", ""),
     (
         "agent_default_context_window_tokens",
         "AGENT_DEFAULT_CONTEXT_WINDOW_TOKENS",

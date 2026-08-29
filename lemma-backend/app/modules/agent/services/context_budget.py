@@ -129,3 +129,52 @@ def context_budget_for(model: object | None) -> ContextBudget:
         summarization_token_limit=int(window * SUMMARIZATION_FRACTION),
         hard_token_ceiling=int(window * HARD_CEILING_FRACTION),
     )
+
+
+def configured_model_context_windows() -> dict[str, int]:
+    """Windows an operator has declared, as ``name=tokens`` pairs.
+
+    `AGENT_MODEL_CONTEXT_WINDOWS="claude-sonnet-4=200000,kimi-k3=131072"`.
+
+    Discovery reads a window straight off a provider's `/models` payload where
+    one is advertised, but most OpenAI-compatible providers advertise nothing,
+    and the system profiles take their model names from configuration rather
+    than from discovery at all. This is the hook for those: without it every
+    such model silently falls back to the deployment default, which is safe but
+    leaves a large model working to a fraction of its window.
+
+    A malformed pair is skipped and logged rather than failing model
+    registration -- one bad entry must not cost a deployment its catalog.
+    """
+    raw = os.getenv("AGENT_MODEL_CONTEXT_WINDOWS")
+    if raw is None:
+        raw = agent_settings.agent_model_context_windows
+    windows: dict[str, int] = {}
+    for pair in (raw or "").split(","):
+        entry = pair.strip()
+        if not entry:
+            continue
+        name, separator, value = entry.partition("=")
+        window = _coerce_window(value) if separator else None
+        if not name.strip() or window is None:
+            logger.warning(
+                "agent.context_budget.invalid_declared_window.degraded",
+                configured_value=entry,
+            )
+            continue
+        windows[name.strip()] = window
+    return windows
+
+
+def catalog_metadata_for(
+    model_name: str, *, discovered_window: int | None = None
+) -> dict[str, int]:
+    """The `metadata` a catalog entry should carry for this model.
+
+    An operator's declaration wins over whatever the provider advertised: they
+    are correcting it on purpose. Empty when neither says anything, so the
+    deployment default applies rather than an invented number.
+    """
+    declared = configured_model_context_windows().get(model_name)
+    window = declared or _coerce_window(discovered_window)
+    return {CONTEXT_WINDOW_METADATA_KEY: window} if window else {}

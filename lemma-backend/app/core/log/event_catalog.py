@@ -27,6 +27,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_runner_service.agent_run_s.failed': EventSpec('error', frozenset()),
     'agent.agent_runner_service.finalize_agent_run_run_s.propagated': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.context_brief.file_inventory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
+    'agent.context_budget.invalid_declared_window.degraded': EventSpec('warning', frozenset({'configured_value'})),
     'agent.context_budget.invalid_env_window.degraded': EventSpec('warning', frozenset({'configured_value'})),
     'agent.context_budget.invalid_model_window.degraded': EventSpec('warning', frozenset({'configured_value', 'model_name'})),
     'agent.conversation_controller.agent_realtime_subscription.failed': EventSpec('error', frozenset({'agent_run_id', 'conversation_id'})),

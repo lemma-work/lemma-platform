@@ -143,3 +143,118 @@ def _default_window() -> int:
     from app.modules.agent.config import agent_settings
 
     return agent_settings.agent_default_context_window_tokens
+
+
+class TestWindowsRecordedWhenModelsAreRegistered:
+    """A window nobody records is a window nobody can use.
+
+    The budget resolver reads `metadata.context_window` off a model's catalog
+    entry, and every writer of those entries used to leave metadata empty -- so
+    every model in every deployment fell back to the default, however large its
+    real window.
+    """
+
+    def test_an_operator_declaration_is_recorded(self, monkeypatch) -> None:
+        from app.modules.agent.services.context_budget import (
+            CONTEXT_WINDOW_METADATA_KEY,
+            catalog_metadata_for,
+        )
+
+        monkeypatch.setenv(
+            "AGENT_MODEL_CONTEXT_WINDOWS", "claude-sonnet-4=200000,kimi-k3=131072"
+        )
+
+        assert catalog_metadata_for("kimi-k3") == {CONTEXT_WINDOW_METADATA_KEY: 131072}
+
+    def test_a_model_nobody_declared_carries_nothing(self, monkeypatch) -> None:
+        """Empty, not a guess: the deployment default then applies, and a wrong
+        window is worse than an admitted unknown."""
+        from app.modules.agent.services.context_budget import catalog_metadata_for
+
+        monkeypatch.setenv("AGENT_MODEL_CONTEXT_WINDOWS", "kimi-k3=131072")
+
+        assert catalog_metadata_for("some-other-model") == {}
+
+    def test_what_the_provider_advertised_is_used(self, monkeypatch) -> None:
+        from app.modules.agent.services.context_budget import (
+            CONTEXT_WINDOW_METADATA_KEY,
+            catalog_metadata_for,
+        )
+
+        monkeypatch.delenv("AGENT_MODEL_CONTEXT_WINDOWS", raising=False)
+
+        assert catalog_metadata_for("m", discovered_window=64_000) == {
+            CONTEXT_WINDOW_METADATA_KEY: 64_000
+        }
+
+    def test_an_operator_overrides_the_provider(self, monkeypatch) -> None:
+        """They are correcting it on purpose."""
+        from app.modules.agent.services.context_budget import (
+            CONTEXT_WINDOW_METADATA_KEY,
+            catalog_metadata_for,
+        )
+
+        monkeypatch.setenv("AGENT_MODEL_CONTEXT_WINDOWS", "m=200000")
+
+        assert catalog_metadata_for("m", discovered_window=64_000) == {
+            CONTEXT_WINDOW_METADATA_KEY: 200_000
+        }
+
+    def test_one_bad_pair_does_not_cost_the_others(self, monkeypatch) -> None:
+        """A typo must not take a deployment's whole catalog down with it."""
+        from app.modules.agent.services.context_budget import (
+            configured_model_context_windows,
+        )
+
+        monkeypatch.setenv(
+            "AGENT_MODEL_CONTEXT_WINDOWS", "good=131072,broken,also-broken=lots"
+        )
+
+        assert configured_model_context_windows() == {"good": 131072}
+
+    def test_a_declared_window_reaches_the_budget(self, monkeypatch) -> None:
+        """End to end: declaring it must actually change what a run may spend."""
+        monkeypatch.setenv("AGENT_MODEL_CONTEXT_WINDOWS", "big=1000000")
+        from app.modules.agent.services.context_budget import catalog_metadata_for
+
+        budget = context_budget_for(_Entry(catalog_metadata_for("big"), name="big"))
+
+        assert budget.window == 1_000_000
+        assert budget.summarization_token_limit == 800_000
+
+
+class TestDiscoveryReadsTheWindowFromTheProvider:
+    def _parse(self, payload: dict):
+        from app.modules.agent.services.runtime_provider_discovery import (
+            _parse_openai_compatible_models,
+        )
+
+        return _parse_openai_compatible_models(payload)
+
+    def test_context_length_is_read(self) -> None:
+        (model,) = self._parse({"data": [{"id": "m", "context_length": 131072}]})
+
+        assert model.context_window == 131072
+
+    def test_the_openrouter_nested_form_is_read(self) -> None:
+        (model,) = self._parse(
+            {"data": [{"id": "m", "top_provider": {"context_length": 200000}}]}
+        )
+
+        assert model.context_window == 200_000
+
+    def test_the_vllm_spelling_is_read(self) -> None:
+        (model,) = self._parse({"data": [{"id": "m", "max_model_len": 32768}]})
+
+        assert model.context_window == 32768
+
+    def test_a_payload_that_says_nothing_yields_nothing(self) -> None:
+        """The standard OpenAI schema carries no window at all."""
+        (model,) = self._parse({"data": [{"id": "m"}]})
+
+        assert model.context_window is None
+
+    def test_a_nonsense_value_is_ignored(self) -> None:
+        (model,) = self._parse({"data": [{"id": "m", "context_length": "lots"}]})
+
+        assert model.context_window is None
