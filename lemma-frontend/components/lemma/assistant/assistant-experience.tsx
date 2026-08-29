@@ -469,33 +469,26 @@ export function AssistantExperienceView({
 
   const handleSubmit = useCallback(async () => {
     if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
-    // A run already in flight takes a follow-up as a steer: no file uploads
-    // (the append endpoint is text-only), no clearing the busy gate — it
-    // joins the active run instead of starting a new one.
-    if (isConversationBusy) {
-      if (hasPendingFileUploads || !draft.trim()) return;
-      const message = draft.trim();
-      setDraft("");
-      scrollToBottom("smooth");
-      await steerMessage(message);
-      return;
-    }
     const message = draft.trim();
     setDraft("");
     scrollToBottom("smooth");
-    await sendMessage(message);
+    // A run already in flight takes the follow-up as a steer: it joins that run
+    // rather than starting a second one. Otherwise identical to a send —
+    // attachments included, because the two go to the same endpoint shape and a
+    // dropped file with no explanation is worse than either outcome.
+    await (isConversationBusy ? steerMessage(message) : sendMessage(message));
   }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
+  // Only the empty state offers suggestions, and it renders under
+  // `showEmptyState={isConversationEmpty}` — which requires nothing to be
+  // running. So there is no busy case to handle here; a branch for one was
+  // unreachable code that read like a second, disagreeing rule.
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
     if (!message || interactionPending) return;
     scrollToBottom("smooth");
-    if (isConversationBusy) {
-      await steerMessage(message);
-      return;
-    }
     await sendMessage(message);
-  }, [interactionPending, isConversationBusy, scrollToBottom, sendMessage, steerMessage]);
+  }, [interactionPending, scrollToBottom, sendMessage]);
 
   // Stable identities for the memoized transcript: an inline lambda here would
   // be a new prop every render and defeat the memo.

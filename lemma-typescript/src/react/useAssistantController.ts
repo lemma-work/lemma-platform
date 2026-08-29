@@ -682,40 +682,51 @@ function resolveScopedClient(client: LemmaClient, podId?: string | null): LemmaC
   return client;
 }
 
-function conversationUploadDirectory(conversationId: string): string {
-  return `/me/conversations/${conversationId}`;
-}
-
-function shouldIgnoreFolderEnsureError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
-  return message.includes("already exists")
-    || message.includes("already in use")
-    || message.includes("path unavailable")
-    || message.includes("path already")
-    || message.includes("409");
-}
-
-async function ensureFolder(client: LemmaClient, name: string, directoryPath: string): Promise<void> {
-  try {
-    await client.files.folder.create(name, { directoryPath });
-  } catch (error) {
-    if (!shouldIgnoreFolderEnsureError(error)) throw error;
+/**
+ * Where a file attached in the composer is written.
+ *
+ * The conversation's own working directory in pod files — the same
+ * `/me/c/{date}/{slug}` the agent's pod tools resolve a relative path against,
+ * mirroring its `/workspace/c/{date}/{slug}` scratchpad. So a person attaches
+ * `report.pdf` and the agent finds it by that name, with no path to be told.
+ *
+ * The server computes it (`ConversationResponse.pod_cwd`) rather than this
+ * function, and deliberately: the slug is random, it lives in conversation
+ * metadata, and the rule that maps a workspace cwd to a pod one is the same
+ * rule the agent's tools use. Rebuilding it here would be a second
+ * implementation of that rule, and the two drifting is precisely how uploads
+ * ended up under `/me/conversations/{uuid}` — a directory the agent's cwd never
+ * pointed at, findable only because the client pasted the absolute path into
+ * the message text.
+ *
+ * No folder is created first: the upload endpoint makes missing parents on the
+ * way, `mkdir -p` style. The two `folder.create` round-trips that used to run
+ * before every attachment were redundant, and swallowed any error whose message
+ * merely contained "409".
+ */
+async function resolveConversationUploadDirectory(
+  client: LemmaClient,
+  conversationId: string,
+  knownConversation: Conversation | null | undefined,
+  podId: string | null | undefined,
+): Promise<string> {
+  const known = knownConversation?.pod_cwd;
+  if (known) return known;
+  const fetched = await client.conversations.get(conversationId, {
+    pod_id: podId ?? undefined,
+  });
+  if (!fetched?.pod_cwd) {
+    throw new Error("This conversation has no working directory to attach files to.");
   }
-}
-
-async function ensureConversationUploadDirectory(client: LemmaClient, conversationId: string): Promise<string> {
-  await ensureFolder(client, "conversations", "/me");
-  await ensureFolder(client, conversationId, "/me/conversations");
-  return conversationUploadDirectory(conversationId);
+  return fetched.pod_cwd;
 }
 
 async function uploadConversationFiles(
   client: LemmaClient,
-  conversationId: string,
+  directoryPath: string,
   uploads: AssistantPendingFileUpload[],
   onStatus?: (key: string, next: Partial<AssistantPendingFileUpload>) => void,
 ): Promise<FileResponse[]> {
-  const directoryPath = await ensureConversationUploadDirectory(client, conversationId);
   const uploaded: FileResponse[] = [];
   for (const upload of uploads) {
     onStatus?.(upload.key, { status: "uploading", error: undefined });
@@ -1732,6 +1743,40 @@ export function useAssistantController({
     )));
   }, []);
 
+  // Upload whatever is staged into the conversation's working directory and
+  // fold the references into the message. Shared by `sendMessage` and
+  // `steerMessage` so a follow-up sent mid-run carries attachments exactly like
+  // a first message does — they reach the same endpoint shape, and the two
+  // paths disagreeing is how a staged file came to be dropped in silence.
+  const attachPendingFiles = useCallback(async (
+    conversationId: string,
+    content: string,
+    uploads: AssistantPendingFileUpload[],
+  ): Promise<{ content: string; files: FileResponse[] }> => {
+    if (uploads.length === 0) return { content, files: [] };
+    setIsUploadingFiles(true);
+    try {
+      const fileClient = resolveScopedClient(client, scope.podId);
+      const directoryPath = await resolveConversationUploadDirectory(
+        fileClient,
+        conversationId,
+        conversationsRef.current.find((conversation) => conversation.id === conversationId),
+        scope.podId,
+      );
+      const files = await uploadConversationFiles(
+        fileClient,
+        directoryPath,
+        uploads,
+        updatePendingFileUpload,
+      );
+      setPendingFileUploads([]);
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+      return { content: appendPersonalFileReferences(content, files), files };
+    } finally {
+      setIsUploadingFiles(false);
+    }
+  }, [client, scope.podId, touchConversation, updatePendingFileUpload]);
+
   const sendMessage = useCallback(async (content: string, options: SendAssistantControllerMessageOptions = {}) => {
     const trimmed = content.trim();
     const uploadsToSend = pendingFileUploads.filter((upload) => upload.status !== "uploaded");
@@ -1775,20 +1820,13 @@ export function useAssistantController({
       }
       const finalConversationId = conversationId;
 
-      let messageContent = trimmed || "Please use the attached files.";
-      let uploadedFiles: FileResponse[] = [];
-      if (uploadsToSend.length > 0) {
-        setIsUploadingFiles(true);
-        try {
-          const fileClient = resolveScopedClient(client, scope.podId);
-          uploadedFiles = await uploadConversationFiles(fileClient, finalConversationId, uploadsToSend, updatePendingFileUpload);
-          messageContent = appendPersonalFileReferences(messageContent, uploadedFiles);
-          setPendingFileUploads([]);
-          touchConversation(finalConversationId, { updated_at: new Date().toISOString() });
-        } finally {
-          setIsUploadingFiles(false);
-        }
-      }
+      const attached = await attachPendingFiles(
+        finalConversationId,
+        trimmed || "Please use the attached files.",
+        uploadsToSend,
+      );
+      const messageContent = attached.content;
+      const uploadedFiles = attached.files;
 
       if (!hasEagerOptimisticTurn) {
         appendOptimisticUserMessage(messageContent, {
@@ -1870,10 +1908,14 @@ export function useAssistantController({
   ) => {
     const trimmed = content.trim();
     const conversationId = activeConversationIdRef.current;
-    if (!enabled || !trimmed || !conversationId) return;
+    const uploadsToSend = pendingFileUploads.filter((upload) => upload.status !== "uploaded");
+    if (!enabled || (!trimmed && uploadsToSend.length === 0) || !conversationId) return;
 
     setLocalError(null);
-    appendOptimisticUserMessage(trimmed, { conversationId });
+    const hasEagerOptimisticTurn = uploadsToSend.length === 0;
+    if (hasEagerOptimisticTurn) {
+      appendOptimisticUserMessage(trimmed, { conversationId });
+    }
 
     const knownConversation = conversationsRef.current.find(
       (conversation) => conversation.id === conversationId,
@@ -1881,9 +1923,19 @@ export function useAssistantController({
     const resolvedPodId = knownConversation?.pod_id ?? scope.podId;
 
     try {
+      // Same order as `sendMessage`: an upload changes the content (it appends
+      // the file references), so the turn only goes up once it is final.
+      const attached = await attachPendingFiles(
+        conversationId,
+        trimmed || "Please use the attached files.",
+        uploadsToSend,
+      );
+      if (!hasEagerOptimisticTurn) {
+        appendOptimisticUserMessage(attached.content, { conversationId });
+      }
       await client.conversations.appendMessage(
         conversationId,
-        { content: trimmed, metadata: options.metadata ?? undefined },
+        { content: attached.content, metadata: options.metadata ?? undefined },
         { pod_id: resolvedPodId ?? undefined },
       );
       touchConversation(conversationId, { updated_at: new Date().toISOString() });
@@ -1892,7 +1944,16 @@ export function useAssistantController({
       // actually sees arrive, whether that's the still-open stream from the
       // turn this joined or a reconnect after it had died. Same pattern
       // `resolveUserApproval` uses after an action that (re)starts a run.
-      void sessionResumeIfRunning(conversationId, { expectRun: true }).catch(() => {});
+      //
+      // force: true for the same reason it does. The dedup key is
+      // conversation+status, and a steer never changes the status -- so a run
+      // whose stream had already died looked identical to one still being
+      // watched, and the reconnect that would have shown the answer no-op'd.
+      // A live stream is still not disturbed: `resumeIfRunning` returns early
+      // while streaming, and `resume` cancels before it subscribes.
+      void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch((error) => {
+        setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
+      });
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
@@ -1902,8 +1963,10 @@ export function useAssistantController({
     }
   }, [
     appendOptimisticUserMessage,
+    attachPendingFiles,
     client,
     enabled,
+    pendingFileUploads,
     scope.podId,
     sessionResumeIfRunning,
     touchConversation,
@@ -1940,14 +2003,18 @@ export function useAssistantController({
     options?: { deferUntilSend?: boolean },
   ) => {
     const normalizedFiles = files.filter((file) => file instanceof File);
-    if (!enabled || normalizedFiles.length === 0 || isLoading || isUploadingFiles) return;
+    // Not gated on a run being in flight. Staging is local — nothing is sent
+    // until the message is — and a running conversation now takes a follow-up,
+    // so refusing here meant the paperclip accepted a file, said nothing, and
+    // kept none of it. The upload actually in progress is still a reason to
+    // wait: that one is not local.
+    if (!enabled || normalizedFiles.length === 0 || isUploadingFiles) return;
 
     void options;
     setLocalError(null);
     queuePendingFiles(normalizedFiles);
   }, [
     enabled,
-    isLoading,
     isUploadingFiles,
     queuePendingFiles,
   ]);

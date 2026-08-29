@@ -236,6 +236,20 @@ class AgentSteps:
             json={"content": message},
         )
 
+    async def adds(self, message: str, *, in_conversation: JSON, in_pod: JSON) -> JSON:
+        """Say something without opening a stream to watch the answer arrive.
+
+        What a person does when the agent is already working: the message joins
+        the run in flight rather than starting a second one. ``says`` is the
+        wrong call for that -- it opens a second Server-Sent Events
+        subscription for a run that already has one.
+        """
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/conversations/{in_conversation['id']}/messages/append",
+            what=f"{self.label} adding a message to a run already working",
+            json={"content": message},
+        )
+
     async def messages_in(self, conversation: JSON, *, in_pod: JSON) -> list[JSON]:
         return items_of(
             await self.api.get(

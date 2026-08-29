@@ -4176,6 +4176,12 @@
             ],
             "title": "Parent Id"
           },
+          "pod_cwd": {
+            "description": "The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.",
+            "readOnly": true,
+            "title": "Pod Cwd",
+            "type": "string"
+          },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
@@ -4222,7 +4228,8 @@
           "user_id",
           "pod_id",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "pod_cwd"
         ],
         "title": "ConversationResponse",
         "type": "object"
