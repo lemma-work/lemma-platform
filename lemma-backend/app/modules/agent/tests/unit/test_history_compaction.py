@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelRequest,
     ModelResponse,
     ToolCallPart,
@@ -185,3 +186,130 @@ async def test_the_guard_trims_when_summarization_returned_oversized_history() -
     result = await guard(oversized)
 
     assert count_model_message_tokens(result) <= 3_000
+
+
+def _png(size: int) -> bytes:
+    """Bytes that tokenize like a real image: high-entropy, not a run of zeros."""
+    return b"\x89PNG\r\n" + (bytes(range(256)) * (size // 256 + 1))[:size]
+
+
+def _image_exchange(
+    caption: str, *, size: int = 130_000, call_id: str = "img1"
+) -> list[object]:
+    """A `view_image` round-trip in the shape pydantic-ai actually produces.
+
+    The binary never arrives as bare `bytes`: it is a `BinaryContent` sitting in
+    a list next to its caption. That is precisely the shape the old top-level
+    `isinstance(value, bytes)` guard could not see.
+    """
+    return [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="view_image",
+                    args={"workspace_file_path": "shot.png"},
+                    tool_call_id=call_id,
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="view_image",
+                    content=[
+                        caption,
+                        BinaryContent(data=_png(size), media_type="image/png"),
+                    ],
+                    tool_call_id=call_id,
+                )
+            ]
+        ),
+    ]
+
+
+class TestImagesAreNotCountedAsText:
+    """The regression suite for a conversation that lost its own task.
+
+    A 129KB screenshot counted as 277k tokens against a 110k ceiling. The guard
+    then head-dropped a healthy 40-message history to 4 messages to fit a number
+    that was never real, taking the user's original request with it, and the
+    agent spent the next hour building something nobody asked for.
+    """
+
+    def test_an_image_costs_what_a_vision_model_charges_not_its_bytes(self) -> None:
+        assert count_model_message_tokens(_image_exchange("Read image")) < 3_000
+
+    def test_image_cost_does_not_grow_with_file_size(self) -> None:
+        """The old counter billed per byte. A vision model bills per image."""
+        small = count_model_message_tokens(_image_exchange("shot", size=10_000))
+        large = count_model_message_tokens(_image_exchange("shot", size=400_000))
+
+        assert small == large
+
+    def test_an_image_in_the_tail_does_not_evict_the_conversation(self) -> None:
+        """The incident, in miniature: a screenshot at the end of a healthy
+        history must not cost the user the request that started it."""
+        messages: list[object] = [_text("Explain this architecture as a video")]
+        for index in range(12):
+            messages.extend(_tool_exchange(f"c{index}", "build output " * 100))
+        messages.extend(_image_exchange("Successfully read image", size=200_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=110_000)
+
+        assert trimmed == messages
+        assert any(
+            isinstance(part, UserPromptPart) and "video" in str(part.content)
+            for message in trimmed
+            for part in message.parts
+        )
+
+    def test_binary_nested_deeper_than_a_list_is_still_not_text(self) -> None:
+        """A document viewer returns one payload per page, inside a structure."""
+        pages = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="pod_view_document_pages",
+                    content={
+                        "pages": [
+                            {
+                                "page_number": number,
+                                "image": BinaryContent(
+                                    data=_png(80_000), media_type="image/png"
+                                ),
+                            }
+                            for number in range(10)
+                        ]
+                    },
+                    tool_call_id="doc1",
+                )
+            ]
+        )
+
+        assert count_model_message_tokens([pages]) < 25_000
+
+    def test_structured_tool_results_are_still_counted(self) -> None:
+        """Excluding binary must not excuse the counter from structured text --
+        under-counting JSON is the failure the real tokenizer was added for."""
+        rows = [{"id": index, "name": f"customer-{index}"} for index in range(200)]
+        message = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="pod_query",
+                    content={"rows": rows},
+                    tool_call_id="q1",
+                )
+            ]
+        )
+
+        assert count_model_message_tokens([message]) > 1_000
+
+
+def test_a_known_size_does_not_change_what_the_guard_decides() -> None:
+    """`known_size` exists to skip one re-tokenisation on the request path, so
+    it must be an optimisation and never a behaviour change."""
+    messages = [_text("filler " * 500) for _ in range(20)]
+    measured = count_model_message_tokens(messages)
+
+    assert enforce_token_ceiling(messages, ceiling=5_000) == enforce_token_ceiling(
+        messages, ceiling=5_000, known_size=measured
+    )

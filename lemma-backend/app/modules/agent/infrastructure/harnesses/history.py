@@ -67,15 +67,23 @@ def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
     return index
 
 
-def enforce_token_ceiling(messages: Sequence[object], *, ceiling: int) -> list[object]:
+def enforce_token_ceiling(
+    messages: Sequence[object], *, ceiling: int, known_size: int | None = None
+) -> list[object]:
     """Drop the oldest messages until the history fits, keeping pairs intact.
 
     This is the backstop, not the strategy: it runs when summarization was
     skipped or failed. Losing old context is bad; having the provider reject the
     request is worse, and that is the only alternative.
+
+    `known_size` lets a caller that has already measured `messages` skip the
+    first re-tokenisation. Counting a long history is the most expensive thing
+    on the request path, and doing it twice to make one decision is waste the
+    worker pays for on every model request.
     """
     working = list(messages)
-    if ceiling <= 0 or count_model_message_tokens(working) <= ceiling:
+    size = known_size if known_size is not None else count_model_message_tokens(working)
+    if ceiling <= 0 or size <= ceiling:
         return working
 
     # Halve the head repeatedly rather than walk one message at a time: each
@@ -95,16 +103,19 @@ def enforce_token_ceiling(messages: Sequence[object], *, ceiling: int) -> list[o
 
 def _trim_to_ceiling(
     messages: Sequence[object], ceiling: int
-) -> tuple[int, list[object] | None]:
-    """``(size_before, trimmed)``; ``trimmed`` is None when nothing was needed.
+) -> tuple[int, list[object] | None, int]:
+    """``(size_before, trimmed, size_after)``; ``trimmed`` is None when nothing
+    was needed.
 
     Counting and trimming are one unit so the whole thing is a single hop onto a
-    worker thread rather than several.
+    worker thread rather than several -- the after-count included, which the log
+    line below used to take on the event loop itself.
     """
     before = count_model_message_tokens(messages)
     if before <= ceiling:
-        return before, None
-    return before, enforce_token_ceiling(messages, ceiling=ceiling)
+        return before, None, before
+    trimmed = enforce_token_ceiling(messages, ceiling=ceiling, known_size=before)
+    return before, trimmed, count_model_message_tokens(trimmed)
 
 
 def build_history_processors(
@@ -141,7 +152,9 @@ def build_history_processors(
             # The whole check runs on a worker thread: the halving loop below
             # re-tokenizes on each pass, so this is the most CPU-hungry thing on
             # the request path and the last place it should hold the event loop.
-            before, trimmed = await run_blocking(_trim_to_ceiling, messages, ceiling)
+            before, trimmed, after = await run_blocking(
+                _trim_to_ceiling, messages, ceiling
+            )
             if trimmed is None:
                 return list(messages)
             # Field names avoid "token"/"message", which the logging contract
@@ -149,7 +162,7 @@ def build_history_processors(
             logger.warning(
                 "agent.history.token_ceiling_enforced.degraded",
                 size_before=before,
-                size_after=count_model_message_tokens(trimmed),
+                size_after=after,
                 dropped_count=len(messages) - len(trimmed),
             )
             return trimmed
