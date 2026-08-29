@@ -51,7 +51,7 @@ function fakeClient(items: Conversation[], itemsByAgent?: Record<string, Convers
       total: scoped.length,
     };
   });
-  const create = vi.fn(async () => createdConversation);
+  const create = vi.fn(async (_payload?: Record<string, unknown>) => createdConversation);
   const get = vi.fn(async (id: string) => (
     items.find((item) => item.id === id)
     ?? conversation(id, "2026-07-01T12:00:00.000Z")
