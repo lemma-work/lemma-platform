@@ -181,6 +181,22 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          # A nightly needs a version of its own, and an ordered one.
+          #
+          # Every shared build shipped as plain `inputs.version`, so a nightly
+          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
+          # told no: the channel could never update itself, and the update path
+          # only ever ran on release day. The run number is monotonic and reads
+          # the same in every job of one run, so the three places that stamp a
+          # version -- the host pack marker, the release manifest and the app
+          # bundle -- reach the same string without passing it between jobs.
+          #
+          # `-nightly.N` also sorts *below* the release it derives from, so a
+          # nightly never presents itself as newer than the stable of the same
+          # number.
+          if [[ "${PUBLISH}" != "true" ]]; then
+            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
+          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -432,6 +448,22 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          # A nightly needs a version of its own, and an ordered one.
+          #
+          # Every shared build shipped as plain `inputs.version`, so a nightly
+          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
+          # told no: the channel could never update itself, and the update path
+          # only ever ran on release day. The run number is monotonic and reads
+          # the same in every job of one run, so the three places that stamp a
+          # version -- the host pack marker, the release manifest and the app
+          # bundle -- reach the same string without passing it between jobs.
+          #
+          # `-nightly.N` also sorts *below* the release it derives from, so a
+          # nightly never presents itself as newer than the stable of the same
+          # number.
+          if [[ "${PUBLISH}" != "true" ]]; then
+            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
+          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -656,6 +688,22 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          # A nightly needs a version of its own, and an ordered one.
+          #
+          # Every shared build shipped as plain `inputs.version`, so a nightly
+          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
+          # told no: the channel could never update itself, and the update path
+          # only ever ran on release day. The run number is monotonic and reads
+          # the same in every job of one run, so the three places that stamp a
+          # version -- the host pack marker, the release manifest and the app
+          # bundle -- reach the same string without passing it between jobs.
+          #
+          # `-nightly.N` also sorts *below* the release it derives from, so a
+          # nightly never presents itself as newer than the stable of the same
+          # number.
+          if [[ "${PUBLISH}" != "true" ]]; then
+            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
+          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -1019,6 +1067,23 @@ jobs:
           VERIFY
           cp desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json
 
+      # Read, not recomputed. The app refuses to start against a runtime whose
+      # release is not exactly its own `CARGO_PKG_VERSION`, so the DMG must
+      # carry the version the manifest job stamped. Deriving it from the
+      # manifest we just downloaded makes that agreement structural: there is
+      # one string, and this job reads it rather than rebuilding it from the
+      # same formula and hoping the two never drift.
+      - name: Resolve the nightly app version
+        id: app-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+            desktop/runtime/lemma-local.json)"
+          [[ -n "${version}" ]]
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building Lemma ${version}"
+
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
 
@@ -1061,16 +1126,29 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SHA: ${{ github.sha }}
-          # Marks the build as a nightly, which turns its updater off. The
-          # signing key is deliberately absent from this workflow: a nightly's
-          # runtime lives in a prerelease pruned to the three most recent
-          # builds, so there is no durable feed for it to follow, and it must
-          # not be able to produce a valid update even by accident.
+          # Marks the build as a nightly. A nightly follows its own feed --
+          # the `desktop-nightly` tag published at the end of this job -- so
+          # that the update path is exercised every night instead of first
+          # meeting a user on release day.
           LEMMA_RELEASE_CHANNEL: nightly
           LEMMA_BUILD_SHA: ${{ github.sha }}
+          VERSION: ${{ steps.app-version.outputs.version }}
+          # Same key the stable channel signs with, because it is the same
+          # public key baked into every build. A nightly signed with anything
+          # else produces an update the app correctly refuses to install.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+          # Written outside the checkout so it cannot dirty a tree that later
+          # steps diff. It carries only the version: everything else about a
+          # nightly is already the online config.
+          overlay="${RUNNER_TEMP}/tauri.nightly.conf.json"
+          printf '{"version": "%s"}\n' "${VERSION}" > "${overlay}"
+          npx -y "$TAURI_CLI" build \
+            --config tauri.online.conf.json \
+            --config tauri.updater.conf.json \
+            --config "${overlay}"
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -1130,6 +1208,151 @@ jobs:
             echo "### Lemma Desktop nightly"
             echo
             echo "[Download the DMG](${url})"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Tauri notarizes and staples the .app, then tars it. That ordering is
+      # believed, not documented -- and an update payload that is not notarized
+      # replaces a working install with one Gatekeeper refuses to open. The
+      # stable channel asserts this rather than assuming it; a nightly that
+      # updates itself every night has more chances to prove it, not fewer.
+      - name: Verify the updater payload is notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          test -f "${tarball}"
+          test -f "${tarball}.sig"
+          workdir="$(mktemp -d)"
+          tar -xzf "${tarball}" -C "${workdir}"
+          app="${workdir}/Lemma.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          xcrun stapler validate "${app}"
+          spctl -a -t exec -vv "${app}"
+
+      # The nightly update feed lives at a tag that never moves.
+      #
+      # The per-run `desktop-nightly-<sha>` prereleases below are pruned to the
+      # three most recent, so none of them can host a feed: an install two weeks
+      # old would be pointed at a release that no longer exists. `desktop-nightly`
+      # is created once and rewritten in place, which is what makes the endpoint
+      # baked into every nightly build durable. The prune step below selects on
+      # `desktop-nightly-`, with the trailing dash, so this tag is not a
+      # candidate -- deleting it would silently strand every nightly ever
+      # installed.
+      - name: Publish the nightly update feed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.app-version.outputs.version }}
+          FEED_TAG: desktop-nightly
+          RUNTIME_TAG: ${{ steps.tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          artifacts="desktop/target/release/release-artifacts"
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          # Named for its version rather than clobbered under a fixed name. A
+          # feed and the payload it is signed for have to change together, and
+          # a single reused filename has a window -- small, but nightly -- where
+          # a client has last night's signature and this morning's bytes, which
+          # presents as a signature failure on the user's machine.
+          payload="Lemma_${VERSION}_aarch64.app.tar.gz"
+          cp "${tarball}" "${artifacts}/${payload}"
+          cp "${tarball}.sig" "${artifacts}/${payload}.sig"
+          python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          feed_tag = os.environ["FEED_TAG"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          artifacts = pathlib.Path("desktop/target/release/release-artifacts")
+          # The *contents* of the .sig file, not a path or a URL to it. A feed
+          # that carries the wrong thing here verifies nowhere but on a user's
+          # machine, which is the worst place to find out.
+          signature = (
+              artifacts / f"Lemma_{version}_aarch64.app.tar.gz.sig"
+          ).read_text().strip()
+          if not signature:
+              raise SystemExit("refusing to publish a feed with an empty signature")
+
+          # Same shape the stable feed publishes, including the `lemma` block
+          # the app reads to warn about a data-incompatible upgrade before
+          # downloading anything. Unknown top-level keys are ignored by the
+          # updater.
+          manifest = json.loads(pathlib.Path("desktop/runtime/lemma-local.json").read_text())
+          if manifest["version"] != version:
+              raise SystemExit(
+                  f"runtime manifest is {manifest['version']}, app is {version}"
+              )
+          host = manifest["host_packs"]["aarch64-apple-darwin"]
+          guest = manifest["guest_runtimes"]["macos-aarch64"]
+          postgres = manifest.get("infra", {}).get("postgres", "")
+          major = None
+          if "-pg" in postgres:
+              digits = postgres.split("-pg")[1].split("@")[0].split(".")[0]
+              major = int(digits) if digits.isdigit() else None
+
+          feed = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).isoformat(),
+              "notes": f"Lemma Desktop nightly {version}",
+              "platforms": {
+                  "darwin-aarch64": {
+                      "url": (
+                          f"https://github.com/{repository}/releases/download/"
+                          f"{feed_tag}/Lemma_{version}_aarch64.app.tar.gz"
+                      ),
+                      "signature": signature,
+                  }
+              },
+              "lemma": {
+                  "postgres_major": major,
+                  "runtime_download_bytes": host["size"] + guest["size"],
+              },
+          }
+          (artifacts / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
+          PY
+          cat "${artifacts}/latest.json"
+
+          if ! gh release view "${FEED_TAG}" >/dev/null 2>&1; then
+            gh release create "${FEED_TAG}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "Lemma Desktop nightly update feed" \
+              --notes "$(printf '%s\n' \
+                'The update feed every nightly build follows.' \
+                '' \
+                'This tag is rewritten in place by each nightly run. Install a' \
+                'nightly from its own dated prerelease; it updates itself from' \
+                'here.')"
+          fi
+          # The payload before latest.json, so the feed never names an asset
+          # that is not there yet.
+          gh release upload "${FEED_TAG}" \
+            "${artifacts}/${payload}" \
+            "${artifacts}/${payload}.sig" \
+            --clobber
+          gh release upload "${FEED_TAG}" "${artifacts}/latest.json" --clobber
+
+          # Versioned payloads would otherwise accumulate on this tag for good.
+          # Keeping a few means an update that is already in flight still finds
+          # its bytes after tonight's run has replaced the feed.
+          gh release view "${FEED_TAG}" --json assets \
+            --jq '.assets | map(select(.name | endswith(".app.tar.gz")))
+                  | sort_by(.createdAt) | reverse | .[3:] | .[].name' \
+            > "${RUNNER_TEMP}/stale-payloads.txt" || : > "${RUNNER_TEMP}/stale-payloads.txt"
+          while read -r asset; do
+            [[ -n "${asset}" ]] || continue
+            echo "Removing superseded payload ${asset}"
+            gh release delete-asset "${FEED_TAG}" "${asset}" --yes || true
+            gh release delete-asset "${FEED_TAG}" "${asset}.sig" --yes || true
+          done < "${RUNNER_TEMP}/stale-payloads.txt"
+
+          {
+            echo "### Nightly update feed"
+            echo
+            echo "\`${VERSION}\` published to \`${FEED_TAG}\`."
+            echo "Installed nightlies will offer this build on their next check."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # The nightly channel is a rolling window, not an archive. Every shared
