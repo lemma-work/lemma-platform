@@ -1,25 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
+import { Check, ChevronLeft, ChevronRight, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
 import type { PodMemberResponse, ResourceAccessGrantResponse, ResourceAccessResponse } from 'lemma-sdk';
 
 import { ConceptHint } from '@/components/education/concept-hint';
 import { ShareLinkRow } from '@/components/share/share-link-row';
 import { SocialCardPanel } from '@/components/share/social-card-panel';
+import { StepLoader } from '@/components/brand/loader';
+import { Command, CommandInput } from '@/components/ui/command';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -65,8 +58,6 @@ type ResourceVisibilityCopy = {
     className: string;
 };
 
-const NO_GRANTEE_VALUE = '__none__';
-
 /**
  * Only the things a stranger can meaningfully open get a social card. A table
  * or a folder is shared *into* a team, not out to a timeline, and "Run it on
@@ -76,18 +67,6 @@ const SOCIAL_CARD_VARIANT_BY_RESOURCE: Partial<Record<ShareableResourceType, Soc
     agent: 'agent',
     app: 'app',
     workflow: 'workflow',
-};
-
-/** Human name for the kind of thing being shared, shown under the dialog title. */
-const RESOURCE_NOUN: Record<ShareableResourceType, string> = {
-    agent: 'Agent',
-    function: 'Function',
-    workflow: 'Workflow',
-    schedule: 'Schedule',
-    datastore_table: 'Table',
-    document: 'Document',
-    folder: 'Folder',
-    app: 'App',
 };
 
 type AccessLevel = {
@@ -233,17 +212,6 @@ function grantKey(grant: Pick<ResourceAccessGrantResponse, 'grantee_type' | 'gra
     return `${grant.grantee_type}:${grant.grantee_id}`;
 }
 
-function sameGrantLists(left: ResourceAccessGrantResponse[], right: ResourceAccessGrantResponse[]) {
-    if (left.length !== right.length) return false;
-    const rightByKey = new Map(right.map((grant) => [grantKey(grant), grant]));
-
-    return left.every((leftGrant) => {
-        const rightGrant = rightByKey.get(grantKey(leftGrant));
-        if (!rightGrant) return false;
-        return samePermissions(leftGrant.permission_ids || [], rightGrant.permission_ids || []);
-    });
-}
-
 function getAccessLabel(resourceType: ShareableResourceType, permissionIds: string[]) {
     const levels = ACCESS_LEVELS_BY_RESOURCE[resourceType] || [];
     const exact = levels.find((level) => samePermissions(level.permissionIds, permissionIds));
@@ -334,56 +302,174 @@ export function ResourceVisibilityBadge({
     );
 }
 
+/** Which of the three things the share popover is showing. */
+type ShareView = 'access' | 'people' | 'card';
+
 /**
  * One choice in the general-access list.
  *
  * All four options stay on screen instead of hiding behind a dropdown — the
- * whole point of this dialog is comparing "only me" against "anyone with the
+ * whole point of this surface is comparing "only me" against "anyone with the
  * link", and you cannot compare what you cannot see.
+ *
+ * The row applies its own choice, so it also carries the answer: a spinner
+ * while the change is in flight, a tick once it holds. That used to be a radio
+ * you set and a Save button somewhere below that told you nothing about why it
+ * was grey.
  */
 function VisibilityOption({
     copy,
     selected,
+    saving,
     onSelect,
+    children,
 }: {
     copy: ResourceVisibilityCopy;
     selected: boolean;
+    saving: boolean;
     onSelect: () => void;
+    /** The inline confirmation, when this is the choice being confirmed. */
+    children?: ReactNode;
 }) {
     const Icon = copy.icon;
 
     return (
-        <label
+        <div
             className={cn(
-                'flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-gentle',
-                selected
+                'rounded-md border transition-gentle',
+                selected || children
                     ? 'border-[color:var(--action-primary)] bg-[var(--action-primary-soft)]'
-                    : 'border-[color:var(--border-subtle)] bg-[var(--surface-1)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]',
+                    : 'border-transparent',
             )}
         >
-            <RadioGroupItem value={copy.value} id={`visibility-${copy.value}`} onClick={onSelect} />
-            <span
+            <button
+                type="button"
+                data-visibility-row=""
+                onClick={onSelect}
                 className={cn(
-                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
-                    selected
-                        ? 'bg-[var(--action-primary)] text-[var(--text-on-brand)]'
-                        : 'bg-[var(--surface-3)] text-[var(--text-tertiary)]',
+                    'resource-share-choice-button flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors focus-visible:outline-none',
+                    !selected && !children && 'hover:bg-[var(--surface-2)] focus-visible:bg-[var(--surface-2)]',
                 )}
             >
-                <Icon className="h-4 w-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
-                    {copy.label}
+                <span
+                    className={cn(
+                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                        selected
+                            ? 'bg-[var(--action-primary)] text-[var(--text-on-brand)]'
+                            : 'bg-[var(--surface-3)] text-[var(--text-tertiary)]',
+                    )}
+                >
+                    <Icon className="h-3.5 w-3.5" />
                 </span>
-                <span className="block truncate text-xs text-[var(--text-secondary)]">
-                    {copy.description}
+                <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-[var(--text-primary)]">{copy.label}</span>
+                    <span className="block truncate text-xs text-[var(--text-tertiary)]">
+                        {copy.shortDescription}
+                    </span>
                 </span>
-            </span>
-        </label>
+                {saving ? (
+                    <StepLoader size="sm" />
+                ) : (
+                    <Check
+                        className={cn(
+                            'size-3.5 shrink-0',
+                            selected ? 'text-[var(--action-primary)]' : 'text-transparent',
+                        )}
+                    />
+                )}
+            </button>
+            {children}
+        </div>
     );
 }
 
+/** A row that leads to one of the other two views, in the picker's idiom. */
+function ShareNavRow({
+    label,
+    meta,
+    onClick,
+}: {
+    label: string;
+    meta?: string;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className="resource-share-nav-button flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] focus-visible:bg-[var(--surface-2)] focus-visible:outline-none"
+        >
+            <span className="min-w-0 flex-1 truncate">{label}</span>
+            {meta ? <span className="shrink-0 text-xs text-[var(--text-tertiary)]">{meta}</span> : null}
+            <ChevronRight className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
+        </button>
+    );
+}
+
+/** The back arrow takes the leading slot, as it does in the model picker. */
+function ShareViewHeader({
+    title,
+    onBack,
+    children,
+}: {
+    title: string;
+    onBack: () => void;
+    children?: ReactNode;
+}) {
+    return (
+        // The back arrow takes the search glyph's slot rather than sitting
+        // beside it: two marks before the placeholder read as decoration, and
+        // only one of them is a control.
+        <div className="flex items-center gap-1 border-b border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-1 [&_[cmdk-input-wrapper]]:min-w-0 [&_[cmdk-input-wrapper]]:flex-1 [&_[cmdk-input-wrapper]]:border-0 [&_[cmdk-input-wrapper]]:bg-transparent [&_[cmdk-input-wrapper]]:pl-0 [&_[cmdk-input-wrapper]_svg]:hidden">
+            <Button
+                type="button"
+                variant="quiet"
+                size="icon"
+                onClick={onBack}
+                aria-label="Back to general access"
+                className="size-8 shrink-0 rounded-md text-[var(--text-tertiary)]"
+            >
+                <ChevronLeft className="size-4" />
+            </Button>
+            {children ?? (
+                <span className="min-w-0 flex-1 truncate py-2 text-sm text-[var(--text-primary)]">{title}</span>
+            )}
+        </div>
+    );
+}
+
+type GranteeType = ResourceAccessGrantResponse['grantee_type'];
+
+/** One change to one person's access, applied on its own. */
+type GrantOp = {
+    kind: 'set' | 'remove';
+    key: string;
+    granteeType: GranteeType;
+    granteeId: string;
+    permissionIds?: string[];
+};
+
+/**
+ * Share, as a popover.
+ *
+ * It was a 560px dialog with a scrolling body and a Save button, and the Save
+ * button was the problem. It went grey for two unrelated reasons — the grants
+ * request still in flight, and an unticked acknowledgement further down the
+ * page — and said neither, so choosing "anyone signed in" looked like a click
+ * that had failed. Meanwhile selecting it mounted the social card above the
+ * list you had just clicked and smooth-scrolled the page out from under the
+ * cursor while a ~1.3s image rendered into an empty box.
+ *
+ * So: no Save. Every choice applies when you make it, the row itself carries
+ * the spinner and the tick, and the two steps that cannot be walked back ask
+ * for confirmation *in the row you clicked* rather than through a checkbox
+ * wired to a button somewhere else. The card moves behind the link it belongs
+ * to, one view over, where its render time costs nothing.
+ *
+ * The shape is the model picker's: a short list you act on directly, and named
+ * rows leading to the longer surfaces. Same reason, too — this is a thing
+ * people open often and want to leave quickly.
+ */
 export function ResourceShareButton({
     value,
     onChange,
@@ -393,7 +479,6 @@ export function ResourceShareButton({
     resourceLabel,
     resourceName,
     shareUrl,
-    className,
     buttonClassName,
     disabled = false,
     options = VISIBILITY_VALUES,
@@ -407,7 +492,6 @@ export function ResourceShareButton({
     resourceLabel?: string;
     resourceName?: string | null;
     shareUrl?: string | null;
-    className?: string;
     buttonClassName?: string;
     disabled?: boolean;
     options?: ResourceVisibilityValue[];
@@ -416,84 +500,86 @@ export function ResourceShareButton({
     const current = normalizeResourceVisibility(value);
     const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
-    const [draftVisibility, setDraftVisibility] = useState<ResourceVisibilityValue>(current);
-    const [selectedGrantee, setSelectedGrantee] = useState<string>(NO_GRANTEE_VALUE);
-    const [selectedAccessLevel, setSelectedAccessLevel] = useState<string>('viewer');
-    const [draftGrants, setDraftGrants] = useState<ResourceAccessGrantResponse[]>([]);
-    const [saveError, setSaveError] = useState<string | null>(null);
-    const [hasAcknowledgedPublic, setHasAcknowledgedPublic] = useState(false);
-    const cardSectionRef = useRef<HTMLElement | null>(null);
-    const hasVisibilityChange = draftVisibility !== current;
+    const [view, setView] = useState<ShareView>('access');
+    const [confirming, setConfirming] = useState<ResourceVisibilityValue | null>(null);
+    /** What the rows show while the change is in flight, so a click lands now. */
+    const [optimistic, setOptimistic] = useState<ResourceVisibilityValue | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [peopleQuery, setPeopleQuery] = useState('');
+
     const canManageSpecificAccess = Boolean(podId && resourceType && resourceId);
     const accessLevels = resourceType ? ACCESS_LEVELS_BY_RESOURCE[resourceType] : [];
-    const selectedAccess = accessLevels.find((level) => level.value === selectedAccessLevel) || accessLevels[0];
     const accessQueryKey = ['pods', podId, 'resources', resourceType, resourceId, 'access'];
     const optionCopies = useMemo(
         () => options.map((option) => getResourceVisibilityCopy(option, resourceLabel, resourceType)),
         [options, resourceLabel, resourceType],
     );
+
     const { data: accessData, isLoading: isAccessLoading } = useQuery({
         queryKey: accessQueryKey,
         queryFn: () => getLemmaClient(podId!).resourceAccess.get(resourceType!, resourceId!) as Promise<ResourceAccessResponse>,
         enabled: open && canManageSpecificAccess,
     });
+    // Only the people view needs the roster, and most opens never reach it.
     const { data: membersData } = useQuery({
         queryKey: ['pods', podId, 'members'],
         queryFn: () => getLemmaClient().podMembers.list(podId!) as Promise<{ items: PodMemberResponse[] }>,
-        enabled: open && canManageSpecificAccess,
+        enabled: open && view === 'people' && canManageSpecificAccess,
     });
+
     const grants = useMemo(() => accessData?.grants || [], [accessData]);
-    const members = membersData?.items || [];
-    const granteeOptions = members.map((member) => ({
-        value: `POD_MEMBER:${member.pod_member_id}`,
-        label: member.user_name || member.email || member.user_email,
-        detail: member.email || member.user_email,
-        granteeType: 'POD_MEMBER',
-        granteeId: member.pod_member_id,
-        grant: {
-            resource_type: resourceType,
-            resource_name: resourceId,
-            grantee_type: 'POD_MEMBER',
-            grantee_id: member.pod_member_id,
-            permission_ids: selectedAccess?.permissionIds || [],
-            user_id: member.user_id,
-            email: member.email || member.user_email || null,
-            display_name: member.user_name || member.email || member.user_email || null,
-        } as ResourceAccessGrantResponse,
-    }));
-    const directAccessEnabled = draftVisibility !== 'PERSONAL';
-    const effectiveDraftGrants = useMemo(
-        () => (draftVisibility === 'PERSONAL'
-            ? []
-            : draftGrants.filter((grant) => grant.grantee_type === 'POD_MEMBER')),
-        [draftVisibility, draftGrants],
+    const memberGrants = useMemo(
+        () => grants.filter((grant) => grant.grantee_type === 'POD_MEMBER'),
+        [grants],
     );
-    const removedRoleGrantCount = directAccessEnabled
-        ? draftGrants.filter((grant) => grant.grantee_type === 'ROLE').length
-        : 0;
-    const removedPersonalGrantCount = draftVisibility === 'PERSONAL' ? draftGrants.length : 0;
-    const hasGrantChanges = canManageSpecificAccess && Boolean(accessData) && !sameGrantLists(grants, effectiveDraftGrants);
-    const hasChanges = hasVisibilityChange || hasGrantChanges;
-    /**
-     * Leaving the organization is the one step here that cannot be walked back
-     * by editing a member list, so it is the one step that asks twice. Only on
-     * newly selecting it — reopening the dialog on an already-public resource
-     * does not re-prompt.
-     */
-    const needsPublicConfirmation = draftVisibility === 'PUBLIC' && current !== 'PUBLIC';
-    const isBlockedOnConfirmation = needsPublicConfirmation && !hasAcknowledgedPublic;
-    const accessSectionTitle = draftVisibility === 'RESTRICTED' ? 'People with access' : 'Additional people';
-    const accessSectionDescription = draftVisibility === 'RESTRICTED'
-        ? 'Only these people can open it.'
-        : 'Added on top of workspace access.';
+    const members = useMemo(() => membersData?.items || [], [membersData?.items]);
 
-    // Granted people already in the list should not be offered again.
-    const grantedKeys = new Set(effectiveDraftGrants.map((grant) => grantKey(grant)));
-    const addableOptions = granteeOptions.filter(
-        (option) => !grantedKeys.has(`${option.granteeType}:${option.granteeId}`),
-    );
+    const shownVisibility = optimistic ?? current;
+    const directAccessEnabled = shownVisibility !== 'PERSONAL';
 
-    const cardVariant = resourceType ? SOCIAL_CARD_VARIANT_BY_RESOURCE[resourceType] : undefined;
+    const applyVisibility = useMutation({
+        mutationFn: async (next: ResourceVisibilityValue) => {
+            await onChange(next);
+            return next;
+        },
+        onMutate: (next: ResourceVisibilityValue) => {
+            setError(null);
+            setOptimistic(next);
+        },
+        onError: (mutationError) => {
+            setOptimistic(null);
+            setError(mutationError instanceof Error
+                ? mutationError.message
+                : 'Could not change who can open this.');
+        },
+    });
+
+    const applyGrant = useMutation({
+        mutationFn: async (op: GrantOp) => {
+            const client = getLemmaClient(podId!);
+            if (op.kind === 'remove') {
+                await client.resourceAccess.deleteGrant(resourceType!, resourceId!, op.granteeType, op.granteeId);
+                return;
+            }
+            await client.resourceAccess.replaceGrant(
+                resourceType!,
+                resourceId!,
+                op.granteeType,
+                op.granteeId,
+                { permission_ids: op.permissionIds || [] },
+            );
+        },
+        onMutate: () => setError(null),
+        onError: (mutationError) => {
+            setError(mutationError instanceof Error ? mutationError.message : 'Could not update access.');
+        },
+        onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: accessQueryKey });
+        },
+    });
+
+    const savingVisibility = applyVisibility.isPending ? applyVisibility.variables : null;
+    const pendingGrantKey = applyGrant.isPending ? applyGrant.variables?.key ?? null : null;
 
     /**
      * A `/pod/…` URL is signed-in-only and drops anyone without pod access on a
@@ -505,125 +591,108 @@ export function ResourceShareButton({
      */
     const outsidePodShareUrl = useMemo(() => {
         if (!shareUrl || !resourceType) return null;
-        if (!reachesOutsidePod(draftVisibility)) return null;
+        if (!reachesOutsidePod(shownVisibility)) return null;
         return buildShareLink({
             kind: shareKindForResourceType(resourceType),
             canonicalUrl: shareUrl,
             name: resourceName,
         });
-    }, [shareUrl, resourceType, resourceName, draftVisibility]);
+    }, [shareUrl, resourceType, resourceName, shownVisibility]);
 
     const linkToShare = outsidePodShareUrl ?? shareUrl;
+    const cardVariant = resourceType ? SOCIAL_CARD_VARIANT_BY_RESOURCE[resourceType] : undefined;
     // A card only exists where a link reaches past the pod — anything narrower
     // has no `/s/…` URL to unfurl in the first place.
     const canShowCard = Boolean(cardVariant && outsidePodShareUrl);
 
-    const saveSharing = useMutation({
-        mutationFn: async () => {
-            if (hasVisibilityChange) {
-                await onChange(draftVisibility);
-            }
-
-            if (!canManageSpecificAccess || !accessData || !podId || !resourceType || !resourceId) {
-                return null;
-            }
-
-            const finalByKey = new Map(effectiveDraftGrants.map((grant) => [grantKey(grant), grant]));
-            const initialByKey = new Map(grants.map((grant) => [grantKey(grant), grant]));
-            const grantsToDelete = grants.filter((grant) => !finalByKey.has(grantKey(grant)));
-            const grantsToReplace = effectiveDraftGrants.filter((grant) => {
-                const initial = initialByKey.get(grantKey(grant));
-                return !initial || !samePermissions(initial.permission_ids || [], grant.permission_ids || []);
-            });
-
-            await Promise.all([
-                ...grantsToDelete.map((grant) =>
-                    getLemmaClient(podId).resourceAccess.deleteGrant(
-                        resourceType,
-                        resourceId,
-                        grant.grantee_type,
-                        grant.grantee_id,
-                    )
-                ),
-                ...grantsToReplace.map((grant) =>
-                    getLemmaClient(podId).resourceAccess.replaceGrant(
-                        resourceType,
-                        resourceId,
-                        grant.grantee_type,
-                        grant.grantee_id,
-                        { permission_ids: grant.permission_ids || [] },
-                    )
-                ),
-            ]);
-
-            return null;
-        },
-        onSuccess: () => {
-            setSaveError(null);
-            setOpen(false);
-            void queryClient.invalidateQueries({ queryKey: accessQueryKey });
-        },
-        onError: (error) => {
-            setSaveError(error instanceof Error ? error.message : 'Failed to save sharing changes.');
-        },
-    });
-
-    useEffect(() => {
-        if (!open || !accessData) return;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setDraftGrants(accessData.grants || []);
-    }, [accessData, open]);
-
-    // Switching to "anyone signed in" reveals the card further up the dialog;
-    // bring it into view so the change is visible wherever the reader is.
-    useEffect(() => {
-        if (!canShowCard) return;
-        cardSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [canShowCard]);
-
-    const addDraftGrant = (granteeValue: string, access = selectedAccess) => {
-        if (granteeValue === NO_GRANTEE_VALUE || !access) return;
-        const option = granteeOptions.find((candidate) => candidate.value === granteeValue);
-        if (!option) return;
-        const nextGrant = {
-            ...option.grant,
-            permission_ids: access.permissionIds,
-        };
-        setDraftGrants((prev) => [
-            ...prev.filter((grant) => grantKey(grant) !== grantKey(nextGrant)),
-            nextGrant,
-        ]);
-        setSelectedGrantee(NO_GRANTEE_VALUE);
-    };
-
-    const handleSelectedGranteeChange = (nextGrantee: string) => {
-        setSelectedGrantee(nextGrantee);
-        addDraftGrant(nextGrantee);
-    };
-
-    const handleRemoveDraftGrant = (grant: ResourceAccessGrantResponse) => {
-        setDraftGrants((prev) => prev.filter((candidate) => grantKey(candidate) !== grantKey(grant)));
-    };
-
-    const handleDraftGrantAccessChange = (grant: ResourceAccessGrantResponse, accessLevel: string) => {
-        const nextAccess = accessLevels.find((level) => level.value === accessLevel);
-        if (!nextAccess) return;
-        setDraftGrants((prev) => prev.map((candidate) => (
-            grantKey(candidate) === grantKey(grant)
-                ? { ...candidate, permission_ids: nextAccess.permissionIds }
-                : candidate
-        )));
-    };
+    const grantedKeys = new Set(grants.map((grant) => grantKey(grant)));
+    const addableMembers = members.filter(
+        (member) => !grantedKeys.has(`POD_MEMBER:${member.pod_member_id}`),
+    );
+    const peopleNeedle = peopleQuery.trim().toLowerCase();
+    const matchingMembers = peopleNeedle
+        ? addableMembers.filter((member) => (
+            `${member.user_name || ''} ${member.email || ''} ${member.user_email || ''}`
+                .toLowerCase()
+                .includes(peopleNeedle)
+        ))
+        : addableMembers;
 
     const handleOpenChange = (nextOpen: boolean) => {
-        setDraftVisibility(current);
-        setDraftGrants(accessData?.grants || []);
-        setSelectedGrantee(NO_GRANTEE_VALUE);
-        setSelectedAccessLevel('viewer');
-        setSaveError(null);
-        setHasAcknowledgedPublic(false);
+        if (nextOpen) {
+            setView('access');
+            setConfirming(null);
+            setOptimistic(null);
+            setError(null);
+            setPeopleQuery('');
+        }
         setOpen(nextOpen);
     };
+
+    /**
+     * Leaving the pod, and shutting the door behind you, are the two steps here
+     * that a member list cannot walk back. They ask once — in the row, so the
+     * question and the answer are the same object. Reopening on an already
+     * public resource does not re-ask: `current` is what it is compared against.
+     */
+    const chooseVisibility = (next: ResourceVisibilityValue) => {
+        if (next === shownVisibility) {
+            setConfirming(null);
+            return;
+        }
+        if (next === 'PUBLIC' && current !== 'PUBLIC') {
+            setConfirming('PUBLIC');
+            return;
+        }
+        if (next === 'PERSONAL' && memberGrants.length > 0) {
+            setConfirming('PERSONAL');
+            return;
+        }
+        setConfirming(null);
+        applyVisibility.mutate(next);
+    };
+
+    const commitConfirmed = (next: ResourceVisibilityValue) => {
+        setConfirming(null);
+        applyVisibility.mutate(next, {
+            onSuccess: async () => {
+                if (next !== 'PERSONAL' || !canManageSpecificAccess) return;
+                // The confirmation said these would go, so they go — and only
+                // once the visibility change itself has landed.
+                for (const grant of memberGrants) {
+                    await applyGrant
+                        .mutateAsync({
+                            kind: 'remove',
+                            key: grantKey(grant),
+                            granteeType: grant.grantee_type,
+                            granteeId: grant.grantee_id,
+                        })
+                        .catch(() => null);
+                }
+            },
+        });
+    };
+
+    const addPersonGrant = (member: PodMemberResponse) => {
+        const level = accessLevels[0];
+        if (!level) return;
+        applyGrant.mutate({
+            kind: 'set',
+            key: `POD_MEMBER:${member.pod_member_id}`,
+            granteeType: 'POD_MEMBER' as GranteeType,
+            granteeId: member.pod_member_id,
+            permissionIds: level.permissionIds,
+        });
+        setPeopleQuery('');
+    };
+
+    const confirmCopy = confirming === 'PUBLIC'
+        ? optionCopies.find((option) => option.value === 'PUBLIC')?.description
+            ?? 'Anyone with a Lemma account will be able to open it.'
+        : `Only you will be able to open it. ${memberGrants.length} ${memberGrants.length === 1 ? 'person' : 'people'} with direct access will lose it.`;
+    const confirmAction = confirming === 'PUBLIC'
+        ? (optionCopies.find((option) => option.value === 'PUBLIC')?.label ?? 'Make public')
+        : 'Only me';
 
     const triggerNode = trigger?.({ openShare: () => handleOpenChange(true), disabled }) ?? (
         <Button
@@ -639,251 +708,236 @@ export function ResourceShareButton({
         </Button>
     );
 
-    const handleDone = () => {
-        if (!hasChanges) {
-            setOpen(false);
-            return;
-        }
-        if (isBlockedOnConfirmation) return;
-        void saveSharing.mutate();
-    };
-
-    const resourceNoun = resourceType ? RESOURCE_NOUN[resourceType] : null;
-
     return (
-        <div className={className}>
-            {triggerNode}
+        // `modal`, because four call sites open this from inside a dropdown
+        // menu. A non-modal popover leaves the menu's own dismiss layer live, so
+        // the first click *into* the panel reads as a click outside the menu:
+        // the menu closes, taking this whole component down with it. The dialog
+        // this replaced was modal and never had the problem.
+        <Popover open={open} onOpenChange={handleOpenChange} modal>
+            {/* Anchor rather than Trigger, and a real wrapper rather than
+                `asChild`, for two different reasons.
 
-            <Dialog open={open} onOpenChange={handleOpenChange}>
-                <DialogContent className="max-w-[560px] gap-0 overflow-hidden p-0">
-                    <DialogHeader className="gap-1 border-b border-[color:var(--border-subtle)] px-5 py-4 pr-12 text-left">
-                        <DialogTitle className="truncate">
-                            {resourceName ? `Share ${resourceName}` : 'Share'}
-                        </DialogTitle>
-                        <DialogDescription className="text-xs">
-                            {resourceNoun
-                                ? `${resourceNoun} · choose who can open it and what they can do.`
-                                : 'Choose who can open it and what they can do.'}
-                        </DialogDescription>
-                    </DialogHeader>
+                Not Trigger: the caller's node already owns its onClick, and
+                Trigger would add a second, competing one.
 
-                    <div className="max-h-[min(70dvh,34rem)] space-y-5 overflow-y-auto px-5 py-4">
-                        <ShareLinkRow
-                            url={linkToShare}
-                            name={resourceName}
-                            allowNativeShare={draftVisibility === 'PUBLIC'}
-                            emptyHint="A link is available once this is created."
-                        />
+                Not `asChild`: `trigger` returns whatever the caller wants, and
+                two of them return a `<Tooltip>` — a Radix root that renders no
+                host element. Slot hands it a ref it has nowhere to put, so the
+                popover ends up with no anchor and paints nothing at all.
 
-                        {/* Once it is open to anyone signed in, the card *is* the
-                            share — so it sits with the link rather than behind a
-                            toggle at the bottom of a scrolling dialog. */}
-                        {canShowCard && cardVariant ? (
-                            <section ref={cardSectionRef}>
-                                <SocialCardPanel
-                                    layout="compact"
-                                    variant={cardVariant}
-                                    name={resourceName}
-                                    url={outsidePodShareUrl}
-                                    unfurls
-                                />
-                            </section>
-                        ) : null}
+                Which leaves a wrapper, whose one rule is that it must have a
+                box. Four call sites used to pass `className="contents"` to
+                suppress exactly that, which is what put the panel in the corner
+                of the screen: a box is what Radix measures. So the wrapper takes
+                no class from the caller, and those four no longer pass one. */}
+            <PopoverAnchor>{triggerNode}</PopoverAnchor>
 
-                        <section className="space-y-2">
-                            <div className="flex items-center justify-between gap-3">
-                                <h3 className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
-                                    General access
-                                    <ConceptHint concept="grant" />
-                                </h3>
-                                {hasVisibilityChange ? (
-                                    <span className="text-xs text-[var(--state-warning)]">Unsaved</span>
-                                ) : null}
-                            </div>
-                            <RadioGroup
-                                className="gap-1.5"
-                                value={draftVisibility}
-                                onValueChange={(next) => setDraftVisibility(next as ResourceVisibilityValue)}
-                            >
-                                {optionCopies.map((option) => (
-                                    <VisibilityOption
-                                        key={option.value}
-                                        copy={option}
-                                        selected={draftVisibility === option.value}
-                                        onSelect={() => setDraftVisibility(option.value)}
-                                    />
-                                ))}
-                            </RadioGroup>
-
-                            {needsPublicConfirmation ? (
-                                <label className="state-surface-warning flex cursor-pointer items-start gap-2.5 rounded-md px-3 py-2.5">
-                                    <Checkbox
-                                        className="mt-0.5 shrink-0"
-                                        checked={hasAcknowledgedPublic}
-                                        onCheckedChange={(checked) =>
-                                            setHasAcknowledgedPublic(checked === true)
-                                        }
-                                    />
-                                    <span className="text-xs text-[var(--text-secondary)]">
-                                        Anyone with a Lemma account — including people you do not
-                                        work with — will be able to open{' '}
-                                        {resourceName ? <strong>{resourceName}</strong> : 'this'} using the
-                                        link.
-                                    </span>
-                                </label>
-                            ) : null}
-                        </section>
-
-                        {canManageSpecificAccess && directAccessEnabled ? (
-                            <section className="space-y-2">
-                                <div className="flex items-baseline justify-between gap-3">
-                                    <h3 className="text-sm font-medium text-[var(--text-primary)]">
-                                        {accessSectionTitle}
-                                    </h3>
-                                    <span className="text-xs text-[var(--text-tertiary)]">
-                                        {isAccessLoading ? 'Loading…' : accessSectionDescription}
-                                    </span>
-                                </div>
-
-                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                                    <Select
-                                        value={selectedGrantee}
-                                        onValueChange={handleSelectedGranteeChange}
-                                        disabled={addableOptions.length === 0}
-                                    >
-                                        {/* SelectTrigger line-clamps its direct span child, which
-                                            collapses any flex layout nested inside it — so the
-                                            trigger keeps a plain SelectValue and nothing else. */}
-                                        <SelectTrigger className="h-9 min-w-0 text-sm">
-                                            <SelectValue
-                                                placeholder={
-                                                    addableOptions.length === 0
-                                                        ? 'Everyone here already has access'
-                                                        : 'Add a person…'
-                                                }
-                                            />
-                                        </SelectTrigger>
-                                        <SelectContent className="min-w-[20rem]">
-                                            {addableOptions.map((option) => (
-                                                <SelectItem key={option.value} value={option.value}>
-                                                    <span className="flex min-w-0 flex-col">
-                                                        <span className="truncate text-sm text-[var(--text-primary)]">
-                                                            {option.label}
-                                                        </span>
-                                                        <span className="truncate text-xs text-[var(--text-tertiary)]">
-                                                            {option.detail}
-                                                        </span>
-                                                    </span>
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <Select value={selectedAccessLevel} onValueChange={setSelectedAccessLevel}>
-                                        <SelectTrigger className="h-9 text-sm">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {accessLevels.map((level) => (
-                                                <SelectItem key={level.value} value={level.value}>
-                                                    {level.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-
-                                {effectiveDraftGrants.length === 0 ? (
-                                    <p className="rounded-md border border-dashed border-[color:var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
-                                        {draftVisibility === 'RESTRICTED'
-                                            ? 'No one can open this yet — add the people who need it.'
-                                            : 'No one has been added directly.'}
-                                    </p>
-                                ) : (
-                                    <ul className="divide-y divide-[color:var(--border-subtle)] rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-1)]">
-                                        {effectiveDraftGrants.map((grant) => (
-                                            <li
-                                                key={grantKey(grant)}
-                                                className="flex items-center gap-3 px-3 py-2"
-                                            >
-                                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-secondary)]">
-                                                    {grant.grantee_type === 'ROLE' ? <UsersRound className="h-4 w-4" /> : getGrantInitials(grant)}
+            <PopoverContent align="end" sideOffset={8} className="w-[23rem] overflow-hidden p-0">
+                {view === 'people' ? (
+                    <Command shouldFilter={false} className="h-auto overflow-visible rounded-none border-0 bg-transparent shadow-none">
+                        <ShareViewHeader title="People with access" onBack={() => setView('access')}>
+                            <CommandInput
+                                value={peopleQuery}
+                                onValueChange={setPeopleQuery}
+                                placeholder="Search people"
+                                className="h-9"
+                                autoFocus
+                            />
+                        </ShareViewHeader>
+                        <div className="max-h-[19rem] overflow-y-auto p-1">
+                            {grants.length > 0 ? (
+                                <>
+                                    <p className="px-2 pb-1 pt-1.5 type-eyebrow">With access</p>
+                                    <ul className="space-y-0.5">
+                                        {grants.map((grant) => (
+                                            <li key={grantKey(grant)} className="flex items-center gap-2 rounded-md px-2 py-1.5">
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs text-[var(--text-secondary)]">
+                                                    {grant.grantee_type === 'ROLE'
+                                                        ? <UsersRound className="h-3.5 w-3.5" />
+                                                        : getGrantInitials(grant)}
                                                 </span>
-                                                <div className="min-w-0 flex-1">
-                                                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="block truncate text-sm text-[var(--text-primary)]">
                                                         {getGrantLabel(grant)}
-                                                    </div>
-                                                    <div className="truncate text-xs text-[var(--text-tertiary)]">
-                                                        {grant.email || getAccessLabel(resourceType!, grant.permission_ids || [])}
-                                                    </div>
-                                                </div>
-                                                <Select
-                                                    value={accessLevels.find((level) => samePermissions(level.permissionIds, grant.permission_ids || []))?.value || ''}
-                                                    onValueChange={(next) => handleDraftGrantAccessChange(grant, next)}
-                                                >
-                                                    <SelectTrigger className="h-8 w-[6.5rem] text-xs">
-                                                        <SelectValue placeholder={getAccessLabel(resourceType!, grant.permission_ids || [])} />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {accessLevels.map((level) => (
-                                                            <SelectItem key={level.value} value={level.value}>
-                                                                {level.label}
-                                                            </SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
+                                                    </span>
+                                                    <span className="block truncate text-xs text-[var(--text-tertiary)]">
+                                                        {grant.grantee_type === 'ROLE'
+                                                            ? 'Role'
+                                                            : grant.email || getAccessLabel(resourceType!, grant.permission_ids || [])}
+                                                    </span>
+                                                </span>
+                                                {grant.grantee_type === 'ROLE' ? null : (
+                                                    <Select
+                                                        value={accessLevels.find((level) => samePermissions(level.permissionIds, grant.permission_ids || []))?.value || ''}
+                                                        onValueChange={(next) => {
+                                                            const level = accessLevels.find((candidate) => candidate.value === next);
+                                                            if (!level) return;
+                                                            applyGrant.mutate({
+                                                                kind: 'set',
+                                                                key: grantKey(grant),
+                                                                granteeType: grant.grantee_type,
+                                                                granteeId: grant.grantee_id,
+                                                                permissionIds: level.permissionIds,
+                                                            });
+                                                        }}
+                                                    >
+                                                        <SelectTrigger className="h-7 w-[5.5rem] shrink-0 text-xs">
+                                                            <SelectValue placeholder={getAccessLabel(resourceType!, grant.permission_ids || [])} />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {accessLevels.map((level) => (
+                                                                <SelectItem key={level.value} value={level.value}>
+                                                                    {level.label}
+                                                                </SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                )}
                                                 <Button
                                                     type="button"
                                                     variant="quiet"
                                                     size="icon"
-                                                    className="h-8 w-8 shrink-0"
-                                                    onClick={() => handleRemoveDraftGrant(grant)}
-                                                    disabled={saveSharing.isPending}
+                                                    className="h-7 w-7 shrink-0"
+                                                    onClick={() => applyGrant.mutate({
+                                                        kind: 'remove',
+                                                        key: grantKey(grant),
+                                                        granteeType: grant.grantee_type,
+                                                        granteeId: grant.grantee_id,
+                                                    })}
+                                                    loading={pendingGrantKey === grantKey(grant)}
                                                     aria-label={`Remove ${getGrantLabel(grant)}`}
                                                 >
-                                                    <Trash2 className="h-4 w-4" />
+                                                    <Trash2 className="h-3.5 w-3.5" />
                                                 </Button>
                                             </li>
                                         ))}
                                     </ul>
-                                )}
+                                </>
+                            ) : null}
 
-                                {removedRoleGrantCount > 0 ? (
-                                    <p className="text-xs text-[var(--state-warning)]">
-                                        Role-based access is not available here and will be removed when you save.
-                                    </p>
-                                ) : null}
-                            </section>
+                            <p className="px-2 pb-1 pt-2 type-eyebrow">Add</p>
+                            {matchingMembers.length === 0 ? (
+                                <p className="px-2 py-2 text-xs text-[var(--text-tertiary)]">
+                                    {peopleNeedle
+                                        ? 'Nobody in this pod by that name.'
+                                        : 'Everyone in this pod already has access.'}
+                                </p>
+                            ) : (
+                                <ul className="space-y-0.5">
+                                    {matchingMembers.map((member) => (
+                                        <li key={member.pod_member_id}>
+                                            <button
+                                                type="button"
+                                                onClick={() => addPersonGrant(member)}
+                                                className="resource-share-nav-button flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--surface-2)] focus-visible:bg-[var(--surface-2)] focus-visible:outline-none"
+                                            >
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs text-[var(--text-secondary)]">
+                                                    <UserRound className="h-3.5 w-3.5" />
+                                                </span>
+                                                <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
+                                                    {member.user_name || member.email || member.user_email}
+                                                </span>
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </Command>
+                ) : view === 'card' && canShowCard && cardVariant ? (
+                    <>
+                        <ShareViewHeader title="Share card" onBack={() => setView('access')} />
+                        <div className="max-h-[21rem] overflow-y-auto p-3">
+                            <SocialCardPanel
+                                variant={cardVariant}
+                                name={resourceName}
+                                url={outsidePodShareUrl}
+                                unfurls
+                            />
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="space-y-1.5 border-b border-[color:var(--border-subtle)] p-2">
+                            <ShareLinkRow
+                                url={linkToShare}
+                                name={resourceName}
+                                allowNativeShare={shownVisibility === 'PUBLIC'}
+                                emptyHint="A link is available once this is created."
+                            />
+                            {canShowCard ? (
+                                <ShareNavRow label="Share card" onClick={() => setView('card')} />
+                            ) : null}
+                        </div>
+
+                        <div className="p-1">
+                            <p className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 type-eyebrow">
+                                General access
+                                <ConceptHint concept="grant" />
+                            </p>
+                            <div className="space-y-0.5">
+                                {optionCopies.map((option) => (
+                                    <VisibilityOption
+                                        key={option.value}
+                                        copy={option}
+                                        selected={shownVisibility === option.value}
+                                        saving={savingVisibility === option.value}
+                                        onSelect={() => chooseVisibility(option.value)}
+                                    >
+                                        {confirming === option.value ? (
+                                            <div className="px-2 pb-2">
+                                                <p className="text-xs text-[var(--text-secondary)]">{confirmCopy}</p>
+                                                <div className="mt-2 flex justify-end gap-1.5">
+                                                    <Button
+                                                        type="button"
+                                                        variant="quiet"
+                                                        size="xs"
+                                                        onClick={() => setConfirming(null)}
+                                                    >
+                                                        Not now
+                                                    </Button>
+                                                    <Button
+                                                        type="button"
+                                                        variant="primary"
+                                                        size="xs"
+                                                        onClick={() => commitConfirmed(option.value)}
+                                                    >
+                                                        {confirmAction}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                    </VisibilityOption>
+                                ))}
+                            </div>
+                        </div>
+
+                        {canManageSpecificAccess && directAccessEnabled ? (
+                            <div className="border-t border-[color:var(--border-subtle)] p-1">
+                                <ShareNavRow
+                                    label={shownVisibility === 'RESTRICTED' ? 'People with access' : 'Additional people'}
+                                    meta={isAccessLoading ? '…' : String(grants.length)}
+                                    onClick={() => setView('people')}
+                                />
+                            </div>
                         ) : null}
 
-                        {canManageSpecificAccess && !directAccessEnabled && removedPersonalGrantCount > 0 ? (
-                            <p className="rounded-md bg-[var(--surface-2)] px-3 py-2.5 text-xs text-[var(--state-warning)]">
-                                Existing direct access will be removed when you save.
+                        {shownVisibility === 'RESTRICTED' && !isAccessLoading && grants.length === 0 ? (
+                            <p className="border-t border-[color:var(--border-subtle)] px-3 py-2 text-xs text-[var(--state-warning)]">
+                                No one can open this yet — add the people who need it.
                             </p>
                         ) : null}
 
-                        {saveError ? (
-                            <p className="text-sm text-[var(--state-error)]">{saveError}</p>
+                        {error ? (
+                            <p className="border-t border-[color:var(--border-subtle)] px-3 py-2 text-xs text-[var(--state-error)]">
+                                {error}
+                            </p>
                         ) : null}
-                    </div>
-
-                    <DialogFooter className="items-center border-t border-[color:var(--border-subtle)] px-5 py-3 sm:justify-end">
-                        <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>
-                            Cancel
-                        </Button>
-                        <Button variant="primary"
-                            type="button"
-                            size="sm"
-                            onClick={handleDone}
-                            loading={saveSharing.isPending}
-                            loadingLabel="Saving"
-                            disabled={(canManageSpecificAccess && isAccessLoading) || isBlockedOnConfirmation}
-                        >
-                            {hasChanges ? 'Save' : 'Done'}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-        </div>
+                    </>
+                )}
+            </PopoverContent>
+        </Popover>
     );
 }
 

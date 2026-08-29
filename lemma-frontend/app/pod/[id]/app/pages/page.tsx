@@ -259,7 +259,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                                     onChange={async (visibility: ResourceVisibilityValue) => {
                                                         await updateAppVisibility({ podId, name: appName, visibility });
                                                     }}
-                                                    className="contents"
                                                     trigger={({ openShare, disabled }) => (
                                                         <DropdownMenuItem
                                                             disabled={disabled}
