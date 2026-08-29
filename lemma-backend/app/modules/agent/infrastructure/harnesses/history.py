@@ -234,11 +234,26 @@ def build_history_processors(
             return working
         from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+        from app.modules.agent.services.runtime_history import (
+            SYNTHETIC_NOTICE_PREFIX,
+        )
+
+        # Marked synthetic, which is load-bearing rather than cosmetic. Unmarked,
+        # this placeholder is indistinguishable from a user turn, so it gets
+        # pinned -- and because the graph writes the processed history back, it
+        # becomes the *first* pinned message on every later request.
+        # `_bounded_pins` keeps the first and folds the rest, so a long
+        # conversation would keep this placeholder and fold the user's actual
+        # request: exactly the loss this module exists to prevent, reintroduced
+        # by the fix for a different one.
         return [
             ModelRequest(
                 parts=[
                     UserPromptPart(
-                        content=("[earlier turns of this conversation are not shown]")
+                        content=(
+                            f"{SYNTHETIC_NOTICE_PREFIX} earlier turns of this "
+                            "conversation are not shown"
+                        )
                     )
                 ]
             ),

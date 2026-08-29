@@ -471,3 +471,68 @@ class TestThePinnedSetIsBounded:
         await _compactor(sink)(_ctx(), history)
 
         assert "follow-up number 0" in sink[0]
+
+
+class TestSyntheticMessagesNeverDisplaceTheRequest:
+    """The processors write into history the next pass reads back.
+
+    `_ensure_leading_user_message` inserts a placeholder when a trimmed history
+    would otherwise open with an assistant turn, and the graph writes that back
+    (`ctx.state.message_history[:] = messages`). Unmarked, the placeholder looks
+    exactly like a user turn — so it gets pinned, and on the next request it is
+    the *first* pinned message. `_bounded_pins` keeps the first and folds the
+    rest, so a long conversation would keep a placeholder saying nothing and
+    fold the user's actual request. This is that failure, caught once.
+    """
+
+    async def _leading_placeholder(self):
+        from pydantic_ai.messages import ModelResponse, TextPart
+
+        from app.modules.agent.domain.value_objects import HarnessOptions
+        from app.modules.agent.infrastructure.harnesses.history import (
+            build_history_processors,
+        )
+
+        guard = build_history_processors(
+            HarnessOptions(model_name="m"), summarization_model="openai:gpt-4.1"
+        )[-1]
+        opened = await guard([ModelResponse(parts=[TextPart("assistant first")])])
+        return opened[0]
+
+    async def test_the_placeholder_is_not_mistaken_for_a_user_turn(self) -> None:
+        assert not is_pinned_message(await self._leading_placeholder())
+
+    async def test_it_does_not_take_the_first_pinned_slot(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+            MAX_PINNED_USER_MESSAGES,
+            _bounded_pins,
+        )
+
+        placeholder = await self._leading_placeholder()
+        request = _user(THE_REQUEST)
+        head = [placeholder, request] + [
+            _user(f"follow up {index}") for index in range(MAX_PINNED_USER_MESSAGES * 2)
+        ]
+
+        pins = _bounded_pins([m for m in head if is_pinned_message(m)])
+
+        assert pins[0] is request
+
+    async def test_it_is_added_only_once_however_many_passes_run(self) -> None:
+        """It runs on every model request over history it already rewrote."""
+        from pydantic_ai.messages import ModelResponse, TextPart
+
+        from app.modules.agent.domain.value_objects import HarnessOptions
+        from app.modules.agent.infrastructure.harnesses.history import (
+            build_history_processors,
+        )
+
+        guard = build_history_processors(
+            HarnessOptions(model_name="m"), summarization_model="openai:gpt-4.1"
+        )[-1]
+        history = [ModelResponse(parts=[TextPart("assistant first")])]
+
+        once = await guard(history)
+        twice = await guard(once)
+
+        assert len(twice) == len(once)
