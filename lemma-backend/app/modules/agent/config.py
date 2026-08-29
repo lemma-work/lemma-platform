@@ -88,7 +88,7 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_default_context_window_tokens: int = Field(
-        default=200_000,
+        default=128_000,
         description=(
             "Context window assumed for a model whose catalog entry does not "
             "declare one. Compaction triggers at 80% of the window and the hard "

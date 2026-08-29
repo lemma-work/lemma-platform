@@ -38,7 +38,12 @@ CONTEXT_WINDOW_METADATA_KEY = "context_window"
 MIN_CONTEXT_WINDOW_TOKENS = 4_000
 
 #: Used when neither the model nor the deployment says anything usable.
-DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
+#:
+#: Deliberately conservative. A model that genuinely has a larger window declares
+#: it on its catalog entry and gets the larger budget; this is what is safe when
+#: nothing is known. Assuming more than a model has is how compaction fails to
+#: fire until after the provider has already rejected the request.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 
 #: Compact here. Leaves room for tool schemas, instructions and the reply.
 SUMMARIZATION_FRACTION = 0.80

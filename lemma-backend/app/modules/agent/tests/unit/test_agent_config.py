@@ -33,7 +33,7 @@ EXPECTED = [
     (
         "agent_default_context_window_tokens",
         "AGENT_DEFAULT_CONTEXT_WINDOW_TOKENS",
-        200_000,
+        128_000,
     ),
     ("agent_model_stream_max_attempts", "AGENT_MODEL_STREAM_MAX_ATTEMPTS", 3),
     (
