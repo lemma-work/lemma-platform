@@ -32,7 +32,11 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
 from app.modules.agent_surfaces.services import surface_egress
-from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    EnvelopeFile,
+    PartDelivery,
+)
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
     PodFileParts,
@@ -1974,7 +1978,9 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    adapter.send_approval.return_value = True
+    adapter.deliver.return_value = DeliveryReceipt(
+        parts={"decision": PartDelivery.NATIVE}
+    )
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
 
@@ -2007,7 +2013,11 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     )
 
     assert sent is True
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    # Through `deliver`, not `send_approval`: the per-content outbound verbs
+    # became `_render_*` hooks only `deliver` calls, and this assertion was
+    # left naming a method nothing invokes -- so it read `await_args` off a
+    # never-awaited mock and died on None rather than checking the plan.
+    plan = adapter.deliver.await_args.kwargs["envelope"].decision
     assert plan.title == "Write a record"
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
 
