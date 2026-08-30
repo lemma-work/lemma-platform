@@ -62,10 +62,10 @@ _MAX_COLUMNS = 40
 # Redis being unavailable degrades to a miss and never fails a run.
 #
 # Deliberately NOT keyed by conversation. It used to be, and that made the cache
-# almost dead: 89.9% of production runs are the first run of their conversation
-# and therefore a guaranteed miss, and of the runs that were not, the median gap
-# to the previous one was 426.9s -- seven times the TTL. So the hot path paid a
-# full rebuild on ~90% of runs to protect against variation that does not exist.
+# almost dead: most runs are the first run of their conversation and therefore a
+# guaranteed miss, and the runs that were not typically arrived long enough after
+# the previous one to have outlived the TTL anyway. So the hot path paid a full
+# rebuild on nearly every run to protect against variation that does not exist.
 #
 # Nothing in the rendered brief is conversation-derived. The build reads the pod,
 # the user and either the pod inventory or the agent's grants; the only thing it

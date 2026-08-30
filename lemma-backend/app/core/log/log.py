@@ -417,9 +417,8 @@ class _SafeExceptionFilter(logging.Filter):
 # resulting `ConnectionClosedError` surfaces through asyncio's default exception
 # handler -- which logs at ERROR. It is the ordinary end of a websocket: a
 # browser tab suspended, a laptop closed, a network dropped. Production logged
-# 129 of them a day, in bursts of ten as one client's subscriptions died
-# together, and they were indistinguishable from real faults in every error-rate
-# view.
+# them steadily, in bursts as one client's subscriptions died together, and they
+# were indistinguishable from real faults in every error-rate view.
 #
 # Not our code, so it cannot be fixed at the source: the record comes from
 # uvicorn's websocket layer via the `asyncio` logger, and that logger must stay
@@ -428,10 +427,10 @@ _CLIENT_DISCONNECT_LOGGERS = ("asyncio", "uvicorn.error")
 _CLIENT_DISCONNECT_EXCEPTION = "ConnectionClosed"
 # One marker, deliberately. This required both `keepalive ping timeout` *and*
 # `no close frame received`, which is only one of the four strings
-# `ConnectionClosed.__str__` can build. The other three still logged at ERROR:
-# 26 a day survived the filter in production, all of them the branch where the
-# client misses the pong deadline and *then* echoes a close frame -- a slow
-# client, which is exactly what this exists to ignore.
+# `ConnectionClosed.__str__` can build. The other three still logged at ERROR
+# and went on doing so in production, all of them the branch where the client
+# misses the pong deadline and *then* echoes a close frame -- a slow client,
+# which is exactly what this exists to ignore.
 #
 # The second marker was justified on the grounds that `ConnectionClosed` alone
 # is too broad, covering a socket that failed mid-write. That check is real but

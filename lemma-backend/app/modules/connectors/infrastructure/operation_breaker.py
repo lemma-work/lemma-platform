@@ -130,8 +130,8 @@ async def guard(scope: str) -> None:
     # back to the full cooldown only if the key somehow carries no expiry.
     retry_after = remaining if remaining >= 0 else cooldown
     if first_refusal:
-        # Logged, because a refused call left no trace of its own: the seven in
-        # one production incident existed only as request failures naming no
+        # Logged, because a refused call left no trace of its own: the refusals
+        # in one production incident existed only as request failures naming no
         # connector, which is why nobody could say which provider had tripped.
         #
         # Once per cooldown per scope, not once per call. A client retrying a

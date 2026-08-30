@@ -12,10 +12,10 @@ argument. "Everything" is ``excluding(())`` — still explicit, and impossible t
 arrive at by omission.
 
 The direction exists because either side can be the small one, and the array
-travels to a different database than the one that computed it. In the observed
-data most files in a pod are POD-visible and RESTRICTED is rare, so the *hidden*
-side is usually the short list — often empty. Sending 16,050 ids to say "all of
-them" was the wrong way round.
+travels to a different database than the one that computed it. In practice most
+files in a pod are POD-visible and RESTRICTED is rare, so the *hidden* side is
+usually the short list — often empty. Sending every id in a large pod to say "all
+of them" was the wrong way round.
 """
 
 from __future__ import annotations

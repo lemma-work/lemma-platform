@@ -107,7 +107,7 @@ class _FakeRepo:
     ) -> Conversation | None:
         if include_messages:
             # Titling needs two rows. Loading the transcript to find them cost
-            # 1.4s of materialisation inside an open transaction in production.
+            # seconds of materialisation inside an open transaction.
             raise AssertionError(
                 "titling must not load the transcript; "
                 "use get_conversation_opening_texts"

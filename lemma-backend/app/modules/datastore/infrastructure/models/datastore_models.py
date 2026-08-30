@@ -109,12 +109,11 @@ class DatastoreFile(UUIDAuditBase):
     __table_args__ = (
         # Leads with status because the dispatch and recovery sweeps filter it
         # with no pod_id, and led by pod_id this index could not serve them --
-        # 39,945 sequential scans reading 325 million rows from a 16,050-row
-        # table, in under two days of production.
+        # every tick fell back to a sequential scan of the whole table.
         #
         # The predicate is what keeps it nearly free: folders are created
         # NOT_REQUIRED and non-indexable types never reach PENDING, so only
-        # documents actually in flight are in here. At rest that was zero rows.
+        # documents actually in flight are in here. At rest that is no rows.
         Index(
             "ix_datastore_file_status",
             "status",

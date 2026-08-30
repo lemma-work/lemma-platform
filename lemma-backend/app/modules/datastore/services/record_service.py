@@ -483,7 +483,7 @@ class RecordService:
         # preamble per row -- a permission check against the database, a
         # connection release, and a row-scope decision -- none of which can
         # change inside the loop, because the caller, the table and the mode are
-        # all fixed. Production saw the cost as p50 8.6s on records/bulk/update.
+        # all fixed. That per-row cost is what dominated records/bulk/update.
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,

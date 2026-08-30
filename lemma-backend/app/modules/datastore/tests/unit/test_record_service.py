@@ -1056,8 +1056,8 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypa
 
     `bulk_create_records` in the same service already hoists its permission
     check and stages events for one dispatch. This is that shape, applied to
-    update. Production saw the difference as p50 8.6s and max 14.9s on
-    `records/bulk/update`.
+    update, and the difference showed up as `records/bulk/update` latency that
+    scaled with the batch instead of staying flat.
 
     The rows themselves are now written by one repository call in one
     transaction, rather than N calls that each opened a session, set the RLS

@@ -48,7 +48,7 @@ wrong interpreter does not fail with "module not found", it reports a
 - **[docs/testing.md](docs/testing.md)** — the three suites, which one your
   change needs, and what gates what.
 
-## The five that get broken most
+## The six that get broken most
 
 **The specification is not a description.** If the system does not behave the
 way a scenario says, do not edit the scenario to match. Mark it `gap`, record
@@ -77,6 +77,14 @@ checks all of it.
 `docs/` and gets a row in its index. Do not paste coverage percentages or
 benchmark numbers into prose — they go stale silently. Name the command that
 produces them.
+
+**Comments say why, and never carry production data.** A comment that restates
+the code is one the next edit invalidates — make the code say it instead, with a
+name or a smaller function. And nothing measured against production belongs in
+the source: no traffic percentages, row or request counts, latencies, error
+rates, costs, customer names or internal URLs. Keep the reasoning, drop the
+figures. Configured limits, TTLs and API ceilings are contract and stay.
+[CONTRIBUTING.md](CONTRIBUTING.md#code-and-comments) has the full rule.
 
 ## Before opening a pull request
 
