@@ -28,8 +28,26 @@ from app.modules.agent.infrastructure.run_projections import ResumableAgentRunRe
 logger = get_logger(__name__)
 
 
-def agent_run_job_id(agent_run_id: UUID) -> str:
-    return f"agent-run:{agent_run_id}"
+def agent_run_job_id(agent_run_id: UUID, *, attempt: int = 0) -> str:
+    """The streaq job id for a run, distinct per resume attempt.
+
+    The id exists to deduplicate: streaq publishes with `SET ... NX`, so a
+    second enqueue under an id that already exists is dropped -- and dropped
+    silently, because `enqueue` returns a Task exactly as it would for a real
+    one. That is what stops a run being started twice.
+
+    It is also what made resuming under the original id a coin flip. The job
+    that was interrupted has already finished, but its task key lingers for the
+    result TTL, so a sweep that ran inside that window enqueued nothing, the run
+    sat parked, and its attempts drained away against a job that never existed.
+    Observed working only because the key had expired in the 74 seconds between
+    the worker restarting and the sweep firing.
+
+    So each attempt gets its own id. Deduplication still holds where it matters
+    -- two sweeps racing on the same attempt collide as before.
+    """
+    suffix = f":resume-{attempt}" if attempt else ""
+    return f"agent-run:{agent_run_id}{suffix}"
 
 
 #: How many times a run may be handed on before we stop trying. A run that is
@@ -96,7 +114,10 @@ async def resume_parked_agent_runs(
                     "pod_id": str(run.pod_id),
                     "agent_name": None,
                 },
-                _job_id=agent_run_job_id(run.id),
+                # The attempt this enqueue *is*: `record_resume_attempt` has
+                # already counted it, so the stored value is one ahead of what
+                # was read.
+                _job_id=agent_run_job_id(run.id, attempt=run.resume_attempts + 1),
             )
         # One run that cannot be enqueued must not strand the others; the next
         # tick tries it again.

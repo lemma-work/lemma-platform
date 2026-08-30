@@ -43,7 +43,10 @@ from app.modules.datastore.contracts import (
     DatastoreFileDeletedEvent,
     DatastoreFileUpdatedEvent,
 )
-from app.modules.agent.services.run_resume import resume_parked_agent_runs
+from app.modules.agent.services.run_resume import (
+    agent_run_job_id,
+    resume_parked_agent_runs,
+)
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
@@ -158,10 +161,6 @@ def build_harness_registry() -> HarnessRegistry:
             ),
         ]
     )
-
-
-def agent_run_job_id(agent_run_id: UUID) -> str:
-    return f"agent-run:{agent_run_id}"
 
 
 @reliable_redis_stream_subscriber(
