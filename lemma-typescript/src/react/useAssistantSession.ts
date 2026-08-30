@@ -50,6 +50,8 @@ export interface UseAssistantSessionOptions {
   onEvent?: (event: SseRawEvent, payload: unknown | null) => void;
   onStatus?: (status: string) => void;
   onMessage?: (message: ConversationMessage) => void;
+  /** The conversation was renamed mid-stream by the server's title generator. */
+  onTitle?: (title: string, conversationId: string | null) => void;
   onError?: (error: unknown) => void;
 }
 
@@ -357,6 +359,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     onEvent,
     onStatus,
     onMessage,
+    onTitle,
     onError,
   } = options;
 
@@ -388,6 +391,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const onEventRef = useRef(onEvent);
   const onStatusRef = useRef(onStatus);
   const onMessageRef = useRef(onMessage);
+  const onTitleRef = useRef(onTitle);
   const onErrorRef = useRef(onError);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const consumeRef = useRef<(opts: any) => Promise<void>>(null!);
@@ -470,6 +474,10 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   useEffect(() => {
     onMessageRef.current = onMessage;
   }, [onMessage]);
+
+  useEffect(() => {
+    onTitleRef.current = onTitle;
+  }, [onTitle]);
 
   useEffect(() => {
     onErrorRef.current = onError;
@@ -826,6 +834,19 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
             clearStreamingTool();
           }
         }
+        if (parsed.title) {
+          // Conversation-scoped, not run-scoped: the title is generated from
+          // the first user message while the run is still going, so it lands
+          // mid-turn and says nothing about the run's status.
+          const renamedConversationId = parsed.conversationId
+            ?? streamConversationId
+            ?? conversationIdRef.current;
+          const renamed = conversationRecordRef.current;
+          if (renamed && (!renamedConversationId || renamed.id === renamedConversationId)) {
+            rememberConversation({ ...renamed, title: parsed.title });
+          }
+          onTitleRef.current?.(parsed.title, renamedConversationId ?? null);
+        }
         if (parsed.status) {
           setConversationStatus(parsed.status);
           if (!isConversationRunningStatus(parsed.status)) {
@@ -949,6 +970,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     defaultScope,
     loadMessages,
     refreshConversation,
+    rememberConversation,
     setConversationStatus,
     syncOnTurnEnd,
   ]);
