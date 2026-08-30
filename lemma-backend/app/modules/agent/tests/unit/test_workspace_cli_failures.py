@@ -6,7 +6,7 @@ import pytest
 
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import helper as workspace_helper
-from app.modules.agent.tools.workspace_cli import workspace_cli
+from app.modules.agent.tools.workspace_cli import process_visibility, workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ListProcessesRequest,
@@ -355,7 +355,7 @@ async def test_list_processes_internal_binds_running_processes(
                 {
                     "process_id": "proc-1",
                     "cmd": "npm run dev",
-                    "cwd": "/workspace",
+                    "cwd": "",
                     "tty": True,
                     "started_at": 123.0,
                     "completed": False,
@@ -380,11 +380,14 @@ async def test_list_processes_internal_binds_running_processes(
     assert runtime.bound_processes == [("proc-1", "session-1")]
 
 
-def _process(process_id: str) -> dict:
+def _process(process_id: str, cwd: str = "") -> dict:
     return {
         "process_id": process_id,
         "cmd": "npm run dev",
-        "cwd": "/workspace",
+        # Empty unless a test is about directories: an entry the provider
+        # recorded no directory for stays visible, so these keep testing the
+        # session binding they were written for.
+        "cwd": cwd,
         "tty": True,
         "started_at": 123.0,
         "completed": False,
@@ -539,3 +542,63 @@ async def test_a_finished_process_this_session_owns_is_still_listed(
     )
 
     assert [process.process_id for process in result.processes] == ["proc-mine"]
+
+
+@pytest.mark.asyncio
+async def test_list_processes_hides_another_directorys_running_process(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A sandbox belongs to the user, not to one conversation.
+
+    Several conversations can be working in it at once, each in its own
+    directory. A running process nobody currently owns used to be shown to
+    whichever of them listed first -- and adopted by it, so a sibling
+    conversation's build became this agent's to poll and kill. The directory is
+    what tells them apart once a session binding is gone.
+    """
+    ctx = _context()
+    own_cwd = ctx.get_workspace_cwd()
+    runtime = _FakeRuntime(
+        {
+            "processes": [
+                _process("proc-theirs", cwd="/workspace/conversations/someone-else"),
+                _process("proc-mine", cwd=own_cwd),
+            ]
+        }
+    )
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(ctx, ListProcessesRequest())
+
+    assert [process.process_id for process in result.processes] == ["proc-mine"]
+    assert runtime.bound_processes == [("proc-mine", "session-1")]
+
+
+@pytest.mark.asyncio
+async def test_a_process_in_a_subdirectory_of_ours_is_ours(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ctx = _context()
+    runtime = _FakeRuntime(
+        {"processes": [_process("proc-sub", cwd=f"{ctx.get_workspace_cwd()}/video")]}
+    )
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(ctx, ListProcessesRequest())
+
+    assert [process.process_id for process in result.processes] == ["proc-sub"]
+
+
+def test_a_process_with_no_recorded_directory_stays_visible() -> None:
+    """Older entries carry no directory, and the in-sandbox runtime reports
+    none. Excluding those would drop a live process out of the only listing
+    that can return its id."""
+    assert process_visibility.within("", "/workspace/conversations/a") is True
+    assert process_visibility.within(None, "/workspace/conversations/a") is True
+    # And a prefix that is not a path boundary is not a match.
+    assert (
+        process_visibility.within(
+            "/workspace/conversations/ab", "/workspace/conversations/a"
+        )
+        is False
+    )

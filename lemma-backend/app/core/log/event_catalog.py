@@ -78,7 +78,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pydantic_ai.agent_input_required_kind_call.observed': EventSpec('debug', frozenset({'tool_call_id'})),
     'agent.pydantic_ai.agent_run_ended_after_repeated.degraded': EventSpec('warning', frozenset()),
     'agent.pydantic_ai.agent_run_hit_usage_limit.degraded': EventSpec('warning', frozenset()),
-    'agent.pydantic_ai.driver_cancelled_mid_run.failed': EventSpec('error', frozenset({'agent_run_id'})),
+    'agent.pydantic_ai.driver_cancelled_mid_run.failed': EventSpec('error', frozenset({'agent_run_id', 'consumer_cancelling', 'driver_cancelling'})),
     'agent.pydantic_ai.dropping_non_object_tool_args.diagnostic': EventSpec('debug', frozenset()),
     'agent.pydantic_ai.dropping_unattached_replayed_thought.diagnostic': EventSpec('debug', frozenset({'dropped_count'})),
     'agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic': EventSpec('debug', frozenset()),
