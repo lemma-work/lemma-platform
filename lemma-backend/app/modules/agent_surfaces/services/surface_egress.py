@@ -413,7 +413,15 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             )
             return False
 
-        pending = await self.conversation_service.get_pending_user_interaction(
+        # The approval pause specifically, not "whatever this conversation is
+        # waiting on". `get_pending_user_interaction` answers the second, across
+        # every pausing tool, and the check below then threw away anything that
+        # was not an approval — so a single `ask_user` nobody ever tapped, being
+        # older, shadowed every approval that followed it in that conversation
+        # for good. On a chat surface, where one conversation stands for the
+        # whole relationship with a person, that is permanent: dev's standing
+        # Telegram chat stopped rendering approval cards entirely.
+        pending = await self.conversation_service.get_pending_approval(
             conversation_id=conversation_id
         )
         if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
