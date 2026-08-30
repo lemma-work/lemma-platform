@@ -708,6 +708,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.sandbox_sweeper.orphan_destroy_ineffective': EventSpec('warning', frozenset({'reason', 'sandbox_id'})),
     'workspace.sandbox_sweeper.orphan_reclaimed': EventSpec('info', frozenset({'reason', 'sandbox_id'})),
     'workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed': EventSpec('info', frozenset({'reclaimed_count'})),
+    'workspace.sandbox_sweeper.released_idle_sandbox.observed': EventSpec('info', frozenset({'idle_after_seconds', 'sandbox_id'})),
     'workspace.sandbox_sweeper.released_idle_sandboxes.observed': EventSpec('info', frozenset({'released_count'})),
     'workspace.sandbox_sweeper.unattributed_objects': EventSpec('info', frozenset({'count', 'sample'})),
 }

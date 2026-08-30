@@ -487,3 +487,55 @@ class TestCommandOutputIsAlwaysBounded:
 
         assert stdout == "all good"
         assert stderr == ""
+
+
+@pytest.mark.asyncio
+async def test_list_processes_hides_finished_processes_nobody_owns(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The stale-process complaint, in one case.
+
+    One sandbox serves every conversation a user has. Bindings are cleared when
+    a process completes, and nothing prunes the process index, so every command
+    any of that user's conversations had ever finished arrived here unowned --
+    and unowned was enough to be listed. An agent asking which processes exist
+    got a growing list of other conversations' corpses, carrying no command
+    line to tell them apart, and the tool docstring points it at that list to
+    recover a process id.
+    """
+    finished = _process("proc-old")
+    finished["completed"] = True
+    finished["exit_code"] = 0
+    runtime = _FakeRuntime({"processes": [finished, _process("proc-live")]})
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(
+        _context(),
+        ListProcessesRequest(),
+    )
+
+    assert [process.process_id for process in result.processes] == ["proc-live"]
+    # And it is not adopted on the way past: binding a dead process to this
+    # conversation is how a corpse becomes this agent's problem.
+    assert runtime.bound_processes == [("proc-live", "session-1")]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_process_this_session_owns_is_still_listed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only *unowned* corpses are hidden -- an agent must still be able to read
+    the outcome of the command it started itself."""
+    finished = _process("proc-mine")
+    finished["completed"] = True
+    finished["exit_code"] = 0
+    runtime = _FakeRuntime({"processes": [finished]})
+    runtime.process_sessions = {"proc-mine": "session-1"}
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(
+        _context(),
+        ListProcessesRequest(),
+    )
+
+    assert [process.process_id for process in result.processes] == ["proc-mine"]

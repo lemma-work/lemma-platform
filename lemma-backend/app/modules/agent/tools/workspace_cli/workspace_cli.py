@@ -419,10 +419,20 @@ async def list_processes_internal(
             process_id = str(process["process_id"])
             owner = await runtime.resolve_session_for_process(process_id)
             if owner is None:
-                # Unowned: its binding expired, or it was started outside the
-                # tool path. Claiming it here is how an agent recovers a
-                # process it can otherwise no longer address.
-                if not process.get("completed") and session_id:
+                if process.get("completed"):
+                    # A finished process nobody owns is somebody else's
+                    # history. Bindings are cleared on completion, and the
+                    # index is never pruned, so every command any of this
+                    # user's conversations has ever finished arrived here
+                    # unowned -- and was shown. The list an agent uses to
+                    # recover a lost process was mostly other conversations'
+                    # corpses, none of them carrying a command line to tell
+                    # them apart.
+                    continue
+                # Unowned and still running: its binding expired, or it was
+                # started outside the tool path. Claiming it here is how an
+                # agent recovers a process it can otherwise no longer address.
+                if session_id:
                     await runtime.bind_process_to_session(
                         process_id=process_id,
                         session_id=session_id,

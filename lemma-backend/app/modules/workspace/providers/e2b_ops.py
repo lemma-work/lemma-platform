@@ -219,6 +219,13 @@ class E2BOpsMixin:
                 # A command that exits non-zero raises in some SDK versions;
                 # the exit code is still the thing the caller needs.
                 exit_code = getattr(exc, "exit_code", None)
+                if exit_code is None:
+                    # No exit code on the exception means this is not the
+                    # command reporting failure, it is us losing the stream.
+                    # Recording it as an exit reported a running build as
+                    # failed and unpinned its sandbox for the idle sweep.
+                    await self._output.record_unknown(process_id)
+                    return
             except asyncio.CancelledError:
                 # `wait()` awaits an SDK-internal task, so a cancellation
                 # anywhere in that chain (a disconnect, a sandbox release)
@@ -228,7 +235,7 @@ class E2BOpsMixin:
                 # polls a corpse until its own deadline. Record the outcome we
                 # have, then let the cancellation continue.
                 with anyio.CancelScope(shield=True):
-                    await self._output.record_exit(process_id, exit_code=None)
+                    await self._output.record_unknown(process_id)
                 raise
             await self._output.record_exit(process_id, exit_code=exit_code)
 

@@ -102,6 +102,18 @@ class E2BOutputBuffer:
             exit_code=exit_code,
         )
 
+    async def record_unknown(self, process_id: str) -> None:
+        """We stopped being able to watch. That is not the process ending.
+
+        `record_exit(exit_code=None)` maps to FAILED, because the only test is
+        `exit_code == 0`. So a dropped SDK stream -- which is what a long,
+        silent command provokes, since nothing keeps the HTTP/2 stream warm --
+        was written as a terminal failure of a command that was still running.
+        The agent was told its build had failed, and the idle sweeper was told
+        the sandbox was free to release, both while the work was live.
+        """
+        await self._write_state(process_id, state=ProcessState.UNKNOWN, exit_code=None)
+
     async def record_cancelled(self, process_id: str) -> None:
         await self._write_state(
             process_id, state=ProcessState.CANCELLED, exit_code=None

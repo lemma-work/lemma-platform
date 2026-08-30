@@ -17,6 +17,7 @@ from fakeredis import aioredis as fake_aioredis
 
 from sandbox_runtime.protocol import ProcessOutputChannel, ProcessState
 
+from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
 from app.modules.workspace.providers import e2b_output
 from app.modules.workspace.providers.e2b_output import _MAX_CHUNKS, E2BOutputBuffer
 
@@ -117,3 +118,38 @@ async def test_recorded_exit_survives_a_later_read(buffer) -> None:
     assert snapshot.state is ProcessState.SUCCEEDED
     assert snapshot.exit_code == 0
     assert len(snapshot.chunks) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_lost_stream_is_unknown_rather_than_failed(buffer) -> None:
+    """Losing the watch is not the command ending.
+
+    `record_exit` decides state with `exit_code == 0`, so `exit_code=None` --
+    what a transport error carries -- was written as FAILED. A long, silent
+    render is exactly what drops an idle HTTP/2 stream, so the command that most
+    needs the watch to survive was the one reported as failed while it ran. It
+    also unpinned the sandbox: FAILED is terminal, so the idle sweep saw nothing
+    running and was free to release live work.
+    """
+    await _emit(buffer, "p", 2)
+    await buffer.record_unknown("p")
+
+    snapshot = await buffer.read("p", after_sequence=0)
+
+    assert snapshot.state is ProcessState.UNKNOWN
+    assert snapshot.exit_code is None
+    # Not terminal: the poll keeps going and the sweeper keeps its hands off.
+    assert snapshot.state not in TERMINAL_PROCESS_STATES
+
+
+@pytest.mark.asyncio
+async def test_a_real_non_zero_exit_is_still_a_failure(buffer) -> None:
+    """The distinction is the exception carrying an exit code, not the error."""
+    await _emit(buffer, "p", 1)
+    await buffer.record_exit("p", exit_code=1)
+
+    snapshot = await buffer.read("p", after_sequence=0)
+
+    assert snapshot.state is ProcessState.FAILED
+    assert snapshot.exit_code == 1
+    assert snapshot.state in TERMINAL_PROCESS_STATES
