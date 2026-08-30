@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 from urllib.parse import urlencode
 from uuid import UUID
 
+from app.core import app_install
 from app.core.config import settings
 
 # Sentinel attribute marking the injected <script>. Idempotency keys off this,
@@ -25,6 +26,7 @@ from app.core.config import settings
 RUNTIME_CONFIG_SENTINEL = "data-lemma-runtime-config"
 SOCIAL_METADATA_SENTINEL = "data-lemma-social-metadata"
 APP_BRANDING_SENTINEL = "data-lemma-app-branding"
+APP_INSTALL_SENTINEL = app_install.APP_INSTALL_SENTINEL
 
 # Where an app reaches the API: its own origin, under a reserved prefix that
 # ``AppHostRoutingMiddleware`` strips back off.
@@ -147,6 +149,18 @@ def _public_app_social_metadata(app: dict[str, str] | None) -> str:
     )
 
 
+def _public_app_install(app: dict[str, str] | None) -> str:
+    """Manifest, icons and the install offer -- for a hosted app only.
+
+    Gated on the public URL for the same reason the social tags are: an app has
+    an origin of its own and a widget does not, and a manifest with no scope of
+    its own has nothing to install.
+    """
+    if not app or not app.get("url"):
+        return ""
+    return app_install.install_head_links() + app_install.install_prompt_script()
+
+
 def build_app_branding(public_url: str) -> dict[str, str]:
     """Build the host-controlled attribution shown on a public app."""
 
@@ -255,9 +269,20 @@ def runtime_config_token(
 ) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
     config = build_runtime_config(pod_id, app=app, api_url=api_url)
+    install = _public_app_install(app)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
     )
+    if install:
+        # Deploying a new install script has to reach pages already cached.
+        # Nothing else in the tag moves when only the host's own injection
+        # changes -- the release version does not, and no-cache revalidation
+        # would keep answering 304 against the old one.
+        token_payload = {
+            "config": config,
+            "branding": branding,
+            "install": hashlib.sha256(install.encode("utf-8")).hexdigest()[:12],
+        }
     payload = json.dumps(token_payload, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -298,6 +323,8 @@ def inject_runtime_config(
         injection += _public_app_social_metadata(app)
     if APP_BRANDING_SENTINEL not in text:
         injection += _public_app_branding_script(branding)
+    if APP_INSTALL_SENTINEL not in text:
+        injection += _public_app_install(app)
     if not injection:
         return text.encode("utf-8")
 
