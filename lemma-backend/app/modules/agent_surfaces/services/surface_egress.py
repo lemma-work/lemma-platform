@@ -54,6 +54,10 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.services.free_text_answer import (
+    remember_answer_will_be_typed,
+    tool_call_id_of,
+)
 from app.modules.agent_surfaces.services.surface_egress_target import (
     SurfaceEgressTargetMixin,
 )
@@ -369,6 +373,13 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     message=render_questions_as_text(plan),
                     metadata=metadata,
                 )
+                # Delivered as words, so words are the only way back.
+                # See `free_text_answer`.
+                await remember_answer_will_be_typed(
+                    self.conversation_service.conversation_repository,
+                    conversation_id=conversation_id,
+                    tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
+                )
             except Exception:
                 # The comment above says "surface it loudly"; this used to be a
                 # debug record that production never emitted. The question has
@@ -476,6 +487,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     event=target.event,
                     message=plan.to_plain_text(),
                     metadata=metadata,
+                )
+                # Delivered as words: "approve"/"deny" typed back is the answer.
+                await remember_answer_will_be_typed(
+                    self.conversation_service.conversation_repository,
+                    conversation_id=conversation_id,
+                    tool_call_id=tool_call_id_of(plan),
                 )
             except Exception:
                 # The docstring above promises this is "reported rather than

@@ -26,6 +26,9 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.services.free_text_answer import (
+    remember_free_text_answer_wanted,
+)
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     merge_other_answers,
 )
@@ -122,6 +125,17 @@ class SurfaceInteractionMixin:
             conversation_id = link.conversation_id
 
             if parsed.interaction_state == "other":
+                # Remember that they asked to type the answer. Without this the
+                # next message is indistinguishable from any other, and the only
+                # way to honour "Other" was to treat *every* typed message as an
+                # answer — which is how an unanswered question came to swallow
+                # whatever somebody said next. Recorded against the specific
+                # call, so it cannot be spent on a later, unrelated one.
+                await remember_free_text_answer_wanted(
+                    self.uow,
+                    conversation_id=conversation_id,
+                    tool_call_id=tool_call_id,
+                )
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
