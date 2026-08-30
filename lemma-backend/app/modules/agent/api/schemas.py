@@ -150,6 +150,7 @@ class ConversationResponse(BaseModel):
     status: ConversationStatus | None = None
     output: JsonValue | None = None
     metadata: JsonObject | None = None
+    is_archived: bool = False
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_finished_at: datetime | None = None
@@ -224,10 +225,13 @@ class CreateConversationRequest(BaseModel):
 
 
 class UpdateConversationRequest(BaseModel):
+    #: Send an explicit null (or a blank string) to clear a title and hand the
+    #: conversation back to auto-titling. An omitted field changes nothing.
     title: str | None = None
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     metadata: JsonObject | None = None
+    is_archived: bool | None = None
 
 
 class SendMessageRequest(BaseModel):

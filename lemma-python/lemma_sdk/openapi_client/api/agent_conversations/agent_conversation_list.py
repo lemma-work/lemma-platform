@@ -21,6 +21,7 @@ def _get_kwargs(
     status: ConversationStatus | None | Unset = UNSET,
     type_: ConversationType | None | Unset = UNSET,
     parent_id: None | Unset | UUID = UNSET,
+    archived: bool | Unset = False,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
@@ -60,6 +61,8 @@ def _get_kwargs(
     else:
         json_parent_id = parent_id
     params["parent_id"] = json_parent_id
+
+    params["archived"] = archived
 
     json_page_token: None | str | Unset
     if isinstance(page_token, Unset):
@@ -121,6 +124,7 @@ def sync_detailed(
     status: ConversationStatus | None | Unset = UNSET,
     type_: ConversationType | None | Unset = UNSET,
     parent_id: None | Unset | UUID = UNSET,
+    archived: bool | Unset = False,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[ConversationListResponse | ErrorResponse]:
@@ -129,7 +133,9 @@ def sync_detailed(
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead.
+    default; pass parent_id to list the children of a specific conversation instead. Archived
+    conversations are omitted too; pass archived=true for the archive, which is a separate list rather
+    than a tail on this one.
 
     Args:
         pod_id (UUID):
@@ -137,6 +143,7 @@ def sync_detailed(
         status (ConversationStatus | None | Unset):
         type_ (ConversationType | None | Unset):
         parent_id (None | Unset | UUID):
+        archived (bool | Unset):  Default: False.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -154,6 +161,7 @@ def sync_detailed(
         status=status,
         type_=type_,
         parent_id=parent_id,
+        archived=archived,
         page_token=page_token,
         limit=limit,
     )
@@ -173,6 +181,7 @@ def sync(
     status: ConversationStatus | None | Unset = UNSET,
     type_: ConversationType | None | Unset = UNSET,
     parent_id: None | Unset | UUID = UNSET,
+    archived: bool | Unset = False,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> ConversationListResponse | ErrorResponse | None:
@@ -181,7 +190,9 @@ def sync(
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead.
+    default; pass parent_id to list the children of a specific conversation instead. Archived
+    conversations are omitted too; pass archived=true for the archive, which is a separate list rather
+    than a tail on this one.
 
     Args:
         pod_id (UUID):
@@ -189,6 +200,7 @@ def sync(
         status (ConversationStatus | None | Unset):
         type_ (ConversationType | None | Unset):
         parent_id (None | Unset | UUID):
+        archived (bool | Unset):  Default: False.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -207,6 +219,7 @@ def sync(
         status=status,
         type_=type_,
         parent_id=parent_id,
+        archived=archived,
         page_token=page_token,
         limit=limit,
     ).parsed
@@ -220,6 +233,7 @@ async def asyncio_detailed(
     status: ConversationStatus | None | Unset = UNSET,
     type_: ConversationType | None | Unset = UNSET,
     parent_id: None | Unset | UUID = UNSET,
+    archived: bool | Unset = False,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[ConversationListResponse | ErrorResponse]:
@@ -228,7 +242,9 @@ async def asyncio_detailed(
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead.
+    default; pass parent_id to list the children of a specific conversation instead. Archived
+    conversations are omitted too; pass archived=true for the archive, which is a separate list rather
+    than a tail on this one.
 
     Args:
         pod_id (UUID):
@@ -236,6 +252,7 @@ async def asyncio_detailed(
         status (ConversationStatus | None | Unset):
         type_ (ConversationType | None | Unset):
         parent_id (None | Unset | UUID):
+        archived (bool | Unset):  Default: False.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -253,6 +270,7 @@ async def asyncio_detailed(
         status=status,
         type_=type_,
         parent_id=parent_id,
+        archived=archived,
         page_token=page_token,
         limit=limit,
     )
@@ -270,6 +288,7 @@ async def asyncio(
     status: ConversationStatus | None | Unset = UNSET,
     type_: ConversationType | None | Unset = UNSET,
     parent_id: None | Unset | UUID = UNSET,
+    archived: bool | Unset = False,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> ConversationListResponse | ErrorResponse | None:
@@ -278,7 +297,9 @@ async def asyncio(
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead.
+    default; pass parent_id to list the children of a specific conversation instead. Archived
+    conversations are omitted too; pass archived=true for the archive, which is a separate list rather
+    than a tail on this one.
 
     Args:
         pod_id (UUID):
@@ -286,6 +307,7 @@ async def asyncio(
         status (ConversationStatus | None | Unset):
         type_ (ConversationType | None | Unset):
         parent_id (None | Unset | UUID):
+        archived (bool | Unset):  Default: False.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -305,6 +327,7 @@ async def asyncio(
             status=status,
             type_=type_,
             parent_id=parent_id,
+            archived=archived,
             page_token=page_token,
             limit=limit,
         )

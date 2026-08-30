@@ -1,6 +1,6 @@
 'use client';
 
-import { use } from 'react';
+import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PanelLeftOpen, Plus } from '@/components/ui/icons';
 import { PodConversationList } from '@/components/conversations/pod-conversation-list';
@@ -17,6 +17,7 @@ export default function PodConversationsPage({
     const router = useRouter();
     const { data: pod } = usePod(podId);
     const { isCompact, toggleNav } = usePodLayout();
+    const [showArchived, setShowArchived] = useState(false);
 
     const startNewConversation = () => {
         router.push(`/pod/${podId}/conversations/new`);
@@ -41,6 +42,28 @@ export default function PodConversationsPage({
                         <h1 className="min-w-0 truncate text-sm font-medium leading-none text-[var(--text-primary)]">
                             Conversations
                         </h1>
+                        {/* Two lists, one control -- the archive is a place you
+                            switch to, not a filter you tick. */}
+                        <div className="segmented-control ml-2" role="group" aria-label="Conversation list">
+                            <button
+                                type="button"
+                                onClick={() => setShowArchived(false)}
+                                className="segmented-control-item"
+                                data-active={!showArchived}
+                                aria-pressed={!showArchived}
+                            >
+                                Active
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setShowArchived(true)}
+                                className="segmented-control-item"
+                                data-active={showArchived}
+                                aria-pressed={showArchived}
+                            >
+                                Archived
+                            </button>
+                        </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                         <Button variant="secondary" type="button" size="sm" className="gap-2" onClick={startNewConversation}>
@@ -56,6 +79,7 @@ export default function PodConversationsPage({
                     podName={pod?.name}
                     variant="page"
                     showHeader={false}
+                    archived={showArchived}
                 />
             </div>
         </div>

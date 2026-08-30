@@ -100,6 +100,7 @@ class ConversationRepository(Protocol):
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
+        archived: bool = False,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]: ...

@@ -171,6 +171,9 @@ export class ConversationsNamespace {
     // PROJECT). `type` filters by CHAT / TASK / PROJECT and composes with it.
     parent_id?: string | null;
     type?: ConversationType | null;
+    // The archive is a separate list, not a tail on this one: omit for the
+    // history, pass true for what has been put away.
+    archived?: boolean | null;
     limit?: number;
     page_token?: string | null;
   } = {}): Promise<ConversationListResponse> {
@@ -182,6 +185,7 @@ export class ConversationsNamespace {
           : options.agent_name,
         parent_id: options.parent_id,
         type: options.type,
+        archived: options.archived,
         limit: options.limit ?? 20,
         page_token: options.page_token,
       },

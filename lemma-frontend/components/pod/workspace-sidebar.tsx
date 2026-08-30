@@ -4,13 +4,17 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
     AppWindow,
+    Archive,
     Check,
     ChevronDown,
     ChevronsUpDown,
+    Edit,
     Home,
     PanelLeftClose,
+    Pin,
     Plus,
     Search,
     Share2,
@@ -56,7 +60,10 @@ import {
 } from '@/lib/hooks/use-datastores';
 import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
-import { useScopedConversations } from '@/lib/hooks/use-assistants';
+import { useScopedConversations, useUpdateConversation } from '@/lib/hooks/use-assistants';
+import { usePinnedConversations } from '@/lib/hooks/use-pinned-conversations';
+import { ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { identityHueClass } from '@/lib/utils/resource-icon-value';
 import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 import {
@@ -393,11 +400,23 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         [conversationHistory?.items, openedConversationId, scopedControllerConversations],
     );
 
-    const visibleConversations = useMemo(
-        () => filterSidebarConversations(conversations, conversationFilter),
-        [conversationFilter, conversations],
-    );
+    const {
+        pinned: pinnedConversations,
+        isPinned,
+        toggle: togglePinned,
+        unpin,
+        canPin,
+    } = usePinnedConversations(podId, conversations);
+
     const hasFilter = conversationFilter.trim().length > 0;
+    // Filtering searches the whole history, pins included: while you are
+    // looking for something, "pinned" is not the question you are asking.
+    const showPinnedGroup = !hasFilter && pinnedConversations.length > 0;
+    const visibleConversations = useMemo(
+        () => filterSidebarConversations(conversations, conversationFilter)
+            .filter((conversation) => !showPinnedGroup || !isPinned(conversation.id)),
+        [conversationFilter, conversations, isPinned, showPinnedGroup],
+    );
     const hasVisibleConversations = visibleConversations.length > 0;
 
     /* Reserve the responder gutter for the whole list, or for none of it.
@@ -1055,6 +1074,32 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         </div>
                     ) : null}
 
+                    {showPinnedGroup ? (
+                        <>
+                            <div className="shrink-0 px-2 pt-2">
+                                <span className="text-xs leading-5 text-[var(--text-tertiary)]">Pinned</span>
+                            </div>
+                            <div className="shrink-0 px-3 pt-1.5">
+                                {pinnedConversations.map((conversation) => (
+                                    <ConversationRow
+                                        key={conversation.id}
+                                        conversation={conversation}
+                                        active={isConversationRoute && openedConversationId === conversation.id}
+                                        onOpen={() => openConversation(conversation.id)}
+                                        mark={getConversationMark(conversation, agentsById)}
+                                        showResponder={showResponderSlot}
+                                        podId={podId}
+                                        pin={{
+                                            pinned: true,
+                                            toggle: () => togglePinned(conversation.id),
+                                            unpin: () => unpin(conversation.id),
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        </>
+                    ) : null}
+
                     <div className="shrink-0 flex items-center justify-between px-2 pt-2">
                         <span className="text-xs leading-5 text-[var(--text-tertiary)]">Recents</span>
                         <div
@@ -1149,6 +1194,12 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         onOpen={() => openConversation(conversation.id)}
                                         mark={getConversationMark(conversation, agentsById)}
                                         showResponder={showResponderSlot}
+                                        podId={podId}
+                                        pin={canPin ? {
+                                            pinned: isPinned(conversation.id),
+                                            toggle: () => togglePinned(conversation.id),
+                                            unpin: () => unpin(conversation.id),
+                                        } : undefined}
                                     />
                                 ))}
                             </>
@@ -1299,6 +1350,8 @@ export function ConversationRow({
     onOpen,
     mark,
     showResponder,
+    podId,
+    pin,
 }: {
     conversation: Conversation;
     active: boolean;
@@ -1306,6 +1359,17 @@ export function ConversationRow({
     mark?: ConversationMark | null;
     /** Reserve the responder slot. The sidebar sets it; the agent page does not. */
     showResponder?: boolean;
+    /**
+     * Present where the row can be acted on, which is what draws the menu. The
+     * pod is what the write needs and what tells the two callers apart: the
+     * sidebar owns this history, the agent page's rail is a read of it.
+     */
+    podId?: string;
+    /**
+     * Pinning lives on the device, so the row is told what it is rather than
+     * asking: the list that holds the pins is the one that can change them.
+     */
+    pin?: { pinned: boolean; toggle: () => void; unpin: () => void };
 }) {
     const signal = getConversationSignal(conversation);
     /* Only an agent gets drawn. The assistant is the default responder — in most
@@ -1317,60 +1381,208 @@ export function ConversationRow({
        one left edge, and the empty ones carry the status dot they always had. */
     const face = showResponder && mark?.kind === 'agent' ? mark : null;
 
+    const updateConversation = useUpdateConversation();
+    // Non-null *is* the editing state: a draft and a "renaming" flag are the
+    // same fact, and holding them apart is how they disagree.
+    const [draftTitle, setDraftTitle] = useState<string | null>(null);
+    const committed = useRef(false);
+    const storedTitle = conversation.title || '';
+
+    const beginRename = () => {
+        committed.current = false;
+        setDraftTitle(storedTitle);
+    };
+
+    // Enter commits and so does leaving the field; the guard is because both
+    // can happen for one edit, and the second would be a write of a value the
+    // row no longer holds.
+    const finishRename = (draft: string, { commit }: { commit: boolean }) => {
+        if (committed.current) return;
+        committed.current = true;
+        setDraftTitle(null);
+        const next = draft.trim();
+        if (!commit || !podId || next === storedTitle) return;
+        updateConversation.mutate(
+            {
+                podId,
+                conversationId: conversation.id,
+                // Blank is not a name. Null is what makes the conversation
+                // eligible for auto-titling again, so clearing the field asks
+                // for a generated title rather than storing an empty one.
+                data: { title: next || null },
+            },
+            { onError: (error) => toast.error(`Could not rename: ${error.message}`) },
+        );
+    };
+
+    const setArchived = (isArchived: boolean) => {
+        if (!podId) return;
+        updateConversation.mutate(
+            { podId, conversationId: conversation.id, data: { is_archived: isArchived } },
+            {
+                onSuccess: () => {
+                    if (!isArchived) return;
+                    // A conversation you have put away is not one you are
+                    // keeping at hand.
+                    pin?.unpin();
+                    // Archiving is this product's answer to deleting, so the way
+                    // back is offered at the moment it is least trouble rather
+                    // than left to be found in a view nobody has opened yet.
+                    toast.success('Conversation archived', {
+                        action: { label: 'Undo', onClick: () => setArchived(false) },
+                    });
+                },
+                onError: (error) =>
+                    toast.error(
+                        `Could not ${isArchived ? 'archive' : 'restore'}: ${error.message}`,
+                    ),
+            },
+        );
+    };
+
+    if (draftTitle !== null) {
+        return (
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    finishRename(draftTitle, { commit: true });
+                }}
+                className={cn(
+                    'lemma-sidebar-row workspace-sidebar-conversation-row',
+                    showResponder ? 'workspace-sidebar-conversation-row-marked' : null,
+                )}
+            >
+                {/* The gutter stays, empty. Editing a title should move the
+                    title as little as possible -- ideally not at all. */}
+                <span
+                    className={cn('shrink-0', showResponder ? 'w-5' : 'w-3.5')}
+                    aria-hidden="true"
+                />
+                <input
+                    autoFocus
+                    value={draftTitle}
+                    aria-label="Conversation title"
+                    onChange={(event) => setDraftTitle(event.target.value)}
+                    onBlur={() => finishRename(draftTitle, { commit: true })}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                            event.preventDefault();
+                            finishRename(draftTitle, { commit: false });
+                        }
+                    }}
+                    /* `inline-edit-field` is the shared skin for editing in
+                       place. No type size of its own either: the form around it
+                       carries the row's measure and a form control inherits it,
+                       so the title is set in exactly what it was a moment ago. */
+                    className="inline-edit-field min-w-0 flex-1 border-0 p-0 text-[var(--text-primary)]"
+                />
+            </form>
+        );
+    }
+
     return (
-        <button
-            type="button"
-            onClick={onOpen}
-            data-active={active ? 'true' : undefined}
-            title={conversation.title || 'Untitled conversation'}
-            className={cn(
-                'lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring',
-                showResponder ? 'workspace-sidebar-conversation-row-marked' : null,
-            )}
-        >
-            {showResponder ? (
-                <span className="workspace-sidebar-conversation-mark shrink-0">
-                    {face ? (
-                        <>
-                            <ResourceIcon
-                                iconUrl={face.iconUrl}
-                                alt=""
-                                label={face.label}
-                                identityKind="being"
-                                identitySeed={face.seed}
-                                identitySize={20}
-                                className="h-5 w-5 shrink-0 rounded-md"
-                            />
-                            {/* The face carries *who*, the pip carries *what this
-                                run is doing*. Separate objects on purpose: the
-                                identity system's own `state` describes the agent,
-                                and an agent with three runs in flight is not "the
-                                state" of any one of them. */}
-                            {signal.tone !== 'none' ? (
-                                <span
-                                    className="workspace-sidebar-conversation-pip"
-                                    data-tone={signal.tone}
-                                    data-pulse={signal.pulse ? 'true' : undefined}
-                                    aria-hidden="true"
+        <div className="group/conversation relative">
+            <button
+                type="button"
+                onClick={onOpen}
+                data-active={active ? 'true' : undefined}
+                title={conversation.title || 'Untitled conversation'}
+                className={cn(
+                    'lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring',
+                    showResponder ? 'workspace-sidebar-conversation-row-marked' : null,
+                    // Reserved whether or not the menu is showing: a title that
+                    // reflows when the pointer arrives is a title that moves while
+                    // you are reading it.
+                    podId ? 'pe-8' : null,
+                )}
+            >
+                {showResponder ? (
+                    <span className="workspace-sidebar-conversation-mark shrink-0">
+                        {face ? (
+                            <>
+                                <ResourceIcon
+                                    iconUrl={face.iconUrl}
+                                    alt=""
+                                    label={face.label}
+                                    identityKind="being"
+                                    identitySeed={face.seed}
+                                    identitySize={20}
+                                    className="h-5 w-5 shrink-0 rounded-md"
                                 />
-                            ) : null}
-                        </>
-                    ) : (
-                        <span className="flex h-5 w-5 items-center justify-center" aria-hidden="true">
-                            <ConversationSignalDot signal={signal} />
-                        </span>
-                    )}
+                                {/* The face carries *who*, the pip carries *what this
+                                    run is doing*. Separate objects on purpose: the
+                                    identity system's own `state` describes the agent,
+                                    and an agent with three runs in flight is not "the
+                                    state" of any one of them. */}
+                                {signal.tone !== 'none' ? (
+                                    <span
+                                        className="workspace-sidebar-conversation-pip"
+                                        data-tone={signal.tone}
+                                        data-pulse={signal.pulse ? 'true' : undefined}
+                                        aria-hidden="true"
+                                    />
+                                ) : null}
+                            </>
+                        ) : (
+                            <span className="flex h-5 w-5 items-center justify-center" aria-hidden="true">
+                                <ConversationSignalDot signal={signal} />
+                            </span>
+                        )}
+                    </span>
+                ) : (
+                    <span className="flex w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+                        <ConversationSignalDot signal={signal} />
+                    </span>
+                )}
+                <span className="min-w-0 flex-1 truncate">
+                    {conversation.title || 'Untitled conversation'}
                 </span>
-            ) : (
-                <span className="flex w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-                    <ConversationSignalDot signal={signal} />
+                {signal.label ? <span className="sr-only">{signal.label}</span> : null}
+            </button>
+            {podId ? (
+                /* Quiet until wanted: a column of fifteen rows each wearing a
+                   control is a column of controls, not a history. It stays out
+                   while the menu is open, or the thing you are aiming at vanishes
+                   under your cursor. */
+                <span className="absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/conversation:opacity-100 has-[[data-state=open]]:opacity-100">
+                    <ResourceActionsMenu
+                        ariaLabel={`Actions for ${conversation.title || 'this conversation'}`}
+                        triggerClassName="h-6 w-6"
+                        align="start"
+                    >
+                        {pin ? (
+                            <DropdownMenuItem
+                                onSelect={(event) => {
+                                    event.preventDefault();
+                                    pin.toggle();
+                                }}
+                            >
+                                <Pin className="mr-2 h-4 w-4" />
+                                {pin.pinned ? 'Unpin' : 'Pin'}
+                            </DropdownMenuItem>
+                        ) : null}
+                        <DropdownMenuItem
+                            onSelect={(event) => {
+                                event.preventDefault();
+                                beginRename();
+                            }}
+                        >
+                            <Edit className="mr-2 h-4 w-4" />
+                            Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                            onSelect={(event) => {
+                                event.preventDefault();
+                                setArchived(true);
+                            }}
+                        >
+                            <Archive className="mr-2 h-4 w-4" />
+                            Archive
+                        </DropdownMenuItem>
+                    </ResourceActionsMenu>
                 </span>
-            )}
-            <span className="min-w-0 flex-1 truncate">
-                {conversation.title || 'Untitled conversation'}
-            </span>
-            {signal.label ? <span className="sr-only">{signal.label}</span> : null}
-        </button>
+            ) : null}
+        </div>
     );
 }
 

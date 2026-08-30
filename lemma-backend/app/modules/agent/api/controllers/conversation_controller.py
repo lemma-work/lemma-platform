@@ -203,7 +203,8 @@ async def create_conversation(
         "(or pod_default) to list default pod assistant conversations, or "
         "pass a name to list conversations for a specific pod agent. Child "
         "(sub-agent) conversations are omitted by default; pass parent_id to "
-        "list the children of a specific conversation instead."
+        "list the children of a specific conversation instead. Archived "
+        "conversations are omitted; pass archived=true for the archive."
     ),
 )
 async def list_conversations(
@@ -215,6 +216,7 @@ async def list_conversations(
     run_status: ConversationStatus | None = Query(default=None, alias="status"),
     conversation_type: ConversationType | None = Query(default=None, alias="type"),
     parent_id: UUID | None = Query(default=None),
+    archived: bool = Query(default=False),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -228,6 +230,7 @@ async def list_conversations(
             query_params=request.query_params.multi_items(),
         ),
         parent_id=parent_id,
+        archived=archived,
         cursor=parse_uuid_page_token(page_token),
         limit=limit,
     )
@@ -282,6 +285,10 @@ async def update_conversation(
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
+    # Null is not a state a conversation can be in: the field is optional so
+    # omitting it means "leave it alone", and an explicit null means the same.
+    if update_payload.get("is_archived") is None:
+        update_payload.pop("is_archived", None)
     conversation = await service.update_conversation(
         conversation_id=conversation_id,
         user_id=user.id,
