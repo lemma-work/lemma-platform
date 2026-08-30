@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { appIndexQueryKey } from '@/lib/hooks/use-app';
 import { buildAppThemeMessage } from '@/lib/app/app-theme';
+import { APP_INSTALL_REQUEST_MESSAGE, appInstallUrl } from '@/lib/app/app-install';
 import { useProfile } from '@/lib/hooks/use-user';
 import { crossSiteFramesCarryCookies } from '@/lib/desktop/local-capabilities';
 import { trackAppOpened } from '@/lib/analytics/onboarding';
@@ -95,6 +96,27 @@ export function AppFrame({
         if (!frameLoaded) return;
         postAppTheme();
     }, [frameLoaded, postAppTheme]);
+
+    // The app's install offer, handed back out to a top-level tab. The frame
+    // is sandboxed without `allow-popups-to-escape-sandbox`, so a tab it opened
+    // for itself would still be sandboxed and still could not install -- the
+    // workspace has to be the one to open it. See `lib/app/app-install.ts`.
+    useEffect(() => {
+        let origin: string;
+        try {
+            origin = new URL(url, window.location.href).origin;
+        } catch {
+            return;
+        }
+        const onMessage = (event: MessageEvent) => {
+            if (event.origin !== origin) return;
+            if (event.source !== iframeRef.current?.contentWindow) return;
+            if (!event.data || event.data.type !== APP_INSTALL_REQUEST_MESSAGE) return;
+            window.open(appInstallUrl(url), '_blank', 'noopener');
+        };
+        window.addEventListener('message', onMessage);
+        return () => window.removeEventListener('message', onMessage);
+    }, [url]);
 
     const copyLink = async () => {
         try {
@@ -185,7 +207,7 @@ export function AppFrame({
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
-                                            <a href={url} target="_blank" rel="noreferrer">
+                                            <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
                                                 <ExternalLink className="h-4 w-4" />
                                             </a>
                                         </Button>
@@ -236,7 +258,7 @@ export function AppFrame({
                                 className="mt-4 gap-2"
                                 onClick={() => trackAppOpened(profile?.created_at ?? null)}
                             >
-                                <a href={url} target="_blank" rel="noreferrer">
+                                <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
                                     <ExternalLink className="h-4 w-4" />
                                     Open app
                                 </a>
