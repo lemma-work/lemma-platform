@@ -181,22 +181,6 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
-          # A nightly needs a version of its own, and an ordered one.
-          #
-          # Every shared build shipped as plain `inputs.version`, so a nightly
-          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
-          # told no: the channel could never update itself, and the update path
-          # only ever ran on release day. The run number is monotonic and reads
-          # the same in every job of one run, so the three places that stamp a
-          # version -- the host pack marker, the release manifest and the app
-          # bundle -- reach the same string without passing it between jobs.
-          #
-          # `-nightly.N` also sorts *below* the release it derives from, so a
-          # nightly never presents itself as newer than the stable of the same
-          # number.
-          if [[ "${PUBLISH}" != "true" ]]; then
-            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
-          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -448,22 +432,6 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
-          # A nightly needs a version of its own, and an ordered one.
-          #
-          # Every shared build shipped as plain `inputs.version`, so a nightly
-          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
-          # told no: the channel could never update itself, and the update path
-          # only ever ran on release day. The run number is monotonic and reads
-          # the same in every job of one run, so the three places that stamp a
-          # version -- the host pack marker, the release manifest and the app
-          # bundle -- reach the same string without passing it between jobs.
-          #
-          # `-nightly.N` also sorts *below* the release it derives from, so a
-          # nightly never presents itself as newer than the stable of the same
-          # number.
-          if [[ "${PUBLISH}" != "true" ]]; then
-            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
-          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -688,22 +656,6 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
-          # A nightly needs a version of its own, and an ordered one.
-          #
-          # Every shared build shipped as plain `inputs.version`, so a nightly
-          # asking the update feed whether 0.7.1 was newer than 0.7.1 was always
-          # told no: the channel could never update itself, and the update path
-          # only ever ran on release day. The run number is monotonic and reads
-          # the same in every job of one run, so the three places that stamp a
-          # version -- the host pack marker, the release manifest and the app
-          # bundle -- reach the same string without passing it between jobs.
-          #
-          # `-nightly.N` also sorts *below* the release it derives from, so a
-          # nightly never presents itself as newer than the stable of the same
-          # number.
-          if [[ "${PUBLISH}" != "true" ]]; then
-            version="${version}-nightly.${GITHUB_RUN_NUMBER}"
-          fi
           if [[ "${PUBLISH}" == "true" ]]; then
             image_tag="v${version}"
           else
@@ -1078,11 +1030,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+          runtime_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
             desktop/runtime/lemma-local.json)"
-          [[ -n "${version}" ]]
+          [[ -n "${runtime_version}" ]]
+
+          # The invariant that broke a shipped nightly, now checked here.
+          #
+          # Everything the app does with a runtime compares it against
+          # `CARGO_PKG_VERSION`, which comes from `[workspace.package]` in
+          # desktop/Cargo.toml and from nowhere else. A nightly once stamped the
+          # runtime manifest and the app bundle and not the crate, so a freshly
+          # installed build met its own runtime and refused it: "This copy of
+          # Lemma and its runtime do not match." Nothing in the build noticed,
+          # because nothing compared these two numbers.
+          crate_version="$(python3 - <<'PY'
+          import re, pathlib
+          text = pathlib.Path("desktop/Cargo.toml").read_text()
+          section = text.split("[workspace.package]", 1)[1]
+          print(re.search(r'^version\s*=\s*"([^"]+)"', section, re.M).group(1))
+          PY
+          )"
+          if [[ "${runtime_version}" != "${crate_version}" ]]; then
+            echo "::error title=Runtime and app versions disagree::the runtime \
+          manifest is ${runtime_version} and the desktop crate is \
+          ${crate_version}; the app would refuse its own runtime"
+            exit 1
+          fi
+
+          # Only the *bundle* version carries the nightly stamp. Tauri takes
+          # `package_info().version` -- what the updater compares -- from the
+          # config's `version`, so this is enough to make one nightly newer than
+          # the last. The runtime keeps the plain version, which means it also
+          # keeps matching `CARGO_PKG_VERSION`, and a 1.7 GiB runtime is not
+          # re-downloaded for every nightly: install compares artifact digests,
+          # so a runtime whose contents actually changed still replaces itself.
+          version="${runtime_version}-nightly.${GITHUB_RUN_NUMBER}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Building Lemma ${version}"
+          echo "runtime_version=${runtime_version}" >> "$GITHUB_OUTPUT"
+          echo "Building Lemma ${version} against runtime ${runtime_version}"
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -1280,7 +1265,10 @@ jobs:
           # downloading anything. Unknown top-level keys are ignored by the
           # updater.
           manifest = json.loads(pathlib.Path("desktop/runtime/lemma-local.json").read_text())
-          if manifest["version"] != version:
+          # The app bundle carries the nightly stamp and the runtime does not,
+          # so these differ by design -- but only by that suffix. Anything else
+          # means the DMG was built against a runtime that is not this one.
+          if not version.startswith(f"{manifest['version']}-nightly."):
               raise SystemExit(
                   f"runtime manifest is {manifest['version']}, app is {version}"
               )
