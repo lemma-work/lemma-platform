@@ -55,17 +55,19 @@ function fakeClient(options: { status?: string; podCwd?: string | null } = {}) {
     (running as { pod_cwd?: string | null }).pod_cwd = options.podCwd;
   }
 
-  const appendMessage = vi.fn(async () => ({
-    conversation_id: "c1",
-    agent_run_id: "run-1",
-    started_new_run: false,
-  }));
+  const appendMessage = vi.fn(
+    async (_conversationId: string, _payload: { content?: string }, _options?: unknown) => ({
+      conversation_id: "c1",
+      agent_run_id: "run-1",
+      started_new_run: false,
+    }),
+  );
   // A send owns its stream and that stream ends with the turn; a resume
   // attaches to a run still working, so it stays open.
   const sendMessageStream = vi.fn(async () => finishedTurn());
   const resumeStream = vi.fn(async () => neverEndingStream());
   const get = vi.fn(async () => running);
-  const upload = vi.fn(async (file: File) => ({
+  const upload = vi.fn(async (file: File, _options?: { directoryPath?: string }) => ({
     id: `f-${file.name}`,
     name: file.name,
     path: `${POD_CWD}/${file.name}`,
@@ -207,9 +209,7 @@ describe("steering a run that is already working", () => {
     await settle();
 
     expect(upload).toHaveBeenCalledTimes(1);
-    const content = String(
-      (appendMessage.mock.calls[0]?.[1] as { content?: string } | undefined)?.content ?? "",
-    );
+    const content = String(appendMessage.mock.calls[0]?.[1]?.content ?? "");
     expect(content).toContain("use this too");
     expect(content).toContain("report.txt");
   });

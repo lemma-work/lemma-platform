@@ -2,6 +2,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LemmaClient } from "../client.js";
+import type { Conversation } from "../types.js";
 import {
   useAssistantSession,
   type UseAssistantSessionResult,
@@ -251,7 +252,12 @@ describe("assistant session stream recovery", () => {
       return null;
     }
 
-    const knownConversation = { id: "conv-1", pod_id: "pod-1", status: "RUNNING" };
+    // Only the fields `resumeIfRunning` reads; the cast is what the other
+    // suites use for the same reason, and `tsconfig.test.json` typechecks
+    // these files even though `tsconfig.json` does not.
+    const knownConversation = {
+      id: "conv-1", pod_id: "pod-1", status: "RUNNING",
+    } as unknown as Conversation;
 
     await render(createElement(Harness));
     await act(async () => {
