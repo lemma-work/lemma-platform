@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import textwrap
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from app.core.fonts import load_font
 
 WIDTH = 1200
 HEIGHT = 630
@@ -15,27 +17,6 @@ _MUTED = "#595851"
 _PAPER = "#F3F1EA"
 _PANEL = "#E9E6DC"
 _CARD = "#F8F7F2"
-
-
-def _font(size: int, *, bold: bool = False):
-    candidates = (
-        (
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            if bold
-            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-        ),
-        (
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-            if bold
-            else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
-        ),
-    )
-    for candidate in candidates:
-        try:
-            return ImageFont.truetype(candidate, size)
-        except OSError:
-            continue
-    return ImageFont.load_default(size=size)
 
 
 def _clean(value: str | None, fallback: str, limit: int) -> str:
@@ -58,17 +39,17 @@ def render_social_card(*, pod_name: str, source_label: str) -> bytes:
     draw.rounded_rectangle((64, 76, 74, 90), radius=2, fill=_INK)
     draw.rounded_rectangle((79, 66, 89, 90), radius=2, fill=_INK)
     draw.rounded_rectangle((94, 56, 104, 90), radius=2, fill=_INK)
-    draw.text((120, 58), "Lemma", font=_font(27, bold=True), fill=_INK)
+    draw.text((120, 58), "Lemma", font=load_font(27, bold=True), fill=_INK)
 
     draw.text(
         (64, 166),
         "RUN IT ON LEMMA",
-        font=_font(19, bold=True),
+        font=load_font(19, bold=True),
         fill=_MUTED,
         spacing=3,
     )
     title_lines = textwrap.wrap(name, width=24, max_lines=2, placeholder="…") or [name]
-    title_font = _font(74 if max(map(len, title_lines)) <= 22 else 64, bold=True)
+    title_font = load_font(74 if max(map(len, title_lines)) <= 22 else 64, bold=True)
     draw.multiline_text(
         (60, 232),
         "\n".join(title_lines),
@@ -81,10 +62,10 @@ def render_social_card(*, pod_name: str, source_label: str) -> bytes:
     draw.text(
         (64, 544),
         "Apps · agents · workflows · data",
-        font=_font(18),
+        font=load_font(18),
         fill=_MUTED,
     )
-    draw.text((64, 579), label, font=_font(15), fill=_INK)
+    draw.text((64, 579), label, font=load_font(15), fill=_INK)
 
     # A compact app/workflow motif.
     draw.rounded_rectangle(
