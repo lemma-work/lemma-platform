@@ -96,6 +96,8 @@ export interface AgentControllerOptions {
   onEvent?: (event: SseRawEvent, payload: unknown | null) => void;
   onStatus?: (status: string) => void;
   onMessage?: (message: ConversationMessage) => void;
+  /** The conversation was renamed mid-stream by the server's title generator. */
+  onTitle?: (title: string, conversationId: string | null) => void;
   onError?: (error: unknown) => void;
 }
 
@@ -342,6 +344,15 @@ export class AgentController {
     if (normalized) {
       this.options.onStatus?.(normalized);
     }
+  }
+
+  /** Apply a rename that arrived on the stream to the record we already hold. */
+  private setConversationTitle(title: string, conversationId: string | null): void {
+    const conversation = this.state.conversation;
+    if (conversation && (!conversationId || conversation.id === conversationId)) {
+      this.patch({ conversation: { ...conversation, title } });
+    }
+    this.options.onTitle?.(title, conversationId);
   }
 
   // -- streaming text buffering ----------------------------------------------
@@ -697,6 +708,12 @@ export class AgentController {
             this.clearStreamingThinking();
             this.clearStreamingTool();
           }
+        }
+        if (parsed.title) {
+          this.setConversationTitle(
+            parsed.title,
+            parsed.conversationId ?? streamConversationId ?? this.state.conversationId,
+          );
         }
         if (parsed.status) {
           this.setConversationStatus(parsed.status);

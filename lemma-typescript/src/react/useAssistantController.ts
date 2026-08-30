@@ -873,6 +873,21 @@ export function useAssistantController({
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
   }, []);
 
+  // The server generates a title from the first user message and publishes it
+  // on the conversation channel while the run is still streaming. Applying it
+  // here is what renames the row in place mid-turn instead of leaving the local
+  // stand-in up until the next list fetch. Deliberately not `touchConversation`:
+  // a rename is not activity, and moving `updated_at` would reorder the list
+  // under the person reading it.
+  const handleConversationTitle = useCallback((title: string, conversationId: string | null) => {
+    if (!conversationId) return;
+    setConversations((previous) => previous.map((conversation) => (
+      conversation.id === conversationId && conversation.title !== title
+        ? { ...conversation, title }
+        : conversation
+    )));
+  }, []);
+
   const assistantSession = useAssistantSession({
     client,
     podId: scope.podId ?? undefined,
@@ -883,6 +898,7 @@ export function useAssistantController({
     instructions,
     conversationId: activeConversationId ?? undefined,
     autoLoad: false,
+    onTitle: handleConversationTitle,
     onError: handleAssistantSessionError,
   });
 

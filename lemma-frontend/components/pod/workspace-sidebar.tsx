@@ -57,6 +57,7 @@ import {
 import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
+import { useTypedRename } from '@/lib/hooks/use-typed-rename';
 import { identityHueClass } from '@/lib/utils/resource-icon-value';
 import { LEM_SEED, agentIdentitySeed } from '@/lib/identity/seeded-identity';
 import {
@@ -1316,13 +1317,24 @@ export function ConversationRow({
        draws *nothing*. The slot stays reserved either way so every title keeps
        one left edge, and the empty ones carry the status dot they always had. */
     const face = showResponder && mark?.kind === 'agent' ? mark : null;
+    /* The server names a conversation a few seconds after it starts, and that
+       rename arrives on the live stream rather than on a refetch. Typed in, so
+       the row visibly gets its name instead of silently swapping one. */
+    const label = conversation.title || 'Untitled conversation';
+    const typedLabel = useTypedRename(label);
+    /* Named off the settled title, so a row focused mid-animation never offers a
+       half-typed name — and carrying the status the dot shows visually, which
+       is what the sibling `sr-only` span used to do before a name existed to
+       fold it into. */
+    const rowLabel = signal.label ? `${label}, ${signal.label}` : label;
 
     return (
         <button
             type="button"
             onClick={onOpen}
             data-active={active ? 'true' : undefined}
-            title={conversation.title || 'Untitled conversation'}
+            title={label}
+            aria-label={rowLabel}
             className={cn(
                 'lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring',
                 showResponder ? 'workspace-sidebar-conversation-row-marked' : null,
@@ -1367,9 +1379,8 @@ export function ConversationRow({
                 </span>
             )}
             <span className="min-w-0 flex-1 truncate">
-                {conversation.title || 'Untitled conversation'}
+                {typedLabel}
             </span>
-            {signal.label ? <span className="sr-only">{signal.label}</span> : null}
         </button>
     );
 }
