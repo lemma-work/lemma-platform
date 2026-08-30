@@ -1,60 +1,89 @@
 """A release should not end every conversation in flight.
 
-A worker on its way out used to finalize each in-flight run FAILED, and streaq
-recorded the interrupted job as *succeeded* so nothing redelivered it. Shipping
-a version therefore terminated every agent run on the box, and each person had
-to ask again.
+A worker on its way out used to finalize each in-flight run FAILED, and because
+`process_agent_run` swallowed the CancelledError, streaq saw a task that
+returned and XACKed it — so nothing redelivered it either. Shipping a version
+terminated every agent run on the box and each person had to ask again.
 
-Everything a run did is already durable — messages are persisted as they stream
-and history is rebuilt from the database on every run — so the work does not
-need re-doing, only picking back up.
+Nothing needs re-doing to fix that, and nothing needs building: streaq already
+relinquishes a task cancelled by the shutdown grace period, leaving it in the
+pending list for the next worker's XAUTOCLAIM. Messages are persisted as they
+stream and history is rebuilt from the database on every run, so the worker that
+reclaims the job reconstructs exactly the context the interrupted one had.
+
+All this takes is letting the cancellation out.
 """
 
 from __future__ import annotations
+
+import ast
+import inspect
+import textwrap
 
 import pytest
 
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
-    RESUMABLE_AGENT_RUN_STATUSES,
-    TERMINAL_AGENT_RUN_STATUSES,
     AgentRunStatus,
-    ConversationStatus,
 )
 
 pytestmark = pytest.mark.unit
 
 
-class TestInterruptedIsItsOwnThing:
-    def test_it_is_not_terminal(self) -> None:
-        """Terminal would stop `finish_agent_run` transitioning out of it, which
-        is the transition the whole feature is."""
-        assert AgentRunStatus.INTERRUPTED not in TERMINAL_AGENT_RUN_STATUSES
+class TestTheCancellationReachesStreaq:
+    def test_the_task_handler_does_not_catch_it(self) -> None:
+        """A `except asyncio.CancelledError` here is the whole bug: streaq only
+        relinquishes a task that was actually cancelled."""
+        from app.modules.agent.events import handlers
 
-    def test_it_is_not_active(self) -> None:
-        """Active holds the conversation's one run slot. A person who gave up
-        waiting and said something else must be able to start a run."""
-        assert AgentRunStatus.INTERRUPTED not in ACTIVE_AGENT_RUN_STATUSES
+        # Parsed, not grepped: the comment above the call says the word too, and
+        # a substring check would pass with the handler right back in place.
+        tree = ast.parse(
+            textwrap.dedent(inspect.getsource(handlers.process_agent_run.fn))
+        )
+        caught = {
+            name.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ExceptHandler)
+            for name in ast.walk(node.type or ast.Constant(None))
+            if isinstance(name, ast.Name)
+        } | {
+            node.type.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ExceptHandler)
+            and isinstance(node.type, ast.Attribute)
+        }
 
-    def test_it_is_the_status_a_worker_resumes_from(self) -> None:
-        assert AgentRunStatus.INTERRUPTED in RESUMABLE_AGENT_RUN_STATUSES
+        assert "CancelledError" not in caught
 
-    def test_no_terminal_status_is_resumable(self) -> None:
-        """Resuming a completed or stopped run would re-run finished work."""
-        assert not (RESUMABLE_AGENT_RUN_STATUSES & TERMINAL_AGENT_RUN_STATUSES)
+    async def test_execute_lets_it_out(self, monkeypatch) -> None:
+        from app.modules.agent.services import agent_runner_service as module
 
-    def test_the_conversation_has_no_matching_state(self) -> None:
-        """Deliberate: the conversation stays RUNNING while a run is parked,
-        because it is going to continue. A new user-visible status would reach
-        the frontend, which switches on these values."""
-        assert not hasattr(ConversationStatus, "INTERRUPTED")
+        source = inspect.getsource(module.AgentRunnerService.execute)
+
+        # Re-raised for anything that is not an ordinary Exception -- which is
+        # cancellation, and nothing else.
+        assert "raise" in source
+
+    def test_a_reclaimed_run_is_still_in_a_state_execute_accepts(self) -> None:
+        """The run is deliberately left RUNNING when the worker goes away: that
+        is the state the worker reclaiming the job expects to find. A status
+        change would need a claim, an index dance, and a sweep to drive it."""
+        assert AgentRunStatus.RUNNING in ACTIVE_AGENT_RUN_STATUSES
+
+    def test_there_is_no_resume_sweep_left(self) -> None:
+        """The queue redelivers. A cron that re-enqueues duplicates it, and the
+        one that existed could silently enqueue nothing: streaq publishes with
+        `SET NX`, so re-enqueueing under a finished job's id is dropped."""
+        import importlib.util
+
+        assert importlib.util.find_spec("app.modules.agent.services.run_resume") is None
 
 
 class TestAnInterruptedToolCallDoesNotInviteARepeat:
     def test_the_model_is_not_told_to_run_it_again(self) -> None:
-        """It was: "Run it again if you still need the result." A run
-        interrupted mid-send that is told that sends twice — and now that runs
-        resume rather than fail, that text is reached far more often."""
+        """Runs resume now, so this text is reached far more often. The tool may
+        well have succeeded; all that is known is that no result was recorded."""
         from uuid import uuid7
 
         from pydantic_ai.messages import ModelRequest, ToolReturnPart
@@ -99,4 +128,3 @@ class TestAnInterruptedToolCallDoesNotInviteARepeat:
         )
         assert "Run it again" not in returns
         assert "outcome is unknown" in returns
-        assert "Check the current state" in returns

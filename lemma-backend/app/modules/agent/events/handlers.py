@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID
 
 from faststream import Depends, Logger
@@ -42,10 +41,6 @@ from app.modules.datastore.contracts import (
     DatastoreFileCreatedEvent,
     DatastoreFileDeletedEvent,
     DatastoreFileUpdatedEvent,
-)
-from app.modules.agent.services.run_resume import (
-    agent_run_job_id,
-    resume_parked_agent_runs,
 )
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.domain.events import (
@@ -99,6 +94,10 @@ _FILE_WRITE_EVENT_TYPES = frozenset(
         DatastoreFileDeletedEvent.get_event_type(),
     }
 )
+
+
+def agent_run_job_id(agent_run_id: UUID) -> str:
+    return f"agent-run:{agent_run_id}"
 
 
 @reliable_redis_stream_subscriber(
@@ -314,29 +313,20 @@ async def process_agent_run(
     )
     from app.composition.agent_surface_runtime import build_progress_observer
 
-    # Safety net: if a cancellation arrives before/during runner.execute (e.g.
-    # streaq task timeout, worker shutdown) and propagates as CancelledError
-    # past execute's own handler, swallow it here. Re-raising CancelledError
-    # into streaq's `with scope:` block triggers
-    # "Attempted to exit a cancel scope that isn't the current task's current
-    # cancel scope" — a RuntimeError that crashes the entire worker. The run
-    # is already finalized inside execute; there is nothing useful to do here.
-    try:
-        await runner.execute(
-            agent_run_id=agent_run_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-            observer=build_progress_observer(
-                uow_factory=worker_ctx.uow_factory,
-                service_factory=worker_ctx.build_surface_event_handler,
-            ),
-        )
-    except asyncio.CancelledError:
-        logger.debug(
-            "agent.handlers.process_agent_run_cancelled_run.diagnostic",
-            agent_run_id=agent_run_id,
-        )
+    # No try/except around this. A CancelledError from a worker shutting down
+    # must reach streaq: it only XACKs a task that returned, and relinquishes a
+    # cancelled one for the next worker to reclaim. See
+    # `AgentRunnerService.execute`.
+    await runner.execute(
+        agent_run_id=agent_run_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_name=agent_name,
+        observer=build_progress_observer(
+            uow_factory=worker_ctx.uow_factory,
+            service_factory=worker_ctx.build_surface_event_handler,
+        ),
+    )
 
 
 @streaq_task(name="reconcile_agent_approval")
@@ -428,16 +418,6 @@ async def process_conversation_title(
 # finalization race) and the run must be failed so it doesn't sit in RUNNING
 # forever.
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
-
-
-@streaq_cron("*/2 * * * *", name="resume_interrupted_agent_runs")
-async def resume_interrupted_agent_runs() -> None:
-    """Hand runs parked by a departing worker to a live one."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    await resume_parked_agent_runs(
-        uow_factory=worker_ctx.uow_factory,
-        job_queue=worker_ctx.job_queue,
-    )
 
 
 @streaq_cron("5-59/10 * * * *", name="reconcile_orphaned_agent_runs")

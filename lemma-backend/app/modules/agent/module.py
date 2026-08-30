@@ -59,38 +59,6 @@ def _routers():
     ]
 
 
-@asynccontextmanager
-async def _resume_parked_runs_on_start(context) -> AsyncIterator[None]:
-    """Pick up runs the previous worker parked, without waiting for the sweep.
-
-    The two-minute cron is the backstop; this is the common case. A deploy stops
-    one worker and starts another, and the person watching the conversation
-    should not sit through a cron interval to find out their work continues --
-    measured at 74 seconds on the restart this was written for.
-
-    Best-effort by design, like the schedule module's breaker reconciliation: a
-    worker that boots ahead of its migrations must not crash-loop over a sweep
-    that would simply run two minutes later.
-    """
-    from redis.exceptions import RedisError
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from app.core.domain.errors import DomainError
-    from app.modules.agent.services.run_resume import resume_parked_agent_runs
-
-    try:
-        await resume_parked_agent_runs(
-            uow_factory=context.uow_factory,
-            job_queue=context.job_queue,
-        )
-    except DomainError, SQLAlchemyError, RedisError, OSError, TimeoutError:
-        logger.warning(
-            "agent.module.startup_resume_failed.degraded",
-            exc_info=True,
-        )
-    yield
-
-
 def _event_routers():
     from app.modules.agent.events.handlers import router
 
@@ -102,7 +70,6 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_report_system_model_pricing,),
-    worker_lifespans=(_resume_parked_runs_on_start,),
     stream_groups=(
         ("agent_events", "agent-events"),
         # A second group on the datastore's stream, so a memory file written
