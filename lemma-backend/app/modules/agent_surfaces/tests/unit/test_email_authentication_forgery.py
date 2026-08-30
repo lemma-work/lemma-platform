@@ -159,7 +159,9 @@ def test_a_json_array_inside_a_string_is_expanded_the_same_way():
 
 
 def test_an_ordinary_dict_header_still_passes():
-    headers = {"authentication-results": "mx.google.com; dmarc=pass header.from=corp.com"}
+    headers = {
+        "authentication-results": "mx.google.com; dmarc=pass header.from=corp.com"
+    }
     assert _verdict(headers) is EmailAuthenticationVerdict.PASS
 
 

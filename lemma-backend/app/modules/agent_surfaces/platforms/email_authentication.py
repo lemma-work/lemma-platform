@@ -281,7 +281,9 @@ def _verdict_of(value: str, from_domain: str) -> EmailAuthenticationVerdict:
         for info in infos
     )
     return (
-        EmailAuthenticationVerdict.FAIL if failed else EmailAuthenticationVerdict.UNKNOWN
+        EmailAuthenticationVerdict.FAIL
+        if failed
+        else EmailAuthenticationVerdict.UNKNOWN
     )
 
 

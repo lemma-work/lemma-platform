@@ -1,11 +1,11 @@
 {
   "_comment": "Floors, not exact counts: a marker collecting fewer tests than recorded fails, more is fine. `skip` and `skipif` are the other way round -- those are ceilings. Regenerate with `python3 scripts/check_pytest_census.py --update`.",
-  "collected": 7352,
+  "collected": 7414,
   "markers": {
     "approval_worker": 1,
     "connection_scope": 15,
     "desktop_e2e": 8,
-    "e2e": 1889,
+    "e2e": 1893,
     "fast_workspace": 6,
     "human": 1,
     "indexing": 31,
@@ -19,7 +19,7 @@
     "skipif": 49,
     "slow": 26,
     "surface_live": 5,
-    "unit": 955,
+    "unit": 1008,
     "worker": 166,
     "workspace": 190
   },
