@@ -68,6 +68,19 @@ async def test_a_question_is_asked_with_native_controls(reachable):
         f"pressing a button; the buttons were {offered}"
     )
 
+    # Leave nothing waiting behind. A person has one chat with a bot and it
+    # stands between runs, so a question this scenario never answers is still
+    # pending when the next one starts — and that is not hypothetical: it is
+    # what made the approval scenario fail for nine runs, its message taken as
+    # the answer to this question instead of as a request of its own.
+    #
+    # Said rather than tapped because saying it is what clears it: a typed
+    # message on a surface with buttons is a new message, and starting one
+    # supersedes whatever was still pending. Nothing is asserted about that
+    # here — this scenario is about the buttons arriving — but the chat is
+    # handed on clean.
+    await reachable.says("Never mind that, thanks.")
+
 
 @scenario("An agent's approval request reaches the person as native buttons")
 @proves("PS-SURF-021", "PS-AGENT-020")
