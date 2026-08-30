@@ -83,24 +83,6 @@ export type ChatTurnItem =
   /** A non-file display_resource, carded where the run presented it. */
   | { kind: "resource"; id: string; card: ChatResourceCard };
 
-/**
- * Whether this message was sent into a run that was already working.
- *
- * The backend stamps `during_active_run` when it appends a message to a run in
- * flight rather than starting a new one, and that distinction is invisible
- * otherwise: the turn looks exactly like an ordinary one nobody has answered
- * yet. It matters most on an Agent Host run, where a follow-up is not steered
- * into the current step at all — it waits for the run to finish and is picked
- * up by the next one, which can be minutes of a person watching a message sit
- * there wondering whether it went anywhere.
- */
-export function wasSentDuringActiveRun(
-  message: Pick<AssistantRenderableMessage, "role" | "metadata"> | null | undefined,
-): boolean {
-  if (!message || message.role !== "user") return false;
-  return message.metadata?.during_active_run === true;
-}
-
 /** DOM id of an interaction card, so a blocked composer can scroll to the
  *  question blocking it. A string, not a lookup: this module stays pure. */
 export function interactionAnchorId(toolCallId: string): string {

@@ -44,7 +44,6 @@ import {
   chatTurnFingerprint,
   completedTurnStatusLabel,
   interactionAnchorId,
-  wasSentDuringActiveRun,
   type ChatArtifact,
   type ChatTurn,
   type TraceEntry,
@@ -577,13 +576,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
             {speechContent(turn.userMessage.content, turn.userMessage, "user", turn.userMessage.id)}
             <HoverCopyButton text={turn.userMessage.content} side="left" />
           </div>
-          {wasSentDuringActiveRun(turn.userMessage) ? (
-            // Said plainly, because the alternative is a message that looks
-            // unanswered: this one joined the turn already running rather than
-            // starting its own, and on a remote harness it waits for that turn
-            // to finish before anything reads it.
-            <span className="lchat-user-note">Added to the running turn</span>
-          ) : null}
           {userTimestamp ? (
             <time className="lchat-user-time" dateTime={turn.userMessage?.createdAt?.toISOString()}>{userTimestamp}</time>
           ) : null}
