@@ -40,6 +40,7 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
+    UserProfile,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
@@ -201,12 +202,11 @@ class AgentContextBriefBuilder:
         async with self.uow_factory() as uow:
             repo = AgentContextBriefRepository(uow)
             pod_name = await repo.get_pod_name(pod_id) or "(unknown)"
-            email = await repo.get_user_email(user_id)
-        user_line = f"{email} ({user_id})" if email else str(user_id)
+            profile = await repo.get_user_profile(user_id)
         lines = [
             "# Runtime Context",
             f"- Pod: {pod_name} ({pod_id})",
-            f"- User: {user_line}",
+            *_user_lines(profile, user_id),
         ]
 
         if is_default:
@@ -404,6 +404,42 @@ def _more_note(shown: int, total: object, noun: str) -> list[str]:
         f"- … and {total - shown} more {noun} not listed here "
         f"(showing {shown}). Use your tools to list them all."
     ]
+
+
+def _user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
+    """Who the agent is talking to, and what time it is where they are.
+
+    Both halves used to be missing, and neither is recoverable from anywhere
+    else in the prompt. The brief named an address and a UUID, so an agent
+    asked to greet somebody by name had nothing to read one from -- it either
+    said the email address out loud or hoped a past agent had written the name
+    into `/me`. And the only clock a run is given is UTC, which is the wrong
+    answer to "this morning" and the wrong date to write into a memory file.
+
+    Said plainly when the timezone is unset, rather than left out: an agent
+    told nothing assumes the clock in front of it is the person's.
+    """
+    identity = profile.email or "(unknown)"
+    if profile.display_name:
+        identity = (
+            f"{profile.display_name} <{profile.email}>"
+            if profile.email
+            else profile.display_name
+        )
+    lines = [f"- User: {identity} ({user_id})"]
+    if profile.timezone:
+        lines.append(
+            f"- Their timezone: {profile.timezone}. The clock you are given "
+            "reads UTC — convert before naming a time of day or resolving a "
+            "date for them."
+        )
+    else:
+        lines.append(
+            "- Their timezone is not set, and the clock you are given reads "
+            "UTC, which may not be theirs. Don't name a time of day or resolve "
+            '"today" on their behalf without asking.'
+        )
+    return lines
 
 
 def _table_line(table) -> str:
