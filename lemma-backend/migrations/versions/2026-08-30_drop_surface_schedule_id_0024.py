@@ -17,8 +17,8 @@ shape: the values were already gone before this ran.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0023_drop_surface_schedule_id"
-down_revision = "0022_org_names_not_unique"
+revision = "0024_drop_surface_schedule_id"
+down_revision = "0023_conversation_archived"
 branch_labels = None
 depends_on = None
 

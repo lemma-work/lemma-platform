@@ -24,6 +24,9 @@ from app.modules.agent.services.conversation_access import (
     resolve_agent_for_path,
     validate_conversation_access,
 )
+from app.modules.agent.domain.conversation_titles import (
+    normalize_conversation_title,
+)
 from app.modules.agent.domain.entities import (
     Conversation,
 )
@@ -194,6 +197,7 @@ class ConversationService:
         instructions: str | None | UnsetType = UNSET,
         agent_runtime: AgentRuntimeConfig | None | UnsetType = UNSET,
         metadata: dict[str, object] | None | UnsetType = UNSET,
+        is_archived: bool | UnsetType = UNSET,
     ) -> Conversation:
         expected_agent_id = await resolve_expected_agent_id(
             self.agent_repository,
@@ -219,13 +223,18 @@ class ConversationService:
         )
 
         if not isinstance(title, UnsetType):
-            conversation.title = title
+            # A blank title normalizes to None, which is not "no change" -- it
+            # is the conversation asking to be auto-titled again, since
+            # `generate_title_if_absent` fires on a null title.
+            conversation.title = normalize_conversation_title(title)
         if not isinstance(instructions, UnsetType):
             conversation.instructions = instructions
         if not isinstance(agent_runtime, UnsetType):
             conversation.agent_runtime = agent_runtime
         if not isinstance(metadata, UnsetType):
             conversation.metadata = metadata
+        if not isinstance(is_archived, UnsetType):
+            conversation.is_archived = is_archived
 
         return await self.conversation_repository.update_conversation(conversation)
 

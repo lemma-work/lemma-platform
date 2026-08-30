@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -175,6 +176,11 @@ class ConversationModel(UUIDAuditBase):
         index=True,
     )
     conversation_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: Put away, not deleted: the row stays, the listing skips it, and a new
+    #: message clears it (`append_message`).
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
     pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
@@ -244,6 +250,7 @@ class ConversationModel(UUIDAuditBase):
             else None,
             output=self.output_data,
             metadata=self.conversation_metadata,
+            is_archived=bool(self.is_archived),  # None until the INSERT.
             last_run_status=latest_run.status if latest_run else None,
             last_run_error=latest_run.error if latest_run else None,
             last_run_finished_at=latest_run.finished_at if latest_run else None,

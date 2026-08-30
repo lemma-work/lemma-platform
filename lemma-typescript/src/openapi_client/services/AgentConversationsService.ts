@@ -20,12 +20,13 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead.
+     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.
      * @param podId
      * @param agentName
      * @param status
      * @param type
      * @param parentId
+     * @param archived
      * @param pageToken
      * @param limit
      * @returns ConversationListResponse Successful Response
@@ -37,6 +38,7 @@ export class AgentConversationsService {
         status?: (ConversationStatus | null),
         type?: (ConversationType | null),
         parentId?: (string | null),
+        archived: boolean = false,
         pageToken?: (string | null),
         limit: number = 20,
     ): CancelablePromise<ConversationListResponse> {
@@ -51,6 +53,7 @@ export class AgentConversationsService {
                 'status': status,
                 'type': type,
                 'parent_id': parentId,
+                'archived': archived,
                 'page_token': pageToken,
                 'limit': limit,
             },
