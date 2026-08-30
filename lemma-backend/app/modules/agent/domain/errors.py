@@ -52,6 +52,13 @@ class ConversationNotFoundError(AgentModuleError):
         super().__init__(message, code="CONVERSATION_NOT_FOUND", status_code=404)
 
 
+class ConversationValidationError(AgentModuleError):
+    """Conversation payload failed module-level validation."""
+
+    def __init__(self, message: str = "Invalid conversation"):
+        super().__init__(message, code="CONVERSATION_VALIDATION_ERROR", status_code=400)
+
+
 class ConversationStateError(AgentModuleError):
     """Conversation state does not allow the requested operation."""
 

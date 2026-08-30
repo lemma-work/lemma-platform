@@ -6,6 +6,7 @@ import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
 export type UpdateConversationRequest = {
     agent_runtime?: (AgentRuntimeConfig | null);
     instructions?: (string | null);
+    is_archived?: (boolean | null);
     metadata?: (Record<string, any> | null);
     title?: (string | null);
 };
