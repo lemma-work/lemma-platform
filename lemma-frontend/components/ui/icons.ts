@@ -19,6 +19,7 @@ export type {
 
 // Names shared by Lucide and Phosphor.
 export {
+    Archive,
     ArrowDown,
     ArrowLeft,
     ArrowRight,
@@ -178,6 +179,7 @@ export {
     Sidebar as PanelLeftOpen,
     SidebarSimple as PanelRightClose,
     Layout as PanelsTopLeft,
+    PushPin as Pin,
     Printer,
     PuzzlePiece as Puzzle,
     Receipt as ReceiptText,

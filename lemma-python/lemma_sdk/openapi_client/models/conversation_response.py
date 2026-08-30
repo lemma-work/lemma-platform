@@ -38,6 +38,7 @@ class ConversationResponse:
         agent_id (None | Unset | UUID):
         agent_runtime (AgentRuntimeConfig | None | Unset):
         instructions (None | str | Unset):
+        is_archived (bool | Unset):  Default: False.
         last_run_error (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
         last_run_retryable (bool | Unset):  Default: False.
@@ -60,6 +61,7 @@ class ConversationResponse:
     agent_id: None | Unset | UUID = UNSET
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
     instructions: None | str | Unset = UNSET
+    is_archived: bool | Unset = False
     last_run_error: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
     last_run_retryable: bool | Unset = False
@@ -112,6 +114,8 @@ class ConversationResponse:
             instructions = UNSET
         else:
             instructions = self.instructions
+
+        is_archived = self.is_archived
 
         last_run_error: None | str | Unset
         if isinstance(self.last_run_error, Unset):
@@ -203,6 +207,8 @@ class ConversationResponse:
             field_dict["agent_runtime"] = agent_runtime
         if instructions is not UNSET:
             field_dict["instructions"] = instructions
+        if is_archived is not UNSET:
+            field_dict["is_archived"] = is_archived
         if last_run_error is not UNSET:
             field_dict["last_run_error"] = last_run_error
         if last_run_finished_at is not UNSET:
@@ -290,6 +296,8 @@ class ConversationResponse:
             return cast(None | str | Unset, data)
 
         instructions = _parse_instructions(d.pop("instructions", UNSET))
+
+        is_archived = d.pop("is_archived", UNSET)
 
         def _parse_last_run_error(data: object) -> None | str | Unset:
             if data is None:
@@ -445,6 +453,7 @@ class ConversationResponse:
             agent_id=agent_id,
             agent_runtime=agent_runtime,
             instructions=instructions,
+            is_archived=is_archived,
             last_run_error=last_run_error,
             last_run_finished_at=last_run_finished_at,
             last_run_retryable=last_run_retryable,
