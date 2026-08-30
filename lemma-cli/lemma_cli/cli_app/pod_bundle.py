@@ -403,6 +403,51 @@ def _has_seed_data(resource_dir: Path) -> bool:
     return any((resource_dir / name).is_file() for name in _TABLE_DATA_CANDIDATES)
 
 
+def _rows_typed_by_schema(
+    rows: list[dict[str, Any]], resource_dir: Path
+) -> list[dict[str, Any]]:
+    """Re-read CSV cells as the columns they are going into.
+
+    CSV has no types, so the reader guesses from the text -- and a TEXT column
+    holding "2026" arrives as an int, which Postgres rejects outright:
+    `invalid input for query argument $13: 2026 (expected str, got int)`. The
+    export is not wrong and the CSV is not wrong; the guess is. A year, a
+    postcode, an ISBN, a version, an account number: every one of them is text
+    that looks like a number, and any of them stops a pod from being imported.
+
+    The declared type is right there in the table's own JSON, next to the data
+    file, so use it. Only the columns the table declares are touched, and only
+    where the guess disagrees; anything unrecognised is left exactly as read.
+    """
+    schema_files = [
+        path for path in resource_dir.glob("*.json") if path.stem == resource_dir.name
+    ]
+    if not schema_files:
+        return rows
+    try:
+        columns = json.loads(schema_files[0].read_text(encoding="utf-8")).get("columns")
+    except OSError, json.JSONDecodeError:
+        return rows
+    if not isinstance(columns, list):
+        return rows
+    declared = {
+        str(column.get("name")): str(column.get("type") or "").upper()
+        for column in columns
+        if isinstance(column, dict) and column.get("name")
+    }
+    # Types whose values are carried as strings. A number that reached a TEXT
+    # column is the guess misfiring, so put it back the way the CSV spelled it.
+    textual = {"TEXT", "ENUM", "UUID", "FILE_PATH", "DATE", "DATETIME", "TIME"}
+    retyped: list[dict[str, Any]] = []
+    for row in rows:
+        fixed = dict(row)
+        for key, value in row.items():
+            if declared.get(key) in textual and isinstance(value, (int, float)):
+                fixed[key] = str(value)
+        retyped.append(fixed)
+    return retyped
+
+
 def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int:
     """Seed a table from a bundled ``data.{csv,jsonl,json}`` file via bulk create.
     Returns the number of rows sent (0 when there is no data file)."""
@@ -420,6 +465,8 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
         {key: value for key, value in row.items() if key not in _SEED_STRIP_COLUMNS}
         for row in read_record_rows(data_file, None)
     ]
+    if data_file.suffix.lower() == ".csv":
+        rows = _rows_typed_by_schema(rows, resource_dir)
     if not rows:
         return 0
     # Upsert so re-importing an edited data.csv updates existing rows (matched on
@@ -783,29 +830,47 @@ def _is_pod_visible_file(item: dict[str, Any]) -> bool:
 def fetch_files_index(
     client: Lemma, pod_id: str
 ) -> tuple[dict[str | None, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-    tree_payload = to_plain(client.pod(pod_id).files.tree("/"))
-    root = tree_payload.get("tree")
-    if not isinstance(root, dict):
-        return {}, {}
+    """Every file and folder in the pod, by walking directories to exhaustion.
 
+    This used to read the directory-*tree* endpoint, which is a preview: it
+    returns at most ``files_per_directory`` entries per directory, defaulting to
+    three and capped at twenty. Export then treated that preview as the pod's
+    contents. On a real pod that meant a directory of twelve files exported
+    three of them, and the summary counted what it collected, so the number
+    looked right and nothing warned. Measured on one pod: 266 files, 104
+    exported, no error.
+
+    The backend's own exporter already avoids this and says why -- "the tree
+    endpoint caps files-per-dir, so we walk with ``list_files`` instead". This
+    is the same walk, and it inherits the same hazard the backend documents: a
+    listing is not guaranteed to point strictly downward, because a user's home
+    folder lists *itself*. Without ``seen`` that recurses until the interpreter
+    gives up.
+    """
     by_parent: dict[str | None, list[dict[str, Any]]] = {None: []}
     all_items: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    stack: list[tuple[str, str | None]] = [("/", None)]
 
-    def walk(node: dict[str, Any], *, parent_key: str | None) -> None:
-        for child in node.get("children") or []:
-            if not isinstance(child, dict):
+    while stack:
+        directory, parent_key = stack.pop()
+        if directory in seen:
+            continue
+        seen.add(directory)
+        for entry in client.pod(pod_id).files.list_all(directory):
+            item = to_plain(entry)
+            if not isinstance(item, dict):
                 continue
-            child_path = str(child.get("path") or "")
-            if not child_path or child_path == "/":
+            path = str(item.get("path") or "")
+            if not path or path == "/":
                 continue
-            item = dict(child)
-            item_id = str(item.get("id") or child_path)
+            item_id = str(item.get("id") or path)
             item["id"] = item_id
             all_items[item_id] = item
             by_parent.setdefault(parent_key, []).append(item)
-            walk(child, parent_key=child_path)
+            if str(item.get("kind") or "").upper() == "FOLDER":
+                stack.append((path, path))
 
-    walk(root, parent_key=None)
     return by_parent, all_items
 
 
@@ -1220,6 +1285,14 @@ def export_pod_bundle(
         with_data=wants_data,
         with_files=bool(file_folders),
     )
+
+    # Printed, not just returned. Every one of these says something was left
+    # out of the bundle, and they were reaching the caller only inside a summary
+    # panel that folds long fields -- so the one line saying a file had been
+    # skipped was the line most likely to be hidden. The import path already
+    # prints its advisories this way.
+    for warning in data_table_warnings:
+        console.print(f"[yellow]warning[/yellow] {warning}")
 
     return {
         "ok": True,
