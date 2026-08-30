@@ -74,6 +74,15 @@ def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
     security one, so policy decides -- and it is logged either way, so an
     operator can see whether their provider supplies the header before turning
     the stricter setting on.
+
+    **``None`` on an email surface is UNKNOWN, not "nothing to check".** Only
+    ``merge_received_email`` ever sets the verdict, so it is absent whenever
+    enrichment did not run: no ``email_id`` on the webhook, an ``HTTPError`` on
+    the body fetch, or the whole polling receiver. Reading that as the chat
+    platforms' "no question to ask" meant an attacker who could make the fetch
+    fail -- or a deployment in polling mode -- skipped this check entirely,
+    whatever either setting said. The platform is what separates the two cases,
+    so the platform is what decides.
     """
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.platforms.email_authentication import (
@@ -81,7 +90,7 @@ def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
     )
 
     verdict = event.sender_authentication
-    if verdict is None:
+    if verdict is None and not event.platform.is_email:
         return True
     if verdict == EmailAuthenticationVerdict.PASS:
         return True

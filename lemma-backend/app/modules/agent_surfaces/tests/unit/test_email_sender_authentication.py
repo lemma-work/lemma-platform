@@ -144,9 +144,11 @@ def test_headers_from_nobody_we_trust_are_as_good_as_absent() -> None:
 # --- what the gate does with it -------------------------------------------
 
 
-def _event(verdict: str | None) -> ParsedInboundSurfaceEvent:
+def _event(
+    verdict: str | None, *, platform: str = "RESEND"
+) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
-        platform="RESEND",
+        platform=platform,
         conversation_type=ConversationType.EXTERNAL_DM,
         external_thread_id="thread-1",
         sender_external_user_id="a@example.com",
@@ -215,7 +217,45 @@ async def test_an_unauthenticated_sender_follows_the_deployment_setting(
 
 
 async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:
-    """Its sender came inside a payload whose signature was already verified."""
+    """Its sender came inside a payload whose signature was already verified.
+
+    This test used to build a ``RESEND`` event while claiming to be about chat,
+    so what it actually pinned was an *email* message with no verdict
+    resolving — the bypass below, asserted as correct behaviour.
+    """
     known = uuid4()
-    resolved = await _service(known).resolve(event=_event(None))
+    resolved = await _service(known).resolve(event=_event(None, platform="SLACK"))
     assert resolved.internal_user_id == known
+
+
+async def test_an_email_with_no_verdict_at_all_is_unknown_not_trusted(
+    monkeypatch,
+) -> None:
+    """A missing verdict on email means the check did not run, not that it passed.
+
+    Only ``merge_received_email`` ever sets one, so it is absent whenever
+    enrichment did not: no ``email_id`` on the webhook, an ``HTTPError`` on the
+    body fetch, or the whole polling receiver. Read as the chat platforms'
+    "nothing to ask", an attacker who could make that fetch fail skipped
+    authentication entirely, whatever the setting said.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+
+    known = uuid4()
+    monkeypatch.setattr(
+        surface_settings, "surface_email_allow_unauthenticated_identity", False
+    )
+    assert (await _service(known).resolve(event=_event(None))).internal_user_id is None
+
+
+async def test_an_email_with_no_verdict_still_follows_a_permissive_setting(
+    monkeypatch,
+) -> None:
+    """It is UNKNOWN, so policy decides — the same as an unusable header."""
+    from app.modules.agent_surfaces.config import surface_settings
+
+    known = uuid4()
+    monkeypatch.setattr(
+        surface_settings, "surface_email_allow_unauthenticated_identity", True
+    )
+    assert (await _service(known).resolve(event=_event(None))).internal_user_id == known
