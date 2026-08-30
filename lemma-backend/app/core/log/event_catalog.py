@@ -324,6 +324,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed': EventSpec('debug', frozenset({'surface_type'})),
     'agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed': EventSpec('debug', frozenset()),
+    'agent_surfaces.surface_row.retired_value_skipped.degraded': EventSpec('warning', frozenset({'column', 'surface_id', 'value'})),
     'agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic': EventSpec('debug', frozenset({'account_id'})),
     'agent_surfaces.telegram.callback_acknowledgement_best_effort': EventSpec('debug', frozenset()),

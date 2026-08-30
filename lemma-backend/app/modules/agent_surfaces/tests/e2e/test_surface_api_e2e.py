@@ -1009,3 +1009,50 @@ async def test_slack_view_submission_is_acknowledged_with_an_empty_body(
     )
     assert response.status_code == 200
     assert response.content == b""
+
+
+async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+):
+    """A surface somebody configured before GMAIL stopped being a platform.
+
+    No migration deletes these -- that is a deployment's decision, and the PR
+    that removed the platform says so. But `surface_type` is a plain string
+    column and `SurfacePlatform` is a StrEnum, so mapping the row raised a bare
+    ValueError, which is not a DomainError and so came back as a 500. And
+    `list_by_pod` maps a whole page, so the pod lost every surface it had, not
+    just this one -- along with all agent-to-human notification delivery, and
+    the owner's cross-pod list.
+    """
+    from sqlalchemy import text as sql_text
+
+    pod_id = test_pod["id"]
+    live = await _create_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "TELEGRAM"},
+        name="telegram-live",
+    )
+
+    # Written the way an older release wrote it, since nothing can create one
+    # through the API any more.
+    await db_session.execute(
+        sql_text(
+            "INSERT INTO agent_surfaces "
+            "(id, pod_id, name, surface_type, mode, event_mode, credential_mode,"
+            " config, status, created_at, updated_at) "
+            "VALUES (gen_random_uuid(), :pod_id, 'legacy-gmail', 'GMAIL', 'DM',"
+            " 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE', now(), now())"
+        ),
+        {"pod_id": pod_id},
+    )
+    await db_session.commit()
+
+    listed = await authenticated_client.get(f"/pods/{pod_id}/surfaces")
+    assert listed.status_code == 200, listed.text
+    names = {item["name"] for item in listed.json()["items"]}
+    assert "telegram-live" in names, "the live surface survived the retired row"
+    assert "legacy-gmail" not in names, "and the retired one is simply absent"
+    assert live["id"] in {item["id"] for item in listed.json()["items"]}

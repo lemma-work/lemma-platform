@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.crypto import get_secret_cipher
+from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -35,6 +36,8 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
+
+logger = get_logger(__name__)
 
 
 class AgentSurface(UUIDAuditBase):
@@ -107,6 +110,47 @@ class AgentSurface(UUIDAuditBase):
     # Encrypted at rest via app.core.crypto (compact ``lsenc1:`` envelope). Text
     # (not String(255)) because the envelope is longer than the raw secret.
     webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_entity_or_none(self) -> "AgentSurfaceEntity | None":
+        """This row as an entity, or ``None`` when it names something retired.
+
+        ``surface_type`` and ``event_mode`` are plain string columns whose
+        enums have both lost members -- ``GMAIL``/``OUTLOOK`` when email became
+        Resend and only Resend, ``COMPOSIO_TRIGGER`` when polled triggers went.
+        No migration deletes those rows, deliberately: they are configuration
+        somebody chose, and removing them belongs to whoever is deploying.
+
+        But `to_entity` raising a bare ``ValueError`` made that choice
+        everyone's problem. `list_by_pod` maps a whole page, so one retired row
+        took the pod's entire surface list with it -- as a 500, since a
+        ``ValueError`` is not a ``DomainError`` and reaches the catch-all
+        handler. `get_account_conflict_in_org` is org-wide and platform-blind,
+        so it did the same to the *creation* of an unrelated surface, and
+        `list_by_pod` again to every agent-to-human notification for the pod.
+
+        So: unreadable rows drop out of lists and read as absent, which is what
+        every caller already handles. `to_entity` still raises, because code
+        holding a validated entity is entitled to assume the mapping worked.
+        """
+        raw_type = (self.surface_type or "SLACK").rsplit(".", 1)[-1].upper()
+        if SurfacePlatform.from_source(raw_type) is None:
+            self._log_retired_value("surface_type", raw_type)
+            return None
+        raw_event_mode = self.event_mode or SurfaceEventMode.WEBHOOK.value
+        try:
+            SurfaceEventMode(raw_event_mode)
+        except ValueError:
+            self._log_retired_value("event_mode", str(raw_event_mode))
+            return None
+        return self.to_entity()
+
+    def _log_retired_value(self, column: str, value: str) -> None:
+        logger.warning(
+            "agent_surfaces.surface_row.retired_value_skipped.degraded",
+            surface_id=str(self.id),
+            column=column,
+            value=value,
+        )
 
     def to_entity(self) -> AgentSurfaceEntity:
         surface_type_raw = self.surface_type or "SLACK"
