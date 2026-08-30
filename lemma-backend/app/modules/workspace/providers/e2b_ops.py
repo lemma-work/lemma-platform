@@ -44,6 +44,14 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_process_index import (
+    ENTRY_TTL_SECONDS,
+    decode_pid,
+    encode_entry,
+    index_key,
+    pid_key,
+    read_descriptors,
+)
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
@@ -74,24 +82,27 @@ class E2BOpsMixin:
     """
 
     async def _remember_pid(
-        self, process_id: str, pid: int, *, tty: bool, sandbox_id: str = ""
+        self,
+        process_id: str,
+        pid: int,
+        *,
+        tty: bool,
+        sandbox_id: str = "",
+        expires_at: float = 0.0,
     ) -> None:
         redis = self._redis()
-        await redis.set(
-            f"workspace:e2b:pid:v1:{process_id}", f"{pid}:{int(tty)}", ex=60 * 60
-        )
+        entry = encode_entry(pid, tty=tty, expires_at=expires_at)
+        await redis.set(pid_key(process_id), entry, ex=ENTRY_TTL_SECONDS)
         if sandbox_id:
-            # A per-sandbox index, because "list the processes" means the ones
-            # this platform started, not every pid inside the sandbox.
-            key = f"workspace:e2b:procs:v1:{sandbox_id}"
-            await redis.hset(key, process_id, f"{pid}:{int(tty)}")
-            await redis.expire(key, 60 * 60)
+            key = index_key(sandbox_id)
+            await redis.hset(key, process_id, entry)
+            await redis.expire(key, ENTRY_TTL_SECONDS)
 
     async def _recall_pid(self, process_id: str) -> tuple[int, bool]:
-        raw = await self._redis().get(f"workspace:e2b:pid:v1:{process_id}")
+        raw = await self._redis().get(pid_key(process_id))
         if raw is None:
             raise ProviderGone(f"process {process_id} is no longer tracked")
-        return _decode_pid(raw)
+        return decode_pid(raw)
 
     async def list_processes(
         self, instance: ProviderInstance, *, deadline_at: datetime
@@ -101,23 +112,16 @@ class E2BOpsMixin:
         Read from our own index rather than E2B's process list, which reports
         every pid inside the sandbox and cannot say which operation any of them
         belongs to. State comes from the output buffer, which is where a
-        process's completion is recorded.
+        process's completion is recorded, corrected by the recorded deadline --
+        see `e2b_process_index.read_descriptors`.
         """
-        entries = await self._redis().hgetall(
-            f"workspace:e2b:procs:v1:{instance.provider_id}"
+        del deadline_at
+        return await read_descriptors(
+            self._redis(),
+            self._output,
+            sandbox_id=instance.provider_id,
+            now=datetime.now(timezone.utc).timestamp(),
         )
-        descriptors: list[ProcessDescriptor] = []
-        for raw_id in entries:
-            process_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
-            snapshot = await self._output.read(process_id, after_sequence=0)
-            descriptors.append(
-                ProcessDescriptor(
-                    process_id=process_id,
-                    state=snapshot.state,
-                    exit_code=snapshot.exit_code,
-                )
-            )
-        return tuple(descriptors)
 
     @staticmethod
     def _redis():
@@ -198,6 +202,7 @@ class E2BOpsMixin:
             handle.pid,
             tty=request.tty is not None,
             sandbox_id=instance.provider_id,
+            expires_at=deadline_at.timestamp(),
         )
         self._watch_for_exit(process_id, handle)
         return process_id
@@ -571,12 +576,6 @@ class E2BOpsMixin:
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors():
             return f"https://{sandbox.get_host(port)}"
-
-
-def _decode_pid(raw) -> tuple[int, bool]:
-    text = raw.decode() if isinstance(raw, bytes) else str(raw)
-    pid, _, flag = text.partition(":")
-    return int(pid), flag == "1"
 
 
 def _to_stat(entry) -> FileStat:

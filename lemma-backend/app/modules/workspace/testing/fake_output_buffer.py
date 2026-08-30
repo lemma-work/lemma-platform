@@ -21,6 +21,9 @@ class InMemoryOutputBuffer:
     chunks: dict[str, list[ProcessOutputChunk]] = field(default_factory=dict)
     states: dict[str, tuple[ProcessState, int | None]] = field(default_factory=dict)
     pids: dict[str, tuple[int, bool]] = field(default_factory=dict)
+    # The deadline the provider records beside the pid, so a process whose
+    # watch was lost stops counting as busy once it cannot still be running.
+    deadlines: dict[str, float] = field(default_factory=dict)
 
     async def append(
         self, process_id: str, *, channel: ProcessOutputChannel, data: bytes
@@ -69,10 +72,17 @@ class InMemoryOutputBuffer:
 
     # Stand-ins for the provider's Redis-backed pid mapping.
     async def remember_pid(
-        self, process_id: str, pid: int, *, tty: bool = False, sandbox_id: str = ""
+        self,
+        process_id: str,
+        pid: int,
+        *,
+        tty: bool = False,
+        sandbox_id: str = "",
+        expires_at: float = 0.0,
     ) -> None:
         del sandbox_id
         self.pids[process_id] = (pid, tty)
+        self.deadlines[process_id] = expires_at
 
     async def recall_pid(self, process_id: str) -> tuple[int, bool]:
         return self.pids[process_id]
