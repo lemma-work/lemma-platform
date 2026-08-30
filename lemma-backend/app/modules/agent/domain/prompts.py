@@ -76,13 +76,20 @@ def load_agent_base_prompt() -> str:
 
 
 def load_replies_prompt() -> str:
-    """What an assistant message is, and how long it is allowed to be.
+    """What an assistant message is, how long it may be, and when the right
+    answer is a reply rather than a run.
 
     Not keyed to a toolset: every agent replies, whatever tools it has, and the
     reply is the one thing the person always sees. Gating it on a toolset is how
     the narration in the Lemma UI went unruled for so long -- the equivalent
     rules existed only in the per-platform surface fragment, so a run with no
     surface platform (the web UI) was told nothing about length or narration.
+
+    The trailing "not every message is a task" section is here for the same
+    reason. "When you know enough to act, act" is the loudest line in either
+    base prompt, and applied to "hi" it yields an interrogation or a tool
+    spree -- so the rule that some messages want a sentence back has to sit
+    with the reply rules, on the one path every agent takes.
     """
     return _read_required_prompt(_REPLIES_PROMPT_PATH)
 
