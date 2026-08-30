@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.infrastructure.pydantic_ai_compat import (
     FunctionSchema,
     InlineDefsJsonSchemaTransformer,
@@ -293,7 +294,7 @@ class AgentCallableToolFactory:
 
             if run.status != FunctionRunStatus.COMPLETED:
                 raise RuntimeError(run.error or f"Function {function.name} failed")
-            return run.output_data or {}
+            return bounded_tool_payload(run.output_data or {}, what="function output")
 
         return Tool(
             _run_function,

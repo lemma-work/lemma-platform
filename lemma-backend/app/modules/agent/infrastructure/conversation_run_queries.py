@@ -24,12 +24,26 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
     MessageRole,
 )
-from app.modules.agent.domain.value_objects import ACTIVE_AGENT_RUN_STATUSES
-from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
+from app.modules.agent.domain.value_objects import (
+    ACTIVE_AGENT_RUN_STATUSES,
+    AgentRunStatus,
+)
+from app.modules.agent.infrastructure.models import (
+    AgentRunModel,
+    ConversationModel,
+    MessageModel,
+)
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    list_conversations_stranded_by_a_finished_run,
+)
 from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.infrastructure.run_projections import (
+    ResumableAgentRunRef,
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
 
@@ -102,6 +116,95 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def claim_resumable_run(self, agent_run_id: UUID) -> bool:
+        """Flip an interrupted run back to RUNNING, if the slot is free.
+
+        The partial unique index on (conversation_id) where the status is active
+        is the real lock. Checking first only turns the common case -- the person
+        gave up waiting and started something else -- into a clean "no" instead
+        of an integrity error, and the index still decides a genuine race.
+        """
+        run = (
+            await self.session.execute(
+                select(AgentRunModel.conversation_id, AgentRunModel.status).where(
+                    AgentRunModel.id == agent_run_id
+                )
+            )
+        ).one_or_none()
+        if run is None or run.status != AgentRunStatus.INTERRUPTED.value:
+            return False
+        holder = (
+            await self.session.execute(
+                select(AgentRunModel.id)
+                .where(
+                    AgentRunModel.conversation_id == run.conversation_id,
+                    AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if holder is not None:
+            return False
+        result = await self.session.execute(
+            update(AgentRunModel)
+            .where(
+                AgentRunModel.id == agent_run_id,
+                AgentRunModel.status == AgentRunStatus.INTERRUPTED.value,
+            )
+            .values(status=AgentRunStatus.RUNNING.value)
+        )
+        await self.session.flush()
+        return bool(result.rowcount)
+
+    async def list_resumable_runs(
+        self, *, limit: int = 200
+    ) -> list[ResumableAgentRunRef]:
+        """Runs a worker parked on its way out, oldest first."""
+        result = await self.session.execute(
+            select(
+                AgentRunModel.id,
+                AgentRunModel.conversation_id,
+                ConversationModel.user_id,
+                ConversationModel.pod_id,
+                AgentRunModel.run_metadata,
+            )
+            .join(
+                ConversationModel,
+                ConversationModel.id == AgentRunModel.conversation_id,
+            )
+            .where(AgentRunModel.status == AgentRunStatus.INTERRUPTED.value)
+            .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [
+            ResumableAgentRunRef(
+                id=row.id,
+                conversation_id=row.conversation_id,
+                user_id=row.user_id,
+                pod_id=row.pod_id,
+                resume_attempts=int((row.run_metadata or {}).get("resume_attempts", 0)),
+            )
+            for row in result.all()
+        ]
+
+    async def record_resume_attempt(self, agent_run_id: UUID) -> None:
+        """Count one resume, so a run that cannot survive a restart stops trying.
+
+        Kept in `run_metadata` rather than a column: this is bookkeeping for a
+        rare path, and a migration to count retries is a migration to maintain.
+        """
+        model = (
+            await self.session.execute(
+                select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
+            )
+        ).scalar_one_or_none()
+        if model is None:
+            return
+        metadata = dict(model.run_metadata or {})
+        metadata["resume_attempts"] = int(metadata.get("resume_attempts", 0)) + 1
+        model.run_metadata = metadata
+        await self.session.flush()
+
     async def list_stale_active_runs(
         self,
         *,
@@ -124,6 +227,21 @@ class ConversationRunQueriesMixin:
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]:
+        """Conversations still active whose most recent run already finished.
+
+        Implemented next to the write that settles them; see
+        `repositories.conversation_status_repair`.
+        """
+        return await list_conversations_stranded_by_a_finished_run(
+            self.session, cutoff_seconds=cutoff_seconds, limit=limit
+        )
 
     async def list_agent_runs_with_messages(
         self,
@@ -225,8 +343,10 @@ class ConversationRunQueriesMixin:
     ) -> list[AgentRunEntity]:
         """Fill in messages: whole for ``full_run_ids``, first and last for the rest.
 
-        Two ``DISTINCT ON`` reads serve the elided runs, both answered by the
-        (agent_run_id, sequence) index rather than by reading the runs.
+        Three reads serve the elided runs -- two ``DISTINCT ON`` for each run's
+        first and last message, and one for every user message in them, since
+        those are never elided. All are answered by the (agent_run_id, sequence)
+        index rather than by reading the runs.
         """
         if not runs:
             return runs
@@ -248,6 +368,27 @@ class ConversationRunQueriesMixin:
                 .all()
             )
         if elided_ids:
+            # The user's own messages are never elided, however old the run. An
+            # agent that cannot see what it was asked drifts onto a different
+            # task and then reports that task as the one requested -- which is
+            # exactly how a request for one video became an hour spent building
+            # another. Answered by (agent_run_id, sequence) like its neighbours.
+            messages.extend(
+                (
+                    await self.session.execute(
+                        select(MessageModel)
+                        .where(
+                            MessageModel.agent_run_id.in_(elided_ids),
+                            MessageModel.role == MessageRole.USER.value,
+                        )
+                        .order_by(
+                            MessageModel.agent_run_id, MessageModel.sequence.asc()
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for order in (MessageModel.sequence.asc(), MessageModel.sequence.desc()):
                 messages.extend(
                     (

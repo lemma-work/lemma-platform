@@ -330,8 +330,8 @@ class AgentHostEventStream:
             redis = self._client()
             await redis.delete(run_events_stream_key(run_id))
         except RedisError:
-            logger.debug(
-                "agent.infrastructure.agent_host_event_stream.delete_failed",
+            logger.warning(
+                "agent.infrastructure.agent_host_event_stream.delete_failed.degraded",
                 agent_run_id=str(run_id),
                 exc_info=True,
             )

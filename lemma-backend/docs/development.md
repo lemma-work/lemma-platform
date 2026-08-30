@@ -58,6 +58,40 @@ global, background task).
   stale authorization is never acceptable. The role-snapshot cache clears its
   whole prefix on role mutations by design.
 
+## Errors and logging
+
+- **Never hide an error.** An error nobody can see is how unexplained behaviour
+  in production stays unexplained. Every caught exception is logged with what
+  actually went wrong — the message and the traceback (`exc_info=True`), not a
+  type name — before it is turned into a fallback, a retry, or a returned error
+  result.
+- **Log it where it can be seen.** Production runs at `LOG_LEVEL=INFO`, so
+  `logger.debug` for a caught failure is the same as not logging it at all. Use
+  `logger.warning` when the run survives in a degraded state and
+  `logger.error` when it does not. Reserve `logger.debug` for genuine
+  diagnostics: an expected cancellation, a policy decision, an exception that is
+  re-raised for the caller to log.
+- **The one exception is volume.** A failure that fires per-token or per-row
+  drowns the signal it was added for. Log those once per run, per batch, or on a
+  transition, with a count — never per occurrence, and never by dropping the
+  level to hide them.
+- **Returning an error to the model is not logging it.** A tool that answers
+  `{"success": false, "error": ...}` has told the agent; it has told nobody
+  operating the system. Do both.
+- **A bare `except: pass` or `suppress(Exception)` around real work is a bug.**
+  `scripts/check_swallowed_errors.py` ratchets these — `silent-broad-catch`,
+  `debug-only-broad-catch`, and `cancellation-blind-catch` — so the count can
+  only go down.
+- **Name the event for what happened**, and keep the suffix honest, since it is
+  how the catalog reads: `.degraded` for something lost or fallen back,
+  `.propagated` for re-raised, `.observed` for an outcome worth recording,
+  `.diagnostic` for genuine debug detail. New events must be regenerated into
+  `app/core/log/event_catalog.py` (`make quality` checks it), and a field named
+  `stack` is silently dropped by structlog — pick another name.
+- **Never log a secret or a user's message text.** See Secrets below; error
+  strings reach both the log and, for agent tools, the user-visible transcript,
+  so route free text through `app/core/redaction.py`.
+
 ## Authorization model (summary)
 
 Two ledgers decide everything:

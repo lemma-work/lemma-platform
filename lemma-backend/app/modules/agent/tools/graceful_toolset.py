@@ -59,8 +59,8 @@ class GracefulToolset(WrapperToolset[Any]):
         except Exception as exc:  # noqa: BLE001 - intentional catch-all boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.debug(
-                "agent.graceful_toolset.tool_r_returning_model_instead.diagnostic",
+            logger.warning(
+                "agent.graceful_toolset.tool_r_returning_model_instead.degraded",
                 exc_info=True,
             )
             return format_tool_error(name, exc)

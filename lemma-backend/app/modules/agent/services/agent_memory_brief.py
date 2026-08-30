@@ -242,6 +242,20 @@ class AgentMemoryBriefBuilder:
             "the second or fourth."
         )
         blocks = _budgeted_blocks(scopes, contents)
+        # An index that is simply absent reads as "this scope holds nothing", so
+        # the agent stops looking instead of opening the file -- and it reads
+        # that directly under a header saying all four were loaded together.
+        # Named here rather than in place of the block: by the time a scope is
+        # dropped the budget has nothing left to spend on saying so.
+        omitted = [
+            path for _, path in scopes if contents.get(path) and path not in blocks
+        ]
+        if omitted:
+            header += (
+                "\n\nNot shown this turn (they did not fit the memory budget) — "
+                "read them directly if you need them: "
+                + ", ".join(f"`{p}`" for p in omitted)
+            )
         return "\n".join(
             [header, *(blocks[path] for _, path in reversed(scopes) if path in blocks)]
         )
@@ -303,6 +317,11 @@ def _scopes(paths: AgentMemoryPaths) -> tuple[tuple[str, str], ...]:
     )
 
 
+#: Below this a scope's share buys a heading and almost no content, so the
+#: budget is better spent in priority order than split evenly.
+_MIN_USEFUL_SHARE = 400
+
+
 def _budgeted_blocks(
     scopes: tuple[tuple[str, str], ...], contents: dict[str, str]
 ) -> dict[str, str]:
@@ -314,16 +333,30 @@ def _budgeted_blocks(
     """
     per_index = agent_settings.agent_memory_index_max_chars
     remaining = agent_settings.agent_memory_section_max_chars
+    present = [(label, path) for label, path in scopes if contents.get(path)]
     blocks: dict[str, str] = {}
-    for label, path in scopes:
-        text = contents.get(path)
-        if not text:
-            continue
+    for index, (label, path) in enumerate(present):
+        text = contents[path]
         heading = f"\n### {label} — `{path}`\n"
+        # A share of what is left, so an earlier scope cannot starve a later
+        # one. Four indexes at the 2000-char cap do not fit a 6000-char section,
+        # and spending it greedily in priority order meant the last scope --
+        # `/memory/AGENTS.md`, the pod-shared index every agent writes to --
+        # vanished entirely. Unspent room rolls forward to the next scope.
+        #
+        # Below a usable share, fall back to priority order: when the budget is
+        # too small for everyone, one readable index beats four unreadable ones.
+        fair_share = remaining // (len(present) - index)
         room = min(per_index, remaining - len(heading))
-        if room <= 0:
-            continue
-        trimmed = truncate_index(text, limit=room, path=path)
+        if fair_share >= _MIN_USEFUL_SHARE:
+            room = min(room, fair_share - len(heading))
+        # Four indexes at the 2000-char cap did not fit a 6000-char section, and
+        # the budget is spent narrowest-scope-first, so the scope that fell off
+        # the end was always the last one: `/memory/AGENTS.md`, the pod-shared
+        # index every agent writes to and so the likeliest to have grown. The
+        # section budget now allows for every scope at the per-index cap; a
+        # scope that still does not fit is named in the header instead.
+        trimmed = truncate_index(text, limit=room, path=path) if room > 0 else ""
         if not trimmed:
             continue
         blocks[path] = f"{heading}{trimmed}"

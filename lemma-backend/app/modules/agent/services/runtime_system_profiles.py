@@ -24,6 +24,9 @@ from typing import Any
 from dotenv import load_dotenv
 
 from app.core.config import reveal_secret, settings
+from app.modules.agent.services.context_budget import (
+    catalog_metadata_for,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
@@ -114,6 +117,9 @@ def _build_system_openai_catalog(
             capabilities=_openai_compat_model_capabilities(
                 model_name, vision_model_names
             ),
+            # These names come from configuration, not discovery, so nothing
+            # else can know their window -- see `catalog_metadata_for`.
+            metadata=catalog_metadata_for(model_name),
         )
         for model_name in model_names
     ]
@@ -206,6 +212,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
                 provider_model_name=model_name,
                 # Claude models are multimodal, so the vision-only `view_image`
                 # tool stays available on the Anthropic system profile.
+                metadata=catalog_metadata_for(model_name),
                 capabilities=[
                     RuntimeModelCapability.TEXT,
                     RuntimeModelCapability.TOOLS,
@@ -294,6 +301,7 @@ def agent_host_model_catalog(
                     display_name=display_name,
                     provider_model_name=name,
                     capabilities=list(capabilities),
+                    metadata=catalog_metadata_for(name),
                 )
             )
     return entries

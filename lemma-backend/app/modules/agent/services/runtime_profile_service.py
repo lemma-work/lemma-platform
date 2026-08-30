@@ -383,8 +383,8 @@ class AgentRuntimeProfileService:
             # A capability hint is not worth losing a run over, but only a
             # database failure is expected here; anything else is a bug and
             # should surface as one.
-            logger.debug(
-                "agent.runtime_profile.harness_vision_lookup_failed.diagnostic",
+            logger.warning(
+                "agent.runtime_profile.harness_vision_lookup_failed.degraded",
                 exc_info=True,
             )
             return False
@@ -412,6 +412,11 @@ class AgentRuntimeProfileService:
                 include_disabled=True,
             )
         except Exception:  # noqa: BLE001 - a diagnostic must never mask the real error
+            logger.warning(
+                "agent.runtime_profile.archived_lookup_failed.degraded",
+                profile_id=str(profile_id),
+                exc_info=True,
+            )
             return None
         if profile is None or profile.status is RuntimeProfileStatus.ACTIVE:
             return None

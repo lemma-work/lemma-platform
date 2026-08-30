@@ -138,8 +138,8 @@ async def prepare_project_directory(
             await ensure_github_credentials(ctx, workspace_session)
             return await ensure_project_checkout(ctx, workspace_session)
     except Exception:
-        logger.debug(
-            "agent.workspace_cli.github_credential_bridge_failed.diagnostic",
+        logger.warning(
+            "agent.workspace_cli.github_credential_bridge_failed.degraded",
             exc_info=True,
         )
         return None

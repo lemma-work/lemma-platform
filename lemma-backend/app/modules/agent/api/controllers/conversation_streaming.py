@@ -42,6 +42,9 @@ async def start_and_stream_run(
             with anyio.CancelScope(shield=True):
                 await subscription.__aexit__(exc_type, exc, traceback)
         except Exception:
+            logger.warning(
+                "agent.streaming.subscription_close_failed.degraded", exc_info=True
+            )
             return
 
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
