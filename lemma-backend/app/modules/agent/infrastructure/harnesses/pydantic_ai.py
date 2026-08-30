@@ -7,7 +7,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
-import anyio
 
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     OutstandingToolCalls,
@@ -70,6 +69,13 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
+
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
+    STOP_WHILE_BUSY,
+    next_event_or_stop,
+    teardown_driver,
+)
+
 StopChecker = Callable[[], Awaitable[bool]]
 
 
@@ -97,21 +103,6 @@ def _instructions(
         )
         span.set_attribute("lemma.instructions.chars", len(text))
         return text
-
-
-def _report_teardown_failure(exc: BaseException, *, agent_run_id: UUID) -> None:
-    """Report a driver task that crashed unwinding — but not cancellation.
-
-    Swallowed either way; ``reraise_driver_failure`` owns what the run reports.
-    Caught by name, not as ``BaseException``, so SystemExit still propagates.
-    """
-    if isinstance(exc, asyncio.CancelledError):
-        return
-    logger.error(
-        "agent.pydantic_ai.stream_teardown.failed",
-        agent_run_id=str(agent_run_id),
-        exc_info=exc,
-    )
 
 
 class PydanticAIHarness:
@@ -417,7 +408,15 @@ class PydanticAIHarness:
         cancelled_by_us = False
         try:
             while True:
-                kind, payload = await queue.get()
+                item = await next_event_or_stop(queue, streamer.stop_requested)
+                if item is STOP_WHILE_BUSY:
+                    # The driver is somewhere that never checks for a stop --
+                    # in practice, inside a tool call. Ending the loop here
+                    # cancels it below, and the closing returns for whatever it
+                    # left open are emitted by `run`.
+                    yield streamer.stopped_event()
+                    break
+                kind, payload = item  # type: ignore[misc]
                 if kind == "done":
                     break
                 if kind == "error":
@@ -425,16 +424,7 @@ class PydanticAIHarness:
                     continue
                 yield payload  # type: ignore[misc]
         finally:
-            if not task.done():
-                cancelled_by_us = True
-                task.cancel()
-            # Let the child finish unwinding pydantic's scopes (in its own task),
-            # shielded so our own cancellation doesn't abandon that cleanup.
-            with anyio.CancelScope(shield=True):
-                try:
-                    await task
-                except (Exception, asyncio.CancelledError) as exc:
-                    _report_teardown_failure(exc, agent_run_id=agent_run_id)
+            cancelled_by_us = await teardown_driver(task, agent_run_id=agent_run_id)
 
         reraise_driver_failure(
             pending_error,
