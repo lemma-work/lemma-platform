@@ -358,7 +358,7 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
         },
     )
 
-    await adapter.send_display_resource(
+    await adapter._render_resource(
         credentials={},
         event=event,
         render_plan=SurfaceDisplayRenderPlan(

@@ -4,8 +4,8 @@
 pod reaches them back.
 
 A surface connects a pod's agent to an outside platform — Slack, Microsoft
-Teams, Telegram, WhatsApp, Gmail, Outlook, or plain email. A person messages the
-agent there and gets an answer there, in the same thread, without opening Lemma.
+Teams, Telegram, WhatsApp, or email. A person messages the agent there and gets
+an answer there, in the same thread, without opening Lemma.
 
 Two rules run through everything here. **A surface is a door, not a hole**: who
 someone is on Slack has to resolve to who they are in Lemma before they get
@@ -13,14 +13,25 @@ anything, and a person who is not entitled to the pod gets nothing.
 **Every platform gets the full product**: asking a question, approving an action,
 sending a file — if it works in the workspace it works on the surface, natively
 where the platform supports it and as plain text where it does not, but never
-dropped.
+dropped. Email included: it receives one message per turn rather than several,
+so a question travels inside the reply and the person answers by replying — but
+it is asked, not skipped.
 
 ---
 
 ## Capability: Connect a pod to a platform
 
 ### PS-SURF-001 — A person connects a pod's agent to a platform
-**Status:** covered
+**Status:** gap
+
+> **Gap:** a pod is never connected to *nothing*. Creating one mints the
+> assistant's mailbox, so `agent.surface.list` returns a `resend` surface
+> immediately and the two scenarios that open by asserting an empty pod fail on
+> that precondition rather than on what they set out to prove. See
+> `DEV-SURF-005`, which is a question for the product rather than a bug: an
+> agent with no other way to reach anyone should have an address, and what is
+> unresolved is whether "a person connects a surface" is the right framing for
+> the *first* one or only for the rest.
 
 - When a person connects a surface for a platform and binds it to an agent, the
   system shall start accepting messages for that pod on that platform.
@@ -167,6 +178,14 @@ dropped.
   to exactly the pod that address belongs to.
 - If an inbound email cannot be read completely, then the system shall drop it
   rather than starting an agent on a partial message.
+- Where a surface is email, the system shall compose everything one turn produces
+  into a single reply — the answer, any file shown, anything said aloud, and any
+  question asked.
+- Where an agent asks a question or requests approval on an email surface, the
+  system shall put it in that reply and shall accept the person's emailed answer
+  as the response.
+- Where an inbound email's sender cannot be authenticated by the receiving mail
+  service, the system shall not resolve it to a member's identity.
 
 > **Verified by:** scenarios for everything except the reply. Addressing,
 > routing to the pod that owns the address, refusing mail no surface owns,

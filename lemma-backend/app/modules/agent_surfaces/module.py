@@ -132,7 +132,6 @@ module = LemmaModule(
     worker_lifespans=(_surface_event_receiver,),
     stream_groups=(
         ("surface_events", "surface-webhook-events"),
-        ("schedule_events", "surface-schedule-events"),
         ("pod_events", "surface-pod-deletion-events"),
         ("identity_events", "surface-identity-events"),
     ),

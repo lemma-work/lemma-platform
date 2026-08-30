@@ -32,7 +32,7 @@ export type RecipePreviewKind =
     | 'briefing'
     | 'follow-up'
     | 'kit';
-export type RecipePlatform = 'WHATSAPP' | 'TELEGRAM' | 'SLACK' | 'GMAIL' | 'OUTLOOK' | 'TEAMS';
+export type RecipePlatform = 'WHATSAPP' | 'TELEGRAM' | 'SLACK' | 'RESEND' | 'TEAMS';
 export type StarterThemeId =
     | 'dashboards'
     | 'whatsapp'
@@ -421,7 +421,7 @@ const PROMPT_RECIPES: Recipe[] = [
     },
     {
         id: 'email-agent', name: 'Email your agent', kicker: 'Reach the pod from your own inbox, and get the work back there.',
-        category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'workflow'], preview: 'email', platforms: ['GMAIL', 'OUTLOOK'],
+        category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'workflow'], preview: 'email', platforms: ['RESEND'],
         blurb: 'Mail the pod from your work address — forward a thread, ask a question, approve a draft — and get the answer in the same thread.',
         examples: ['Forward to file', 'Ask by email', 'Reply to approve'],
         highlights: ['A connected Gmail or Outlook mailbox your teammates can write to', 'Forwarded threads become records the pod can act on', 'The agent answers in the same thread, from the same permissions'],

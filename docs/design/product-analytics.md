@@ -59,7 +59,7 @@ make.
 
 **A surface is not the platform.** In Lemma, *surface* is a specific product
 noun: a chat platform where an agent answers pod members — Slack, Teams,
-WhatsApp, Telegram, Gmail, Outlook. Using it to mean "the client that made the
+WhatsApp, Telegram, email. Using it to mean "the client that made the
 request" collides with the product's own vocabulary and breaks one noun per
 concept. Surfaces are one entry among many.
 
@@ -132,7 +132,7 @@ class OriginKind(str, Enum):
     DESKTOP = "DESKTOP"            # the Next app in the Tauri webview
     CLI = "CLI"                    # lemma commands
     APP = "APP"                    # a published pod app, members only
-    SURFACE = "SURFACE"            # Slack/Teams/WhatsApp/Telegram/Gmail/Outlook
+    SURFACE = "SURFACE"            # Slack/Teams/WhatsApp/Telegram/email
 
     # Programmatic
     SDK = "SDK"                    # lemma-python / lemma-typescript

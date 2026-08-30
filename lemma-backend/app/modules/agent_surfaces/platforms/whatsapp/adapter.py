@@ -55,21 +55,22 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, message, metadata
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await WhatsAppPlatformService(credentials).send_display_resource(
+    ) -> bool:
+        await WhatsAppPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
+        return True
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -77,11 +78,11 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await WhatsAppPlatformService(credentials).send_questions(
+        return await WhatsAppPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -89,8 +90,24 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await WhatsAppPlatformService(credentials).send_approval(
+        return await WhatsAppPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
+        )
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await WhatsAppPlatformService(credentials).acknowledge_interaction(
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
         )
 
     async def parse_inbound_interaction(
@@ -140,7 +157,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, attachment
         )
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

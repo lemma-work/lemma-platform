@@ -48,14 +48,49 @@ class ConversationType(StrEnum):
         return None
 
 
+class ThreadShape(StrEnum):
+    """Does one thread id carry many conversations, or exactly one?
+
+    The axis the conversation reset actually turns on, and it is a property of
+    the *conversation*, not of the surface. One Slack install has both shapes at
+    once, which is why asking ``surface.mode`` got it wrong: a channel thread
+    inherited the DM reset and a reply a day later started a fresh conversation
+    with no history -- while Slack showed the person the whole thread.
+    """
+
+    #: A chat DM. One permanent thread id carries every conversation you will
+    #: ever have there, so something has to cut it into conversations.
+    MULTIPLEXED = "MULTIPLEXED"
+    #: A channel thread, an email thread. The platform already bounded it to one
+    #: topic, so a time-based reset would cut a conversation that is still one.
+    TOPIC_SCOPED = "TOPIC_SCOPED"
+
+
+def thread_shape(conversation_kind: str | None) -> ThreadShape:
+    """The shape of the thread a conversation of this kind lives in.
+
+    Derived rather than stored: ``conversation_kind`` is already on every link
+    (``NOT NULL``, defaulting to ``DM``), so there is nothing to migrate and a
+    row written before routing set it degrades to the reset that was already
+    happening -- no change, rather than a new behaviour.
+    """
+    return (
+        ThreadShape.MULTIPLEXED
+        if str(conversation_kind or "DM").upper() == "DM"
+        else ThreadShape.TOPIC_SCOPED
+    )
+
+
 class SurfaceMode(StrEnum):
     DM = "DM"
     EMAIL = "EMAIL"
 
 
 class SurfaceEventMode(StrEnum):
+    """How a surface receives. Only one way now, and the member is kept because
+    the column stores it -- ``COMPOSIO_TRIGGER`` went with the polled mailboxes."""
+
     WEBHOOK = "WEBHOOK"
-    COMPOSIO_TRIGGER = "COMPOSIO_TRIGGER"
 
 
 class SurfaceCredentialMode(StrEnum):
@@ -64,12 +99,20 @@ class SurfaceCredentialMode(StrEnum):
 
 
 class SurfacePlatform(StrEnum):
+    """The platforms a pod can be reached on.
+
+    Email is Resend, and only Resend. Gmail and Outlook were here as
+    Composio-backed mailboxes, which made "an email surface" mean three
+    different transports with three attachment strategies between them -- bytes,
+    Graph drafts, and a signed URL the provider downloads server-side. Reaching
+    a Gmail *account* is still something an agent does, through the connector;
+    it is just not a surface.
+    """
+
     SLACK = "SLACK"
     TEAMS = "TEAMS"
     WHATSAPP = "WHATSAPP"
     TELEGRAM = "TELEGRAM"
-    GMAIL = "GMAIL"
-    OUTLOOK = "OUTLOOK"
     RESEND = "RESEND"
 
     @classmethod
@@ -81,11 +124,7 @@ class SurfacePlatform(StrEnum):
 
     @property
     def is_email(self) -> bool:
-        return self in {
-            SurfacePlatform.GMAIL,
-            SurfacePlatform.OUTLOOK,
-            SurfacePlatform.RESEND,
-        }
+        return self is SurfacePlatform.RESEND
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -112,6 +151,10 @@ class ParsedInboundSurfaceEvent(BaseModel):
     sender_email: str | None = None
     sender_phone: str | None = None
     sender_display_name: str | None = None
+    # Did the receiving mail service vouch for ``sender_email``? Email only:
+    # None everywhere else, where a signed platform payload asserts the sender
+    # and there is nothing to authenticate. See ``email_authentication``.
+    sender_authentication: str | None = None
     message_text: str
     is_dm: bool = False
     mentioned_agent: bool = False
@@ -230,8 +273,8 @@ class AgentSurfaceEntity(AggregateRoot):
     external_channel_id: str | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
-    schedule_id: UUID | None = None  # Gmail/Outlook: linked email schedule
-    surface_identity_email: str | None = None  # Gmail/Outlook: for self-email filtering
+    #: The address this surface receives on, and the one it replies from.
+    surface_identity_email: str | None = None
     webhook_secret: str | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
@@ -335,34 +378,9 @@ class AgentSurfaceEntity(AggregateRoot):
         account_id: UUID | None,
     ) -> None:
         if mode is SurfaceMode.EMAIL and not surface_type.is_email:
-            raise AgentSurfaceValidationError(
-                "EMAIL mode is only supported for Gmail and Outlook"
-            )
-        # Resend is an email surface delivered over a native webhook (system
-        # creds), not a Composio trigger like Gmail/Outlook.
+            raise AgentSurfaceValidationError("EMAIL mode is only supported for email")
         if (
-            mode is SurfaceMode.EMAIL
-            and surface_type is not SurfacePlatform.RESEND
-            and event_mode is not SurfaceEventMode.COMPOSIO_TRIGGER
-        ):
-            raise AgentSurfaceValidationError(
-                "EMAIL surfaces require COMPOSIO_TRIGGER event_mode"
-            )
-        if (
-            mode is not SurfaceMode.EMAIL
-            and event_mode is SurfaceEventMode.COMPOSIO_TRIGGER
-        ):
-            raise AgentSurfaceValidationError(
-                "COMPOSIO_TRIGGER event_mode is only supported for EMAIL surfaces"
-            )
-        if (
-            surface_type
-            in {
-                SurfacePlatform.SLACK,
-                SurfacePlatform.TEAMS,
-                SurfacePlatform.GMAIL,
-                SurfacePlatform.OUTLOOK,
-            }
+            surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}
             and account_id is None
         ):
             raise AgentSurfaceValidationError(
@@ -380,11 +398,8 @@ class AgentSurfaceEntity(AggregateRoot):
                 if isinstance(event_mode, SurfaceEventMode)
                 else event_mode
             )
-        # Resend uses a native inbound webhook; Gmail/Outlook use Composio triggers.
-        if surface_type is SurfacePlatform.RESEND:
-            return SurfaceEventMode.WEBHOOK
-        if surface_type.is_email:
-            return SurfaceEventMode.COMPOSIO_TRIGGER
+        # Every surface receives over a native webhook. Polling existed only for
+        # the Composio-backed mailboxes, and they are gone.
         return SurfaceEventMode.WEBHOOK
 
     def activate(self) -> None:

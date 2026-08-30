@@ -18,6 +18,7 @@ import inspect
 
 import pytest
 
+from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -119,4 +120,244 @@ def test_adapter_overrides_accept_every_argument_the_base_declares(platform, ada
         "shared caller passes what the base declares, so a narrower override "
         "raises TypeError at runtime — swallowed wherever the call is "
         "best-effort."
+    )
+
+
+def _overrides(adapter: object, name: str) -> bool:
+    """Does this adapter supply ``name`` itself, rather than inheriting the base?"""
+    return any(
+        name in vars(cls)
+        for cls in type(adapter).__mro__
+        if cls is not BaseSurfaceAdapter and issubclass(cls, BaseSurfaceAdapter)
+    )
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_a_platform_that_parses_interactions_also_acknowledges_them(platform, adapter):
+    """The two halves of an interaction are one capability, not two.
+
+    `acknowledge_interaction` had a silent no-op default and only Telegram
+    overrode it, so on Slack, Teams and WhatsApp a tapped Approve produced no
+    confirmation, left the buttons live, and — because `handle_interaction`
+    routes every failure through this same call — reported a failed submission
+    to nobody at all while the run stayed WAITING.
+
+    A platform that cannot receive interactions is free to implement neither.
+    Implementing only the inbound half is what is banned.
+    """
+    if not _overrides(adapter, "parse_inbound_interaction"):
+        pytest.skip(f"{platform} receives no interactions")
+    assert _overrides(adapter, "acknowledge_interaction"), (
+        f"{platform} parses interactions but inherits the no-op "
+        "acknowledge_interaction(), so a person tapping a button is told nothing."
+    )
+
+
+# Outbound conversation content goes through `deliver` and nowhere else. These
+# two are the delivery port's remaining public sends, and both are deliberate:
+#
+#   send_message   — the text primitive `deliver` itself degrades onto, and the
+#                    only way to say something before a conversation exists
+#                    (the signup and setup replies in fallback_reply_service).
+#   send_cold_email — not a reply at all. It opens a thread rather than landing
+#                    in one, which is the one thing email can do that chat
+#                    cannot, and it has no envelope to belong to.
+_PUBLIC_SENDS_THAT_ARE_NOT_CONTENT = {"send_message", "send_cold_email"}
+
+
+def test_the_delivery_port_exposes_no_public_verb_for_a_kind_of_content():
+    """One seam for content, so a new kind cannot add a hole per platform.
+
+    Each of `send_questions`, `send_approval`, `send_voice_note`,
+    `send_file_attachment` and `send_display_resource` was a public verb every
+    platform had to answer and most answered with a default `return False` --
+    indistinguishable from a platform that genuinely declined. They are
+    `_render_*` hooks now, reachable only from `deliver`.
+
+    Chrome is not in scope here and does not need excluding: App Home, modals,
+    setup prompts and thread titles live on `SurfaceChromeMixin`, which is why
+    this list no longer carries six Slack-shaped exceptions.
+    """
+    delivery_only = {
+        name
+        for cls in (BaseSurfaceAdapter,)
+        for name in dir(cls)
+        if name.startswith(("send_", "publish_", "open_", "set_thread"))
+        and not _declared_on_chrome(name)
+    }
+    unexpected = sorted(delivery_only - _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT)
+    assert not unexpected, (
+        f"{unexpected} are public outbound verbs on the delivery port. A kind of "
+        "content belongs in SurfaceEnvelope with a `_render_*` hook."
+    )
+
+
+def _declared_on_chrome(name: str) -> bool:
+    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
+
+    return name in vars(SurfaceChromeMixin)
+
+
+def test_chrome_is_a_separate_contract_from_delivery():
+    """The split that stopped every non-Slack platform reading as half-done.
+
+    An App Home tab is not a message. Mixing them made a platform contract of
+    eighteen verbs, six of which only one platform has.
+    """
+    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
+    from app.modules.agent_surfaces.platforms.envelope_delivery import (
+        EnvelopeDeliveryMixin,
+    )
+
+    assert "publish_home_view" in vars(SurfaceChromeMixin)
+    assert "publish_home_view" not in vars(EnvelopeDeliveryMixin)
+    assert "deliver" in vars(EnvelopeDeliveryMixin)
+    assert "deliver" not in vars(SurfaceChromeMixin)
+
+
+def test_nothing_outside_the_delivery_mixin_renders_content_itself():
+    """The seam is only a seam while everything goes through it.
+
+    A static check rather than a typed one, because Python cannot express
+    "protected" — and the failure this prevents is precisely someone reaching
+    past `deliver` for one platform's native render and quietly reintroducing
+    the ladder that used to be copied at every call site.
+    """
+    from pathlib import Path
+
+    module_root = Path(__file__).resolve().parents[2]
+    assert module_root.name == "agent_surfaces", module_root
+    allowed = {"envelope_delivery.py", "base.py"}
+    scanned = 0
+    offenders: list[str] = []
+    for path in module_root.rglob("*.py"):
+        if path.name in allowed or "/tests/" in path.as_posix():
+            continue
+        source = path.read_text()
+        scanned += 1
+        for hook in (
+            "_render_choices",
+            "_render_decision",
+            "_render_file",
+            "_render_voice",
+            "_render_resource",
+        ):
+            # A definition is a platform implementing its half. A call is the
+            # thing being banned.
+            if f".{hook}(" in source and f"def {hook}(" not in source:
+                offenders.append(f"{path.name}:{hook}")
+    assert scanned > 50, f"the scan found only {scanned} files; it is not looking"
+    assert not offenders, (
+        f"{offenders} call a render hook directly. Build a SurfaceEnvelope and "
+        "call deliver() so the part degrades the same way it does everywhere else."
+    )
+
+
+def _single_part_envelope(field: str):
+    """An envelope carrying exactly one kind of content, for `field`."""
+    from app.modules.agent_surfaces.domain.envelope import (
+        EnvelopeFile,
+        EnvelopeVoice,
+    )
+    from app.modules.agent_surfaces.domain.models import (
+        APPROVAL_DECISION_APPROVE,
+        SurfaceApprovalButton,
+        SurfaceApprovalRenderPlan,
+        SurfaceDisplayRenderPlan,
+        SurfaceQuestion,
+        SurfaceQuestionOption,
+        SurfaceQuestionRenderPlan,
+    )
+
+    made = {
+        "text": lambda: SurfaceEnvelope(text="something to say"),
+        "resources": lambda: SurfaceEnvelope(
+            resources=[SurfaceDisplayRenderPlan(resource_type="TABLE", title="Orders")]
+        ),
+        "files": lambda: SurfaceEnvelope(
+            files=[
+                EnvelopeFile(
+                    file_name="q3.pdf", content=b"%PDF", mime_type="application/pdf"
+                )
+            ]
+        ),
+        "voice": lambda: SurfaceEnvelope(
+            voice=EnvelopeVoice(
+                file_name="answer.ogg", content=b"OggS", mime_type="audio/ogg"
+            )
+        ),
+        "choices": lambda: SurfaceEnvelope(
+            choices=SurfaceQuestionRenderPlan(
+                title="Pick",
+                callback_id="conv|tool",
+                questions=[
+                    SurfaceQuestion(
+                        header="which",
+                        question="Which one?",
+                        options=[SurfaceQuestionOption(label="Red")],
+                    )
+                ],
+            )
+        ),
+        "decision": lambda: SurfaceEnvelope(
+            decision=SurfaceApprovalRenderPlan(
+                title="Delete the table?",
+                callback_id="conv|tool",
+                buttons=[
+                    SurfaceApprovalButton(
+                        label="Approve", decision=APPROVAL_DECISION_APPROVE
+                    )
+                ],
+            )
+        ),
+    }
+    builder = made.get(field)
+    assert builder is not None, (
+        f"SurfaceEnvelope grew a {field!r} field and this test does not know how "
+        "to build one. Add it here — that is the point of the test."
+    )
+    return builder()
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+@pytest.mark.parametrize("field", sorted(SurfaceEnvelope.model_fields))
+async def test_every_envelope_field_reaches_the_person_on_every_platform(
+    platform, adapter, field
+):
+    """A part `deliver` does not handle is a part that reaches nobody, silently.
+
+    This is the hole the seam was supposed to close and did not. `SurfaceEnvelope`
+    grew a `voice` field; `EmailOneReplyMixin._render_one` folded five of the six
+    and never read it — so `say` on an email surface composed an empty body, sent
+    nothing, and returned a receipt saying nothing was undelivered. Every other
+    contract test here checks a method *exists*; none checked that the one method
+    that matters covers everything it is handed.
+
+    Driven against a stubbed transport, so this asserts the envelope was walked,
+    not that a real platform accepted it.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+
+    adapter.send_message = AsyncMock()
+    receipt = await adapter.deliver(
+        credentials={},
+        event=ParsedInboundSurfaceEvent(
+            platform=platform,
+            conversation_type=ConversationType.EXTERNAL_DM,
+            external_thread_id="thread-1",
+            message_text="hi",
+        ),
+        envelope=_single_part_envelope(field),
+    )
+    assert field in receipt.parts or any(
+        name.startswith(f"{field}[") for name in receipt.parts
+    ), (
+        f"{platform} delivered an envelope carrying only {field!r} and the receipt "
+        f"never mentions it ({sorted(receipt.parts)}). A part `deliver` does not "
+        "walk is a part that reaches nobody with nothing saying so."
     )

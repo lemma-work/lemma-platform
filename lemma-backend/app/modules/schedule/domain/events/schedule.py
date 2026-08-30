@@ -120,5 +120,4 @@ class ScheduleEvents:
         "workflow-schedule-events",
         "schedule-notifications",
         "schedule-runtime-lifecycle",
-        "surface-schedule-events",
     )

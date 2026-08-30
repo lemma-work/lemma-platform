@@ -13,7 +13,7 @@ file past the real 20 MB cap — see ``_oversize_bytes``.
 
 N/A cells:
 - **Teams has no native file-send implementation at all**
-  (``TeamsSurfaceAdapter`` doesn't override ``send_file_attachment``, so the
+  (``TeamsSurfaceAdapter`` doesn't override ``_render_file``, so the
   base adapter's stub always returns ``False``) — every Teams file, regardless
   of size, falls back to a link card. Only one Teams case is needed since
   there is no size-threshold behavior to prove.
@@ -53,7 +53,6 @@ from app.modules.agent.tools.user_interaction import (
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.platforms import attachment_limits
@@ -62,12 +61,9 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_TENANT_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _ensure_connector_trigger,
-    _gmail_payload,
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
-    _outlook_payload,
     _resend_payload,
     _seed_external_user,
     _seed_pod_file,
@@ -82,13 +78,9 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_display_resource,
-    script_email_reply,
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.composition.schedule_connectors import (
-    ManagersFactory,
-)
 
 pytestmark = pytest.mark.e2e
 
@@ -749,197 +741,7 @@ async def test_display_resource_whatsapp_small_file_attaches_natively(
     assert documents[-1]["document"]["filename"] == "small.pdf"
 
 
-async def test_display_resource_gmail_attaches_datastore_file_via_composio(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_gmail,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Composio-connected Gmail attaches a datastore file by passing its signed
-    URL in the Composio op's `attachment` field (the SDK downloads + attaches)."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="gmail",
-        credentials={
-            "connection_id": "gmail-file-e2e-account",
-        },
-        email="assistant@gmail.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="gmail",
-        trigger_id="gmail_new_message_file_e2e",
-        event_type="GMAIL_NEW_GMAIL_MESSAGE",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "GMAIL", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
-    )
-
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_gmail_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@gmail.test",
-                thread_id="gmail-thread-file-e2e",
-                message_id="gmail-message-file-1",
-                text="Can you send me the report?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[
-            script_email_reply(
-                "gmail_reply_email",
-                "Here is the report.",
-                attachment_paths=[path],
-                tool_call_id=_TOOL_CALL_ID,
-            )
-        ],
-    )
-
-    messages = await _messages_for_conversation(
-        authenticated_client,
-        pod_id=pod_id,
-        conversation_id=str(context.conversation_id),
-    )
-    tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
-    )
-    result = tool_return["tool_result"]
-    assert result["success"] is True
-    assert result["attachment_count"] == 1
-
-    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
-    payload = gmail_messages[-1]["payload"]
-    assert "Here is the report." in json.dumps(payload)
-    # The datastore file was passed to Composio as a signed URL to download+attach.
-    assert payload.get("attachment")
-
-
-async def test_display_resource_outlook_attaches_datastore_file_via_composio(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_outlook,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Composio-connected Outlook attaches a datastore file by passing its signed
-    URL in the Composio op's `attachment` field."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="outlook",
-        credentials={
-            "connection_id": "outlook-file-e2e-account",
-        },
-        email="assistant@outlook.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="outlook",
-        trigger_id="outlook_message_file_e2e",
-        event_type="OUTLOOK_MESSAGE_TRIGGER",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "OUTLOOK", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
-    )
-
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_outlook_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@outlook.test",
-                thread_id="outlook-thread-file-e2e",
-                message_id="outlook-message-file-1",
-                text="Can you send me the report?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[
-            script_email_reply(
-                "outlook_reply_email",
-                "Here is the report.",
-                attachment_paths=[path],
-                tool_call_id=_TOOL_CALL_ID,
-            )
-        ],
-    )
-
-    messages = await _messages_for_conversation(
-        authenticated_client,
-        pod_id=pod_id,
-        conversation_id=str(context.conversation_id),
-    )
-    tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
-    )
-    result = tool_return["tool_result"]
-    assert result["success"] is True
-    assert result["attachment_count"] == 1
-
-    outlook_messages = await wait_for_messages(
-        message_store, "OUTLOOK_REPLY", min_count=1
-    )
-    payload = outlook_messages[-1]["payload"]
-    assert "Here is the report." in json.dumps(payload)
-    # The datastore file was passed to Composio as a signed URL to download+attach.
-    assert payload.get("attachment")
-
-
-async def test_display_resource_resend_attachment_paths_delivers_real_attachment(
+async def test_a_file_shown_on_email_is_attached_to_the_one_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -995,13 +797,11 @@ async def test_display_resource_resend_attachment_paths_delivers_real_attachment
             ),
             headers={},
         ),
+        # No reply tool any more: the agent shows the file and writes its
+        # answer, and the one reply carries both.
         script=[
-            script_email_reply(
-                "resend_reply_email",
-                "Here is the report.",
-                attachment_paths=[path],
-                tool_call_id=_TOOL_CALL_ID,
-            )
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
+            script_text("Here is the report."),
         ],
     )
 

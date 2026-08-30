@@ -25,6 +25,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
     maybe_resume_pending_interaction,
 )
 
@@ -93,7 +94,7 @@ async def test_typing_past_a_question_is_a_new_message() -> None:
         _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
     )
 
-    assert consumed is False
+    assert consumed is ResumeOutcome.NOT_A_DECISION
     service.resolve_user_approval_internal.assert_not_awaited()
 
 
@@ -112,7 +113,7 @@ async def test_typing_past_an_approval_is_a_new_message() -> None:
         _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
     )
 
-    assert consumed is False
+    assert consumed is ResumeOutcome.NOT_A_DECISION
     service.resolve_user_approval_internal.assert_not_awaited()
 
 
@@ -130,7 +131,7 @@ async def test_an_answer_typed_after_tapping_other_still_answers() -> None:
         _context(conversation_id), "Weekly summary", conversation_service=service
     )
 
-    assert consumed is True
+    assert consumed is ResumeOutcome.CONSUMED
     resolved = service.resolve_user_approval_internal.await_args.kwargs
     assert resolved["approval_id"] == "call-the-question"
 
@@ -150,7 +151,7 @@ async def test_other_tapped_on_a_different_question_is_not_spent_here() -> None:
         _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
     )
 
-    assert consumed is False
+    assert consumed is ResumeOutcome.NOT_A_DECISION
 
 
 @pytest.mark.asyncio
@@ -168,7 +169,7 @@ async def test_typing_an_offered_option_still_answers() -> None:
         consumed = await maybe_resume_pending_interaction(
             _context(conversation_id), typed, conversation_service=service
         )
-        assert consumed is True, typed
+        assert consumed is ResumeOutcome.CONSUMED, typed
 
 
 @pytest.mark.asyncio
@@ -184,7 +185,7 @@ async def test_typing_a_decision_still_answers_an_approval() -> None:
         consumed = await maybe_resume_pending_interaction(
             _context(conversation_id), typed, conversation_service=service
         )
-        assert consumed is True, typed
+        assert consumed is ResumeOutcome.CONSUMED, typed
 
 
 @pytest.mark.asyncio
@@ -209,4 +210,4 @@ async def test_a_card_that_arrived_as_text_is_answered_by_typing() -> None:
         conversation_service=service,
     )
 
-    assert consumed is True
+    assert consumed is ResumeOutcome.CONSUMED

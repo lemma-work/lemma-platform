@@ -13307,13 +13307,12 @@
         "type": "object"
       },
       "SurfacePlatform": {
+        "description": "The platforms a pod can be reached on.\n\nEmail is Resend, and only Resend. Gmail and Outlook were here as\nComposio-backed mailboxes, which made \"an email surface\" mean three\ndifferent transports with three attachment strategies between them -- bytes,\nGraph drafts, and a signed URL the provider downloads server-side. Reaching\na Gmail *account* is still something an agent does, through the connector;\nit is just not a surface.",
         "enum": [
           "SLACK",
           "TEAMS",
           "WHATSAPP",
           "TELEGRAM",
-          "GMAIL",
-          "OUTLOOK",
           "RESEND"
         ],
         "title": "SurfacePlatform",
