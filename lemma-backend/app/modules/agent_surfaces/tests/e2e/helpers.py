@@ -750,6 +750,7 @@ def _resend_payload(
     subject: str = "Surface Resend E2E",
     in_reply_to: str | None = None,
     references: list[str] | None = None,
+    authentication_results: str | None = None,
 ) -> dict:
     """Already-normalized Resend inbound shape (matches what the production
     webhook controller's ``_normalize_resend_inbound`` produces from the raw
@@ -767,7 +768,32 @@ def _resend_payload(
         # them or it silently tests a first contact instead.
         "in_reply_to": in_reply_to,
         "references": list(references or []),
+        # Without this the sender is nobody: an inbound address only names a
+        # member when the receiving mail service vouched for it. Every real
+        # message has one -- Resend receives through SES, and 20 of 20 live
+        # inbound messages carry exactly this shape -- so a fixture without one
+        # was testing a message that does not arrive.
+        "headers": {
+            "authentication-results": authentication_results
+            or _authentication_results(sender_email)
+        },
     }
+
+
+def _authentication_results(sender_email: str) -> str:
+    """What SES writes above an inbound message it authenticated.
+
+    Copied from live inbound mail rather than invented, down to the comment
+    beside ``spf=`` — that comment is where an attacker's envelope sender is
+    echoed, so a fixture that omits it cannot exercise the parsing that matters.
+    """
+    domain = str(sender_email).rpartition("@")[2] or "example.com"
+    return (
+        f"amazonses.com; spf=pass (spfCheck: domain of {domain} designates "
+        f"1.2.3.4 as permitted sender) client-ip=1.2.3.4; "
+        f"envelope-from={sender_email}; helo=mail.{domain}; "
+        f"dkim=pass header.i=@{domain}; dmarc=pass header.from={domain};"
+    )
 
 
 def _telegram_photo_payload(

@@ -26,25 +26,17 @@ class SurfaceSettings(BaseSettings):
 
     # Inbound email identity (see platforms/email_authentication.py)
     surface_email_trusted_authserv_ids: str = Field(
-        default="",
+        default="amazonses.com",
         description=(
             "Comma-separated authserv-ids whose Authentication-Results headers are "
-            "trusted, e.g. 'mx.google.com'. Anyone can put that header in a message "
-            "they send; naming the receiving service here is what makes it a real "
-            "check rather than a claim. Empty means read only the first header, "
-            "which is the one the receiver prepends -- weaker, but not nothing."
-        ),
-    )
-    surface_email_allow_unauthenticated_identity: bool = Field(
-        default=True,
-        description=(
-            "Whether an inbound email carrying NO usable Authentication-Results "
-            "header may still resolve to a Lemma user. A header that says the "
-            "sender failed is never believed regardless. Defaults to True because "
-            "not every provider adds the header and flipping it blind would stop "
-            "resolving every inbound sender; watch for "
-            "agent_surfaces.identity.email_sender_unauthenticated.degraded in "
-            "logs, then set it False."
+            "believed. Anyone can put that header in a message they send; naming "
+            "the receiving service is what makes reading it a check rather than a "
+            "claim. Defaults to the one Lemma's own inbound actually uses -- "
+            "Resend receives through SES, which writes 'amazonses.com' -- so the "
+            "check is real out of the box. Change it only if inbound mail reaches "
+            "this deployment through a different receiver; emptying it falls back "
+            "to believing whichever header came first, which is what a forged one "
+            "arrives as when the receiver adds none of its own."
         ),
     )
 

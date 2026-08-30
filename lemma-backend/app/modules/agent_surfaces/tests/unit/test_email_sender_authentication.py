@@ -196,24 +196,18 @@ async def test_an_authenticated_sender_resolves(monkeypatch) -> None:
     assert resolved.internal_user_id == known
 
 
-async def test_an_unauthenticated_sender_follows_the_deployment_setting(
-    monkeypatch,
-) -> None:
-    from app.modules.agent_surfaces.config import surface_settings
+async def test_an_unauthenticated_sender_is_a_stranger_not_a_member() -> None:
+    """No setting can make this resolve, which is the point of removing it.
 
+    `PS-SURF-022` already said an inbound sender the receiving mail service
+    could not authenticate shall not resolve to a member's identity. The config
+    that let a deployment opt out of that existed because nobody had checked
+    whether Resend supplies `Authentication-Results`. It does, on every message.
+    """
     known = uuid4()
-    monkeypatch.setattr(
-        surface_settings, "surface_email_allow_unauthenticated_identity", False
-    )
     assert (
         await _service(known).resolve(event=_event("UNKNOWN"))
     ).internal_user_id is None
-    monkeypatch.setattr(
-        surface_settings, "surface_email_allow_unauthenticated_identity", True
-    )
-    assert (
-        await _service(known).resolve(event=_event("UNKNOWN"))
-    ).internal_user_id == known
 
 
 async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:
@@ -228,34 +222,27 @@ async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:
     assert resolved.internal_user_id == known
 
 
-async def test_an_email_with_no_verdict_at_all_is_unknown_not_trusted(
-    monkeypatch,
-) -> None:
+async def test_an_email_with_no_verdict_at_all_is_unknown_not_trusted() -> None:
     """A missing verdict on email means the check did not run, not that it passed.
 
     Only ``merge_received_email`` ever sets one, so it is absent whenever
     enrichment did not: no ``email_id`` on the webhook, an ``HTTPError`` on the
     body fetch, or the whole polling receiver. Read as the chat platforms'
     "nothing to ask", an attacker who could make that fetch fail skipped
-    authentication entirely, whatever the setting said.
+    authentication entirely.
     """
-    from app.modules.agent_surfaces.config import surface_settings
-
     known = uuid4()
-    monkeypatch.setattr(
-        surface_settings, "surface_email_allow_unauthenticated_identity", False
-    )
     assert (await _service(known).resolve(event=_event(None))).internal_user_id is None
 
 
-async def test_an_email_with_no_verdict_still_follows_a_permissive_setting(
-    monkeypatch,
-) -> None:
-    """It is UNKNOWN, so policy decides — the same as an unusable header."""
-    from app.modules.agent_surfaces.config import surface_settings
+def test_the_trusted_receiver_is_named_out_of_the_box() -> None:
+    """Reading the first header is only sound if the receiver writes one.
 
-    known = uuid4()
-    monkeypatch.setattr(
-        surface_settings, "surface_email_allow_unauthenticated_identity", True
-    )
-    assert (await _service(known).resolve(event=_event(None))).internal_user_id == known
+    Where it does not, the sender's forgery *is* the first header. Lemma's own
+    inbound is Resend, which receives through SES and signs its verdict
+    ``amazonses.com`` -- so naming it costs a deployment nothing and turns
+    "believe whoever wrote first" into "believe our receiver".
+    """
+    from app.modules.agent_surfaces.config import SurfaceSettings
+
+    assert SurfaceSettings().surface_email_trusted_authserv_ids == "amazonses.com"

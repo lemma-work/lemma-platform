@@ -144,6 +144,7 @@ class ResendInboundParser:
         if not sender or not destination:
             return None
 
+        raw_headers = payload.get("headers")
         message_id = text_or_none(payload.get("message_id"))
         in_reply_to = text_or_none(payload.get("in_reply_to"))
         references = [
@@ -176,6 +177,17 @@ class ResendInboundParser:
             sender_external_user_id=sender,
             sender_email=sender,
             sender_display_name=identity.display_name,
+            # Only when this payload actually carries headers. The `email.received`
+            # webhook carries none, so on that path this stays None and
+            # `merge_received_email` fills it in after the body fetch. Anything
+            # that *does* arrive with headers -- the polling receiver, a
+            # replayed payload -- gets its verdict here rather than never,
+            # which is what left those paths unauthenticated entirely.
+            sender_authentication=(
+                email_sender_authentication(raw_headers, sender)
+                if raw_headers
+                else None
+            ),
             message_text=message_text,
             is_dm=True,
             should_start_conversation=True,

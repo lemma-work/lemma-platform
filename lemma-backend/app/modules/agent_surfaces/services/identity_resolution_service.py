@@ -68,23 +68,28 @@ def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
     whose signature was already verified, so there is nothing here to doubt --
     ``sender_authentication`` is None for them and this passes.
 
-    A verdict of FAIL is never believed, whatever the configuration says: the
-    receiving service evaluated the message and it did not pass. UNKNOWN means
-    no usable header arrived, which is a deployment question rather than a
-    security one, so policy decides -- and it is logged either way, so an
-    operator can see whether their provider supplies the header before turning
-    the stricter setting on.
+    **There is no setting.** There used to be one, defaulting to "believe an
+    unauthenticated ``From:``", on the reasoning that not every provider writes
+    ``Authentication-Results`` and refusing blind would stop resolving every
+    inbound sender. That reasoning rested on a question nobody had asked the
+    provider: 20 of 20 real inbound messages carry the header, written by
+    ``amazonses.com``, because Resend receives through SES. So the config was
+    protecting against something that does not happen, at the price of leaving
+    account takeover a single environment variable away -- and a flag whose safe
+    value is the default is not a flag, it is an unexploited hole.
 
-    **``None`` on an email surface is UNKNOWN, not "nothing to check".** Only
+    What is left is the rule ``PS-SURF-022`` already stated and the code did not
+    keep: a sender the receiving mail service did not vouch for does not become
+    a member. They are a stranger, and the unresolved-sender path tells them how
+    to get access -- which is what should happen to someone we cannot identify.
+
+    ``None`` on an email surface is UNKNOWN, not "nothing to check". Only
     ``merge_received_email`` ever sets the verdict, so it is absent whenever
     enrichment did not run: no ``email_id`` on the webhook, an ``HTTPError`` on
     the body fetch, or the whole polling receiver. Reading that as the chat
     platforms' "no question to ask" meant an attacker who could make the fetch
-    fail -- or a deployment in polling mode -- skipped this check entirely,
-    whatever either setting said. The platform is what separates the two cases,
-    so the platform is what decides.
+    fail -- or a deployment in polling mode -- skipped this check entirely.
     """
-    from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.platforms.email_authentication import (
         EmailAuthenticationVerdict,
     )
@@ -101,14 +106,14 @@ def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
             sender_email=event.sender_email,
         )
         return False
-    allowed = bool(surface_settings.surface_email_allow_unauthenticated_identity)
+    # UNKNOWN. Nothing vouched for this address, so it names nobody here.
     logger.warning(
         "agent_surfaces.identity.email_sender_unauthenticated.degraded",
         platform=str(event.platform),
         sender_email=event.sender_email,
-        resolved=allowed,
+        resolved=False,
     )
-    return allowed
+    return False
 
 
 class SurfaceIdentityResolutionService:
