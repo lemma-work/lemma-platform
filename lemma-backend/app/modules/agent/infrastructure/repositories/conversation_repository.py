@@ -544,7 +544,8 @@ class ConversationRepository(
             current_status == AgentRunStatus.STOP_REQUESTED
             and status in TERMINAL_AGENT_RUN_STATUSES
         ):
-            next_status = AgentRunStatus.STOPPED
+            # Stopped, not failed: it must not inherit a failure's message.
+            next_status, error = AgentRunStatus.STOPPED, None
 
         model.status = next_status.value
         model.error = error

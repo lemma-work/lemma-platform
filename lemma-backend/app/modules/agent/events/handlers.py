@@ -52,6 +52,7 @@ from app.modules.agent.domain.events import (
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
     settle_stranded_conversations,
+    settle_stuck_stops,
 )
 from app.modules.agent.infrastructure.harnesses import (
     HarnessRegistry,
@@ -419,21 +420,26 @@ async def process_conversation_title(
 # forever.
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
 
+# A live worker acts on a stop within a second, so one still pending after this
+# means no worker ever will. STOP_REQUESTED holds the conversation's one active
+# run slot, so until it settles a new message starts nothing and Retry refuses.
+_STUCK_STOP_CUTOFF_SECONDS = 120
+
 
 @streaq_cron("5-59/10 * * * *", name="reconcile_orphaned_agent_runs")
 async def reconcile_orphaned_agent_runs() -> None:
-    """Self-heal agent runs stuck RUNNING after a hard crash.
+    """Self-heal runs a worker abandoned, and stops nobody picked up.
 
-    Narrower than it used to be. A worker shut down with SIGTERM now parks its
-    runs INTERRUPTED and `resume_interrupted_agent_runs` hands them on, so this
-    is left with what a worker never got the chance to park: SIGKILL, OOM, and
-    the residual race where finalization lost to engine disposal.
+    A worker shut down with SIGTERM relinquishes its task for the queue to
+    redeliver, so what reaches here is what no worker got to hand back: SIGKILL,
+    OOM, and the race where finalization lost to engine disposal. Those cannot
+    be resumed safely -- nothing closed their outstanding tool calls, and
+    staleness alone cannot tell a dead worker from a live peer without a
+    heartbeat -- so they fail terminally, publishing the same lifecycle and SSE
+    events a normal finish does.
 
-    Those runs cannot be resumed safely -- nothing closed their outstanding tool
-    calls, and staleness alone cannot tell a dead worker from a live peer without
-    a heartbeat. So they still fail terminally, which publishes the same
-    lifecycle + SSE events a normal finish does: the UI updates and any waiting
-    workflow is unblocked.
+    A run left STOP_REQUESTED is the other half, and settles as STOPPED: the
+    user asked for it to end, and it is holding the conversation's active slot.
     """
     worker_ctx: AppWorkerContext = streaq_worker.context
     try:
@@ -443,6 +449,11 @@ async def reconcile_orphaned_agent_runs() -> None:
                 cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
             )
             finalized: list[tuple[UUID, UUID, AgentRunStatus]] = []
+            finalized.extend(
+                await settle_stuck_stops(
+                    repo, cutoff_seconds=_STUCK_STOP_CUTOFF_SECONDS
+                )
+            )
             for run in stale:
                 finish_result = await repo.finish_agent_run(
                     agent_run_id=run.id,
