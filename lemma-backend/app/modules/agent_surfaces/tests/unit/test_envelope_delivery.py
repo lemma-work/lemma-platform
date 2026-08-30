@@ -193,7 +193,14 @@ async def test_the_lead_in_is_delivered_before_the_thing_it_leads_into() -> None
 
 
 async def test_voice_degrades_to_the_same_bytes_as_a_file_not_to_a_mention() -> None:
-    """A platform with no voice notes still has an audio player."""
+    """A platform with no voice notes still has an audio player.
+
+    The bytes arrive, so this is a delivery -- but as an attachment to open,
+    not a voice note that plays in the thread, so it is DEGRADED. It read
+    NATIVE while `_render_one` recorded the identical outcome as DEGRADED for
+    email, and `_render_voice` is Telegram's alone, so NATIVE was the answer
+    everywhere else.
+    """
     adapter = _Adapter(
         _render_voice=AsyncMock(return_value=False),
         _render_file=AsyncMock(return_value=True),
@@ -206,8 +213,73 @@ async def test_voice_degrades_to_the_same_bytes_as_a_file_not_to_a_mention() -> 
             )
         ),
     )
-    assert receipt.parts["voice"] is PartDelivery.NATIVE
+    assert receipt.parts["voice"] is PartDelivery.DEGRADED
+    assert receipt.degraded == ["voice"]
     assert adapter._render_file.await_args.kwargs["file_bytes"] == b"OggS"
+
+
+async def test_a_real_voice_note_is_still_native() -> None:
+    """The downgrade above must not swallow the platform that can do it."""
+    adapter = _Adapter(_render_voice=AsyncMock(return_value=True))
+    receipt = await _deliver(
+        adapter,
+        SurfaceEnvelope(
+            voice=EnvelopeVoice(
+                file_name="reply.ogg", content=b"OggS", mime_type="audio/ogg"
+            )
+        ),
+    )
+    assert receipt.parts["voice"] is PartDelivery.NATIVE
+    assert receipt.degraded == []
+
+
+async def test_voice_that_reached_nobody_is_not_reported_as_degraded() -> None:
+    """DEGRADED means it arrived in a lesser form, not that it failed."""
+    adapter = _Adapter(
+        _render_voice=AsyncMock(return_value=False),
+        _render_file=AsyncMock(return_value=False),
+        send_message=AsyncMock(side_effect=httpx.ConnectError("no route")),
+    )
+    with pytest.raises(AgentSurfacePlatformError):
+        await _deliver(
+            adapter,
+            SurfaceEnvelope(
+                voice=EnvelopeVoice(
+                    file_name="reply.ogg", content=b"OggS", mime_type="audio/ogg"
+                )
+            ),
+        )
+
+
+async def test_email_and_chat_agree_on_what_an_audio_attachment_is() -> None:
+    """The two delivery paths described the same outcome two different ways.
+
+    `_render_one` folds the audio into the single reply as an attachment and
+    calls it DEGRADED; the per-part path attaches it as a file. Whatever a
+    caller reads `receipt.degraded` for, it must not depend on which path ran.
+    """
+    from app.modules.agent_surfaces.platforms.email_one_reply import (
+        EmailOneReplyMixin,
+    )
+
+    class _OneReply(EmailOneReplyMixin, _Adapter):
+        pass
+
+    envelope = SurfaceEnvelope(
+        voice=EnvelopeVoice(
+            file_name="reply.ogg", content=b"OggS", mime_type="audio/ogg"
+        )
+    )
+    chat = _Adapter(
+        _render_voice=AsyncMock(return_value=False),
+        _render_file=AsyncMock(return_value=True),
+    )
+    one = _OneReply(_render_voice=AsyncMock(return_value=False))
+    one_receipt = await one._render_one(
+        credentials={}, event=_event(), envelope=envelope, metadata=None
+    )
+    assert (await _deliver(chat, envelope)).parts["voice"] is PartDelivery.DEGRADED
+    assert one_receipt.parts["voice"] is PartDelivery.DEGRADED
 
 
 async def test_a_file_that_cannot_be_attached_degrades_to_its_link_card() -> None:

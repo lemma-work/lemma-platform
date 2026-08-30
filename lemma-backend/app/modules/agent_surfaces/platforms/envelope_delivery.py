@@ -444,7 +444,7 @@ class EnvelopeDeliveryMixin:
         # A platform with no voice notes still has an audio player: the same
         # bytes as an ordinary attachment are a real delivery, not a mention
         # of one, which is why this rung is a file rather than text.
-        return await self._deliver_file(
+        outcome = await self._deliver_file(
             credentials=credentials,
             event=event,
             attachment=EnvelopeFile(
@@ -456,6 +456,14 @@ class EnvelopeDeliveryMixin:
             ),
             metadata=metadata,
         )
+        # Delivered, but not as the thing that was asked for. Returning the
+        # file's own NATIVE said a voice note played in the thread when what
+        # arrived was an attachment to open -- and `_render_voice` is Telegram's
+        # alone, so that was the answer on every other platform. `_render_one`
+        # already records this exact outcome as DEGRADED for email; the two
+        # paths disagreed about one delivery, each with a comment explaining why
+        # it was right.
+        return PartDelivery.DEGRADED if outcome is PartDelivery.NATIVE else outcome
 
 
 def _file_fallback_text(attachment: EnvelopeFile) -> str:
