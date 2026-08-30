@@ -488,6 +488,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.net.impersonating_client import close_impersonating_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
+        stop_connection_scope_monitor,
     )
 
     configure_thread_pool()
@@ -683,6 +684,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
+        # Symmetric with `start_connection_scope_monitor_from_settings` above.
+        # Nothing stopped it, which does not matter to a process that is about
+        # to exit -- and matters a great deal to a test that runs this lifespan
+        # in-process, because the monitor is a module singleton that then
+        # outlives the test and attaches to the next suite's engines.
+        stop_connection_scope_monitor()
         await _safe_shutdown_step("close_redis_clients", close_redis_clients)
         await _safe_shutdown_step("close_engine", close_engine)
         await _safe_shutdown_step(

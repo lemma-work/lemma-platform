@@ -59,6 +59,9 @@ class E2BOutputBuffer:
     def _state_key(self, process_id: str) -> str:
         return f"{self.key_prefix}:{process_id}:state"
 
+    def _sequence_key(self, process_id: str) -> str:
+        return f"{self.key_prefix}:{process_id}:seq"
+
     async def append(
         self, process_id: str, *, channel: ProcessOutputChannel, data: bytes
     ) -> None:
@@ -66,8 +69,19 @@ class E2BOutputBuffer:
             return
         redis = self._redis
         key = self._chunks_key(process_id)
+        # The absolute sequence is stamped into the chunk rather than derived
+        # from its position, because position is not stable: `ltrim` below
+        # shifts every surviving index left. A reader whose cursor was a list
+        # index therefore skipped exactly as many chunks as were dropped, and
+        # once its cursor reached the cap it matched nothing at all and the
+        # process went silent to that reader for the rest of its life.
+        sequence = int(await redis.incr(self._sequence_key(process_id)))
         payload = json.dumps(
-            {"c": channel.value, "d": data.decode("utf-8", errors="replace")}
+            {
+                "c": channel.value,
+                "d": data.decode("utf-8", errors="replace"),
+                "n": sequence,
+            }
         )
         pipe = redis.pipeline()
         pipe.rpush(key, payload)
@@ -75,6 +89,7 @@ class E2BOutputBuffer:
         # if nobody ever reads this process's output.
         pipe.ltrim(key, -_MAX_CHUNKS, -1)
         pipe.expire(key, _RETENTION_SECONDS)
+        pipe.expire(self._sequence_key(process_id), _RETENTION_SECONDS)
         await pipe.execute()
 
     async def record_start(self, process_id: str) -> None:
@@ -86,6 +101,18 @@ class E2BOutputBuffer:
             state=(ProcessState.SUCCEEDED if exit_code == 0 else ProcessState.FAILED),
             exit_code=exit_code,
         )
+
+    async def record_unknown(self, process_id: str) -> None:
+        """We stopped being able to watch. That is not the process ending.
+
+        `record_exit(exit_code=None)` maps to FAILED, because the only test is
+        `exit_code == 0`. So a dropped SDK stream -- which is what a long,
+        silent command provokes, since nothing keeps the HTTP/2 stream warm --
+        was written as a terminal failure of a command that was still running.
+        The agent was told its build had failed, and the idle sweeper was told
+        the sandbox was free to release, both while the work was live.
+        """
+        await self._write_state(process_id, state=ProcessState.UNKNOWN, exit_code=None)
 
     async def record_cancelled(self, process_id: str) -> None:
         await self._write_state(
@@ -134,8 +161,15 @@ class E2BOutputBuffer:
                 # RUNNING/None defaults above already say.
                 pass
 
-        # Sequence N is list index N-1, so "after N" starts at index N.
-        start_index = max(0, after_sequence)
+        # Where the retained window starts in absolute terms. Trimming drops
+        # from the left, so index 0 is not sequence 1 once anything has been
+        # dropped -- and the difference is what a positional cursor got wrong.
+        oldest_sequence = await self._oldest_sequence(process_id, total=total)
+        start_index = (
+            0
+            if oldest_sequence is None
+            else max(0, after_sequence - (oldest_sequence - 1))
+        )
         raw_chunks = (
             await redis.lrange(key, start_index, -1) if start_index < total else []
         )
@@ -144,9 +178,14 @@ class E2BOutputBuffer:
         for offset, raw in enumerate(raw_chunks):
             try:
                 decoded = json.loads(raw)
+                # Older chunks were written before sequences were stamped;
+                # position is the best available answer for those.
+                sequence = int(
+                    decoded.get("n", (oldest_sequence or 1) + start_index + offset)
+                )
                 chunks.append(
                     ProcessOutputChunk(
-                        sequence=start_index + offset + 1,
+                        sequence=sequence,
                         channel=ProcessOutputChannel(decoded["c"]),
                         data=decoded["d"].encode(),
                     )
@@ -154,13 +193,39 @@ class E2BOutputBuffer:
             except KeyError, TypeError, ValueError:
                 continue
 
+        # What the module docstring has always promised the reader, and never
+        # delivered: this was hard-coded to 0, so output dropped to stay inside
+        # the memory bound was indistinguishable from output that never existed.
+        dropped_before = (
+            oldest_sequence - 1
+            if oldest_sequence is not None and after_sequence < oldest_sequence - 1
+            else 0
+        )
+        next_sequence = (
+            chunks[-1].sequence if chunks else max(after_sequence, dropped_before)
+        )
+
         return ProcessOutputSnapshot(
             chunks=tuple(chunks),
-            next_sequence=start_index + len(chunks),
-            truncated_before_sequence=0,
+            next_sequence=next_sequence,
+            truncated_before_sequence=dropped_before,
             state=state,
             exit_code=exit_code,
         )
+
+    async def _oldest_sequence(self, process_id: str, *, total: int) -> int | None:
+        """Absolute sequence of the oldest chunk still retained."""
+        if total <= 0:
+            return None
+        raw = await self._redis.lindex(self._chunks_key(process_id), 0)
+        if not raw:
+            return None
+        try:
+            return int(json.loads(raw)["n"])
+        except KeyError, TypeError, ValueError:
+            # Written before sequences were stamped: treat the window as
+            # starting at 1, which is what the old positional scheme assumed.
+            return 1
 
     async def forget(self, process_id: str) -> None:
         await self._redis.delete(

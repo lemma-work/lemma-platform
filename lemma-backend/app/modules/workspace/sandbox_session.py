@@ -370,7 +370,9 @@ class SandboxWorkspaceSession:
         return [
             {
                 "process_id": str(process.operation_id),
-                "cmd": "",
+                # Empty when the in-sandbox runtime is the source: it tracks
+                # what is running, not how it was asked for.
+                "cmd": getattr(process, "command", None) or "",
                 # Absent when the sandbox runtime is the source: it tracks what
                 # is running, not what a control plane once recorded about how
                 # it was started.

@@ -431,6 +431,7 @@ class PydanticAIHarness:
             pending_error,
             cancelled_by_us=cancelled_by_us,
             agent_run_id=agent_run_id,
+            driver_task=task,
         )
 
     def _stream_reset_event(self, agent_run_id: UUID) -> AgentEvent:

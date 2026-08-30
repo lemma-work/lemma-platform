@@ -58,11 +58,11 @@ manage_process(action="input", process_id="<id>")   # repeat until completed: tr
 
 Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.
 
-Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
+Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it — it shows what is still running here plus anything you started, not the whole workspace's history. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
 
 ## Sandbox
 
-The workspace is private to this conversation. Work in your working directory (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
+The workspace is the user's, not this conversation's: other sessions may be working in it at the same time, each in its own working directory. Work in yours (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
 
 `execute_python` and `exec_command` share one interpreter and run in your working directory, so relative paths land there. Python state — imports, variables, objects — persists across calls; use that for stepwise analysis instead of repeating setup.
 
