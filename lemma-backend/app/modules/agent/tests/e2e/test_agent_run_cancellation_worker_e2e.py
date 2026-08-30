@@ -45,6 +45,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     AgentRuntimeConfig,
     MessageDraft,
     MessageRole,
@@ -72,8 +73,14 @@ _CANCEL_SCOPE_CRASH_MARKERS = (
 )
 
 
+@pytest.fixture
+def mock_llm_latency_ms() -> int:
+    """How long the mock model sits inside one request. Overridden per test."""
+    return 0
+
+
 @pytest_asyncio.fixture(scope="function")
-async def cancellable_worker(e2e_settings):
+async def cancellable_worker(e2e_settings, mock_llm_latency_ms):
     """A real streaq worker owned by the test, so it can be SIGTERM'd mid-run.
 
     Mirrors the shared session ``worker`` fixture but function-scoped, and yields
@@ -129,6 +136,11 @@ async def cancellable_worker(e2e_settings):
             # So a hung worker can be made to print where every thread is
             # stuck, rather than dying silently on SIGKILL.
             "PYTHONFAULTHANDLER": "1",
+            # Lets a test hold the mock model inside one request for as long as
+            # it likes. A model request is a place the driver makes no stop
+            # checks at all, so this is how "a stop reaches a busy run" is
+            # asserted without needing a real slow tool.
+            "E2E_MOCK_LLM_LATENCY_MS": str(mock_llm_latency_ms),
         },
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -379,5 +391,115 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
         expected=terminal_values,
         failed=set(),
         timeout_seconds=10.0,
+        interval_seconds=0.1,
+    )
+
+
+@pytest.mark.parametrize("mock_llm_latency_ms", [60_000])
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+async def test_stop_reaches_a_run_that_is_busy_in_the_model(
+    authenticated_client,
+    fixed_test_user,
+    fixed_test_org,
+    db_session,
+    cancellable_worker,
+):
+    """Stop must land while the driver is somewhere that never checks for one.
+
+    Every stop check the harness makes sits between streamed chunks, so none of
+    them runs during a model request or a tool call — and `exec_command` may
+    hold for 300 seconds. Pressing Stop therefore did nothing at all until
+    whatever was in flight returned, while the client went on showing the run as
+    live. That is the "Stop does nothing" report.
+
+    The mock model is held inside a single request for 20 seconds, which is the
+    same blind spot as a long tool call and needs no sandbox. The assertion is
+    the latency: the stop has to land in a small fraction of that window. Before
+    the consumer raced the queue against a stop poll, nothing could have
+    observed it until the 20 seconds were up.
+
+    Runs on this file's dedicated worker and queue, so the shared session worker
+    never competes for the run.
+    """
+    proc, _log_path, queue_name = cancellable_worker
+    del proc
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": "Stoppable Agent",
+            "instruction": "Answer in plain text.",
+            "agent_runtime": DEFAULT_AGENT_RUNTIME,
+        },
+    )
+    assert create_agent.status_code == 201, create_agent.text
+    agent_id = create_agent.json()["id"]
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"agent_name": "stoppable_agent", "title": "Stop", "type": "CHAT"},
+    )
+    assert create_conversation.status_code == 201, create_conversation.text
+    conversation_id = create_conversation.json()["id"]
+
+    run_id = await _start_real_agent_run(
+        conversation_id=UUID(conversation_id),
+        agent_id=UUID(agent_id),
+        content="Write something long.",
+    )
+    await _dispatch_agent_run(
+        run_id=run_id,
+        conversation_id=UUID(conversation_id),
+        user_id=UUID(fixed_test_user["id"]),
+        pod_id=UUID(pod_id),
+        queue_name=queue_name,
+    )
+    await _wait_for_job_status(
+        f"agent-run:{run_id}", TaskStatus.RUNNING, queue_name=queue_name
+    )
+    # Long enough that the run is unambiguously inside the model request and
+    # not still doing setup, where stop checks do exist.
+    await asyncio.sleep(6.0)
+
+    requested_at = asyncio.get_running_loop().time()
+    stopped = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations/{conversation_id}/stop"
+    )
+    assert stopped.status_code == 200, stopped.text
+
+    # Deliberately NOT the agent_runs row. The stop event also reaches the
+    # shared session worker, which looks this job up on its own queue, does not
+    # find it (this run was dispatched to a dedicated one), concludes there is
+    # no job to wait for and finalizes the row itself. A row assertion
+    # therefore goes green while the worker actually executing the run is still
+    # asleep in the model — it passed against the unfixed code, which is how
+    # this was caught. The job on *this* worker's queue is the honest signal.
+    await _wait_for_job_status(
+        f"agent-run:{run_id}",
+        TaskStatus.DONE,
+        queue_name=queue_name,
+        timeout_seconds=30.0,
+    )
+    # The latency IS the assertion, and it is measured rather than left to a
+    # generous timeout. The model is holding its request for 60s; anything near
+    # that means nothing observed the stop until the request returned.
+    elapsed = asyncio.get_running_loop().time() - requested_at
+    assert elapsed < 15.0, (
+        f"the run took {elapsed:.1f}s to end while the model held its request "
+        "for 60s — the stop was not observed until the request returned"
+    )
+
+    async def probe() -> dict:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            row = await uow.session.get(AgentRunModel, run_id)
+            return {"status": None if row is None else str(row.status)}
+
+    await wait_for_status(
+        label=f"run {run_id} to settle as STOPPED",
+        probe=probe,
+        expected={AgentRunStatus.STOPPED.value},
+        failed=set(),
+        timeout_seconds=15.0,
         interval_seconds=0.1,
     )

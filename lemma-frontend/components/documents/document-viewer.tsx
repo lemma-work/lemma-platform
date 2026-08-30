@@ -243,7 +243,7 @@ export function DocumentViewer({
     });
 
     const docxPreviewSrcDoc = useMemo(() => (
-        docxPreview?.html ? buildDocxPreviewSrcDoc(docxPreview.html) : ''
+        docxPreview ? buildDocxPreviewSrcDoc(docxPreview.html, docxPreview.styles) : ''
     ), [docxPreview]);
 
 

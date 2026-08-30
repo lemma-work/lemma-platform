@@ -199,7 +199,14 @@ async def _snapshot_stream(
         caught_up = pending == 0 and _last_delivered_id(group) == stream_last_id
         consumers = int(_value(group, "consumers", 0) or 0)
         if not _worth_reporting(
-            length=stream_length,
+            # Deliberately not `length`. A stream retains its entries up to
+            # maxlen, so any stream ever written to has a non-zero length for
+            # the rest of its life -- and passing it here meant every healthy,
+            # fully caught-up group reported on every cycle. That is what made
+            # these records the bulk of a worker's log and buried everything
+            # else. Whether a *reader* is behind is what `caught_up`, `pending`
+            # and `reported_lag` already say. Length still counts below, in the
+            # no-group branch, where nothing is reading and a pile-up is real.
             delayed=delayed,
             caught_up=caught_up,
             pending=pending,

@@ -18,10 +18,24 @@
  * the artifact that ships, and this script's job is keeping it in sync
  * whenever a maintainer regenerates the spec. It no-ops, rather than fails,
  * when the source tree is not there.
+ *
+ * `--check` compares instead of writing, the way
+ * `lemma-backend/scripts/dump_openapi_spec.py --check` does for the source
+ * spec and `generate_route_inventory.py --check` does for the route
+ * inventory. Nothing verified this end of the chain: the spec is gated
+ * against the code, and the SDKs are gated against the spec, but the copy
+ * served at lemma.work/openapi.json was only ever rewritten as a side effect
+ * of `npm run dev` or `npm run build`. So a maintainer who regenerated the
+ * spec without then building the frontend committed a stale published copy,
+ * and nothing said so: the last sync was #528, the spec was regenerated four
+ * times after it, and what lemma.work served still described an app `url`
+ * that is never null and an `AgentRunStatus` without `INTERRUPTED`.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const check = process.argv.includes("--check");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "..", "lemma-python", "lemma_sdk", "openapi_spec.json");
@@ -42,5 +56,20 @@ if (!spec.servers || spec.servers.length === 0) {
   spec.servers = [{ url: "https://api.lemma.work", description: "Lemma Cloud API" }];
 }
 
-writeFileSync(outPath, `${JSON.stringify(spec, null, 2)}\n`);
+const rendered = `${JSON.stringify(spec, null, 2)}\n`;
+
+if (check) {
+  const committed = existsSync(outPath) ? readFileSync(outPath, "utf-8") : "";
+  if (committed !== rendered) {
+    console.error(
+      `[openapi] ${outPath} does not match ${sourcePath}. ` +
+        "Run 'npm run sync:openapi-spec' and commit the result.",
+    );
+    process.exit(1);
+  }
+  console.log(`[openapi] public/openapi.json is current (${Object.keys(spec.paths ?? {}).length} paths)`);
+  process.exit(0);
+}
+
+writeFileSync(outPath, rendered);
 console.log(`[openapi] wrote ${outPath} (${Object.keys(spec.paths ?? {}).length} paths)`);

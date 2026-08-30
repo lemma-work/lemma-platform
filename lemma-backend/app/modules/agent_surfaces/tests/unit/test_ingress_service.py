@@ -1931,7 +1931,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     adapter._render_decision.return_value = True  # platform rendered native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_user_interaction.return_value = {
+    service.conversation_service.get_pending_approval.return_value = {
         "tool_call_id": "tool-2",
         "kind": "request_approval",
         "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
@@ -1953,6 +1953,64 @@ async def test_send_approval_prompt_renders_native_buttons():
     adapter.send_message.assert_not_awaited()
 
 
+async def test_an_older_unanswered_question_does_not_shadow_the_approval():
+    """The bug this pairing exists to catch.
+
+    A conversation can hold more than one unresolved pause. An `ask_user`
+    nobody ever tapped stays unresolved forever, and being older it is what
+    "what is this conversation waiting on" returns — so the approval renderer,
+    which asked that question and then discarded anything that was not an
+    approval, delivered nothing at all and left the run WAITING with nobody
+    told. On a chat surface, where one conversation stands for the whole
+    relationship with a person, that is permanent: dev's standing Telegram chat
+    stopped rendering approval cards entirely.
+
+    Wired through a stand-in that filters the way the real lookup does, so this
+    fails if the renderer goes back to asking the unfiltered question.
+    """
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_approval.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+
+    stale_question = {
+        "tool_call_id": "tool-ask",
+        "kind": "ask_user",
+        "tool_args": {},
+        "agent_run_id": uuid4(),
+    }
+    the_approval = {
+        "tool_call_id": "tool-2",
+        "kind": "request_approval",
+        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
+        "agent_run_id": uuid4(),
+    }
+    # Oldest first, exactly as `oldest_unresolved_pause` walks them.
+    pauses = [stale_question, the_approval]
+
+    async def oldest_of_any_kind(*, conversation_id):
+        return pauses[0]
+
+    async def oldest_approval(*, conversation_id):
+        return next((p for p in pauses if p["kind"] == "request_approval"), None)
+
+    service.conversation_service.get_pending_user_interaction = oldest_of_any_kind
+    service.conversation_service.get_pending_approval = oldest_approval
+
+    sent = await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+
+    assert sent is True
+    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    assert plan.title == "Write a record"
+    assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
+
+
 async def test_send_approval_prompt_falls_back_to_text():
     surface = _slack_surface()
     conversation_id = uuid4()
@@ -1962,7 +2020,7 @@ async def test_send_approval_prompt_falls_back_to_text():
     adapter._render_decision.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_user_interaction.return_value = {
+    service.conversation_service.get_pending_approval.return_value = {
         "tool_call_id": "tool-2",
         "kind": "request_approval",
         "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
@@ -1988,7 +2046,7 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     adapter._render_decision.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_user_interaction.return_value = {
+    service.conversation_service.get_pending_approval.return_value = {
         "tool_call_id": "tool-2",
         "kind": "request_approval",
         "tool_args": {
@@ -2017,7 +2075,7 @@ async def test_send_approval_prompt_skips_when_no_pending():
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_user_interaction.return_value = None
+    service.conversation_service.get_pending_approval.return_value = None
 
     sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id

@@ -69,6 +69,12 @@ jobs:
               - 'lemma-typescript/scripts/generate_openapi_client.sh'
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              # The published copy of the spec is generated from it too. It
+              # belongs to this filter and not `frontend`, because the change
+              # that staled it is a spec regeneration -- a lemma-python edit,
+              # which never starts the frontend job.
+              - 'lemma-frontend/public/openapi.json'
+              - 'lemma-frontend/scripts/sync-openapi-spec.mjs'
               - '.github/workflows/ci.yml'
             desktop:
               # desktop/** is now every Rust crate the app ships: the shell,
@@ -507,7 +513,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
@@ -516,6 +522,13 @@ jobs:
         run: |
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
+      # lemma-frontend/public/openapi.json is what lemma.work/openapi.json
+      # serves, generated from the same committed spec. `npm run check` in the
+      # frontend job verifies it too, but that job does not run on a
+      # lemma-python-only change -- so this is the gate that sees a spec
+      # regeneration. No `npm ci`: the script is dependency-free Node.
+      - name: Fail on published OpenAPI spec drift
+        run: node lemma-frontend/scripts/sync-openapi-spec.mjs --check
 
   # Was two jobs. They were byte-identical for their first four steps -- two
   # checkouts, two `npm ci` pairs, and the lemma-typescript build that every

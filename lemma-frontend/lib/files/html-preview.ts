@@ -17,28 +17,53 @@ export type HtmlPreviewDocument = {
     srcDoc: string;
 };
 
-export function buildDocxPreviewSrcDoc(contentHtml: string): string {
+/**
+ * The page a rendered .docx is displayed on.
+ *
+ * `docx-preview` hands back the document's own stylesheet alongside its markup,
+ * so this adds almost nothing to it — the styling that matters came out of the
+ * file. What is here is the frame around the pages: the backdrop they sit on,
+ * and a way for a page whose width Word fixed in inches to survive a preview
+ * pane narrower than that.
+ *
+ * The frame is loaded into a `sandbox=""` iframe, so nothing in it can script,
+ * navigate or reach this origin. The policy below closes the one door sandboxing
+ * leaves open: a document that names an external stylesheet, font or image would
+ * otherwise announce to that host that someone had opened the file. Images and
+ * fonts are inlined by the renderer, so `data:` is all either needs.
+ */
+export function buildDocxPreviewSrcDoc(contentHtml: string, documentStyles = ''): string {
     return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'" />
+  ${documentStyles}
   <style>
     :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: rgb(255 255 255); color: rgb(15 23 42); }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.55;
-      overflow-x: hidden;
+    html, body { margin: 0; padding: 0; min-height: 100%; }
+    body { background: rgb(241 245 249); overflow-x: auto; }
+
+    /* The renderer paints its own flat grey backdrop and a hard drop shadow.
+       Both are replaced rather than removed: the pages still need to read as
+       paper laid on something, just not as a 2004 print dialog. */
+    .docx-wrapper { background: transparent; padding: 24px 16px; }
+    .docx-wrapper > section.docx {
+      box-shadow: 0 1px 2px rgb(15 23 42 / 0.10), 0 8px 24px rgb(15 23 42 / 0.08);
+      margin-bottom: 24px;
     }
-    body :where(*) { max-width: 100%; }
-    body :where(p, li, td, th, span) { overflow-wrap: anywhere; word-break: break-word; }
-    img { max-width: 100%; height: auto; }
-    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-    td, th { border: 1px solid rgb(229 231 235); padding: 6px 8px; vertical-align: top; }
-    p { margin: 0 0 10px; }
-    h1, h2, h3, h4, h5, h6 { margin: 14px 0 10px; }
+
+    /* A Word page is a fixed width in inches — around 816px for Letter — and a
+       preview pane is whatever the reader left it at. Scaling the whole page
+       keeps the layout the document specified instead of reflowing it into
+       something Word never described. The frame is sandboxed, so this is done
+       in steps rather than measured: no script runs in here to measure with. */
+    @media (max-width: 860px) { .docx-wrapper { zoom: 0.9; } }
+    @media (max-width: 780px) { .docx-wrapper { zoom: 0.8; } }
+    @media (max-width: 680px) { .docx-wrapper { zoom: 0.7; } }
+    @media (max-width: 600px) { .docx-wrapper { zoom: 0.6; } }
+    @media (max-width: 520px) { .docx-wrapper { zoom: 0.5; } }
   </style>
 </head>
 <body>${contentHtml}</body>

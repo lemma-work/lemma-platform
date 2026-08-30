@@ -11,5 +11,4 @@ export enum AgentRunStatus {
     COMPLETED = 'COMPLETED',
     FAILED = 'FAILED',
     STOPPED = 'STOPPED',
-    INTERRUPTED = 'INTERRUPTED',
 }

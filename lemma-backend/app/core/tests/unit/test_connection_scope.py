@@ -292,3 +292,49 @@ def test_attach_is_a_no_op_without_a_monitor():
 
     connection_scope.stop_connection_scope_monitor()
     connection_scope.attach_connection_scope_monitor(_Engine())  # must not raise
+
+
+def test_whatever_starts_the_monitor_also_stops_it():
+    """The monitor is a module singleton, so starting it is a process-wide act.
+
+    Both service entrypoints started one and neither stopped it. A process that
+    is about to exit does not care, which is why this went unnoticed — but a
+    test that runs a lifespan in-process inherits the monitor, and it then
+    attaches to the engines of every suite that follows in that process. The
+    symptom was a failure in an unrelated test three suites later, blamed on
+    whatever change happened to be in flight.
+
+    Static because the alternative is booting both services for real.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        if "tests" in path.parts or "test_support" in path.parts:
+            continue
+        if path.name == "connection_scope.py":
+            # Where both are defined. `start_..._from_settings` calls `start`,
+            # which is the wiring, not a service leaving one running.
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError, UnicodeDecodeError:  # pragma: no cover
+            continue
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        starts = called & {
+            "start_connection_scope_monitor",
+            "start_connection_scope_monitor_from_settings",
+        }
+        if starts and "stop_connection_scope_monitor" not in called:
+            offenders.append(path.relative_to(root).as_posix())
+
+    assert offenders == [], (
+        "these start the connection-scope monitor and never stop it: "
+        + ", ".join(sorted(offenders))
+    )

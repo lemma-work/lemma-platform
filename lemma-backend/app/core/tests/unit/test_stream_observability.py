@@ -75,3 +75,64 @@ def test_streaq_queue_is_observed_but_not_managed(monkeypatch) -> None:
     streams = observation.observable_streams()
 
     assert "streaq:priority:queues:normal" in streams
+
+
+@pytest.mark.asyncio
+async def test_a_caught_up_group_is_silent_however_long_the_stream_is(
+    monkeypatch,
+) -> None:
+    """Retained history is not a symptom.
+
+    A stream keeps its entries up to maxlen, so `length` is non-zero for the
+    rest of the life of any stream that has ever been written to. While it
+    counted as "worth reporting", every healthy group reported on every cycle:
+    on the deployment where this was found those records were nearly all of the
+    worker's output, and the errors underneath them were unreadable.
+    """
+    client = AsyncMock()
+    client.exists.return_value = 1
+    client.xinfo_stream.return_value = {
+        "length": 9_187,
+        "last-generated-id": b"1000000-0",
+    }
+    client.xinfo_groups.return_value = [
+        {
+            "name": b"agent-events",
+            "consumers": 2,
+            "pending": 0,
+            "last-delivered-id": b"1000000-0",
+            "lag": 0,
+        }
+    ]
+    client.xinfo_consumers.return_value = [{"name": b"active", "idle": 100}]
+    client.memory_usage.return_value = 4_096
+    logger = _Logger()
+    monkeypatch.setattr(observation, "logger", logger)
+    monkeypatch.setattr(observation.time, "time", lambda: 1_000.0)
+
+    reported = await observation._snapshot_stream(client, "agent_events")
+
+    assert reported == 0
+    assert logger.records == []
+
+
+@pytest.mark.asyncio
+async def test_entries_with_nothing_reading_them_still_report(monkeypatch) -> None:
+    """The one place length is the whole signal: no group means no reader."""
+    client = AsyncMock()
+    client.exists.return_value = 1
+    client.xinfo_stream.return_value = {
+        "length": 9_187,
+        "last-generated-id": b"1000000-0",
+    }
+    client.xinfo_groups.return_value = []
+    client.memory_usage.return_value = 4_096
+    logger = _Logger()
+    monkeypatch.setattr(observation, "logger", logger)
+    monkeypatch.setattr(observation.time, "time", lambda: 1_000.0)
+
+    reported = await observation._snapshot_stream(client, "agent_events")
+
+    assert reported == 1
+    assert [event for event, _ in logger.records] == ["redis.stream.snapshot"]
+    assert logger.records[0][1]["length"] == 9_187
