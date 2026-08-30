@@ -160,20 +160,23 @@ class TelegramPlatformService:
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            retry_token = await put_callback_token(
-                {
-                    "action": "retry",
-                }
-            )
+            retry_token = await put_callback_token({"action": "retry"})
             reply_markup = {
                 "inline_keyboard": [
                     [{"text": "Try again", "callback_data": retry_token}]
                 ]
             }
 
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
-            message or ""
-        ]
+        # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
+        # made that one empty chunk: a blank bubble, and for an approval one
+        # with no words and no buttons.
+        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
+        if not raw_chunks:
+            logger.warning(
+                "agent_surfaces.telegram.empty_message_not_sent",
+                has_reply_markup=isinstance(reply_markup, dict),
+            )
+            return
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:

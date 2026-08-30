@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    computed_field,
+    model_validator,
+)
 
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
@@ -22,6 +29,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
+from app.modules.agent.services.workspace_location import pod_cwd_for
 from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
@@ -158,6 +166,27 @@ class ConversationResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field(  # type: ignore[prop-decorator]
+        return_type=str,
+        description=(
+            "The conversation's working directory in pod files. Anything a "
+            "person attaches here is what the agent finds by a bare filename, "
+            "because this is the directory its pod tools resolve against."
+        ),
+    )
+    @property
+    def pod_cwd(self) -> str:
+        # Derived rather than stored: the cwd already lives in metadata, and
+        # `workspace_location` owns the ladder that reads it. A client that
+        # rebuilt this path itself would be a second implementation of a rule
+        # the agent's tools also depend on, which is how an upload ends up
+        # somewhere the agent never looks.
+        return pod_cwd_for(
+            metadata=self.metadata,
+            conversation_id=self.id,
+            created_at=self.created_at,
+        )
 
 
 class ConversationListResponse(BaseModel):

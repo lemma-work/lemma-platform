@@ -81,12 +81,24 @@ _TITLE_MODEL_SETTINGS: ModelSettings = {"openai_reasoning_effort": "none"}
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
     "Respond with a short, descriptive title of 3-6 words that captures the "
-    "user's intent. "
-    # Without this the model picks a language of its own: an English prompt
-    # came back titled 查询items表行数 while another conversation in the same pod
-    # titled in English. The non-LLM fallback derives the title from the user's
-    # own message and never had the problem, so the two paths disagreed.
-    "Write the title in the same language as the user's message. "
+    "user's intent.\n\n"
+    # Two rounds of this. "Write the title in the same language as the user's
+    # message" fixed the case where there *is* a language to match, but said
+    # nothing about the case where there is not: "hi", "test", "ok", a bare
+    # URL, a code snippet. With no signal to copy, the model picked for itself
+    # and a conversation opened with "hi" came back titled 初识寒暄. So the rule
+    # now names the default, and names the script rather than only the
+    # language -- a model asked for "English" still answered in Han characters.
+    "LANGUAGE (this matters more than anything else about the title):\n"
+    "- Write the title in the same language and the same script as the user's "
+    "message. Never translate it into another language.\n"
+    "- If the user's message is too short, too generic, or has no clear "
+    "language -- a greeting, 'test', 'ok', a URL, an emoji, a code snippet, a "
+    "filename -- then write the title in English. English is the default "
+    "whenever you are not certain, not a language you fall back to only for "
+    "English input.\n"
+    "- Never answer in a language that appears nowhere in the user's message "
+    "unless that language is English.\n\n"
     "Return only the title text: no quotes, no surrounding "
     "punctuation, no trailing period, no prefix like 'Title:'."
 )
@@ -144,6 +156,17 @@ class ConversationTitleService:
                         conversation_id=conversation_id,
                         exc_info=True,
                     )
+            if title and not title_matches_user_script(title, user_text):
+                # The model answered in a script the person never used. Logged
+                # rather than dropped quietly: the prompt is supposed to prevent
+                # this, so every occurrence is evidence about whether it still
+                # does. The fallback below is derived from their own words and
+                # is right by construction.
+                logger.warning(
+                    "agent.conversation_title.language_mismatch.degraded",
+                    conversation_id=conversation_id,
+                )
+                title = None
             if title:
                 outcome = _OUTCOME_LLM
             else:
@@ -273,6 +296,57 @@ def _title_from_user_message(user_text: str) -> str:
     if len(title) > _MAX_TITLE_LEN:
         title = f"{title[: _MAX_TITLE_LEN - 1].rstrip()}…"
     return title
+
+
+def _scripts_in(text: str) -> set[str]:
+    """The writing systems a string actually uses, ignoring shared characters.
+
+    Digits, punctuation and spaces say nothing about language, and Latin is
+    excluded deliberately: it is the script of the default, and of the product's
+    own vocabulary, so a Latin-script title is never the failure this guards
+    against. What is left is the set of scripts a reader would recognise as
+    "not the language I wrote in".
+    """
+    scripts: set[str] = set()
+    for char in text:
+        code = ord(char)
+        if code < 0x0250:  # ASCII + Latin-1/Extended-A: Latin, digits, symbols
+            continue
+        if 0x0400 <= code <= 0x04FF:
+            scripts.add("cyrillic")
+        elif 0x0590 <= code <= 0x05FF:
+            scripts.add("hebrew")
+        elif 0x0600 <= code <= 0x06FF:
+            scripts.add("arabic")
+        elif 0x0900 <= code <= 0x097F:
+            scripts.add("devanagari")
+        elif 0x0E00 <= code <= 0x0E7F:
+            scripts.add("thai")
+        elif 0x3040 <= code <= 0x30FF:
+            scripts.add("kana")
+        elif 0xAC00 <= code <= 0xD7AF or 0x1100 <= code <= 0x11FF:
+            scripts.add("hangul")
+        elif 0x4E00 <= code <= 0x9FFF or 0x3400 <= code <= 0x4DBF:
+            scripts.add("han")
+    return scripts
+
+
+def title_matches_user_script(title: str, user_text: str) -> bool:
+    """Whether a generated title is written in a script the user actually used.
+
+    The system prompt asks for this and mostly gets it, but "mostly" is not a
+    property a title has: a conversation opened with "hi" came back titled
+    初识寒暄, and the person who opened it had no way to fix it short of renaming
+    the thread. Prompts are best-effort; this is the part that holds.
+
+    A title using no script of its own (Latin, digits, punctuation) always
+    passes -- that is the documented default. A title in Han characters passes
+    only if the user wrote in Han characters too.
+    """
+    title_scripts = _scripts_in(title)
+    if not title_scripts:
+        return True
+    return title_scripts.issubset(_scripts_in(user_text))
 
 
 def _build_user_prompt(user_text: str, reply_text: str | None) -> str:

@@ -426,6 +426,30 @@ def platform_agent_guidance(platform: str | None) -> str:
                 "formatted message and the user replies with their choice. For free-form "
                 "input, ask clearly in your reply."
             )
+        # Without this the agent knows `request_approval` only from its own tool
+        # docstring, which frames it as what to do after a permission error. So
+        # when someone says "ask me before you do that" and the action needs no
+        # extra permission, nothing points the model at the tool: it asks in
+        # prose, the run does not pause, and the person is left reading a
+        # question the product has already stopped waiting for an answer to.
+        approvals = (
+            "- Getting a go-ahead: when the person asks to approve something "
+            "before you do it, or the action is consequential enough to be worth "
+            "confirming, call `request_approval` rather than asking in prose. "
+        )
+        if caps.supports_native_choices:
+            approvals += (
+                f"It arrives in {caps.display_name} as buttons they can tap, and "
+                "the run pauses until they answer. Asking in your reply instead "
+                "leaves them nothing to press and nothing waiting for them."
+            )
+        else:
+            approvals += (
+                "It is sent as a formatted message and the run pauses until they "
+                "answer, so their decision is acted on rather than read back as "
+                "ordinary conversation."
+            )
+        delivery.append(approvals)
         delivery.append(
             "- Voice: reply with text by default. Only when the user wants a spoken "
             "reply, call `say` — it delivers a native voice note here and saves the "

@@ -96,4 +96,17 @@ describe("ConversationsNamespace.list", () => {
       expect.objectContaining({ params: { agent_run_id: "run-1" } }),
     );
   });
+
+  it("appends a message without opening a stream", async () => {
+    const { conversations, request, stream } = setup();
+
+    await conversations.appendMessage("conversation-1", { content: "steer this" });
+
+    expect(request).toHaveBeenCalledWith(
+      "POST",
+      "/pods/pod-1/conversations/conversation-1/messages/append",
+      expect.objectContaining({ body: { content: "steer this" } }),
+    );
+    expect(stream).not.toHaveBeenCalled();
+  });
 });

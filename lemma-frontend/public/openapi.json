@@ -1771,7 +1771,8 @@
           "STOP_REQUESTED",
           "COMPLETED",
           "FAILED",
-          "STOPPED"
+          "STOPPED",
+          "INTERRUPTED"
         ],
         "title": "AgentRunStatus",
         "type": "string"
@@ -2551,9 +2552,17 @@
             "title": "Updated At"
           },
           "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where no app host is served -- see `public_app_url`.",
             "readOnly": true,
-            "title": "Url",
-            "type": "string"
+            "title": "Url"
           },
           "user_id": {
             "format": "uuid",
@@ -4167,6 +4176,12 @@
             ],
             "title": "Parent Id"
           },
+          "pod_cwd": {
+            "description": "The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.",
+            "readOnly": true,
+            "title": "Pod Cwd",
+            "type": "string"
+          },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
@@ -4213,7 +4228,8 @@
           "user_id",
           "pod_id",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "pod_cwd"
         ],
         "title": "ConversationResponse",
         "type": "object"
@@ -7930,14 +7946,20 @@
             "type": "string"
           },
           "url": {
-            "title": "Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
           "id",
           "name",
-          "url",
           "status"
         ],
         "title": "HomeAppResponse",
@@ -24230,6 +24252,100 @@
           "resource": "agent.conversation.message",
           "result": "entity",
           "verb": "send"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/messages/append": {
+      "post": {
+        "description": "Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.",
+        "operationId": "agent.conversation.message.append",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conversation was not found or is not visible"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account usage limit was exceeded"
+          }
+        },
+        "summary": "Append Pod Conversation Message",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.message",
+          "result": "entity",
+          "verb": "append"
         }
       }
     },

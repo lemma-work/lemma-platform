@@ -848,6 +848,45 @@ export class AgentController {
     }
   };
 
+  /**
+   * Send a follow-up into a run that is already working.
+   *
+   * `sendMessage` is the wrong call for this. It cancels the stream in flight
+   * and opens a second subscription for the same run, so the events between the
+   * two are simply lost — the person sees their turn stop mid-answer. This
+   * persists the message instead (joining the active run where the harness can
+   * steer, queued for the next one where it cannot) and reattaches whatever
+   * stream should be watching, which is what makes the answer arrive.
+   */
+  appendMessage = async (
+    content: string,
+    input: SendAssistantMessageOptions = {},
+  ): Promise<void> => {
+    this.patch({ error: null });
+    try {
+      const id = requireConversationId(input.conversationId ?? this.state.conversationId);
+      const scope = normalizeScope(this.client, this.scopeDefaults);
+      const scopedClient = applyPodScope(this.client, scope.podId);
+
+      await scopedClient.conversations.appendMessage(
+        id,
+        { content, metadata: input.metadata ?? undefined },
+        { pod_id: scope.podId ?? undefined },
+      );
+      // Forget the dedup key first: a steer never changes the conversation's
+      // status, so a run whose stream had died looks identical to one still
+      // being watched. `resumeIfRunning` still returns early while streaming,
+      // so a live stream is left alone.
+      this.autoResumedKey = null;
+      void this.resumeIfRunning(id).catch(() => {});
+    } catch (appendError) {
+      const normalized = normalizeError(appendError, "Failed to send agent message.");
+      this.patch({ error: normalized });
+      this.options.onError?.(appendError);
+      throw normalized;
+    }
+  };
+
   resume = async (input?: string | null | ResumeAssistantOptions): Promise<void> => {
     this.patch({ error: null });
     try {

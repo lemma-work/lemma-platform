@@ -195,7 +195,12 @@ async def test_telegram_final_answer_contract_and_retry(fake_telegram, message_s
             "api_base_url": f"{fake_telegram.api_base}/bot",
         }
     )
-    fake_telegram.fail_next["sendMessage"] = 1
+    # `sendRichMessage`, not `sendMessage`: that is the method a send is
+    # actually made with. This used to fail — and assert on — `sendMessage`,
+    # which was only ever reached because the mock carried no rich route and
+    # the fallback swallowed the 404. So the retry under test was the
+    # fallback's, and the real path was never exercised at all.
+    fake_telegram.fail_next["sendRichMessage"] = 1
 
     await service.send_message(
         event=_telegram_event(),
@@ -205,12 +210,43 @@ async def test_telegram_final_answer_contract_and_retry(fake_telegram, message_s
     messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
     payload = messages[-1]
     assert payload["_method"] == "POST"
-    assert payload["_path"] == "/bottelegram-contract-token/sendMessage"
+    assert payload["_path"] == "/bottelegram-contract-token/sendRichMessage"
     assert payload["chat_id"] == "424242"
     # A DM quotes nothing: the event an outbound is built from is the link's
     # last inbound, not the message being answered, so a quote here would tag
     # whatever arrived most recently.
     assert "reply_parameters" not in payload
+    # The rich method carries the markdown as written; escaping is the
+    # fallback's job, so there is no parse_mode on this one.
+    assert payload["rich_message"]["markdown"] == "Contract *reply*"
+
+
+async def test_telegram_falls_back_to_send_message_where_rich_is_unavailable(
+    fake_telegram, message_store
+):
+    """The older contract, kept covered now that rich is the path taken.
+
+    A bot API without `sendRichMessage` answers 404 and the reply must still
+    arrive — escaped as MarkdownV2, through `sendMessage`. Until the mock
+    carried a rich route this was the only path any Telegram e2e ever took, so
+    it was covered by accident; now it has to be asked for.
+    """
+    service = TelegramPlatformService(
+        {
+            "bot_token": "telegram-contract-token",
+            "api_base_url": f"{fake_telegram.api_base}/bot",
+        }
+    )
+    fake_telegram.unavailable.add("sendRichMessage")
+
+    await service.send_message(
+        event=_telegram_event(),
+        message="Contract *reply*",
+    )
+
+    messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    payload = messages[-1]
+    assert payload["_path"] == "/bottelegram-contract-token/sendMessage"
     assert payload["parse_mode"] == "MarkdownV2"
     assert "Contract" in payload["text"]
 

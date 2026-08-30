@@ -77,23 +77,26 @@ async def installed(world, stack):
 
 
 async def _a_connector_anyone_can_connect(alice) -> str:
-    """A connector from the catalogue that needs no consent to connect.
+    """A connector from the catalogue this fixture can install unaided.
 
     Asked of the deployment rather than named here. Which connectors a
     deployment carries is its own business — naming one would make this pass on
     the deployment it was written against and skip on every other.
 
-    One kind only, so installing it without saying which is unambiguous; not
-    OAuth2, because connecting one of those means a person in a browser; and
-    `telegram` first where the catalogue has it.
+    Three requirements, and the third is the one that bites. One kind only, so
+    installing it without saying which is unambiguous. Not OAuth2, because
+    connecting one of those means a person in a browser. And **nothing required
+    in its config schema**: installing is a single call with no configuration,
+    so a kind that needs a host, a spec URL or a broker key answers 400 and the
+    whole file fails on setup.
 
-    That preference is not cosmetic. Installing a connector *discovers* what it
-    offers, and for a brokered one that means a live call to the broker —
-    which turns a fixture into a dependency on somebody else's uptime, and
-    fails outright where that broker cannot be reached. Telegram's operations
-    are built in, so installing it asks nobody anything. The suite already
-    depends on it standing (`tenant.STANDING_CONNECTORS`), so preferring it
-    here assumes nothing new.
+    That last one is why a preference for a connector that carries operations
+    does not belong here. On a real deployment the two are close to disjoint —
+    everything with operations wants credentials or an address first, and the
+    ones that install unaided are messaging surfaces with none. Ranking on
+    operations picked `sql`, which needs `dialect`, `host` and `database`, and
+    took eleven scenarios down with it. `test_an_operation_is_readable` asks the
+    operations question for itself, where a lane can answer it.
     """
     catalogue = items_of(await alice.api.get("/connectors"))
     connectable = [
@@ -101,6 +104,7 @@ async def _a_connector_anyone_can_connect(alice) -> str:
         for connector in catalogue
         if len(connector.get("kinds") or []) == 1
         and str((connector["kinds"][0]).get("auth_scheme", "")).upper() != "OAUTH2"
+        and not ((connector["kinds"][0]).get("config_schema") or {}).get("required")
     ]
     for preferred in ("telegram",):
         if preferred in connectable:
@@ -109,9 +113,20 @@ async def _a_connector_anyone_can_connect(alice) -> str:
         return connectable[0]
     pytest.skip(
         "this deployment's catalogue has no single-kind connector that can be "
-        "connected without consent, so there is nothing to install that a "
-        "scenario could also connect an account to"
+        "installed without configuration and connected without consent, so "
+        "there is nothing to install that a scenario could also connect an "
+        "account to"
     )
+
+
+def _a_provider_is_stood_in(stack) -> bool:
+    """Is something answering for a third party on this run?
+
+    The same question the `installed` fixture branches on, asked in one place so
+    a scenario can tell which kind of connector it ended up with.
+    """
+    proxy = getattr(stack, "egress", None)
+    return proxy is not None and getattr(proxy, "mode", "off") in {"fake", "replay"}
 
 
 @scenario("An admin installs a connector and its operations are discovered")
@@ -336,7 +351,7 @@ class TestUsingAConnector:
     @scenario("A person reads what an operation takes before running it")
     @proves("PS-CONN-030")
     @covers("connector.operation.detail", "connector.operation.search")
-    async def test_an_operation_is_readable(self, installed):
+    async def test_an_operation_is_readable(self, installed, stack):
         alice, organization, auth_config, _account = installed
 
         # Whichever operation this connector offers, rather than one named
@@ -344,11 +359,20 @@ class TestUsingAConnector:
         # before running it — true of any operation, and naming one tied this
         # to the spec the suite serves rather than to the product.
         offered = await alice.operations_of(auth_config, in_organization=organization)
-        # Asserted, not skipped. This used to skip when `offered` was empty —
-        # which is to say it stood down at exactly the moment its own
-        # precondition had failed. Operation discovery regressing is the thing
-        # most worth hearing about here, and a skip is not a failure: it would
-        # have been reported as "not run" and nobody would have looked.
+        if not offered and not _a_provider_is_stood_in(stack):
+            # Which connector this run could install is the deployment's
+            # business, and the ones that install unaided are messaging
+            # surfaces that carry no operations — nothing here has failed.
+            #
+            # Not the skip this used to have, which fired in *either* lane and
+            # so stood down at exactly the moment discovery had broken. Where a
+            # provider is stood in the spec is served by this suite, operations
+            # are guaranteed, and an empty list falls through to the assert.
+            pytest.skip(
+                "the connector this deployment let the fixture install offers "
+                "no operations, so there is nothing whose shape a person could "
+                "read. Run against a stack the suite booted to get this one"
+            )
         assert offered, (
             "this connector discovered no operations at all, so there is nothing "
             "whose shape a person could read before running it. The installation "
