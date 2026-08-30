@@ -25,6 +25,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
 )
 from app.modules.agent.infrastructure.models import (
@@ -132,6 +133,37 @@ class ConversationRunQueriesMixin:
                 AgentRunModel.started_at < cutoff,
             )
             .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_runs_stuck_stopping(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]:
+        """Stops that nobody picked up.
+
+        STOP_REQUESTED is an active status, so such a run keeps the one active
+        run slot: a new message attaches to the dying run and starts nothing,
+        and Retry refuses. A live worker now acts on a stop within a second, so
+        one still sitting here means the worker never will -- and until this,
+        the only thing that freed the conversation was the orphan sweep, an hour
+        after the run *started*.
+
+        Keyed on `updated_at`, which is when the stop was written, rather than
+        `started_at`: how long the run had been going says nothing about how
+        long the stop has been ignored.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        result = await self.session.execute(
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            .where(
+                AgentRunModel.status == AgentRunStatus.STOP_REQUESTED.value,
+                AgentRunModel.updated_at < cutoff,
+            )
+            .order_by(AgentRunModel.updated_at.asc())
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]

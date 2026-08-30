@@ -260,6 +260,9 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
         def __init__(self, uow) -> None:
             self.uow = uow
 
+        async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
+            return []
+
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
             return stale
 
@@ -322,6 +325,9 @@ async def test_reconcile_settles_a_conversation_its_run_already_left_behind(
     class _Repo:
         def __init__(self, uow) -> None:
             self.uow = uow
+
+        async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
+            return []
 
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
             return []

@@ -138,3 +138,40 @@ async def settle_stranded_conversations(repository, *, cutoff_seconds: int) -> i
             count=len(stranded),
         )
     return len(stranded)
+
+
+async def settle_stuck_stops(repository, *, cutoff_seconds: int):
+    """Finish stops that no worker ever acted on, as STOPPED.
+
+    A live worker acts on a stop within a second, so one still pending after the
+    cutoff means none will. STOP_REQUESTED is an active status and holds the
+    conversation's one active run slot, so until it settles a new message
+    attaches to the dying run and starts nothing, and Retry refuses. Before this
+    the only thing that freed the conversation was the orphan sweep, an hour
+    after the run started.
+
+    STOPPED rather than FAILED: the user asked for this one to end, and it did.
+    """
+    from app.modules.agent.domain.events import AgentRunCompletedEvent
+    from app.modules.agent.domain.value_objects import AgentRunStatus
+
+    settled = []
+    for run in await repository.list_runs_stuck_stopping(cutoff_seconds=cutoff_seconds):
+        result = await repository.finish_agent_run(
+            agent_run_id=run.id,
+            status=AgentRunStatus.STOPPED,
+        )
+        if result is None or not result.updated:
+            continue
+        repository.collect_events(
+            [
+                AgentRunCompletedEvent(
+                    conversation_id=run.conversation_id,
+                    agent_run_id=run.id,
+                    status=result.status,
+                    data={},
+                )
+            ]
+        )
+        settled.append((run.conversation_id, run.id, result.status))
+    return settled

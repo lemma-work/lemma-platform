@@ -7,7 +7,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
-import anyio
 
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     OutstandingToolCalls,
@@ -70,6 +69,13 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
+
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
+    STOP_WHILE_BUSY,
+    next_event_or_stop,
+    teardown_driver,
+)
+
 StopChecker = Callable[[], Awaitable[bool]]
 
 
@@ -99,21 +105,6 @@ def _instructions(
         return text
 
 
-def _report_teardown_failure(exc: BaseException, *, agent_run_id: UUID) -> None:
-    """Report a driver task that crashed unwinding — but not cancellation.
-
-    Swallowed either way; ``reraise_driver_failure`` owns what the run reports.
-    Caught by name, not as ``BaseException``, so SystemExit still propagates.
-    """
-    if isinstance(exc, asyncio.CancelledError):
-        return
-    logger.error(
-        "agent.pydantic_ai.stream_teardown.failed",
-        agent_run_id=str(agent_run_id),
-        exc_info=exc,
-    )
-
-
 class PydanticAIHarness:
     """Execute an agent through PydanticAI and emit domain events."""
 
@@ -139,7 +130,6 @@ class PydanticAIHarness:
         outstanding = OutstandingToolCalls()
         terminal: AgentEvent | None = None
         pause_tool_call_id: str | None = None
-        already_yielded = False
 
         try:
             async for event in self._execute(
@@ -152,9 +142,18 @@ class PydanticAIHarness:
                 should_stop=options.should_stop,
             ):
                 outstanding.observe(event)
-                yield event
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
-                    terminal, already_yielded = event, True
+                    # Held back, not yielded here. The closing returns for tool
+                    # calls still open are emitted below, and the pump drops
+                    # every event after the terminal one -- so emitting the
+                    # terminal first meant a stopped run kept a tool call that
+                    # nothing ever answered. The next run then saw an
+                    # unanswered call and could reasonably repeat a tool that
+                    # had already run: the duplicate-send hazard the closing
+                    # events exist to prevent.
+                    terminal = event
+                    continue
+                yield event
         except ModelHTTPError as exc:
             log_model_http_error(
                 exc,
@@ -223,7 +222,6 @@ class PydanticAIHarness:
                 data={"conversation_id": str(conversation.id)},
                 agent_run_id=agent_run_id,
             )
-            already_yielded = False
         # Close whatever is still open before the run ends, whichever way it
         # ended. The pausing call is excluded: its real return is appended when
         # the user answers, so a synthetic one would duplicate it.
@@ -231,8 +229,10 @@ class PydanticAIHarness:
             terminal, skip_tool_call_id=pause_tool_call_id
         ):
             yield closing
-        if not already_yielded:
-            yield terminal
+        # Always last. Every path now holds its terminal back to here, so the
+        # run ends with its history closed rather than with the terminal racing
+        # the events that close it.
+        yield terminal
 
     async def _execute(
         self,
@@ -408,7 +408,15 @@ class PydanticAIHarness:
         cancelled_by_us = False
         try:
             while True:
-                kind, payload = await queue.get()
+                item = await next_event_or_stop(queue, streamer.stop_requested)
+                if item is STOP_WHILE_BUSY:
+                    # The driver is somewhere that never checks for a stop --
+                    # in practice, inside a tool call. Ending the loop here
+                    # cancels it below, and the closing returns for whatever it
+                    # left open are emitted by `run`.
+                    yield streamer.stopped_event()
+                    break
+                kind, payload = item  # type: ignore[misc]
                 if kind == "done":
                     break
                 if kind == "error":
@@ -416,16 +424,7 @@ class PydanticAIHarness:
                     continue
                 yield payload  # type: ignore[misc]
         finally:
-            if not task.done():
-                cancelled_by_us = True
-                task.cancel()
-            # Let the child finish unwinding pydantic's scopes (in its own task),
-            # shielded so our own cancellation doesn't abandon that cleanup.
-            with anyio.CancelScope(shield=True):
-                try:
-                    await task
-                except (Exception, asyncio.CancelledError) as exc:
-                    _report_teardown_failure(exc, agent_run_id=agent_run_id)
+            cancelled_by_us = await teardown_driver(task, agent_run_id=agent_run_id)
 
         reraise_driver_failure(
             pending_error,
