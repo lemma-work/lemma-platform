@@ -108,4 +108,11 @@ fi
 
 node "$SDK_DIR/scripts/patch_generated_imports.mjs" "$OUT_DIR"
 
+# Keep the checked-in spec beside the client it produced. This file is tracked
+# but nothing wrote it, so it drifted from the API silently -- by the time this
+# was noticed it was missing fields the server had shipped and still carried an
+# enum value the server no longer had. Writing it here means it cannot drift
+# again without the client drifting with it.
+cp "$SPEC_TMP" "$SDK_DIR/src/openapi_spec.json"
+
 echo "Generated compatibility TypeScript client in src/openapi_client"
