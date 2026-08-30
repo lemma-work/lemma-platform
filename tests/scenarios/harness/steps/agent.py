@@ -236,8 +236,14 @@ class AgentSteps:
             json={"content": message},
         )
 
-    async def adds(self, message: str, *, in_conversation: JSON, in_pod: JSON) -> JSON:
+    async def adds_while_it_works(
+        self, message: str, *, in_conversation: JSON, in_pod: JSON
+    ) -> JSON:
         """Say something without opening a stream to watch the answer arrive.
+
+        Not ``adds``: ``PodSteps.adds`` already owns that name, and ``Person``
+        mixes both in -- a second one is shadowed in silence and the scenario
+        fails on an argument name three files away from the cause.
 
         What a person does when the agent is already working: the message joins
         the run in flight rather than starting a second one. ``says`` is the

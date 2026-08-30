@@ -95,7 +95,7 @@ async def test_a_message_sent_mid_run_is_answered(pod):
     # flight by now is a race nobody can win from out here, so the assertion is
     # the promise that holds either way -- the message is accepted, and the
     # conversation answers it.
-    added = await alice.adds(
+    added = await alice.adds_while_it_works(
         "and also check the invoices", in_conversation=conversation, in_pod=the_pod
     )
     assert added["conversation_id"] == str(conversation["id"])
