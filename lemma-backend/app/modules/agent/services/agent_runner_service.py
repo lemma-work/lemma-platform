@@ -31,7 +31,6 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.value_objects import (
-    RESUMABLE_AGENT_RUN_STATUSES,
     AgentEvent,
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -208,14 +207,6 @@ class AgentRunnerService:
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
         )
-        if agent_run.status in RESUMABLE_AGENT_RUN_STATUSES:
-            # The partial unique index makes this safe: if the person gave up
-            # waiting and said something else, their run holds the conversation's
-            # slot and this claim fails, which is the right outcome.
-            claimed = await self._claim_resumable_run(agent_run.id)
-            if not claimed:
-                return
-            agent_run = agent_run.model_copy(update={"status": AgentRunStatus.RUNNING})
         if agent_run.status != AgentRunStatus.RUNNING:
             await self.finalizer.finish(
                 run=run,
@@ -427,15 +418,19 @@ class AgentRunnerService:
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
             # A cancellation is the worker going away, not the run being
-            # wrong: park it rather than failing it, and announce nothing --
-            # nothing has ended. A real exception still fails terminally,
-            # because retrying a run that threw just throws again.
-            # See `services/run_resume`.
-            interrupted = not isinstance(exc, Exception)
+            # wrong. A real exception still fails terminally, because retrying
+            # a run that threw just throws again.
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                if interrupted:
+                if not isinstance(exc, Exception):
+                    # The worker is going away and the run is not over. Leave the
+                    # status alone -- it stays RUNNING, which is what the worker
+                    # that reclaims this job expects to find -- and announce
+                    # nothing, because nothing has ended. Only the usage
+                    # reservation goes back: the run that picks this work up
+                    # takes its own, and holding both charges one conversation
+                    # twice for a restart.
                     await finalize_safely(
-                        self.finalizer.interrupt(run=identity),
+                        self.usage_recorder.release(usage_reservation),
                         agent_run_id=agent_run_id,
                     )
                 else:
@@ -448,10 +443,12 @@ class AgentRunnerService:
                         agent_run_id=agent_run_id,
                     )
                     await notify_run_failed(observer, conversation, exc, agent_run_id)
-
-    async def _claim_resumable_run(self, agent_run_id: UUID) -> bool:
-        async with self.uow_factory() as uow:
-            return await ConversationRepository(uow).claim_resumable_run(agent_run_id)
+            # Re-raised on purpose: streaq XACKs a task that returned and
+            # "relinquishes" a cancelled one, leaving it for the next worker's
+            # XAUTOCLAIM. Swallowing it made every interrupted run look like a
+            # success, so a deploy ended every conversation in flight.
+            if not isinstance(exc, Exception):
+                raise
 
     async def _resolve_agent_runtime(
         self,

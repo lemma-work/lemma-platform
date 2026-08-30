@@ -670,6 +670,65 @@ def _add_log_level(logger: Any, method_name: str, event_dict: Any) -> Any:
     return structlog.stdlib.add_log_level(logger, method_name, event_dict)
 
 
+# A container log viewer shows one line per record, clipped at the pane width,
+# and `JSONRenderer` serialises in insertion order. That order put `logger` and
+# the static resource context first, so every line began with the same forty
+# characters and `event` -- and, on a failure, `error_message` -- sat off the
+# right-hand edge. Reading why something broke meant scrolling each line
+# sideways, which is why an error in a busy log reads as noise.
+#
+# Presentation only: the same keys are emitted with the same values.
+_LEADING_KEYS = ("timestamp", "level", "event", "error_type", "error_message")
+
+# Bulk and constants. A traceback runs to thousands of characters and
+# `service.name` is identical on every line of the process; both are worth
+# keeping and neither is worth reading before the event.
+_TRAILING_KEYS = (
+    "error_frames",
+    "error_traceback",
+    "exception",
+    "logger",
+    "trace_id",
+    "span_id",
+    "request_id",
+    "correlation_id",
+    "event_id",
+    "event_type",
+    "consumer",
+    "job_id",
+    "task_name",
+    "job_attempt",
+    "service.name",
+    "service.version",
+    "deployment.environment",
+    "release.sha",
+)
+
+
+def _order_for_reading(
+    _logger: Any, _name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Put what happened at the front of the line and context at the back.
+
+    Every key is preserved, including structlog's own `_record` /
+    `_from_structlog` meta -- which lands in the middle and is stripped later by
+    `remove_processors_meta`.
+    """
+    trailing = set(_TRAILING_KEYS)
+    ordered = {key: event_dict[key] for key in _LEADING_KEYS if key in event_dict}
+    ordered.update(
+        {
+            key: value
+            for key, value in event_dict.items()
+            if key not in ordered and key not in trailing
+        }
+    )
+    ordered.update(
+        {key: event_dict[key] for key in _TRAILING_KEYS if key in event_dict}
+    )
+    return ordered
+
+
 def _shared_processors() -> list[Any]:
     return [
         structlog.contextvars.merge_contextvars,
@@ -682,6 +741,8 @@ def _shared_processors() -> list[Any]:
         _add_safe_exception,
         redact_event_dict,
         _bounded_contract,
+        # Last: it orders whatever the chain above produced.
+        _order_for_reading,
     ]
 
 

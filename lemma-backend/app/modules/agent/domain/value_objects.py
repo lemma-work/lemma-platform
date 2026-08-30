@@ -175,8 +175,6 @@ class AgentRunStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     STOPPED = "STOPPED"
-    #: Worker went away mid-run; resumable. See `services/run_resume`.
-    INTERRUPTED = "INTERRUPTED"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentRunStatus | None":
@@ -255,7 +253,6 @@ ACTIVE_AGENT_RUN_STATUSES = frozenset(
     {AgentRunStatus.RUNNING, AgentRunStatus.STOP_REQUESTED}
 )
 
-RESUMABLE_AGENT_RUN_STATUSES = frozenset({AgentRunStatus.INTERRUPTED})
 TERMINAL_AGENT_RUN_STATUSES = frozenset(
     {
         AgentRunStatus.COMPLETED,
@@ -568,7 +565,6 @@ def to_json_value(value: object) -> JsonValue:
 
 __all__ = [
     "ACTIVE_AGENT_RUN_STATUSES",
-    "RESUMABLE_AGENT_RUN_STATUSES",
     "ConnectorAccessConfig",
     "ConnectorMode",
     "AgentEvent",

@@ -4,7 +4,6 @@ from enum import Enum
 class AgentRunStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    INTERRUPTED = "INTERRUPTED"
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
     STOP_REQUESTED = "STOP_REQUESTED"

@@ -93,6 +93,16 @@ class SandboxSweeper:
                 if await self._is_busy(sandbox):
                     continue
                 await self._service.release(sandbox.id)
+                # Named, because the count alone is not a diagnosis. When a
+                # run died mid-command and the only nearby log line said
+                # `released_count=1`, nothing connected the two: establishing
+                # whether the sweep had touched *that* sandbox meant querying
+                # the database, and by then the row had been re-provisioned.
+                logger.info(
+                    "workspace.sandbox_sweeper.released_idle_sandbox.observed",
+                    sandbox_id=str(sandbox.id),
+                    idle_after_seconds=idle_after_seconds,
+                )
             except Exception as exc:
                 # One unreachable sandbox must not stop the others being
                 # reclaimed; the next sweep will try it again.
@@ -133,7 +143,12 @@ class SandboxSweeper:
                 current.provider_id, deadline_at=deadline_at
             )
             if instance is None:
-                return False
+                # Same policy as the `except` below, which says in as many
+                # words that an unreachable sandbox is not evidence that it is
+                # idle. This branch said the opposite fifteen lines above it:
+                # a transient empty result from the provider's metadata listing
+                # read as "not busy" and released a sandbox mid-command.
+                return True
             processes = await self._provider.list_processes(
                 instance, deadline_at=deadline_at
             )
