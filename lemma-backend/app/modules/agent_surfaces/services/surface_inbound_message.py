@@ -15,6 +15,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 
 from app.composition.surface_agent import ConversationService
+from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
 )
@@ -22,8 +23,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfacePlatformAdapterPort,
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
-    # Re-exported: ``_ask_user_request_dict`` still has a caller here (the
-    # native-interaction path) and a unit test that imports it from this module.
+    ResumeOutcome,
     maybe_resume_pending_interaction,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
@@ -35,6 +35,15 @@ logger = get_logger(__name__)
 
 # Recent thread/channel messages fetched per run for group-mention continuity.
 _CHANNEL_CONTEXT_LIMIT = 15
+
+# Said when a decision was understood but could not be written down. It has to
+# state that nothing happened: the failure mode this replaced was an "approve"
+# that silently became a denial, so "it didn't go through" is the one fact the
+# person needs in order to know that answering again is safe.
+_DECISION_NOT_RECORDED = (
+    "I couldn't record that — nothing has been approved or denied, and the "
+    "request is still waiting. Please answer again."
+)
 
 
 def _speech_provider() -> Any:
@@ -171,9 +180,18 @@ class SurfaceInboundMessageMixin:
             # answer and resume — rather than starting a new message/run. This is
             # how the formatted-text fallback (and any "type your own" reply) gets
             # back into the run as a structured answer.
-            if not await maybe_resume_pending_interaction(
+            outcome = await maybe_resume_pending_interaction(
                 context, message_text, conversation_service=conversation_service
-            ):
+            )
+            if outcome is ResumeOutcome.FAILED:
+                # They decided and we could not write it down. Starting a turn
+                # here is what turned an "approve" into a cancellation: it
+                # supersedes the pause with an auto-DENY. The pause is still
+                # there, so saying so and letting them answer again is the one
+                # move that loses nothing.
+                await self._say_the_decision_was_not_recorded(context)
+                return None
+            if outcome is ResumeOutcome.NOT_A_DECISION:
                 return await conversation_service.add_user_message_and_start_run(
                     conversation_id=context.conversation_id,
                     user_id=context.user_id,
@@ -185,6 +203,29 @@ class SurfaceInboundMessageMixin:
             return None
         finally:
             reset_current_context(token)
+
+    async def _say_the_decision_was_not_recorded(
+        self, context: SurfaceChatContext
+    ) -> None:
+        """Tell the person their answer did not land, so they can give it again.
+
+        A bare envelope rather than ``send_agent_message_for_conversation``:
+        that one drains the files ``display_resource`` is holding for a
+        one-reply surface, and attaching them to an apology would consume them
+        before the reply they were meant for. ``_deliver_envelope`` already
+        reports a delivery that reached nobody, so there is nothing to catch
+        here — and if resolving the target fails too, this inbound is failing
+        loudly rather than quietly, which is the point.
+        """
+        target = await self._resolve_egress_target(context.conversation_id)
+        if target is None:
+            return
+        await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(text=_DECISION_NOT_RECORDED),
+            metadata={},
+            conversation_id=context.conversation_id,
+        )
 
     async def _fetch_channel_context(
         self,

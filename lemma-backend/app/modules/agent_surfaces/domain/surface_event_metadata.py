@@ -16,8 +16,6 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from app.modules.agent_surfaces.platforms.email_models import (
     EmailFileAttachment,
-    GmailFileAttachment,
-    OutlookFileAttachment,
 )
 from app.modules.agent_surfaces.platforms.slack.models import SlackFileAttachment
 from app.modules.agent_surfaces.platforms.teams.models import TeamsFileAttachment
@@ -73,31 +71,6 @@ class TelegramSurfaceEventMetadata(BaseModel):
     attachments: list[TelegramFileAttachment] = Field(default_factory=list)
 
 
-class GmailSurfaceEventMetadata(BaseModel):
-    platform: Literal["GMAIL"] = "GMAIL"
-    mailbox_email: str | None = None
-    subject: str | None = None
-    thread_id: str | None = None
-    message_id: str | None = None
-    reply_to_email: str | None = None
-    references: list[str] = Field(default_factory=list)
-    in_reply_to: str | None = None
-    attachments: list[GmailFileAttachment] = Field(default_factory=list)
-
-
-class OutlookSurfaceEventMetadata(BaseModel):
-    platform: Literal["OUTLOOK"] = "OUTLOOK"
-    mailbox_email: str | None = None
-    subject: str | None = None
-    thread_id: str | None = None
-    message_id: str | None = None
-    internet_message_id: str | None = None
-    reply_to_email: str | None = None
-    references: list[str] = Field(default_factory=list)
-    in_reply_to: str | None = None
-    attachments: list[OutlookFileAttachment] = Field(default_factory=list)
-
-
 class ResendSurfaceEventMetadata(BaseModel):
     platform: Literal["RESEND"] = "RESEND"
     mailbox_email: str | None = None
@@ -116,8 +89,6 @@ SurfaceEventMetadata = Annotated[
         SlackSurfaceEventMetadata,
         WhatsAppSurfaceEventMetadata,
         TelegramSurfaceEventMetadata,
-        GmailSurfaceEventMetadata,
-        OutlookSurfaceEventMetadata,
         ResendSurfaceEventMetadata,
     ],
     Field(discriminator="platform"),

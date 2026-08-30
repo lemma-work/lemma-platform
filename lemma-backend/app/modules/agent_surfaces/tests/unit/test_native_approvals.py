@@ -187,7 +187,7 @@ def _telegram_event():
 
 
 @pytest.mark.asyncio
-async def test_telegram_send_approval_builds_an_inline_keyboard():
+async def test_telegram_render_decision_builds_an_inline_keyboard():
     """Telegram was the only platform whose approval *render* had no test.
 
     Every other platform above round-trips render → tap. Telegram only ever
@@ -213,7 +213,7 @@ async def test_telegram_send_approval_builds_an_inline_keyboard():
             new=AsyncMock(),
         ) as send_message,
     ):
-        ok = await adapter.send_approval(
+        ok = await adapter._render_decision(
             credentials={"bot_token": "x"},
             event=_telegram_event(),
             approval_plan=plan,
@@ -242,7 +242,7 @@ async def test_telegram_send_approval_builds_an_inline_keyboard():
 
 
 @pytest.mark.asyncio
-async def test_telegram_send_approval_without_a_chat_target_falls_back():
+async def test_telegram_render_decision_without_a_chat_target_falls_back():
     """No chat to send to means the caller must render text instead."""
     from app.modules.agent_surfaces.platforms.telegram.adapter import (
         TelegramSurfaceAdapter,
@@ -262,7 +262,7 @@ async def test_telegram_send_approval_without_a_chat_target_falls_back():
         reply_target={},
     )
 
-    ok = await TelegramSurfaceAdapter().send_approval(
+    ok = await TelegramSurfaceAdapter()._render_decision(
         credentials={"bot_token": "x"},
         event=nowhere,
         approval_plan=_plan(),

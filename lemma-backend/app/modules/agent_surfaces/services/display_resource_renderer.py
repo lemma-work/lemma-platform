@@ -151,27 +151,12 @@ def merge_other_answers(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_questions_as_text(plan: SurfaceQuestionRenderPlan) -> str:
-    """Render an ask_user plan as a well-formatted chat message.
+    """Deprecated alias for ``SurfaceQuestionRenderPlan.to_plain_text``.
 
-    Used as the fallback on platforms without native tappable choices (and on
-    any platform where the native render is unavailable). The user replies with
-    a number/label or free text, which the ingress routes back as the answer.
+    The degradation moved onto the plan so a delivery can ask any part for its
+    text without knowing which part it is holding.
     """
-    blocks: list[str] = []
-    multiple = len(plan.questions) > 1
-    for index, question in enumerate(plan.questions, start=1):
-        header = f"{index}. {question.question}" if multiple else question.question
-        lines = [header]
-        for opt_index, option in enumerate(question.options, start=1):
-            suffix = " (recommended)" if option.recommended else ""
-            detail = f" — {option.description}" if option.description else ""
-            lines.append(f"  {opt_index}. {option.label}{detail}{suffix}")
-        blocks.append("\n".join(lines))
-    prompt = "Reply with your choice"
-    if any(q.multi_select for q in plan.questions):
-        prompt += " (you can pick more than one)"
-    prompt += ", or type your own answer."
-    return "\n\n".join(blocks + [prompt])
+    return plan.to_plain_text()
 
 
 def build_display_resource_render_plan(

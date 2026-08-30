@@ -85,3 +85,27 @@ def email_thread_root(
     """
     first_reference = references[0] if references else None
     return first_reference or in_reply_to or message_id or str(sender or "")
+
+
+def email_sender_authentication(raw_headers, from_address: str | None) -> str:
+    """The verdict for this message's ``From:``, as the parsed event records it.
+
+    One helper rather than three, because the deployment's trust configuration
+    has to read the same way on every email platform -- an inbound address means
+    the same thing whichever mailbox it arrived through.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.platforms.email_authentication import (
+        evaluate_email_authentication,
+    )
+
+    trusted = frozenset(
+        part.strip().lower()
+        for part in str(
+            surface_settings.surface_email_trusted_authserv_ids or ""
+        ).split(",")
+        if part.strip()
+    )
+    return evaluate_email_authentication(
+        raw_headers, from_address=from_address, trusted_authserv_ids=trusted
+    ).value

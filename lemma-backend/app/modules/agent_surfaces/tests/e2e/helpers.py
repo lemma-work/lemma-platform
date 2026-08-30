@@ -38,8 +38,6 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceExternalUser,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
-    FakeGmailServer,
-    FakeOutlookServer,
     FakeResendServer,
     FakeSlackServer,
     FakeTeamsServer,
@@ -118,26 +116,6 @@ async def fake_whatsapp(message_store):
 @pytest_asyncio.fixture
 async def fake_telegram(message_store):
     server = FakeTelegramServer(message_store)
-    await server.start()
-    try:
-        yield server
-    finally:
-        await server.stop()
-
-
-@pytest_asyncio.fixture
-async def fake_gmail(message_store):
-    server = FakeGmailServer(message_store)
-    await server.start()
-    try:
-        yield server
-    finally:
-        await server.stop()
-
-
-@pytest_asyncio.fixture
-async def fake_outlook(message_store):
-    server = FakeOutlookServer(message_store)
     await server.start()
     try:
         yield server
@@ -763,39 +741,6 @@ def _telegram_payload(*, text: str, message_id: int, sender_id: int) -> dict:
     }
 
 
-def _gmail_payload(
-    *,
-    sender_email: str,
-    assistant_email: str,
-    thread_id: str,
-    message_id: str,
-    text: str,
-) -> dict:
-    return {
-        "data": {
-            "thread_id": thread_id,
-            "message_id": message_id,
-            "sender": f"Surface Test User <{sender_email}>",
-            "to": assistant_email,
-            "subject": "Surface Gmail E2E",
-            "message_text": text,
-            "preview": {"body": text, "subject": "Surface Gmail E2E"},
-            "payload": {
-                "headers": [
-                    {"name": "From", "value": f"Surface Test User <{sender_email}>"},
-                    {"name": "To", "value": assistant_email},
-                    {"name": "Delivered-To", "value": assistant_email},
-                    {"name": "Subject", "value": "Surface Gmail E2E"},
-                    {
-                        "name": "Message-ID",
-                        "value": f"<{message_id}@gmail-e2e.test>",
-                    },
-                ]
-            },
-        }
-    }
-
-
 def _resend_payload(
     *,
     sender_email: str,
@@ -803,6 +748,9 @@ def _resend_payload(
     message_id: str,
     text: str,
     subject: str = "Surface Resend E2E",
+    in_reply_to: str | None = None,
+    references: list[str] | None = None,
+    authentication_results: str | None = None,
 ) -> dict:
     """Already-normalized Resend inbound shape (matches what the production
     webhook controller's ``_normalize_resend_inbound`` produces from the raw
@@ -814,53 +762,38 @@ def _resend_payload(
         "subject": subject,
         "text": text,
         "message_id": f"<{message_id}@resend-e2e.test>",
-        "in_reply_to": None,
-        "references": [],
+        # A reply carries these, and the parser derives the thread root from
+        # them. Left unset the message threads as a brand new mail, which is a
+        # different conversation -- so anything testing a *reply* has to pass
+        # them or it silently tests a first contact instead.
+        "in_reply_to": in_reply_to,
+        "references": list(references or []),
+        # Without this the sender is nobody: an inbound address only names a
+        # member when the receiving mail service vouched for it. Every real
+        # message has one -- Resend receives through SES, and 20 of 20 live
+        # inbound messages carry exactly this shape -- so a fixture without one
+        # was testing a message that does not arrive.
+        "headers": {
+            "authentication-results": authentication_results
+            or _authentication_results(sender_email)
+        },
     }
 
 
-def _outlook_payload(
-    *,
-    sender_email: str,
-    assistant_email: str,
-    thread_id: str,
-    message_id: str,
-    text: str,
-) -> dict:
-    return {
-        "data": {
-            "id": message_id,
-            "conversationId": thread_id,
-            "internetMessageId": f"<{message_id}@outlook-e2e.test>",
-            "from": {
-                "emailAddress": {
-                    "address": sender_email,
-                    "name": "Surface Test User",
-                }
-            },
-            "replyTo": [
-                {
-                    "emailAddress": {
-                        "address": sender_email,
-                        "name": "Surface Test User",
-                    }
-                }
-            ],
-            "toRecipients": [
-                {
-                    "emailAddress": {
-                        "address": assistant_email,
-                        "name": "Lemma",
-                    }
-                }
-            ],
-            "subject": "Surface Outlook E2E",
-            "body": {"contentType": "text", "content": text},
-            "internetMessageHeaders": [
-                {"name": "Message-ID", "value": f"<{message_id}@outlook-e2e.test>"}
-            ],
-        }
-    }
+def _authentication_results(sender_email: str) -> str:
+    """What SES writes above an inbound message it authenticated.
+
+    Copied from live inbound mail rather than invented, down to the comment
+    beside ``spf=`` — that comment is where an attacker's envelope sender is
+    echoed, so a fixture that omits it cannot exercise the parsing that matters.
+    """
+    domain = str(sender_email).rpartition("@")[2] or "example.com"
+    return (
+        f"amazonses.com; spf=pass (spfCheck: domain of {domain} designates "
+        f"1.2.3.4 as permitted sender) client-ip=1.2.3.4; "
+        f"envelope-from={sender_email}; helo=mail.{domain}; "
+        f"dkim=pass header.i=@{domain}; dmarc=pass header.from={domain};"
+    )
 
 
 def _telegram_photo_payload(

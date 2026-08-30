@@ -29,7 +29,6 @@ from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMi
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.composition.surface_agent import ConversationService
 from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfaceDirectWebhookIngress,
     SurfaceIngressRequest,
     SurfacePlatformWebhookIngress,
 )
@@ -183,9 +182,7 @@ class AgentSurfaceIngressService(
     ) -> AgentSurfaceContext | None:
         if isinstance(request, SurfacePlatformWebhookIngress):
             return await self._prepare_platform_webhook_ingress(request)
-        if isinstance(request, SurfaceDirectWebhookIngress):
-            return await self._prepare_surface_webhook_ingress(request)
-        return await self._prepare_schedule_ingress(request)
+        return await self._prepare_surface_webhook_ingress(request)
 
     async def execute_chat(self, context: dict[str, Any] | AgentSurfaceContext) -> None:
         parsed_context = (

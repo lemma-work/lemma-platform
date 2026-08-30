@@ -96,3 +96,36 @@ async def forget_free_text_answer_wanted(
 ) -> None:
     """Spend the intent, so it answers one message and not every later one."""
     await repository.set_conversation_metadata_key(conversation_id, _KEY, None)
+
+
+async def remember_a_prompt_that_arrived_as_words(
+    repository: Any,
+    *,
+    conversation_id: UUID,
+    envelope: Any,
+    receipt: Any,
+) -> None:
+    """Record a question or approval that reached the person as text, not a control.
+
+    ``PartDelivery.DEGRADED`` on ``choices``/``decision`` is exactly the
+    condition :func:`remember_answer_will_be_typed` describes -- the native
+    render did not happen -- so the delivery receipt answers it directly, for
+    every platform and every reason. #575 recorded this from the hand-written
+    text-fallback branch instead, which covered a card whose render failed but
+    not email, whose single reply always carries the prompt as words and had no
+    such branch to record from.
+
+    Lives here rather than in ``surface_egress`` because it is the same subject
+    as the rest of this module, and because that file is at the size ratchet's
+    ceiling.
+    """
+    prompt = envelope.choices or envelope.decision
+    if prompt is None:
+        return
+    if not {"choices", "decision"}.intersection(receipt.degraded):
+        return
+    await remember_answer_will_be_typed(
+        repository,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id_of(prompt),
+    )

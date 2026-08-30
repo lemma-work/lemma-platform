@@ -24,11 +24,6 @@ from app.modules.agent_surfaces.domain.events import (
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
-from app.modules.schedule.domain.events.schedule import (
-    ScheduleDeactivated,
-    ScheduleFired,
-)
-from app.modules.schedule.domain.schedule import ScheduleType
 
 
 @asynccontextmanager
@@ -295,82 +290,6 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     )
 
     handler.try_handle_channel_setup.assert_not_awaited()
-    handler.prepare_ingress.assert_not_awaited()
-    job_queue.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("has_context", [False, True])
-async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queued(
-    monkeypatch, has_context
-):
-    handler = AsyncMock()
-    # Sync on the real service: the delivery is split before anything is
-    # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
-    context = _reply_context() if has_context else None
-    handler.prepare_ingress.return_value = context
-    job_queue = AsyncMock()
-    uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
-    event = ScheduleFired(
-        schedule_id=uuid4(),
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-        payload={"message": "hello"},
-        source_event_id="time:test-fire",
-        pod_id=uuid4(),
-    )
-
-    await handlers.handle_surface_schedule_event(
-        event.model_dump(mode="json"),
-        logging.getLogger("test"),
-        uow_factory=partial(_mock_uow_factory, uow_mock),
-        job_queue=job_queue,
-        inbox=PassthroughEventInbox(),
-    )
-
-    ingress = handler.prepare_ingress.await_args.args[0]
-    assert isinstance(ingress, handlers.SurfaceScheduleIngress)
-    if has_context:
-        job_queue.enqueue.assert_awaited_once()
-        assert job_queue.enqueue.await_args.kwargs["_job_id"] == (
-            f"surface-schedule-event:{event.event_id}"
-        )
-    else:
-        job_queue.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_surface_schedule_subscriber_ignores_lifecycle_events(monkeypatch):
-    """A non-fire event on ``schedule_events`` is skipped, not a validation error.
-
-    The stream carries created/updated/deleted/deactivated too. Parsing one as a
-    fire raises, and a poison message is never acked, so XAUTOCLAIM redelivers it
-    forever.
-    """
-    handler = AsyncMock()
-    # Sync on the real service: the delivery is split before anything is
-    # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
-    job_queue = AsyncMock()
-    uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
-    deactivated = ScheduleDeactivated(
-        schedule_id=uuid4(),
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-        consecutive_failures=12,
-    )
-
-    await handlers.handle_surface_schedule_event(
-        deactivated.model_dump(mode="json"),
-        logging.getLogger("test"),
-        uow_factory=partial(_mock_uow_factory, uow_mock),
-        job_queue=job_queue,
-        inbox=PassthroughEventInbox(),
-    )
-
     handler.prepare_ingress.assert_not_awaited()
     job_queue.enqueue.assert_not_awaited()
 
