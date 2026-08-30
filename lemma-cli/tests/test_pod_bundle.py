@@ -25,8 +25,46 @@ from lemma_cli.cli_app.pod_bundle import (
 import lemma_cli.cli_app.pod_bundle as pod_bundle_module
 
 
+def _list_all_from_tree(files):
+    """Serve `list_all` out of a fake that only knows how to answer `tree`.
+
+    Export and import now enumerate directories with the listing endpoint,
+    because the tree is a capped preview. Most fakes in this file predate that
+    and describe a pod as a tree, which still says exactly what is in each
+    directory -- so derive the listing from it rather than restating every
+    fixture. Tests that are *about* the walk build their own listing fake.
+    """
+
+    def list_all(_pod_id, path="/", *, page_size=500):
+        payload = files.tree(_pod_id)
+        root = payload.get("tree") if isinstance(payload, dict) else None
+        if not isinstance(root, dict):
+            return []
+
+        def children_of(node, target):
+            if str(node.get("path") or "") == target:
+                return [c for c in (node.get("children") or []) if isinstance(c, dict)]
+            for child in node.get("children") or []:
+                if isinstance(child, dict):
+                    found = children_of(child, target)
+                    if found is not None:
+                        return found
+            return None
+
+        return children_of(root, path) or []
+
+    return list_all
+
+
 class FakeClient(SimpleNamespace):
     def pod(self, pod_id):
+        files = getattr(self, "files", None)
+        if (
+            files is not None
+            and not hasattr(files, "list_all")
+            and hasattr(files, "tree")
+        ):
+            files.list_all = _list_all_from_tree(files)
         return _FlatPodProxy(self, pod_id)
 
 
@@ -730,55 +768,238 @@ def test_import_pod_bundle_rejects_grants_without_resource_name(tmp_path: Path):
         import_pod_bundle(client, pod_id="pod_123", source_dir=agents_root)
 
 
-def test_fetch_files_index_uses_tree_payload_without_fetching_each_path():
-    class _FilesApi:
-        def tree(
-            self,
-            pod_id: str,
-            root_path: str = "/",
-            files_per_directory: int = 20,
-        ) -> dict[str, object]:
-            assert pod_id == "pod_123"
-            assert root_path == "/"
-            return {
-                "tree": {
-                    "path": "/",
-                    "name": "/",
-                    "kind": "FOLDER",
-                    "children": [
-                        {
-                            "id": "folder_root",
-                            "name": "product_datasheets",
-                            "kind": "FOLDER",
-                            "visibility": "POD",
-                            "path": "/product_datasheets",
-                            "children": [
-                                {
-                                    "id": "file_pdf",
-                                    "name": "spec-sheet.pdf",
-                                    "kind": "FILE",
-                                    "visibility": "POD",
-                                    "path": "/product_datasheets/spec-sheet.pdf",
-                                }
-                            ],
-                        }
-                    ],
-                }
-            }
+class _ListingFilesApi:
+    """A pod's files, served the way the API serves them: one page at a time."""
 
-        def get(self, pod_id: str, path: str) -> dict[str, object]:
-            raise AssertionError(
-                f"fetch_files_index should not call files.get for {pod_id}:{path}"
-            )
+    def __init__(self, directories: dict[str, list[dict[str, object]]], page: int = 2):
+        self.directories = directories
+        self.page = page
+        self.listed: list[tuple[str, str | None]] = []
 
-    by_parent, all_items = fetch_files_index(FakeClient(files=_FilesApi()), "pod_123")
+    def list_all(self, pod_id: str, path: str = "/", *, page_size: int = 500):
+        entries: list[dict[str, object]] = []
+        token: str | None = None
+        while True:
+            page = self.list(pod_id, path, limit=self.page, page_token=token)
+            entries.extend(page["items"])
+            token = page.get("next_page_token")
+            if not token:
+                return entries
 
-    assert [item["path"] for item in by_parent[None]] == ["/product_datasheets"]
-    assert [item["path"] for item in by_parent["/product_datasheets"]] == [
-        "/product_datasheets/spec-sheet.pdf"
+    def list(self, pod_id: str, path: str = "/", *, limit=100, page_token=None):
+        self.listed.append((path, page_token))
+        items = self.directories.get(path, [])
+        offset = int(page_token or 0)
+        window = items[offset : offset + limit]
+        nxt = offset + limit
+        return {
+            "items": window,
+            "next_page_token": str(nxt) if nxt < len(items) else None,
+        }
+
+    def tree(self, *args, **kwargs):
+        raise AssertionError(
+            "the tree endpoint is a preview capped at files_per_directory; "
+            "an export that must be complete cannot be built from it"
+        )
+
+    def get(self, pod_id: str, path: str):
+        raise AssertionError(f"no per-path fetch expected for {pod_id}:{path}")
+
+
+def _folder(path: str, name: str, visibility: str = "POD") -> dict[str, object]:
+    return {
+        "id": f"folder{path}",
+        "name": name,
+        "kind": "FOLDER",
+        "visibility": visibility,
+        "path": path,
+    }
+
+
+def _file(path: str, name: str, visibility: str = "POD") -> dict[str, object]:
+    return {
+        "id": f"file{path}",
+        "name": name,
+        "kind": "FILE",
+        "visibility": visibility,
+        "path": path,
+    }
+
+
+def test_fetch_files_index_sees_every_file_not_the_first_few():
+    """The bug this replaced: a directory of many files exported three of them.
+
+    The index came from the directory-*tree* endpoint, which returns at most
+    `files_per_directory` entries per directory -- three by default, twenty at
+    most. Export treated that preview as the pod's contents, and counted what it
+    collected, so nothing looked wrong. Measured on a real pod: 266 files, 104
+    exported, no warning.
+    """
+    many = [
+        _file(f"/library/note-{index:02d}.md", f"note-{index:02d}.md")
+        for index in range(12)
     ]
-    assert all_items["folder_root"]["visibility"] == "POD"
-    assert all_items["file_pdf"]["name"] == "spec-sheet.pdf"
+    api = _ListingFilesApi(
+        {
+            "/": [_folder("/library", "library")],
+            "/library": many,
+        }
+    )
+
+    _, all_items = fetch_files_index(FakeClient(files=api), "pod_123")
+
+    exported = sorted(
+        item["path"] for item in all_items.values() if item["kind"] == "FILE"
+    )
+    assert exported == sorted(entry["path"] for entry in many), (
+        "the walk stopped short of the directory's contents"
+    )
+    # Paged to exhaustion rather than taking whatever one page held.
+    assert len([call for call in api.listed if call[0] == "/library"]) > 1
+
+
+def test_fetch_files_index_keeps_walking_when_a_folder_lists_itself():
+    """A home folder lists itself; without a guard the walk never returns.
+
+    The backend's exporter documents this exact hazard -- it recursed until the
+    interpreter gave up, and the error was swallowed, so every pod with a home
+    folder exported an empty `files/` and said nothing.
+    """
+    api = _ListingFilesApi(
+        {
+            "/": [_folder("/me", "me", "PERSONAL")],
+            # `/me` contains itself, and a real file underneath.
+            "/me": [
+                _folder("/me", "me", "PERSONAL"),
+                _file("/me/notes.md", "notes.md", "PERSONAL"),
+            ],
+        }
+    )
+
+    _, all_items = fetch_files_index(FakeClient(files=api), "pod_123")
+
+    assert "/me/notes.md" in {item["path"] for item in all_items.values()}
+
+
+def test_fetch_files_index_reports_a_pod_visible_skills_tree():
+    """Skills are pod-visible and must survive an export.
+
+    The tree endpoint returned the whole `/skills` subtree with no visibility at
+    all, and export keeps only `visibility == "POD"` -- so a pod's skills were
+    dropped from every bundle, silently. The listing endpoint reports them
+    correctly.
+    """
+    api = _ListingFilesApi(
+        {
+            "/": [_folder("/skills", "skills")],
+            "/skills": [_folder("/skills/research", "research")],
+            "/skills/research": [_file("/skills/research/SKILL.md", "SKILL.md")],
+        }
+    )
+
+    _, all_items = fetch_files_index(FakeClient(files=api), "pod_123")
+
+    skill = next(
+        item
+        for item in all_items.values()
+        if item["path"] == "/skills/research/SKILL.md"
+    )
+    assert skill["visibility"] == "POD"
+
+
+def test_a_schedule_exports_without_where_it_last_ran():
+    """A bundle this code writes has to be one this code can import.
+
+    The strip list drifted from the API: it removed `last_run_at`/`next_run_at`
+    and not the seven fields that replaced them, so import refused the bundle by
+    name -- "Unrecognized field(s) on schedule" -- and the only way through was
+    editing the JSON by hand.
+    """
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    payload = _normalize_schedule_payload(
+        {
+            "name": "weekly-coach",
+            "schedule_type": "TIME",
+            "config": {"cron": "0 9 * * 1"},
+            "agent_name": "coach",
+            "is_active": True,
+            "id": "sched_1",
+            "pod_id": "pod_1",
+            "consecutive_failures": 3,
+            "is_internal": False,
+            "last_error": "boom",
+            "last_fire_status": "FAILED",
+            "last_fired_at": "2026-08-29T00:00:00Z",
+            "last_run_id": "run_9",
+            "paused_by_failures": True,
+        }
+    )
+
+    # What a schedule is, kept.
+    assert payload["name"] == "weekly-coach"
+    assert payload["config"] == {"cron": "0 9 * * 1"}
+    assert payload["agent_name"] == "coach"
+    assert payload["is_active"] is True
+    # How one installation's copy has been getting on, dropped.
+    for runtime_only in (
+        "consecutive_failures",
+        "is_internal",
+        "last_error",
+        "last_fire_status",
+        "last_fired_at",
+        "last_run_id",
+        "paused_by_failures",
+    ):
+        assert runtime_only not in payload, runtime_only
+
+
+def test_a_text_column_holding_digits_survives_a_csv_round_trip(tmp_path: Path):
+    """`year` is TEXT and holds "2026"; CSV has no types, so the reader guessed
+    int and Postgres refused the insert outright. The declared type is in the
+    table's own JSON next to the data file."""
+    from lemma_cli.cli_app.pod_bundle import _rows_typed_by_schema
+
+    resource_dir = tmp_path / "sources"
+    resource_dir.mkdir()
+    (resource_dir / "sources.json").write_text(
+        json.dumps(
+            {
+                "name": "sources",
+                "columns": [
+                    {"name": "slug", "type": "TEXT"},
+                    {"name": "year", "type": "TEXT"},
+                    {"name": "rank", "type": "INTEGER"},
+                    {"name": "score", "type": "FLOAT"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = _rows_typed_by_schema(
+        [{"slug": "rigveda", "year": 2026, "rank": 3, "score": 1.5}], resource_dir
+    )
+
+    assert rows[0]["year"] == "2026", "a TEXT column must arrive as text"
+    # Columns that really are numbers are left alone.
+    assert rows[0]["rank"] == 3
+    assert rows[0]["score"] == 1.5
+    assert rows[0]["slug"] == "rigveda"
+
+
+def test_rows_are_left_alone_when_the_table_declares_nothing_usable(tmp_path: Path):
+    """No schema, no opinion: never invent a conversion from a missing type."""
+    from lemma_cli.cli_app.pod_bundle import _rows_typed_by_schema
+
+    resource_dir = tmp_path / "sources"
+    resource_dir.mkdir()
+    rows = [{"year": 2026}]
+    assert _rows_typed_by_schema(rows, resource_dir) == rows
+
+    (resource_dir / "sources.json").write_text("not json", encoding="utf-8")
+    assert _rows_typed_by_schema(rows, resource_dir) == rows
 
 
 def test_import_pod_files_only_creates_missing_folders(tmp_path: Path):

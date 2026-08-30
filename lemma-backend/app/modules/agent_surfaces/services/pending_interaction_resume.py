@@ -25,6 +25,10 @@ from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.user_interaction.models import AskUserRequest
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.services.free_text_answer import (
+    forget_free_text_answer_wanted,
+    free_text_answer_wanted_for,
+)
 
 logger = get_logger(__name__)
 
@@ -41,6 +45,112 @@ class ResumeOutcome(StrEnum):
     #: turn: doing so auto-denies the very approval the person just granted.
     #: The pause stays, so saying so and letting them retry is recoverable.
     FAILED = "FAILED"
+
+
+_APPROVAL_WORDS = {
+    "approve",
+    "yes",
+    "y",
+    "ok",
+    "okay",
+    "confirm",
+    "run",
+    "allow",
+    "go",
+    "deny",
+    "no",
+    "n",
+    "reject",
+    "decline",
+    "cancel",
+    "stop",
+}
+
+
+def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
+    """Is this text unmistakably the answer, rather than a new request?
+
+    A person with buttons in front of them may still type "approve", or "2", or
+    the option's own words — that is answering, and it would be perverse to
+    treat it as a new instruction. So an exact match is still taken as one,
+    whatever the platform can render.
+
+    Deliberately narrow. `_parse_ask_user_reply` falls back to the raw text as a
+    free-form answer and `_parse_approval_decision` reads anything unrecognised
+    as a denial; either would call *every* message an answer, which is the thing
+    being fixed. Only a recognised option, index or decision word counts here.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if str(pending.get("kind") or "") == "request_approval":
+        return stripped.lower() in _APPROVAL_WORDS
+    raw_request = _ask_user_request_dict(pending.get("tool_args"))
+    if raw_request is None:
+        return False
+    try:
+        questions = AskUserRequest.model_validate(raw_request).questions
+    except ValidationError:
+        return False
+    if len(questions) != 1:
+        return False
+    options = getattr(questions[0], "options", None) or []
+    if stripped.isdigit():
+        return 0 <= int(stripped) - 1 < len(options)
+    return any(
+        (getattr(option, "label", "") or "").lower() == stripped.lower()
+        for option in options
+    )
+
+
+async def _is_an_answer(
+    context: SurfaceChatContext,
+    *,
+    conversation_service: ConversationService,
+    pending: dict[str, Any],
+    text: str,
+    tool_call_id: str,
+) -> bool:
+    """Is this typed message answering the pause, or getting on with something else?
+
+    The composer stays enabled while a conversation is WAITING, so somebody can
+    type straight past a card — and until this asked, every such message was
+    taken as the answer to whatever was pending, however old. A question nobody
+    tapped therefore swallowed the next instruction anybody sent, recorded it as
+    the answer, and started no run for it. Only surfaces behaved that way; a new
+    message from the web or the CLI supersedes a stale pause and carries on (see
+    `ConversationTurns.start` -> `supersede_stale_pending_interactions`).
+
+    Three cases are genuinely an answer:
+
+    * the words plainly answer it — an offered option, its number, "approve";
+    * they asked to type it, by tapping "Other" on the card, and this is the
+      pause they tapped it on;
+    * the card reached them as text, so typing is the only way to answer at all.
+
+    That last one is recorded where the text is sent rather than inferred from
+    the platform, because the two differ: Slack renders buttons and still falls
+    back to a formatted message when a block payload is rejected, and somebody
+    looking at plain text has nothing to tap whatever the platform can do.
+
+    Anything else is a new message, and saying so is what lets the normal path
+    mark the pause unanswered, tell the agent, and run what was actually asked.
+    """
+    # Asked before the platform, because an unmistakable answer is one wherever
+    # it was typed — and because it needs nothing but the words.
+    if _plainly_answers(pending, text):
+        return True
+    repository = conversation_service.conversation_repository
+    if await free_text_answer_wanted_for(
+        repository,
+        conversation_id=context.conversation_id,
+        tool_call_id=tool_call_id,
+    ):
+        await forget_free_text_answer_wanted(
+            repository, conversation_id=context.conversation_id
+        )
+        return True
+    return False
 
 
 def _ask_user_request_dict(tool_args: object) -> dict[str, Any] | None:
@@ -252,16 +362,18 @@ async def maybe_resume_pending_interaction(
 ) -> ResumeOutcome:
     """Resume a paused ask_user or request_approval from a typed surface reply.
 
-    ask_user: parses the reply as a numbered option (1, 2, …) or an exact
-    label match, falling back to the raw text as a free-form "Other" answer —
-    every reply answers the question, because free text is a valid answer to it.
+    ``_is_an_answer`` decides first whether this message is answering the pause
+    at all — words that plainly answer it, an "Other" they tapped on this call,
+    or a card that reached them as text with nothing to tap. Anything else is a
+    new message and falls through, so the normal path can mark the pause
+    unanswered and run what was actually asked.
 
-    request_approval: only a reply that actually expresses a decision resolves
-    the approval. "approve"/"yes"/… → APPROVE_ONCE, "approve session"/… →
+    Given that it *is* an answer: ask_user takes a numbered option, an exact
+    label, or free text. request_approval takes only a reply expressing a
+    decision — "approve"/"yes"/… → APPROVE_ONCE, "approve session"/… →
     APPROVE_FOR_SESSION, "deny"/"no"/… → DENY. Anything else is
-    ``NOT_A_DECISION`` and is delivered as a message, because an approval has no
-    free-form answer and guessing one on the person's behalf is how a question
-    became a cancellation.
+    ``NOT_A_DECISION``, because an approval has no free-form answer and guessing
+    one on the person's behalf is how a question became a cancellation.
 
     Failing to *look up* the pause is ``NOT_A_DECISION``: we never learned there
     was one, and the turn the caller then starts would fail on the same broken
@@ -283,6 +395,19 @@ async def maybe_resume_pending_interaction(
             conversation_id=context.conversation_id
         )
         if not isinstance(pending, dict):
+            return ResumeOutcome.NOT_A_DECISION
+        if not await _is_an_answer(
+            context,
+            conversation_service=conversation_service,
+            pending=pending,
+            text=text,
+            tool_call_id=str(pending.get("tool_call_id") or ""),
+        ):
+            # A new message, not an answer. Falling through is the whole fix:
+            # `add_user_message_and_start_run` supersedes the unanswered pause,
+            # writes the tool return that tells the agent it was never answered
+            # (an approval always as a denial, never an approval), and runs what
+            # the person actually asked for.
             return ResumeOutcome.NOT_A_DECISION
         kind = str(pending.get("kind") or "")
         conversation = (

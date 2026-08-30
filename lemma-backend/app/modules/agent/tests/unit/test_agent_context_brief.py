@@ -15,8 +15,10 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
+    _user_lines,
 )
 
 
@@ -78,8 +80,8 @@ class _FakeBriefRepo:
     async def get_pod_name(self, pod_id):
         return "Acme"
 
-    async def get_user_email(self, user_id):
-        return "a@b.co"
+    async def get_user_profile(self, user_id):
+        return UserProfile(email="a@b.co")
 
     async def get_agent_grants(self, **kwargs):
         return []
@@ -461,3 +463,44 @@ class TestEveryCapSaysWhatItLeftOut:
         entries = _top_level_file_entries(tree)
 
         assert any("4 more top-level entries" in entry for entry in entries)
+
+
+class TestTheUserLine:
+    """What the brief says about the person, which is all the agent knows.
+
+    Nothing else in the prompt carries a name or a timezone, so an omission
+    here is not a thinner brief -- it is an agent that greets an email address
+    and calls 09:00 UTC "this morning" to somebody eight hours away.
+    """
+
+    def test_a_name_leads_the_line_and_the_address_stays(self):
+        user_id = uuid4()
+
+        lines = _user_lines(
+            UserProfile(email="ada@example.com", display_name="Ada Lovelace"),
+            user_id,
+        )
+
+        assert lines[0] == f"- User: Ada Lovelace <ada@example.com> ({user_id})"
+
+    def test_an_unnamed_user_still_reads_as_it_always_did(self):
+        user_id = uuid4()
+
+        lines = _user_lines(UserProfile(email="ada@example.com"), user_id)
+
+        assert lines[0] == f"- User: ada@example.com ({user_id})"
+
+    def test_a_known_timezone_is_named_with_what_to_do_about_it(self):
+        lines = _user_lines(
+            UserProfile(email="ada@example.com", timezone="Asia/Kolkata"), uuid4()
+        )
+
+        assert "Asia/Kolkata" in lines[1]
+        assert "UTC" in lines[1]
+
+    def test_a_missing_timezone_is_said_rather_than_left_out(self):
+        """Silence reads as "the clock in front of you is theirs"."""
+        lines = _user_lines(UserProfile(email="ada@example.com"), uuid4())
+
+        assert "not set" in lines[1]
+        assert "UTC" in lines[1]

@@ -151,10 +151,27 @@ def test_every_phrase_the_prompt_quotes_is_one_the_parser_accepts(
         assert _classify_approval_reply(phrase) is not None, phrase
 
 
+# One question with two offered options. `_is_an_answer` (#575) only lets a
+# typed message through when it plainly answers -- an offered label, its index,
+# or a decision word -- so a test about *recording* an answer has to supply one
+# that qualifies, or it never reaches the write it is about.
+_ONE_QUESTION = {
+    "questions": [
+        {
+            "header": "colour",
+            "question": "Which colour?",
+            "options": [{"label": "Red"}, {"label": "Blue"}],
+            "multiSelect": False,
+        }
+    ]
+}
+
+
 async def _resume(
     text: str,
     *,
     kind: str = "request_approval",
+    tool_args: dict | None = None,
     resolve_raises: Exception | None = None,
     lookup_raises: Exception | None = None,
 ):
@@ -175,11 +192,17 @@ async def _resume(
     resolve = AsyncMock(side_effect=resolve_raises)
     service = SimpleNamespace(
         get_pending_user_interaction=AsyncMock(
-            return_value={"tool_call_id": "tool-1", "kind": kind, "tool_args": {}},
+            return_value={
+                "tool_call_id": "tool-1",
+                "kind": kind,
+                "tool_args": tool_args if tool_args is not None else {},
+            },
             side_effect=lookup_raises,
         ),
         conversation_repository=SimpleNamespace(
-            get_conversation=AsyncMock(return_value=conversation)
+            get_conversation=AsyncMock(return_value=conversation),
+            # `_is_an_answer` asks this when the words do not plainly answer.
+            get_conversation_metadata_key=AsyncMock(return_value=None),
         ),
         resolve_user_approval_internal=resolve,
     )
@@ -214,9 +237,16 @@ async def test_a_non_decision_is_not_consumed_and_records_nothing() -> None:
     resolve.assert_not_awaited()
 
 
-async def test_ask_user_still_accepts_any_text_as_the_answer() -> None:
-    """Unchanged: free text is a valid answer to a question, unlike an approval."""
-    outcome, resolve = await _resume("the third one", kind="ask_user")
+async def test_an_offered_option_typed_out_answers_the_question() -> None:
+    """A person with buttons in front of them may still type the option's words.
+
+    Free text no longer answers on its own -- #575 made a message typed past a
+    card a message rather than the answer to it -- so what this pins is the
+    other half: something that plainly answers still resolves the pause.
+    """
+    outcome, resolve = await _resume(
+        "Red", kind="ask_user", tool_args=_ONE_QUESTION
+    )
     assert outcome is ResumeOutcome.CONSUMED
     assert (
         resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
@@ -243,7 +273,10 @@ async def test_a_decision_we_could_not_record_is_never_a_denial() -> None:
 async def test_an_ask_user_answer_we_could_not_record_fails_the_same_way() -> None:
     """Not approval-specific: a lost answer leaves the same run WAITING."""
     outcome, _ = await _resume(
-        "the third one", kind="ask_user", resolve_raises=RuntimeError("db is down")
+        "Red",
+        kind="ask_user",
+        tool_args=_ONE_QUESTION,
+        resolve_raises=RuntimeError("db is down"),
     )
     assert outcome is ResumeOutcome.FAILED
 
