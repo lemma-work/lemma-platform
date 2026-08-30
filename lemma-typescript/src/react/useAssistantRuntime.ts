@@ -70,7 +70,64 @@ function isOptimisticId(messageId: string): boolean {
   return messageId.startsWith("optimistic-user-");
 }
 
-const OPTIMISTIC_MATCH_WINDOW_MS = 2 * 60 * 1000;
+/**
+ * How far back on the SERVER's own timeline an incoming user message may sit
+ * and still be read as the echo of a turn just sent, rather than as history
+ * being loaded. Generous on purpose: all it has to separate is "the message I
+ * just sent" from "a transcript from an earlier session", and those are hours
+ * or days apart, never minutes.
+ */
+const ECHO_RECENCY_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * The newest moment the SERVER has stamped, across every message the store
+ * holds. Provisional turns are excluded deliberately: their times come from the
+ * device clock, and it is mixing the two clocks that this whole file has to
+ * avoid. Everything left is stamped by the one clock all senders share, so the
+ * maximum is the best estimate of "now" available without asking.
+ */
+function newestServerTime(messages: RuntimeConversationMessage[]): number | null {
+  let newest: number | null = null;
+  messages.forEach((message) => {
+    if (isOptimisticId(message.id)) return;
+    const time = messageTime(message);
+    if (newest === null || time > newest) newest = time;
+  });
+  return newest;
+}
+
+/**
+ * Whether this message is recent enough on the server's timeline to be an echo
+ * of something just sent. Server time is compared only against server time, so
+ * a device clock that is hours or days out cannot make a fresh echo look stale.
+ * With nothing server-stamped to compare against, the store holds no history
+ * for the echo to be confused with, and the question does not arise.
+ */
+function isRecentOnServerTimeline(
+  held: RuntimeConversationMessage[],
+  incoming: RuntimeConversationMessage,
+): boolean {
+  const newest = newestServerTime(held);
+  if (newest === null) return true;
+  return messageTime(incoming) >= newest - ECHO_RECENCY_WINDOW_MS;
+}
+
+/**
+ * When to say a turn was sent, for the second it takes the server to say so
+ * itself. The device clock is the obvious answer and the wrong one: on a
+ * machine whose clock is off — Windows with a dead time service, a dual-boot
+ * box reading the RTC as local time, a VM resumed from sleep — it files the
+ * turn hours or days from where it belongs, above the entire transcript on a
+ * clock that is behind. Until the echo lands, this value is what orders the
+ * turn, what the transcript prints under it, and what its duration is measured
+ * from. Anchoring past the newest thing the server has stamped keeps the turn
+ * last in the conversation whatever the device believes the time is.
+ */
+function optimisticCreatedAt(held: RuntimeConversationMessage[]): string {
+  const deviceNow = Date.now();
+  const newest = newestServerTime(held);
+  return new Date(newest === null ? deviceNow : Math.max(deviceNow, newest + 1)).toISOString();
+}
 
 function upsertRuntimeMessage(
   previous: RuntimeConversationMessage[],
@@ -92,32 +149,34 @@ function upsertRuntimeMessage(
     return next;
   }
 
-  if (incoming.role === "user") {
+  // Only a message the server has stamped can take a provisional turn's place.
+  // Without that, appending a second provisional turn made it pair with the
+  // first one of the same text and quietly take its place: send "go" twice and
+  // the first bubble vanished, to reappear only when its echo came back.
+  if (incoming.role === "user" && !isOptimisticId(incoming.id)) {
     const incomingText = messageText(incoming);
+    // Pairing used to ask how far apart the two stamps were — a provisional
+    // turn's, from the device clock, against its echo's, from the server's.
+    // On a device whose clock is wrong that distance is the skew rather than
+    // the round-trip, no echo ever matched, and the sender watched their own
+    // message land twice: once where their machine thinks it is now, once
+    // where the server put it. Nothing below compares the two clocks.
     if (incomingText) {
-      const incomingTimestamp = messageTime(incoming);
-      let optimisticIndex = -1;
-      let bestDistance = Number.POSITIVE_INFINITY;
+      // First match wins. Echoes come back in the order their sends went out,
+      // so two turns sharing their text pair up in that same order — and store
+      // order is the ordering to read it from, never the stamps.
+      const optimisticIndex = next.findIndex((message) => (
+        message.role === "user"
+        && isOptimisticId(message.id)
+        && messageText(message) === incomingText
+      ));
 
-      next.forEach((message, index) => {
-        if (
-          message.role !== "user"
-          || !isOptimisticId(message.id)
-          || messageText(message) !== incomingText
-        ) {
-          return;
-        }
-
-        const distance = Math.abs(messageTime(message) - incomingTimestamp);
-        if (distance > OPTIMISTIC_MATCH_WINDOW_MS || distance >= bestDistance) {
-          return;
-        }
-
-        optimisticIndex = index;
-        bestDistance = distance;
-      });
-
-      if (optimisticIndex >= 0) {
+      // Recency is asked second on purpose. Finding a candidate is string work
+      // over a list that almost never holds a provisional turn at all; judging
+      // recency parses a date per held message. Loading a transcript merges
+      // hundreds of user messages through here and must not pay that per
+      // message — only a send with an echo actually waiting for it does.
+      if (optimisticIndex >= 0 && isRecentOnServerTimeline(next, incoming)) {
         // The echo takes the provisional turn's place *and* remembers whose
         // place it took, so whoever keys turns can keep them the same one.
         next[optimisticIndex] = {
@@ -221,7 +280,7 @@ export function useAssistantRuntime({
       role: "user",
       kind: "TEXT",
       text: trimmed,
-      created_at: new Date().toISOString(),
+      created_at: optimisticCreatedAt(runtimeMessagesRef.current),
       metadata: null,
       ...(optimisticConversationId ? { conversation_id: optimisticConversationId } : {}),
     };

@@ -111,6 +111,10 @@ export function AssistantExperienceComposerBody({
         onSubmit={onSubmit}
         placeholder={placeholder}
         isBusy={isConversationBusy}
+        // A run in flight takes a follow-up here, so a draft turns the primary
+        // control back into Send rather than leaving Stop as the only button on
+        // a sentence the person has just typed.
+        busyAcceptsSend
         disabled={interactionPending}
         hasAttachments={hasPendingFileUploads}
         onStop={controller.stop}

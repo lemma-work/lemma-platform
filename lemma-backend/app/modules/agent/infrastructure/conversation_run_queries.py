@@ -25,12 +25,11 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 from app.modules.agent.domain.value_objects import (
-    ACTIVE_AGENT_RUN_STATUSES,
     AgentRunStatus,
+    ACTIVE_AGENT_RUN_STATUSES,
 )
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
-    ConversationModel,
     MessageModel,
 )
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
@@ -40,7 +39,6 @@ from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
 from app.modules.agent.infrastructure.run_projections import (
-    ResumableAgentRunRef,
     StaleAgentRunRef,
     StrandedConversationRef,
 )
@@ -116,95 +114,6 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def claim_resumable_run(self, agent_run_id: UUID) -> bool:
-        """Flip an interrupted run back to RUNNING, if the slot is free.
-
-        The partial unique index on (conversation_id) where the status is active
-        is the real lock. Checking first only turns the common case -- the person
-        gave up waiting and started something else -- into a clean "no" instead
-        of an integrity error, and the index still decides a genuine race.
-        """
-        run = (
-            await self.session.execute(
-                select(AgentRunModel.conversation_id, AgentRunModel.status).where(
-                    AgentRunModel.id == agent_run_id
-                )
-            )
-        ).one_or_none()
-        if run is None or run.status != AgentRunStatus.INTERRUPTED.value:
-            return False
-        holder = (
-            await self.session.execute(
-                select(AgentRunModel.id)
-                .where(
-                    AgentRunModel.conversation_id == run.conversation_id,
-                    AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if holder is not None:
-            return False
-        result = await self.session.execute(
-            update(AgentRunModel)
-            .where(
-                AgentRunModel.id == agent_run_id,
-                AgentRunModel.status == AgentRunStatus.INTERRUPTED.value,
-            )
-            .values(status=AgentRunStatus.RUNNING.value)
-        )
-        await self.session.flush()
-        return bool(result.rowcount)
-
-    async def list_resumable_runs(
-        self, *, limit: int = 200
-    ) -> list[ResumableAgentRunRef]:
-        """Runs a worker parked on its way out, oldest first."""
-        result = await self.session.execute(
-            select(
-                AgentRunModel.id,
-                AgentRunModel.conversation_id,
-                ConversationModel.user_id,
-                ConversationModel.pod_id,
-                AgentRunModel.run_metadata,
-            )
-            .join(
-                ConversationModel,
-                ConversationModel.id == AgentRunModel.conversation_id,
-            )
-            .where(AgentRunModel.status == AgentRunStatus.INTERRUPTED.value)
-            .order_by(AgentRunModel.started_at.asc())
-            .limit(limit)
-        )
-        return [
-            ResumableAgentRunRef(
-                id=row.id,
-                conversation_id=row.conversation_id,
-                user_id=row.user_id,
-                pod_id=row.pod_id,
-                resume_attempts=int((row.run_metadata or {}).get("resume_attempts", 0)),
-            )
-            for row in result.all()
-        ]
-
-    async def record_resume_attempt(self, agent_run_id: UUID) -> None:
-        """Count one resume, so a run that cannot survive a restart stops trying.
-
-        Kept in `run_metadata` rather than a column: this is bookkeeping for a
-        rare path, and a migration to count retries is a migration to maintain.
-        """
-        model = (
-            await self.session.execute(
-                select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
-            )
-        ).scalar_one_or_none()
-        if model is None:
-            return
-        metadata = dict(model.run_metadata or {})
-        metadata["resume_attempts"] = int(metadata.get("resume_attempts", 0)) + 1
-        model.run_metadata = metadata
-        await self.session.flush()
-
     async def list_stale_active_runs(
         self,
         *,
@@ -224,6 +133,37 @@ class ConversationRunQueriesMixin:
                 AgentRunModel.started_at < cutoff,
             )
             .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_runs_stuck_stopping(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]:
+        """Stops that nobody picked up.
+
+        STOP_REQUESTED is an active status, so such a run keeps the one active
+        run slot: a new message attaches to the dying run and starts nothing,
+        and Retry refuses. A live worker now acts on a stop within a second, so
+        one still sitting here means the worker never will -- and until this,
+        the only thing that freed the conversation was the orphan sweep, an hour
+        after the run *started*.
+
+        Keyed on `updated_at`, which is when the stop was written, rather than
+        `started_at`: how long the run had been going says nothing about how
+        long the stop has been ignored.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        result = await self.session.execute(
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            .where(
+                AgentRunModel.status == AgentRunStatus.STOP_REQUESTED.value,
+                AgentRunModel.updated_at < cutoff,
+            )
+            .order_by(AgentRunModel.updated_at.asc())
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]

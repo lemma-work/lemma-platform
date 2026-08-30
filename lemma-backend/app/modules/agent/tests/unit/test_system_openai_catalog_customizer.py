@@ -56,6 +56,22 @@ def test_default_catalog_uses_names_verbatim(openai_env):
         assert RuntimeModelCapability.VISION not in entry.capabilities
 
 
+def test_openai_compat_profile_replaces_rather_than_sums_streamed_usage(openai_env):
+    """pydantic-ai's OpenAI streaming handler defaults to `usage += chunk_usage`
+    per SSE chunk -- correct only when a provider sends usage on a single final
+    chunk. Verified directly against Fireworks that glm-5.3-flash instead sends
+    already-cumulative usage on *every* chunk (prompt_tokens constant,
+    completion_tokens counting up), which the default then re-sums on top of
+    itself -- one real agent turn recorded 193M input tokens this way.
+    `openai_continuous_usage_stats` switches pydantic-ai to `usage =
+    chunk_usage` (replace), correct under both conventions. Set at the profile
+    level, not per model, so it protects every model behind this provider."""
+    profiles = AgentRuntimeProfileService().system_profiles()
+    assert profiles, "system profile should exist when the API key is set"
+    config = profiles[0].config
+    assert config.model_settings.get("openai_continuous_usage_stats") is True
+
+
 def test_pricing_catalog_is_empty_when_no_models_are_configured(monkeypatch):
     from app.core.config import settings
 

@@ -78,3 +78,36 @@ async def test_deleting_an_agent_keeps_the_default(pod):
     )
     messages = await alice.waits_for_a_reply(in_conversation=conversation, in_pod=the_pod)
     assert any(m.get("role") == "assistant" for m in messages), messages
+
+
+@scenario("A person adds to what the agent is already doing")
+@proves("PS-AGENT-015")
+@covers("agent.conversation.message.append", "agent.conversation.message.list")
+async def test_a_message_sent_mid_run_is_answered(pod):
+    alice, the_pod = pod
+    agent = await alice.creates_an_agent(in_pod=the_pod)
+    conversation = await alice.starts_a_conversation(
+        in_pod=the_pod, with_agent=agent["name"], saying="start something"
+    )
+
+    # No waiting for the first turn to finish: the point is that the composer
+    # takes this while the agent is still working. Whether the run is still in
+    # flight by now is a race nobody can win from out here, so the assertion is
+    # the promise that holds either way -- the message is accepted, and the
+    # conversation answers it.
+    added = await alice.adds_while_it_works(
+        "and also check the invoices", in_conversation=conversation, in_pod=the_pod
+    )
+    assert added["conversation_id"] == str(conversation["id"])
+    # Which of the two happened is reported, so a client can say so.
+    assert isinstance(added["started_new_run"], bool)
+
+    await alice.waits_for_the_run_to_settle(
+        conversation=conversation, in_pod=the_pod, timeout=90.0
+    )
+    messages = await alice.messages_in(conversation, in_pod=the_pod)
+
+    texts = [m.get("text") or "" for m in messages]
+    assert any("check the invoices" in text for text in texts), texts
+    # Accepted and then left unanswered is the failure this guards against.
+    assert any(m.get("role") == "assistant" for m in messages), messages

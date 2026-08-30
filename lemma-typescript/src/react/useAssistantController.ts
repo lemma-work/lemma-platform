@@ -118,6 +118,15 @@ export interface UseAssistantControllerResult {
   selectConversation: (conversationId: string | null) => void;
   setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
   sendMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
+  /**
+   * Append a follow-up message to a conversation that already has a run in
+   * flight, instead of starting a new one. Unlike `sendMessage`, this never
+   * opens its own SSE stream — it persists the message and reattaches
+   * whatever stream should be watching the conversation, relying on that
+   * stream (or the harness's own follow-up-run backstop) to surface the
+   * result. Requires an already-open/active conversation.
+   */
+  steerMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
   retryFailedMessage: () => Promise<void>;
   uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
   removePendingFile: (fileKey: string) => void;
@@ -673,40 +682,51 @@ function resolveScopedClient(client: LemmaClient, podId?: string | null): LemmaC
   return client;
 }
 
-function conversationUploadDirectory(conversationId: string): string {
-  return `/me/conversations/${conversationId}`;
-}
-
-function shouldIgnoreFolderEnsureError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
-  return message.includes("already exists")
-    || message.includes("already in use")
-    || message.includes("path unavailable")
-    || message.includes("path already")
-    || message.includes("409");
-}
-
-async function ensureFolder(client: LemmaClient, name: string, directoryPath: string): Promise<void> {
-  try {
-    await client.files.folder.create(name, { directoryPath });
-  } catch (error) {
-    if (!shouldIgnoreFolderEnsureError(error)) throw error;
+/**
+ * Where a file attached in the composer is written.
+ *
+ * The conversation's own working directory in pod files — the same
+ * `/me/c/{date}/{slug}` the agent's pod tools resolve a relative path against,
+ * mirroring its `/workspace/c/{date}/{slug}` scratchpad. So a person attaches
+ * `report.pdf` and the agent finds it by that name, with no path to be told.
+ *
+ * The server computes it (`ConversationResponse.pod_cwd`) rather than this
+ * function, and deliberately: the slug is random, it lives in conversation
+ * metadata, and the rule that maps a workspace cwd to a pod one is the same
+ * rule the agent's tools use. Rebuilding it here would be a second
+ * implementation of that rule, and the two drifting is precisely how uploads
+ * ended up under `/me/conversations/{uuid}` — a directory the agent's cwd never
+ * pointed at, findable only because the client pasted the absolute path into
+ * the message text.
+ *
+ * No folder is created first: the upload endpoint makes missing parents on the
+ * way, `mkdir -p` style. The two `folder.create` round-trips that used to run
+ * before every attachment were redundant, and swallowed any error whose message
+ * merely contained "409".
+ */
+async function resolveConversationUploadDirectory(
+  client: LemmaClient,
+  conversationId: string,
+  knownConversation: Conversation | null | undefined,
+  podId: string | null | undefined,
+): Promise<string> {
+  const known = knownConversation?.pod_cwd;
+  if (known) return known;
+  const fetched = await client.conversations.get(conversationId, {
+    pod_id: podId ?? undefined,
+  });
+  if (!fetched?.pod_cwd) {
+    throw new Error("This conversation has no working directory to attach files to.");
   }
-}
-
-async function ensureConversationUploadDirectory(client: LemmaClient, conversationId: string): Promise<string> {
-  await ensureFolder(client, "conversations", "/me");
-  await ensureFolder(client, conversationId, "/me/conversations");
-  return conversationUploadDirectory(conversationId);
+  return fetched.pod_cwd;
 }
 
 async function uploadConversationFiles(
   client: LemmaClient,
-  conversationId: string,
+  directoryPath: string,
   uploads: AssistantPendingFileUpload[],
   onStatus?: (key: string, next: Partial<AssistantPendingFileUpload>) => void,
 ): Promise<FileResponse[]> {
-  const directoryPath = await ensureConversationUploadDirectory(client, conversationId);
   const uploaded: FileResponse[] = [];
   for (const upload of uploads) {
     onStatus?.(upload.key, { status: "uploading", error: undefined });
@@ -853,6 +873,21 @@ export function useAssistantController({
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
   }, []);
 
+  // The server generates a title from the first user message and publishes it
+  // on the conversation channel while the run is still streaming. Applying it
+  // here is what renames the row in place mid-turn instead of leaving the local
+  // stand-in up until the next list fetch. Deliberately not `touchConversation`:
+  // a rename is not activity, and moving `updated_at` would reorder the list
+  // under the person reading it.
+  const handleConversationTitle = useCallback((title: string, conversationId: string | null) => {
+    if (!conversationId) return;
+    setConversations((previous) => previous.map((conversation) => (
+      conversation.id === conversationId && conversation.title !== title
+        ? { ...conversation, title }
+        : conversation
+    )));
+  }, []);
+
   const assistantSession = useAssistantSession({
     client,
     podId: scope.podId ?? undefined,
@@ -863,6 +898,7 @@ export function useAssistantController({
     instructions,
     conversationId: activeConversationId ?? undefined,
     autoLoad: false,
+    onTitle: handleConversationTitle,
     onError: handleAssistantSessionError,
   });
 
@@ -1723,6 +1759,40 @@ export function useAssistantController({
     )));
   }, []);
 
+  // Upload whatever is staged into the conversation's working directory and
+  // fold the references into the message. Shared by `sendMessage` and
+  // `steerMessage` so a follow-up sent mid-run carries attachments exactly like
+  // a first message does — they reach the same endpoint shape, and the two
+  // paths disagreeing is how a staged file came to be dropped in silence.
+  const attachPendingFiles = useCallback(async (
+    conversationId: string,
+    content: string,
+    uploads: AssistantPendingFileUpload[],
+  ): Promise<{ content: string; files: FileResponse[] }> => {
+    if (uploads.length === 0) return { content, files: [] };
+    setIsUploadingFiles(true);
+    try {
+      const fileClient = resolveScopedClient(client, scope.podId);
+      const directoryPath = await resolveConversationUploadDirectory(
+        fileClient,
+        conversationId,
+        conversationsRef.current.find((conversation) => conversation.id === conversationId),
+        scope.podId,
+      );
+      const files = await uploadConversationFiles(
+        fileClient,
+        directoryPath,
+        uploads,
+        updatePendingFileUpload,
+      );
+      setPendingFileUploads([]);
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+      return { content: appendPersonalFileReferences(content, files), files };
+    } finally {
+      setIsUploadingFiles(false);
+    }
+  }, [client, scope.podId, touchConversation, updatePendingFileUpload]);
+
   const sendMessage = useCallback(async (content: string, options: SendAssistantControllerMessageOptions = {}) => {
     const trimmed = content.trim();
     const uploadsToSend = pendingFileUploads.filter((upload) => upload.status !== "uploaded");
@@ -1766,20 +1836,13 @@ export function useAssistantController({
       }
       const finalConversationId = conversationId;
 
-      let messageContent = trimmed || "Please use the attached files.";
-      let uploadedFiles: FileResponse[] = [];
-      if (uploadsToSend.length > 0) {
-        setIsUploadingFiles(true);
-        try {
-          const fileClient = resolveScopedClient(client, scope.podId);
-          uploadedFiles = await uploadConversationFiles(fileClient, finalConversationId, uploadsToSend, updatePendingFileUpload);
-          messageContent = appendPersonalFileReferences(messageContent, uploadedFiles);
-          setPendingFileUploads([]);
-          touchConversation(finalConversationId, { updated_at: new Date().toISOString() });
-        } finally {
-          setIsUploadingFiles(false);
-        }
-      }
+      const attached = await attachPendingFiles(
+        finalConversationId,
+        trimmed || "Please use the attached files.",
+        uploadsToSend,
+      );
+      const messageContent = attached.content;
+      const uploadedFiles = attached.files;
 
       if (!hasEagerOptimisticTurn) {
         appendOptimisticUserMessage(messageContent, {
@@ -1848,6 +1911,83 @@ export function useAssistantController({
     updatePendingFileUpload,
   ]);
 
+  // Sibling to `sendMessage` for the "a run is already active" case. It
+  // deliberately does not touch `isStreaming`/`sessionIsStreaming` or call
+  // `consume()`: calling `sendMessage` again mid-stream would open a second
+  // SSE subscription for the same run (genuine event duplication) and race
+  // `sendMessage`'s own shared abort ref. The backend endpoint this calls
+  // persists the message immediately either way -- joining the active run if
+  // there is one -- so no second stream is needed here.
+  const steerMessage = useCallback(async (
+    content: string,
+    options: SendAssistantControllerMessageOptions = {},
+  ) => {
+    const trimmed = content.trim();
+    const conversationId = activeConversationIdRef.current;
+    const uploadsToSend = pendingFileUploads.filter((upload) => upload.status !== "uploaded");
+    if (!enabled || (!trimmed && uploadsToSend.length === 0) || !conversationId) return;
+
+    setLocalError(null);
+    const hasEagerOptimisticTurn = uploadsToSend.length === 0;
+    if (hasEagerOptimisticTurn) {
+      appendOptimisticUserMessage(trimmed, { conversationId });
+    }
+
+    const knownConversation = conversationsRef.current.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    const resolvedPodId = knownConversation?.pod_id ?? scope.podId;
+
+    try {
+      // Same order as `sendMessage`: an upload changes the content (it appends
+      // the file references), so the turn only goes up once it is final.
+      const attached = await attachPendingFiles(
+        conversationId,
+        trimmed || "Please use the attached files.",
+        uploadsToSend,
+      );
+      if (!hasEagerOptimisticTurn) {
+        appendOptimisticUserMessage(attached.content, { conversationId });
+      }
+      await client.conversations.appendMessage(
+        conversationId,
+        { content: attached.content, metadata: options.metadata ?? undefined },
+        { pod_id: resolvedPodId ?? undefined },
+      );
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+      // Reattach whatever stream should be watching this conversation --
+      // this is what turns the persisted message into something the user
+      // actually sees arrive, whether that's the still-open stream from the
+      // turn this joined or a reconnect after it had died. Same pattern
+      // `resolveUserApproval` uses after an action that (re)starts a run.
+      //
+      // force: true for the same reason it does. The dedup key is
+      // conversation+status, and a steer never changes the status -- so a run
+      // whose stream had already died looked identical to one still being
+      // watched, and the reconnect that would have shown the answer no-op'd.
+      // A live stream is still not disturbed: `resumeIfRunning` returns early
+      // while streaming, and `resume` cancels before it subscribes.
+      void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch((error) => {
+        setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      setLocalError(err instanceof Error ? err.message : "Failed to send this message");
+      throw err;
+    }
+  }, [
+    appendOptimisticUserMessage,
+    attachPendingFiles,
+    client,
+    enabled,
+    pendingFileUploads,
+    scope.podId,
+    sessionResumeIfRunning,
+    touchConversation,
+  ]);
+
   const retryFailedMessage = useCallback(async () => {
     const conversationId = activeConversationIdRef.current;
     if (!enabled || !conversationId || isStreaming || sessionIsStreaming) return;
@@ -1879,14 +2019,18 @@ export function useAssistantController({
     options?: { deferUntilSend?: boolean },
   ) => {
     const normalizedFiles = files.filter((file) => file instanceof File);
-    if (!enabled || normalizedFiles.length === 0 || isLoading || isUploadingFiles) return;
+    // Not gated on a run being in flight. Staging is local — nothing is sent
+    // until the message is — and a running conversation now takes a follow-up,
+    // so refusing here meant the paperclip accepted a file, said nothing, and
+    // kept none of it. The upload actually in progress is still a reason to
+    // wait: that one is not local.
+    if (!enabled || normalizedFiles.length === 0 || isUploadingFiles) return;
 
     void options;
     setLocalError(null);
     queuePendingFiles(normalizedFiles);
   }, [
     enabled,
-    isLoading,
     isUploadingFiles,
     queuePendingFiles,
   ]);
@@ -1919,7 +2063,12 @@ export function useAssistantController({
       // WAITING for a moment after this returns — and a single read landing
       // there is how the answer to a question you just answered ended up
       // needing a reload to see.
-      void sessionResumeIfRunning(conversationId, { expectRun: true }).catch((error) => {
+      // force: true because an Agent Host permission wait never leaves
+      // RUNNING (see resumeIfRunning's `force` option), so the ordinary
+      // dedup key looks identical whether or not the earlier subscription
+      // is still alive. Right after an explicit approval a fresh reconnect
+      // attempt is always warranted.
+      void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch((error) => {
         setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
       });
     } catch (err) {
@@ -1930,7 +2079,7 @@ export function useAssistantController({
       const items = await loadConversationMessages(conversationId);
       if (approvalResultPresent(items, approvalId)) {
         // The decision did land, so a run is still coming — same race.
-        void sessionResumeIfRunning(conversationId, { expectRun: true }).catch(() => {});
+        void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch(() => {});
         return;
       }
       setLocalError(err instanceof Error ? err.message : "Failed to resolve approval");
@@ -2006,6 +2155,7 @@ export function useAssistantController({
     selectConversation,
     setConversationModel,
     sendMessage,
+    steerMessage,
     retryFailedMessage,
     uploadFiles,
     removePendingFile,
@@ -2048,6 +2198,7 @@ export function useAssistantController({
     retryFailedMessage,
     selectConversation,
     sendMessage,
+    steerMessage,
     sessionStreamingTool,
     setConversationModel,
     stop,

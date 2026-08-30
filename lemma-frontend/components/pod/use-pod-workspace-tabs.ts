@@ -132,6 +132,7 @@ export function usePodWorkspaceTabs({
     const wasNewConversationRouteRef = useRef(false);
     const newConversationBaselineRef = useRef<string | null>(null);
     const lastConversationOutsideNewRef = useRef<string | null>(openedConversationId);
+    const promotedConversationFromNewRef = useRef<string | null>(null);
 
     // Child (sub-agent) conversations are deliberately absent from a pod's
     // conversation list, so a tab opened on one has nothing to name itself
@@ -190,6 +191,16 @@ export function usePodWorkspaceTabs({
         if (!activeTabId || activeTabId === HOME_WORKSPACE_TAB.id) return;
 
         if (activeTabId === NEW_WORKSPACE_TAB.id) {
+            // The first message turns this visit into a real conversation, and
+            // the effect below replaces the temporary tab with it in place —
+            // while the route is still /new, because the id arrives before the
+            // navigation that carries it does. Writing the temporary tab back
+            // here would take that promotion away, the effect below would make
+            // it again, and the two would trade the same tab for as long as the
+            // route lagged the id. Neither write changes what the strip shows,
+            // so the only visible result was React counting the updates and
+            // stopping the whole surface with "Maximum update depth exceeded".
+            if (promotedConversationFromNewRef.current === openedConversationId) return;
             updatePodWorkspaceTabs(
                 podId,
                 (current) => upsertWorkspaceTab(current, NEW_WORKSPACE_TAB),
@@ -228,7 +239,7 @@ export function usePodWorkspaceTabs({
             }
             return upsertWorkspaceTab(current, nextTab);
         });
-    }, [activeTabId, currentHref, enabled, podId, resolvedConversations, routeTitle]);
+    }, [activeTabId, currentHref, enabled, openedConversationId, podId, resolvedConversations, routeTitle]);
 
     // A new conversation starts without an id. Capture the conversation that was
     // active before entering /new; when a different id appears while that route is
@@ -239,6 +250,7 @@ export function usePodWorkspaceTabs({
         if (!isNewConversationRoute) {
             wasNewConversationRouteRef.current = false;
             newConversationBaselineRef.current = null;
+            promotedConversationFromNewRef.current = null;
             lastConversationOutsideNewRef.current = openedConversationId;
             return;
         }
@@ -255,6 +267,7 @@ export function usePodWorkspaceTabs({
             const conversation = resolvedConversations.find(
                 (candidate) => candidate.id === openedConversationId,
             );
+            promotedConversationFromNewRef.current = openedConversationId;
             updatePodWorkspaceTabs(podId, (current) => promoteNewConversationTab(
                 current,
                 openedConversationId,

@@ -356,7 +356,9 @@ export function useDocumentPreview({
         htmlSrcDoc: htmlQuery.data?.srcDoc ?? null,
         imageUrl,
         pdf: pdfQuery.data ?? null,
-        docxSrcDoc: docxQuery.data?.html ? buildDocxPreviewSrcDoc(docxQuery.data.html) : '',
+        docxSrcDoc: docxQuery.data
+            ? buildDocxPreviewSrcDoc(docxQuery.data.html, docxQuery.data.styles)
+            : '',
         blob,
         isLoading: (isPending && enabled && Boolean(path)) || isRenderPending,
         isError,

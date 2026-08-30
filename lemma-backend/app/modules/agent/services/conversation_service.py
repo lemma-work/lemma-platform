@@ -328,6 +328,29 @@ class ConversationService:
             tool_names=("ask_user",),
         )
 
+    async def get_pending_approval(
+        self,
+        *,
+        conversation_id: UUID,
+    ) -> dict[str, object] | None:
+        """Oldest unresolved ``request_approval`` pause, or ``None``.
+
+        The approval counterpart of :meth:`get_pending_ask_user`, and it has to
+        be its own lookup rather than a filter applied to
+        :meth:`get_pending_user_interaction`. That one answers "what is this
+        conversation waiting on", of *any* pausing kind, which is right for
+        routing a typed reply back — a person answering in words answers
+        whatever is pending. It is wrong for rendering, because a conversation
+        can hold more than one unresolved pause at a time: an `ask_user` nobody
+        ever tapped stays unresolved forever, and being older it is the one
+        returned. The approval card then had nothing to render and the run sat
+        WAITING with nobody told.
+        """
+        return await self.approvals.oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=("request_approval",),
+        )
+
     async def get_pending_user_interaction(
         self,
         *,

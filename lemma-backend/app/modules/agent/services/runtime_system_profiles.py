@@ -177,6 +177,20 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
         config=OpenAICompatibleRuntimeConfig(
             base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
             or settings.lemma_openai_base_url,
+            # pydantic-ai defaults to `self._usage += chunk_usage` per streamed
+            # SSE chunk, correct only for a provider that sends usage once (on
+            # the final chunk) or true per-chunk deltas. Verified directly
+            # against Fireworks that some models (glm-5.3-flash) instead send
+            # already-cumulative usage on every chunk -- prompt_tokens constant,
+            # completion_tokens counting up -- which the default `+=` then sums
+            # again on top of itself. One real agent turn recorded 193M input
+            # tokens this way. `openai_continuous_usage_stats` switches
+            # pydantic-ai to `self._usage = chunk_usage` (replace), which is
+            # correct for both conventions: a single final chunk still lands on
+            # the right total, and a cumulative-per-chunk stream stops being
+            # re-summed. Provider-wide, not glm-5.3-flash-specific -- deepseek-
+            # v4-flash-0731 sends usage once, so this is a no-op there.
+            model_settings={"openai_continuous_usage_stats": True},
         ),
         credentials=ApiKeyRuntimeCredentials(api_key=api_key),
     )

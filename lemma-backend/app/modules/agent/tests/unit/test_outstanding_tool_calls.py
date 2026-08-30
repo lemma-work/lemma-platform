@@ -216,3 +216,76 @@ class TestTheHarnessClosesWhatItOpened:
         ]
         assert [event.data.tool_call_id for event in returns] == ["c1"]
         assert events[-1].type is AgentEventType.COMPLETED
+
+
+class TestAStoppedRunClosesWhatItOpened:
+    """The case every test above missed: a terminal event that is *yielded*.
+
+    Every other path builds its terminal after the stream ends, so the closing
+    returns naturally precede it. A stop does not -- STOPPED comes out of the
+    stream itself. It used to be forwarded the moment it appeared and the
+    closing returns emitted after it, and `RunEventPump` drops everything once
+    it has seen a terminal event. So a stopped run kept a tool call that
+    nothing ever answered, and the next run could reasonably repeat a tool that
+    had already run: exactly the duplicate-send the closing returns exist to
+    prevent.
+    """
+
+    async def _events(self, monkeypatch, fake_execute) -> list[AgentEvent]:
+        harness = PydanticAIHarness()
+        monkeypatch.setattr(harness, "_execute", fake_execute)
+        return [
+            event
+            async for event in harness.run(
+                agent=SimpleNamespace(),
+                conversation=SimpleNamespace(id=RUN_ID),
+                messages=[],
+                ctx=SimpleNamespace(),
+                options=SimpleNamespace(should_stop=None),
+                agent_run_id=RUN_ID,
+            )
+        ]
+
+    async def test_a_stop_closes_the_open_call_before_it_ends_the_run(
+        self, monkeypatch
+    ) -> None:
+        async def fake_execute(**kwargs):
+            yield _call("c1")
+            yield AgentEvent(
+                type=AgentEventType.STOPPED,
+                data={},
+                agent_run_id=RUN_ID,
+            )
+
+        events = await self._events(monkeypatch, fake_execute)
+
+        kinds = [
+            "return"
+            if isinstance(event.data, MessageDraft)
+            and event.data.kind is MessageKind.TOOL_RETURN
+            else event.type.value
+            for event in events
+        ]
+        # Not `kinds[-2:]`: with the terminal forwarded early *and* re-emitted
+        # at the end, the last two entries still read return, stopped while the
+        # pump had already stopped listening. The stop has to appear once, and
+        # every close has to be in front of it.
+        assert kinds.count(AgentEventType.STOPPED.value) == 1
+        stop_at = kinds.index(AgentEventType.STOPPED.value)
+        assert stop_at == len(kinds) - 1
+        assert "return" in kinds[:stop_at]
+
+    async def test_the_stop_is_emitted_exactly_once(self, monkeypatch) -> None:
+        """Holding the terminal back must not also duplicate it."""
+
+        async def fake_execute(**kwargs):
+            yield _call("c1")
+            yield AgentEvent(
+                type=AgentEventType.STOPPED,
+                data={},
+                agent_run_id=RUN_ID,
+            )
+
+        events = await self._events(monkeypatch, fake_execute)
+
+        assert [e.type for e in events].count(AgentEventType.STOPPED) == 1
