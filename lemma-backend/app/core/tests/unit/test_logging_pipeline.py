@@ -807,3 +807,86 @@ def test_a_deliberate_file_sink_on_a_dependency_logger_is_preserved(
     finally:
         dependency_logger.removeHandler(file_handler)
         file_handler.close()
+
+
+def test_the_event_leads_the_line_and_context_trails_it() -> None:
+    """A container log view clips each line at the pane width.
+
+    `JSONRenderer` writes keys in insertion order, which put `logger` and the
+    static resource context first: every line opened with the same forty
+    characters and the event -- and an error's message -- sat off the right
+    edge. Ordering is the whole fix; nothing is dropped.
+    """
+    ordered = logmod._order_for_reading(
+        None,
+        "error",
+        {
+            "logger": "app.modules.agent.harness",
+            "service.name": "lemma-worker",
+            "trace_id": "7f8b5a15",
+            "stream": "agent_events",
+            "event": "agent.run.failed",
+            "level": "error",
+            "timestamp": "2026-08-30T10:52:17Z",
+            "error_traceback": "Traceback (most recent call last): ...",
+            "error_message": "boom",
+            "error_type": "HarnessDriverCancelled",
+        },
+    )
+
+    keys = list(ordered)
+    assert keys[:5] == [
+        "timestamp",
+        "level",
+        "event",
+        "error_type",
+        "error_message",
+    ]
+    # The bulky and the constant both sort to the back.
+    assert keys[-4:] == [
+        "error_traceback",
+        "logger",
+        "trace_id",
+        "service.name",
+    ]
+    # A domain field the caller supplied keeps its place in the middle.
+    assert "stream" in keys[5:-4]
+
+
+def test_ordering_preserves_every_key_and_value() -> None:
+    """Presentation only. A processor that silently dropped a field would be a
+    far worse defect than the one it was written to fix."""
+    record = {
+        "event": "x",
+        "level": "info",
+        "timestamp": "t",
+        "logger": "l",
+        "custom": {"nested": [1, 2]},
+        "_record": object(),
+        "_from_structlog": True,
+    }
+    before = dict(record)
+
+    ordered = logmod._order_for_reading(None, "info", record)
+
+    assert ordered == before
+    # structlog's own meta survives for `remove_processors_meta` to strip.
+    assert ordered["_record"] is before["_record"]
+
+
+def test_ordering_tolerates_a_record_missing_the_usual_keys() -> None:
+    assert logmod._order_for_reading(None, "info", {"only": 1}) == {"only": 1}
+    assert logmod._order_for_reading(None, "info", {}) == {}
+
+
+def test_rendered_json_puts_the_event_first(capsys) -> None:
+    """End to end through the real pipeline, not just the processor."""
+    setup_logging(env="test", service_name="lemma-test", json_logs=True)
+    handler = _processor_formatter_handler()
+    stream = io.StringIO()
+    handler.setStream(stream)
+
+    get_logger(__name__).info("worker.heartbeat")
+
+    line = stream.getvalue().strip().splitlines()[-1]
+    assert list(json.loads(line))[:3] == ["timestamp", "level", "event"]
