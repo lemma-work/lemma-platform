@@ -145,6 +145,16 @@ export interface UseAssistantSessionResult {
        * running — a resume handed to a worker has not started yet.
        */
       expectRun?: boolean;
+      /**
+       * Bypass the dedup key that skips a resume already "consumed" for this
+       * conversation+status pair. Needed right after an explicit user action
+       * (e.g. approving a paused permission request) that is known to warrant
+       * a fresh reconnect even when status hasn't changed since the last
+       * resume — an Agent Host permission wait never leaves RUNNING, so the
+       * ordinary key would otherwise look identical to one already used by a
+       * subscription that has since died.
+       */
+      force?: boolean;
     },
   ) => Promise<boolean>;
   stop: (conversationId?: string | null) => Promise<void>;
@@ -1120,7 +1130,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
   const resumeIfRunning = useCallback(async (
     explicitConversationId?: string | null,
-    options?: { knownConversation?: Conversation | null; expectRun?: boolean },
+    options?: { knownConversation?: Conversation | null; expectRun?: boolean; force?: boolean },
   ): Promise<boolean> => {
     const id = explicitConversationId ?? conversationId;
     if (!id) return false;
@@ -1135,6 +1145,9 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       : null;
     const statusKey = normalizeConversationStatus(knownConversation?.status ?? statusRef.current);
     const resumeKey = `${id}:${statusKey ?? "UNKNOWN"}`;
+    if (options?.force) {
+      autoResumedKeyRef.current = null;
+    }
     if (autoResumedKeyRef.current === resumeKey) {
       return false;
     }

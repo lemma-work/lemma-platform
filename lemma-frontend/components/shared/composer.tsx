@@ -6,6 +6,7 @@ import { ArrowUp, Plus, Square } from '@/components/ui/icons';
 import { StepLoader } from '@/components/brand/loader';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { composerActionState } from '@/lib/composer/action-state';
 
 /**
  * The box you type into. One of them, everywhere.
@@ -40,6 +41,13 @@ export interface ComposerProps {
     /** Something is running. The send button becomes stop when `onStop` is given. */
     isBusy?: boolean;
     onStop?: () => void;
+    /**
+     * This surface can take a message while something is already running — the
+     * assistant, where a follow-up joins the run in flight. Off by default, so
+     * a surface whose submit handler refuses while busy (pod home) keeps a
+     * disabled Send rather than an enabled one that does nothing.
+     */
+    busyAcceptsSend?: boolean;
     /** Blocks sending regardless of draft — no write access, an upload in flight. */
     disabled?: boolean;
     /** Files staged with no text is still a message worth sending. */
@@ -72,6 +80,7 @@ export function Composer({
     header,
     isBusy = false,
     onStop,
+    busyAcceptsSend = false,
     disabled = false,
     hasAttachments = false,
     onAttach,
@@ -96,9 +105,14 @@ export function Composer({
         setIsDropTarget(false);
     };
 
-    const hasDraft = draft.trim().length > 0;
-    const canSend = (hasDraft || hasAttachments) && !disabled && !isBusy;
-    const showStop = isBusy && Boolean(onStop);
+    const { canSend, showStop } = composerActionState({
+        hasDraft: draft.trim().length > 0,
+        hasAttachments,
+        disabled,
+        isBusy,
+        busyAcceptsSend,
+        canStop: Boolean(onStop),
+    });
 
     return (
         <form
@@ -183,6 +197,11 @@ export function Composer({
                   * It used to drop to the quiet variant while empty, which read
                   * as disabled furniture rather than as the thing you are aiming
                   * at — and it is the one control whose position a person learns.
+                  *
+                  * One button, three meanings, in this order: Stop while
+                  * something runs and there is nothing to send; Send the moment
+                  * there is, even mid-run, on a surface that takes a follow-up;
+                  * and a spinner where the surface is busy and will not take one.
                   */}
                 <Button
                     type={showStop ? 'button' : 'submit'}
@@ -197,7 +216,7 @@ export function Composer({
                 >
                     {showStop ? (
                         <Square className="h-3 w-3" />
-                    ) : isBusy ? (
+                    ) : isBusy && !canSend ? (
                         <StepLoader size="sm" />
                     ) : (
                         <ArrowUp className="h-4 w-4" />

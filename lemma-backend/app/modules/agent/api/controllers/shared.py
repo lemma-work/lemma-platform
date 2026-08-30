@@ -3,22 +3,84 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 
+from app.composition.agent_usage import build_usage_service
+from app.composition.authorization import create_authorization_service
+from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
+from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository,
+    ConversationRepository,
+)
+from app.modules.agent.services.conversation_retry_service import (
+    ConversationRetryService,
+)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
     conversation_channel as conversation_channel,
 )
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 _TERMINAL_STREAM_EVENTS = {"completed", "stopped", "error"}
+
+
+def _build_conversation_service(uow) -> ConversationService:
+    return ConversationService(
+        uow=uow,
+        conversation_repository=ConversationRepository(uow),
+        agent_repository=AgentRepository(uow),
+        authorization_service=create_authorization_service(uow),
+        usage_service=build_usage_service(uow),
+    )
+
+
+def _build_conversation_retry_service(uow) -> ConversationRetryService:
+    return ConversationRetryService(
+        uow=uow,
+        conversation_repository=ConversationRepository(uow),
+        agent_repository=AgentRepository(uow),
+        authorization_service=create_authorization_service(uow),
+        usage_service=build_usage_service(uow),
+    )
+
+
+def _parse_metadata_filters(
+    *,
+    query_params: Iterable[tuple[str, str]],
+) -> JsonObject | None:
+    filters: JsonObject = {}
+    for raw_key, value in query_params:
+        if not raw_key.startswith("metadata."):
+            continue
+        key = raw_key.removeprefix("metadata.").strip()
+        if not key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Metadata filters must use metadata.<key>=value format.",
+            )
+        filters[key] = value
+    return filters or None
+
+
+def _parse_message_page_token(page_token: str | None) -> int | None:
+    if page_token is None:
+        return None
+    try:
+        value = int(page_token)
+    except ValueError as exc:
+        raise BadRequestError("Invalid page_token") from exc
+    if value < 0:
+        raise BadRequestError("Invalid page_token")
+    return value
 
 
 def encode_stream_chunk(
