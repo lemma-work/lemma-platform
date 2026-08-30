@@ -148,6 +148,7 @@ async def lifespan(app: FastAPI):
         from app.core.concurrency.offload import configure_thread_pool, run_blocking
         from app.core.observability.connection_scope import (
             start_connection_scope_monitor_from_settings,
+            stop_connection_scope_monitor,
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
@@ -268,6 +269,10 @@ async def lifespan(app: FastAPI):
             await close_agent_provider_clients()
             await dispose_shared_sql_engines()
             await close_redis_json_caches()
+            # Symmetric with the monitor started at startup: a module
+            # singleton that nothing stopped, which outlives an in-process
+            # lifespan and attaches to whatever engines come next.
+            stop_connection_scope_monitor()
             await close_redis_clients()
             await close_engine()
             await channel_service.disconnect()
