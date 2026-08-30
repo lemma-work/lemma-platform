@@ -1,6 +1,6 @@
 {
   "_comment": "Floors, not exact counts: a marker collecting fewer tests than recorded fails, more is fine. `skip` and `skipif` are the other way round -- those are ceilings. Regenerate with `python3 scripts/check_pytest_census.py --update`.",
-  "collected": 7414,
+  "collected": 7425,
   "markers": {
     "approval_worker": 1,
     "connection_scope": 15,

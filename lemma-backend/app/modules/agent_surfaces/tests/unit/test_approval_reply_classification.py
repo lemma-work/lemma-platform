@@ -244,9 +244,7 @@ async def test_an_offered_option_typed_out_answers_the_question() -> None:
     card a message rather than the answer to it -- so what this pins is the
     other half: something that plainly answers still resolves the pause.
     """
-    outcome, resolve = await _resume(
-        "Red", kind="ask_user", tool_args=_ONE_QUESTION
-    )
+    outcome, resolve = await _resume("Red", kind="ask_user", tool_args=_ONE_QUESTION)
     assert outcome is ResumeOutcome.CONSUMED
     assert (
         resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE

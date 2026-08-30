@@ -62,8 +62,7 @@ from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.services.free_text_answer import (
-    remember_answer_will_be_typed,
-    tool_call_id_of,
+    remember_a_prompt_that_arrived_as_words,
 )
 from app.modules.agent_surfaces.services.surface_egress_target import (
     SurfaceEgressTargetMixin,
@@ -509,20 +508,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                     platform=target.surface.surface_type.value,
                     parts=receipt.degraded,
                 )
-        # A prompt that degraded reached them as words, so words are the only
-        # way back and `_is_an_answer` has to know it. #575 recorded this on the
-        # hand-written text-fallback branch, which the envelope replaced; the
-        # receipt answers the same question better. It says "the native control
-        # did not happen" for every platform and every reason -- a card whose
-        # render failed, a platform with no buttons, and email, whose one reply
-        # carries the question as text and had no such branch to record from.
-        prompt = envelope.choices or envelope.decision
-        if prompt is not None and {"choices", "decision"}.intersection(receipt.degraded):
-            await remember_answer_will_be_typed(
-                self.conversation_service.conversation_repository,
-                conversation_id=conversation_id,
-                tool_call_id=tool_call_id_of(prompt),
-            )
+        await remember_a_prompt_that_arrived_as_words(
+            self.conversation_service.conversation_repository,
+            conversation_id=conversation_id,
+            envelope=envelope,
+            receipt=receipt,
+        )
         return True
 
     async def send_voice_note_for_conversation(

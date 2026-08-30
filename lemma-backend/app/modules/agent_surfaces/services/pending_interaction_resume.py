@@ -354,6 +354,34 @@ def _classify_approval_reply(text: str) -> "AgentRunApprovalDecision | None":
     return None
 
 
+def _settle(
+    kind: str, text: str, pending: dict[str, Any]
+) -> "tuple[AgentRunApprovalDecision, dict[str, Any]] | None":
+    """The decision and response this reply resolves the pause with, or None.
+
+    ``None`` means the reply expresses no decision, which only an approval can
+    say: an ask_user takes free text, so once `_is_an_answer` has let it
+    through there is always an answer to record.
+    """
+    if kind == "ask_user":
+        raw_request = _ask_user_request_dict(pending.get("tool_args"))
+        questions = []
+        if raw_request is not None:
+            try:
+                questions = AskUserRequest.model_validate(raw_request).questions
+            except ValidationError:
+                # Leave `questions` empty: the reply is then treated as free
+                # text rather than matched against options. Losing the option
+                # match is better than losing the answer.
+                pass
+        return (
+            AgentRunApprovalDecision.APPROVE_ONCE,
+            {"answers": _parse_ask_user_reply(text, questions)},
+        )
+    classified = _classify_approval_reply(text)
+    return None if classified is None else (classified, {})
+
+
 async def maybe_resume_pending_interaction(
     context: SurfaceChatContext,
     message_text: str,
@@ -418,32 +446,16 @@ async def maybe_resume_pending_interaction(
         if conversation is None:
             return ResumeOutcome.NOT_A_DECISION
 
-        if kind == "ask_user":
-            raw_request = _ask_user_request_dict(pending.get("tool_args"))
-            questions = []
-            if raw_request is not None:
-                try:
-                    questions = AskUserRequest.model_validate(raw_request).questions
-                except ValidationError:
-                    # Leave `questions` empty: the reply is then treated as
-                    # free text rather than matched against options. Losing the
-                    # option match is better than losing the answer.
-                    pass
-            answers = _parse_ask_user_reply(text, questions)
-            decision = AgentRunApprovalDecision.APPROVE_ONCE
-            response: dict[str, Any] = {"answers": answers}
-        else:
-            classified = _classify_approval_reply(text)
-            if classified is None:
-                # Not a decision — a question, a correction, a change of plan.
-                # Leave the approval pending and let the caller deliver this as
-                # an ordinary message: starting a turn supersedes the pause with
-                # an explicit denial the agent can see, and the person's actual
-                # words arrive alongside it. Consuming this as a decision is how
-                # both the words and the question used to be lost.
-                return ResumeOutcome.NOT_A_DECISION
-            decision = classified
-            response = {}
+        settled = _settle(kind, text, pending)
+        if settled is None:
+            # Not a decision — a question, a correction, a change of plan.
+            # Leave the approval pending and let the caller deliver this as an
+            # ordinary message: starting a turn supersedes the pause with an
+            # explicit denial the agent can see, and the person's actual words
+            # arrive alongside it. Consuming this as a decision is how both the
+            # words and the question used to be lost.
+            return ResumeOutcome.NOT_A_DECISION
+        decision, response = settled
 
         recording = True
         # Deferred: a webhook deadline is shorter than an approved command.
