@@ -97,6 +97,11 @@ class ModelRequestStreamer:
             malformed_tool_call_ids=malformed_tool_call_ids,
         )
 
+        # A stop is held back rather than returned on, so a part still in
+        # progress -- one that never reached its PartEndEvent -- is flushed by
+        # the tail below before the run ends.
+        stopped: AgentEvent | None = None
+
         async with node.stream(run.ctx) as request_stream:
             async for event in request_stream:
                 if isinstance(event, PartStartEvent):
@@ -121,18 +126,39 @@ class ModelRequestStreamer:
                 else:
                     continue
                 async for agent_event in handler:
-                    yield agent_event
                     # Every early exit inside a handler is a stop check, and
                     # it announces itself by emitting STOPPED. Reading that
                     # here is what lets the handlers stay ordinary
                     # generators instead of needing a second channel to end
                     # the stream.
                     if agent_event.type is AgentEventType.STOPPED:
-                        return
+                        stopped = agent_event
+                        break
+                    yield agent_event
+                if stopped is not None:
+                    break
 
+        async for event in self._flush_unfinished_parts(parts, stopped):
+            yield event
+
+    async def _flush_unfinished_parts(
+        self,
+        parts: StreamingParts,
+        stopped: AgentEvent | None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Persist parts the stream never finished, then end with the stop.
+
+        `_stream_part_end` pops a part as it ends, so anything still in `kinds`
+        here is a part abandoned mid-flight -- which is what a stop between two
+        deltas produces. Without this the tokens had been shown and nothing was
+        written, so the client cleared them.
+        """
         async for token_event in self._emit_token_chunks(
             parts.drain_all_token_buffers(force=True),
         ):
+            if token_event.type is AgentEventType.STOPPED:
+                stopped = stopped or token_event
+                break
             yield token_event
 
         for part_index in sorted(parts.kinds):
@@ -144,15 +170,19 @@ class ModelRequestStreamer:
                 part_kind=parts.kinds[part_index],
                 part_content=parts.contents.get(part_index),
             )
-            if message is not None:
-                yield AgentEvent(
-                    type=AgentEventType.MESSAGE,
-                    data=message,
-                    agent_run_id=self.agent_run_id,
-                )
-                if await self.stop_requested():
-                    yield self.stopped_event()
-                    return
+            if message is None:
+                continue
+            yield AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=message,
+                agent_run_id=self.agent_run_id,
+            )
+            if stopped is None and await self.stop_requested():
+                # Noted, not acted on: the remaining parts are flushed too.
+                stopped = self.stopped_event()
+
+        if stopped is not None:
+            yield stopped
 
     async def _emit_token_chunks(
         self,
@@ -302,41 +332,24 @@ class ModelRequestStreamer:
         part_content = parts.contents.pop(event.index, None)
         parts.objects.pop(event.index, None)
         if isinstance(event.part, ToolCallPart) or part_kind == "tool_call":
-            for token_chunk in parts.start_tool_stream(
-                event.index,
-                getattr(event.part, "tool_name", None)
-                or parts.tool_names.get(event.index, ""),
-            ):
-                yield AgentEvent(
-                    type=AgentEventType.TOKEN,
-                    data=token_chunk,
-                    agent_run_id=self.agent_run_id,
-                )
-                if await self.stop_requested():
-                    yield self.stopped_event()
+            async for tool_event in self._emit_tool_call_tokens(event, parts):
+                yield tool_event
+                if tool_event.type is AgentEventType.STOPPED:
                     return
-            if event.index not in parts.tool_stream_has_args:
-                final_args = _tool_call_args_text(getattr(event.part, "args", None))
-                for token_chunk in parts.append_token_text(
-                    "tool",
-                    final_args or "{}",
-                ):
-                    yield AgentEvent(
-                        type=AgentEventType.TOKEN,
-                        data=token_chunk,
-                        agent_run_id=self.agent_run_id,
-                    )
-                    if await self.stop_requested():
-                        yield self.stopped_event()
-                        return
-            async for token_event in self._emit_token_chunks(
-                parts.append_token_text("tool", "}"),
-            ):
-                yield token_event
-            parts.forget_tool_part(event.index)
+        # A stop arriving during the drain is held until the part has been
+        # persisted. `_emit_token_chunks` ends its stream by emitting STOPPED,
+        # and returning on that landed the stop between "these tokens were
+        # shown to the user" and "this part became a message" -- the one gap
+        # where honouring it destroys work. Pressing Stop mid-answer therefore
+        # discarded the answer being read, and the client cleared it from the
+        # transcript. The part is the atomic unit; the stop waits for it.
+        pending_stop: AgentEvent | None = None
         async for token_event in self._emit_token_chunks(
             parts.drain_all_token_buffers(force=True),
         ):
+            if token_event.type is AgentEventType.STOPPED:
+                pending_stop = token_event
+                break
             yield token_event
         message = parts.completed_part_message(
             part=event.part,
@@ -349,9 +362,47 @@ class ModelRequestStreamer:
                 data=message,
                 agent_run_id=self.agent_run_id,
             )
+        if pending_stop is not None:
+            yield pending_stop
+        elif await self.stop_requested():
+            yield self.stopped_event()
+        return
+
+    async def _emit_tool_call_tokens(
+        self,
+        event,
+        parts: StreamingParts,
+    ) -> AsyncIterator[AgentEvent]:
+        """Stream a completed tool call's name and arguments as tokens."""
+        for token_chunk in parts.start_tool_stream(
+            event.index,
+            getattr(event.part, "tool_name", None)
+            or parts.tool_names.get(event.index, ""),
+        ):
+            yield AgentEvent(
+                type=AgentEventType.TOKEN,
+                data=token_chunk,
+                agent_run_id=self.agent_run_id,
+            )
             if await self.stop_requested():
                 yield self.stopped_event()
                 return
+        if event.index not in parts.tool_stream_has_args:
+            final_args = _tool_call_args_text(getattr(event.part, "args", None))
+            for token_chunk in parts.append_token_text("tool", final_args or "{}"):
+                yield AgentEvent(
+                    type=AgentEventType.TOKEN,
+                    data=token_chunk,
+                    agent_run_id=self.agent_run_id,
+                )
+                if await self.stop_requested():
+                    yield self.stopped_event()
+                    return
+        async for token_event in self._emit_token_chunks(
+            parts.append_token_text("tool", "}"),
+        ):
+            yield token_event
+        parts.forget_tool_part(event.index)
 
     async def _stream_final_result(
         self,

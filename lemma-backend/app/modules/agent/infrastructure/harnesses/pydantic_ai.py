@@ -139,7 +139,6 @@ class PydanticAIHarness:
         outstanding = OutstandingToolCalls()
         terminal: AgentEvent | None = None
         pause_tool_call_id: str | None = None
-        already_yielded = False
 
         try:
             async for event in self._execute(
@@ -152,9 +151,18 @@ class PydanticAIHarness:
                 should_stop=options.should_stop,
             ):
                 outstanding.observe(event)
-                yield event
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
-                    terminal, already_yielded = event, True
+                    # Held back, not yielded here. The closing returns for tool
+                    # calls still open are emitted below, and the pump drops
+                    # every event after the terminal one -- so emitting the
+                    # terminal first meant a stopped run kept a tool call that
+                    # nothing ever answered. The next run then saw an
+                    # unanswered call and could reasonably repeat a tool that
+                    # had already run: the duplicate-send hazard the closing
+                    # events exist to prevent.
+                    terminal = event
+                    continue
+                yield event
         except ModelHTTPError as exc:
             log_model_http_error(
                 exc,
@@ -223,7 +231,6 @@ class PydanticAIHarness:
                 data={"conversation_id": str(conversation.id)},
                 agent_run_id=agent_run_id,
             )
-            already_yielded = False
         # Close whatever is still open before the run ends, whichever way it
         # ended. The pausing call is excluded: its real return is appended when
         # the user answers, so a synthetic one would duplicate it.
@@ -231,8 +238,10 @@ class PydanticAIHarness:
             terminal, skip_tool_call_id=pause_tool_call_id
         ):
             yield closing
-        if not already_yielded:
-            yield terminal
+        # Always last. Every path now holds its terminal back to here, so the
+        # run ends with its history closed rather than with the terminal racing
+        # the events that close it.
+        yield terminal
 
     async def _execute(
         self,

@@ -88,8 +88,13 @@ async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> Non
             events.append(event)
             should_stop = True
 
+    # The MESSAGE is the point of `test_a_stop_keeps_the_answer_already_shown`
+    # below; it is here because this list used to read TOKEN, STOPPED and that
+    # missing message was a defect, not the contract. What this test is about
+    # is the line above: the scope unwinds in the generator's own task.
     assert [event.type for event in events] == [
         AgentEventType.TOKEN,
+        AgentEventType.MESSAGE,
         AgentEventType.STOPPED,
     ]
 
@@ -256,3 +261,45 @@ class TestPausingToolsBesideFinalAnswer:
 
         assert captured["end_strategy"] == "graceful"
         assert [event.type for event in events] == [AgentEventType.USAGE]
+
+
+@pytest.mark.asyncio
+async def test_a_stop_keeps_the_answer_already_shown() -> None:
+    """Stop must not destroy the reply the user is reading.
+
+    `_emit_token_chunks` ends its stream by emitting STOPPED, and the driver
+    returned on that -- which landed the stop between "these tokens were shown"
+    and "this part became a message". The tokens had already been streamed to
+    the client, the message was never written, and the client then cleared the
+    text it had been showing. Pressing Stop deleted the answer.
+
+    The part is the atomic unit: a stop arriving inside one waits for it.
+    """
+    should_stop = False
+    events = []
+
+    async def stop_requested() -> bool:
+        return should_stop
+
+    streamer = ModelRequestStreamer(
+        emit_tokens=True,
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000001"),
+        should_stop=stop_requested,
+    )
+    with anyio.move_on_after(10, shield=True):
+        async for event in streamer._stream_model_request(
+            _Node(),
+            _Run(),
+            malformed_tool_call_ids=set(),
+        ):
+            events.append(event)
+            should_stop = True
+
+    kinds = [event.type for event in events]
+    assert AgentEventType.MESSAGE in kinds, (
+        "the streamed text was never persisted, so the stop discarded it"
+    )
+    message = events[kinds.index(AgentEventType.MESSAGE)]
+    assert message.data.text == "hello world"
+    # And the stop still ends the stream, last.
+    assert kinds[-1] is AgentEventType.STOPPED
