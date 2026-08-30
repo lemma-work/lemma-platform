@@ -1933,7 +1933,7 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "private to this conversation" in prompt
+    assert "The workspace is the user's, not this conversation's" in prompt
     assert "/me/<topic>/" in prompt
     assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that

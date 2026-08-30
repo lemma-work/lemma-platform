@@ -513,7 +513,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
