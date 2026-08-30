@@ -33,12 +33,16 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    list_conversations_stranded_by_a_finished_run,
+)
 from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
 from app.modules.agent.infrastructure.run_projections import (
     ResumableAgentRunRef,
     StaleAgentRunRef,
+    StrandedConversationRef,
 )
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
@@ -223,6 +227,21 @@ class ConversationRunQueriesMixin:
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]:
+        """Conversations still active whose most recent run already finished.
+
+        Implemented next to the write that settles them; see
+        `repositories.conversation_status_repair`.
+        """
+        return await list_conversations_stranded_by_a_finished_run(
+            self.session, cutoff_seconds=cutoff_seconds, limit=limit
+        )
 
     async def list_agent_runs_with_messages(
         self,

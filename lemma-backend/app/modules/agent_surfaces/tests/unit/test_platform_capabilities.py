@@ -60,6 +60,35 @@ def test_whatsapp_guidance_has_native_choices_and_omits_channel():
     assert "ask_user" in text and "native tappable options" in text
 
 
+def test_chat_guidance_tells_the_agent_how_to_ask_for_a_go_ahead():
+    """A chat agent has to be told `request_approval` exists.
+
+    Its own tool docstring frames it as what to do after a permission error, so
+    an action the agent is already allowed to take gives the model no reason to
+    reach for it — and "ask me to approve it first" gets answered in prose, with
+    nothing to press and nothing paused. The buttons are a product promise
+    (PS-SURF-021), and nothing else asserts the agent is ever told about them.
+    """
+    for platform in ("TELEGRAM", "SLACK", "WHATSAPP"):
+        text = platform_agent_guidance(platform)
+        assert "request_approval" in text, platform
+        assert "rather than asking in prose" in text, platform
+
+    # Where the platform has native controls, say they are buttons to tap.
+    assert "buttons they can tap" in platform_agent_guidance("TELEGRAM")
+
+
+def test_email_guidance_still_refuses_approvals():
+    """Email is not interactive, and that guidance must not be undone.
+
+    The chat branch gained an approvals line; email must keep telling the agent
+    the opposite, because there is no way for an email recipient to answer one.
+    """
+    text = platform_agent_guidance("GMAIL")
+    assert "Do NOT call `ask_user`, `request_approval`" in text
+    assert "rather than asking in prose" not in text
+
+
 def test_unknown_platform_guidance_is_empty():
     assert platform_agent_guidance("DISCORD") == ""
     assert platform_agent_guidance(None) == ""

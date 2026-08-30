@@ -12,9 +12,15 @@ from app.modules.agent.domain.events import (
     AgentRunStopRequestedEvent,
 )
 from app.modules.agent.events.handlers import conversation_title_job_id
-from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    ConversationStatus,
+)
 from app.modules.agent.events import handlers
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.infrastructure.run_projections import (
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 from app.modules.test_support.fakes import PassthroughEventInbox
 
 
@@ -257,6 +263,11 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
             return stale
 
+        async def list_conversations_stranded_by_a_finished_run(
+            self, *, cutoff_seconds, limit=200
+        ):
+            return []
+
         async def finish_agent_run(self, *, agent_run_id, status, error=None):
             finished.append(agent_run_id)
             # run2 was already terminal (race) -> not updated -> no events.
@@ -288,6 +299,66 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
     assert event.agent_run_id == run1
     assert event.status == AgentRunStatus.FAILED
     assert [cid for cid, _ in realtime] == [conv1]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_settles_a_conversation_its_run_already_left_behind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The blind spot: a finished run whose conversation stayed active.
+
+    `list_stale_active_runs` asks only about runs, so it cannot see this one —
+    the run is terminal, therefore not stale — and nothing else ever will,
+    because a terminal run is never finalized again. Dev reported exactly this
+    pairing (`status: RUNNING` beside `last_run_status: COMPLETED`), and it
+    wedges whatever waits on the conversation.
+
+    The conversation is settled as what the *run* actually did, so a failed run
+    is never recorded as a completed conversation.
+    """
+    completed, failed = uuid4(), uuid4()
+    settled: list[tuple[object, object]] = []
+
+    class _Repo:
+        def __init__(self, uow) -> None:
+            self.uow = uow
+
+        async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
+            return []
+
+        async def list_conversations_stranded_by_a_finished_run(
+            self, *, cutoff_seconds, limit=200
+        ):
+            return [
+                StrandedConversationRef(id=completed, run_status="COMPLETED"),
+                StrandedConversationRef(id=failed, run_status="FAILED"),
+            ]
+
+        async def set_conversation_status(self, *, conversation_id, status):
+            settled.append((conversation_id, status))
+
+        def collect_events(self, events: list[object]) -> None:
+            self.uow.collect_events(events)
+
+    monkeypatch.setattr(handlers, "ConversationRepository", _Repo)
+    monkeypatch.setattr(handlers, "publish_conversation_event", _no_realtime)
+    uow_factory = _UowFactory()
+    monkeypatch.setattr(
+        handlers,
+        "streaq_worker",
+        SimpleNamespace(context=SimpleNamespace(uow=lambda: uow_factory)),
+    )
+
+    await handlers.reconcile_orphaned_agent_runs()
+
+    assert settled == [
+        (completed, ConversationStatus.COMPLETED),
+        (failed, ConversationStatus.FAILED),
+    ]
+
+
+async def _no_realtime(conversation_id, payload) -> None:
+    _ = conversation_id, payload
 
 
 class _ApprovalUowFactory:

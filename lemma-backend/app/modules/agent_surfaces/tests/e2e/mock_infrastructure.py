@@ -1042,7 +1042,10 @@ class FakeTelegramServer:
 
     Captures outbound calls for assertion and remembers the registered webhook
     so getWebhookInfo confirms the URL (matching the real registration flow).
-    ``fail_next`` forces transient failures per method to exercise retries.
+    ``fail_next`` forces transient failures per method to exercise retries, and
+    ``unavailable`` makes a method answer 404 the way a bot API that does not
+    carry it would — which is the condition `send_chunk`'s fallback from
+    `sendRichMessage` to `sendMessage` exists for.
     """
 
     def __init__(self, store: MockPlatformMessageStore):
@@ -1052,11 +1055,13 @@ class FakeTelegramServer:
         self._port: int | None = None
         self._registered_webhook: dict | None = None
         self.fail_next: dict[str, int] = {}
+        self.unavailable: set[str] = set()
         self._updates: list[dict[str, Any]] = []
 
     async def start(self) -> None:
         app = web.Application()
         app.router.add_post("/bot{token}/sendMessage", self._send_message)
+        app.router.add_post("/bot{token}/sendRichMessage", self._send_rich_message)
         app.router.add_post("/bot{token}/editMessageText", self._edit_message_text)
         app.router.add_post("/bot{token}/sendVoice", self._send_voice)
         app.router.add_post("/bot{token}/sendDocument", self._send_document)
@@ -1131,6 +1136,11 @@ class FakeTelegramServer:
         return [entry["method"] for entry in self._store.get_all("TELEGRAM_WEBHOOK")]
 
     def _maybe_fail(self, method: str) -> web.Response | None:
+        if method in self.unavailable:
+            return web.json_response(
+                {"ok": False, "error_code": 404, "description": "Not Found"},
+                status=404,
+            )
         remaining = self.fail_next.get(method, 0)
         if remaining > 0:
             self.fail_next[method] = remaining - 1
@@ -1161,6 +1171,49 @@ class FakeTelegramServer:
                 status=400,
             )
         self._store.add("TELEGRAM", {**body, **_request_contract(request)})
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "message_id": len(self._store.get_all("TELEGRAM")),
+                    "chat": {"id": body.get("chat_id")},
+                    "text": text,
+                },
+            }
+        )
+
+    async def _send_rich_message(self, request: web.Request) -> web.Response:
+        """The method Telegram sends are *actually* made with.
+
+        `send_chunk` tries `sendRichMessage` first and falls back to
+        `sendMessage` only when the error looks like the method being
+        unavailable. This route was not registered, so every send 404'd, the
+        fallback swallowed it, and every assertion in every Telegram e2e landed
+        on the fallback — the production path had never once been exercised
+        here. An empty body posted as `rich_message: {"markdown": ""}` would
+        have passed the whole suite.
+
+        The text is recorded under `text` as well as `rich_message`, so
+        assertions written against the fallback keep reading the same key while
+        a test that cares about the rich shape can still see it.
+        """
+        failure = self._maybe_fail("sendRichMessage")
+        if failure is not None:
+            return failure
+        body = await request.json()
+        text = (body.get("rich_message") or {}).get("markdown") or ""
+        if len(text) > 4096:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: message is too long",
+                },
+                status=400,
+            )
+        self._store.add(
+            "TELEGRAM", {**body, "text": text, **_request_contract(request)}
+        )
         return web.json_response(
             {
                 "ok": True,
