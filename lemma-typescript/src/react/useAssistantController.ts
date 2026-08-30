@@ -2050,25 +2050,41 @@ export function useAssistantController({
     const resolvedPodId = knownConversation?.pod_id ?? scope.podId;
     setLocalError(null);
     try {
-      await client.conversations.approvals.resolve(
+      const resolution = await client.conversations.approvals.resolve(
         conversationId,
         approvalId,
         { decision, response: response ?? {} },
         { pod_id: resolvedPodId ?? undefined },
       );
-      await loadConversationMessages(conversationId);
+      // `"queued"`: the decision committed and a worker owns everything after
+      // it — including running the approved tool, which is why the tool return
+      // provably does not exist yet. Anything else means the server finished
+      // inline and the return is already there to be read.
+      const queued = resolution?.status === "queued";
+      // Deliberately not awaited. This is the heaviest read in the chat (the
+      // whole transcript), and the caller's await is what a button holds its
+      // spinner against — putting the two in series made every approval cost a
+      // full transcript load before the click looked like it had landed. It
+      // still has a job: an inline resolve appended the tool return before
+      // answering, and the frame announcing it went out before anything was
+      // listening, so a read is the only way that card learns it is resolved.
+      // For a queued resolve there is nothing to find, so we do not ask.
+      if (!queued) {
+        void loadConversationMessages(conversationId).catch(() => undefined);
+      }
       // Answering is what starts the next run, so this is the one caller that
-      // knows one is coming. An approved `request_approval` reconciles in a
-      // worker and answers `"queued"`, which means the record can still read
-      // WAITING for a moment after this returns — and a single read landing
-      // there is how the answer to a question you just answered ended up
-      // needing a reload to see.
+      // knows one is coming. How long that takes is the server's to say, and
+      // it just did: a queued decision waits on the approved tool, which is
+      // allowed to take minutes.
       // force: true because an Agent Host permission wait never leaves
       // RUNNING (see resumeIfRunning's `force` option), so the ordinary
       // dedup key looks identical whether or not the earlier subscription
       // is still alive. Right after an explicit approval a fresh reconnect
       // attempt is always warranted.
-      void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch((error) => {
+      void sessionResumeIfRunning(conversationId, {
+        expectRun: queued ? "queued" : true,
+        force: true,
+      }).catch((error) => {
         setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
       });
     } catch (err) {
@@ -2078,8 +2094,10 @@ export function useAssistantController({
       // self-clears and the user can keep chatting instead of retrying a dead card.
       const items = await loadConversationMessages(conversationId);
       if (approvalResultPresent(items, approvalId)) {
-        // The decision did land, so a run is still coming — same race.
-        void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch(() => {});
+        // The decision did land, so a run is still coming — same race, and
+        // with no response body to read we have to assume the slow shape of
+        // it: a failed request cannot tell us the work was done inline.
+        void sessionResumeIfRunning(conversationId, { expectRun: "queued", force: true }).catch(() => {});
         return;
       }
       setLocalError(err instanceof Error ? err.message : "Failed to resolve approval");

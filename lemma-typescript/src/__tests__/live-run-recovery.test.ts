@@ -342,7 +342,30 @@ describe("answering a question the agent asked", () => {
     expect(server.resumeStream).toHaveBeenCalledTimes(1);
   });
 
-  it("gives up on a conversation that really is not running", async () => {
+  it("keeps asking, without ever attaching to a conversation that is not running", async () => {
+    // The ladder outlasts the approved tool now, so "it stopped asking" is no
+    // longer the thing to assert — the conversation staying WAITING is. What
+    // must hold for as long as it asks is that it never opens a stream against
+    // a run that does not exist.
+    const server = fakeServer({ status: "WAITING" });
+    const controller = await mount(server.client);
+    await act(async () => controller.current?.openConversation("c1"));
+    await settle();
+    const readsBeforeApproval = server.get.mock.calls.length;
+
+    await act(async () => {
+      await controller.current?.resolveUserApproval?.("a1", "APPROVE" as never);
+    });
+    await waitMs(4000);
+
+    expect(server.resumeStream).not.toHaveBeenCalled();
+    expect(server.get.mock.calls.length).toBeGreaterThan(readsBeforeApproval);
+  });
+
+  it("still attaches when the approved tool outlives the old three-second ladder", async () => {
+    // The worker runs the approved tool *before* the resume run starts, and
+    // deferring it to a worker is an admission that it can take minutes. A
+    // ladder that ran out first left the answer streaming into nothing.
     const server = fakeServer({ status: "WAITING" });
     const controller = await mount(server.client);
     await act(async () => controller.current?.openConversation("c1"));
@@ -351,10 +374,96 @@ describe("answering a question the agent asked", () => {
     await act(async () => {
       await controller.current?.resolveUserApproval?.("a1", "APPROVE" as never);
     });
-    await waitMs(4000);
-
+    // Comfortably past the 3.3s the ladder used to cover.
+    await waitMs(5000);
     expect(server.resumeStream).not.toHaveBeenCalled();
-  });
+
+    // The tool finishes: its return is written, then the run starts.
+    server.persisted.push(messageFrame("m-return", "tool", "", 2000, {
+      kind: "TOOL_RETURN", tool_call_id: "a1", tool_name: "request_approval",
+      tool_result: { decision: "APPROVE" },
+    }).data);
+    server.state.status = "RUNNING";
+
+    await waitUntil(() => server.resumeStream.mock.calls.length > 0, {
+      label: "the client to attach to the run the worker finally started",
+    });
+    // ...and the return the worker wrote while nobody was subscribed is read
+    // back, since the stream it just opened carries the new run, not that row.
+    expect(
+      (controller.current?.messages ?? []).some((message) => (
+        (message.toolInvocations ?? []).some((invocation) => (
+          invocation.toolCallId === "a1"
+          && (invocation.state === "result" || !!invocation.result?.decision)
+        ))
+      )),
+    ).toBe(true);
+  }, 30_000);
+});
+
+describe("the wait a click has to sit through", () => {
+  it("does not hold the click open for the length of a transcript read", async () => {
+    // The decision POST is small. Listing the transcript is the heaviest read
+    // in the chat, and running them in series is what made an approval that
+    // the server had already accepted still look like it was being sent.
+    const server = fakeServer({ status: "WAITING" });
+    server.messagesList.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return { items: [...server.persisted], limit: 100, next_page_token: null };
+    });
+    // An inline resolve — the shape that does still want the read, because it
+    // appended the tool return before answering.
+    server.client.conversations.approvals.resolve = vi.fn(async () => ({
+      approval_id: "a1", decision: "APPROVE", status: "resolved",
+    })) as never;
+
+    const controller = await mount(server.client);
+    await act(async () => controller.current?.openConversation("c1"));
+    await settle();
+
+    const start = Date.now();
+    await act(async () => {
+      await controller.current?.resolveUserApproval?.("a1", "APPROVE" as never);
+    });
+    const heldFor = Date.now() - start;
+
+    expect(heldFor).toBeLessThan(300);
+    // The read still happens; it just is not what the button waits on.
+    await waitUntil(() => server.messagesList.mock.calls.length > 1, {
+      label: "the transcript to catch up on its own",
+    });
+  }, 30_000);
+
+  it("wakes a stream sitting in reconnect backoff instead of waiting it out", async () => {
+    // `isStreaming` is true for a stream that is alive AND for one asleep
+    // between reconnect attempts, so the forced resume declined in both cases —
+    // and in the second there was nothing carrying the run to decline in favour
+    // of. The click now shortens the sleep rather than duplicating the stream.
+    const server = fakeServer({ status: "WAITING" });
+    const controller = await mount(server.client);
+    await act(async () => controller.current?.openConversation("c1"));
+    await settle();
+
+    await act(async () => { void controller.current?.sendMessage("do the long thing"); });
+    await settle();
+    server.state.status = "RUNNING";
+
+    // The transport dies mid-run, and every reconnect attempt fails, so the
+    // backoff climbs: 1s, 2s, 4s...
+    server.resumeStream.mockRejectedValue(new Error("stream cut"));
+    server.sendStreams[0].close();
+    await waitMs(3500);
+    const attemptsBeforeApproval = server.resumeStream.mock.calls.length;
+    expect(attemptsBeforeApproval).toBeGreaterThanOrEqual(2);
+
+    await act(async () => {
+      await controller.current?.resolveUserApproval?.("a1", "APPROVE" as never);
+    });
+    // Inside the 4s sleep that would otherwise have run to ~7s.
+    await waitMs(600);
+
+    expect(server.resumeStream.mock.calls.length).toBeGreaterThan(attemptsBeforeApproval);
+  }, 30_000);
 });
 
 describe("the healthy path", () => {
