@@ -45,6 +45,7 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
     maybe_resume_pending_interaction,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
@@ -2353,7 +2354,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
     resumed = await maybe_resume_pending_interaction(
         ctx, "approve", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )
@@ -2385,7 +2386,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     resumed = await maybe_resume_pending_interaction(
         ctx, "no", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )
@@ -2417,7 +2418,7 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
     resumed = await maybe_resume_pending_interaction(
         ctx, "2", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )

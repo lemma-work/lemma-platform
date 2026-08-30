@@ -18,6 +18,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
     _classify_approval_reply,
 )
 
@@ -150,11 +151,17 @@ def test_every_phrase_the_prompt_quotes_is_one_the_parser_accepts(
         assert _classify_approval_reply(phrase) is not None, phrase
 
 
-async def _resume(text: str, *, kind: str = "request_approval"):
+async def _resume(
+    text: str,
+    *,
+    kind: str = "request_approval",
+    resolve_raises: Exception | None = None,
+    lookup_raises: Exception | None = None,
+):
     """Run the resume path against a stub conversation service.
 
-    Returns ``(consumed, resolve_mock)`` so a test can assert both halves: was
-    the message eaten, and was a decision recorded.
+    Returns ``(outcome, resolve_mock)`` so a test can assert both halves: what
+    the caller is told to do, and whether a decision was recorded.
     """
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -165,10 +172,11 @@ async def _resume(text: str, *, kind: str = "request_approval"):
     )
 
     conversation = SimpleNamespace(user_id=uuid4(), pod_id=uuid4())
-    resolve = AsyncMock()
+    resolve = AsyncMock(side_effect=resolve_raises)
     service = SimpleNamespace(
         get_pending_user_interaction=AsyncMock(
-            return_value={"tool_call_id": "tool-1", "kind": kind, "tool_args": {}}
+            return_value={"tool_call_id": "tool-1", "kind": kind, "tool_args": {}},
+            side_effect=lookup_raises,
         ),
         conversation_repository=SimpleNamespace(
             get_conversation=AsyncMock(return_value=conversation)
@@ -180,15 +188,15 @@ async def _resume(text: str, *, kind: str = "request_approval"):
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,
     )
-    consumed = await maybe_resume_pending_interaction(
+    outcome = await maybe_resume_pending_interaction(
         context, text, conversation_service=service
     )
-    return consumed, resolve
+    return outcome, resolve
 
 
 async def test_a_decision_is_consumed_and_recorded() -> None:
-    consumed, resolve = await _resume("approve")
-    assert consumed is True
+    outcome, resolve = await _resume("approve")
+    assert outcome is ResumeOutcome.CONSUMED
     assert (
         resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
     )
@@ -198,18 +206,75 @@ async def test_a_non_decision_is_not_consumed_and_records_nothing() -> None:
     """The message falls through to become a real message, as the person meant.
 
     Both halves matter. Recording nothing leaves the pause for the new turn to
-    supersede with an explicit denial; returning False is what lets the words
+    supersede with an explicit denial; NOT_A_DECISION is what lets the words
     reach the agent at all.
     """
-    consumed, resolve = await _resume("wait, why do you need that?")
-    assert consumed is False
+    outcome, resolve = await _resume("wait, why do you need that?")
+    assert outcome is ResumeOutcome.NOT_A_DECISION
     resolve.assert_not_awaited()
 
 
 async def test_ask_user_still_accepts_any_text_as_the_answer() -> None:
     """Unchanged: free text is a valid answer to a question, unlike an approval."""
-    consumed, resolve = await _resume("the third one", kind="ask_user")
-    assert consumed is True
+    outcome, resolve = await _resume("the third one", kind="ask_user")
+    assert outcome is ResumeOutcome.CONSUMED
     assert (
         resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
+    )
+
+
+# --- when writing the decision down fails ----------------------------------
+
+
+async def test_a_decision_we_could_not_record_is_never_a_denial() -> None:
+    """The whole reason this returns three things instead of two.
+
+    ``FAILED`` and ``NOT_A_DECISION`` both used to be ``False``, and the caller
+    reads ``False`` as "deliver it as a message" — which starts a turn, and
+    starting a turn supersedes the pause with an auto-DENY. So a database hiccup
+    while recording an "approve" cancelled the action the person had just
+    approved, and said so only at debug level.
+    """
+    outcome, _ = await _resume("approve", resolve_raises=RuntimeError("db is down"))
+    assert outcome is ResumeOutcome.FAILED
+    assert outcome is not ResumeOutcome.NOT_A_DECISION
+
+
+async def test_an_ask_user_answer_we_could_not_record_fails_the_same_way() -> None:
+    """Not approval-specific: a lost answer leaves the same run WAITING."""
+    outcome, _ = await _resume(
+        "the third one", kind="ask_user", resolve_raises=RuntimeError("db is down")
+    )
+    assert outcome is ResumeOutcome.FAILED
+
+
+async def test_failing_to_find_the_pause_is_not_a_failed_decision() -> None:
+    """We never learned there was one, so there is no decision to lose.
+
+    Treating this as FAILED would answer every ordinary message with an
+    apology. The turn the caller starts will fail on the same broken session
+    anyway, so falling through is both safe and honest.
+    """
+    outcome, resolve = await _resume(
+        "hello there", lookup_raises=RuntimeError("db is down")
+    )
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    resolve.assert_not_awaited()
+
+
+def test_the_failure_is_logged_where_production_can_see_it() -> None:
+    """``LOG_LEVEL=INFO`` drops debug, which is where this used to be logged."""
+    from app.core.log.event_catalog import EVENT_CATALOG
+
+    assert (
+        EVENT_CATALOG[
+            "agent_surfaces.ingress_service.typed_reply_decision_not_recorded.failed"
+        ].level
+        == "error"
+    )
+    assert (
+        EVENT_CATALOG[
+            "agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded"
+        ].level
+        == "warning"
     )

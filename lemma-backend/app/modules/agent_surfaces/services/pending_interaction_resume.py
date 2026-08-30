@@ -4,13 +4,18 @@ Lifted out of ``ingress_service`` unchanged: it never touched instance state,
 and the ingress service is far past the size where a self-contained 70-line
 branch should still be living inside it.
 
-Best-effort by construction — every failure returns False and the message falls
-through to the normal new-message path, because misreading a reply as an answer
-is worse than treating an answer as a new message.
+Falling through to the normal new-message path is the right answer when the
+reply is not an answer — but it is the *wrong* answer when the reply was a
+decision we then failed to record. Starting a turn supersedes the pause with an
+auto-DENY, so a database hiccup while writing an "approve" silently cancelled
+the action the person had just approved: the same question-became-a-cancellation
+this module exists to prevent, reached by a different route and logged at debug,
+which `LOG_LEVEL=INFO` drops. Hence three outcomes rather than a bool.
 """
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import ValidationError
@@ -22,6 +27,20 @@ from app.modules.agent.tools.user_interaction.models import AskUserRequest
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 
 logger = get_logger(__name__)
+
+
+class ResumeOutcome(StrEnum):
+    """What became of a typed reply offered to a paused interaction."""
+
+    #: Resolved the pause. The caller starts no turn.
+    CONSUMED = "CONSUMED"
+    #: Not an answer to anything — deliver it as an ordinary message, which
+    #: supersedes the pause with a denial the agent can see.
+    NOT_A_DECISION = "NOT_A_DECISION"
+    #: It *was* a decision and recording it failed. The caller must not start a
+    #: turn: doing so auto-denies the very approval the person just granted.
+    #: The pause stays, so saying so and letting them retry is recoverable.
+    FAILED = "FAILED"
 
 
 def _ask_user_request_dict(tool_args: object) -> dict[str, Any] | None:
@@ -230,11 +249,8 @@ async def maybe_resume_pending_interaction(
     message_text: str,
     *,
     conversation_service: ConversationService,
-) -> bool:
+) -> ResumeOutcome:
     """Resume a paused ask_user or request_approval from a typed surface reply.
-
-    Returns True when the message was consumed as an answer so the caller
-    skips the normal new-message path. Best-effort: any failure returns False.
 
     ask_user: parses the reply as a numbered option (1, 2, …) or an exact
     label match, falling back to the raw text as a free-form "Other" answer —
@@ -242,21 +258,32 @@ async def maybe_resume_pending_interaction(
 
     request_approval: only a reply that actually expresses a decision resolves
     the approval. "approve"/"yes"/… → APPROVE_ONCE, "approve session"/… →
-    APPROVE_FOR_SESSION, "deny"/"no"/… → DENY. Anything else returns False and
-    is delivered as a message, because an approval has no free-form answer and
-    guessing one on the person's behalf is how a question became a cancellation.
+    APPROVE_FOR_SESSION, "deny"/"no"/… → DENY. Anything else is
+    ``NOT_A_DECISION`` and is delivered as a message, because an approval has no
+    free-form answer and guessing one on the person's behalf is how a question
+    became a cancellation.
+
+    Failing to *look up* the pause is ``NOT_A_DECISION``: we never learned there
+    was one, and the turn the caller then starts would fail on the same broken
+    session anyway. Failing to *record* a decision we had already classified is
+    ``FAILED``, and the difference matters — that is the only path where
+    falling through would deny an approval the person granted.
     """
     if context.conversation_id is None:
-        return False
+        return ResumeOutcome.NOT_A_DECISION
     text = (message_text or "").strip()
     if not text:
-        return False
+        return ResumeOutcome.NOT_A_DECISION
+    # Set the moment the decision is settled and the only thing left is the
+    # write. One handler rather than two, so the module's broad-catch count does
+    # not grow, and so there is exactly one place that decides which it was.
+    recording = False
     try:
         pending = await conversation_service.get_pending_user_interaction(
             conversation_id=context.conversation_id
         )
         if not isinstance(pending, dict):
-            return False
+            return ResumeOutcome.NOT_A_DECISION
         kind = str(pending.get("kind") or "")
         conversation = (
             await conversation_service.conversation_repository.get_conversation(
@@ -264,7 +291,7 @@ async def maybe_resume_pending_interaction(
             )
         )
         if conversation is None:
-            return False
+            return ResumeOutcome.NOT_A_DECISION
 
         if kind == "ask_user":
             raw_request = _ask_user_request_dict(pending.get("tool_args"))
@@ -289,10 +316,11 @@ async def maybe_resume_pending_interaction(
                 # an explicit denial the agent can see, and the person's actual
                 # words arrive alongside it. Consuming this as a decision is how
                 # both the words and the question used to be lost.
-                return False
+                return ResumeOutcome.NOT_A_DECISION
             decision = classified
             response = {}
 
+        recording = True
         # Deferred: a webhook deadline is shorter than an approved command.
         await conversation_service.resolve_user_approval_internal(
             conversation=conversation,
@@ -303,10 +331,21 @@ async def maybe_resume_pending_interaction(
             response=response,
             defer_reconciliation=True,
         )
-        return True
+        return ResumeOutcome.CONSUMED
     except Exception:
-        logger.debug(
-            "agent_surfaces.ingress_service.surface_interaction_typed_reply_resume.diagnostic",
+        if recording:
+            # The person decided and we could not write it down. Never fall
+            # through: the turn that would start supersedes this pause with an
+            # auto-DENY, turning their "approve" into a cancellation.
+            logger.error(
+                "agent_surfaces.ingress_service.typed_reply_decision_not_recorded.failed",
+                conversation_id=context.conversation_id,
+                exc_info=True,
+            )
+            return ResumeOutcome.FAILED
+        logger.warning(
+            "agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded",
             conversation_id=context.conversation_id,
+            exc_info=True,
         )
-        return False
+        return ResumeOutcome.NOT_A_DECISION
