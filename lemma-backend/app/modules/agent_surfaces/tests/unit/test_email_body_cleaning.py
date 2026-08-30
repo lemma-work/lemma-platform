@@ -232,3 +232,46 @@ def test_an_ordinary_body_is_untouched_by_the_cap():
     from app.modules.agent_surfaces.platforms.email_text import plain_text_from_html
 
     assert "Hi there" in plain_text_from_html("<p>Hi there</p><p>Thanks!</p>")
+
+
+class TestASoftWrappedAttribution:
+    """Gmail breaks a long attribution mid-address, and the quote survived it.
+
+    Found in real use, not in a fixture. On an email surface the cost is not
+    just a bloated prompt: a one-word "approve" arrived as
+    `approve\\n\\nOn Tue ... <\\nbutler@...> wrote:`, stopped being a decision,
+    fell through to the ordinary message path, and superseded the very approval
+    it was answering. The person said yes three times and the agent read three
+    denials.
+    """
+
+    def test_the_wrapped_form_is_stripped(self) -> None:
+        body = (
+            "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
+            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+        )
+        assert strip_quoted_reply(body, "Re: Hello") == "approve"
+
+    def test_a_wrapped_reply_is_still_a_decision(self) -> None:
+        from app.modules.agent_surfaces.services.pending_interaction_resume import (
+            _classify_approval_reply,
+        )
+        from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
+
+        body = (
+            "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
+            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+        )
+        text = inbound_email_text(text=body, subject="Re: Hello")
+        assert _classify_approval_reply(text) is not None, (
+            "an emailed approval must still read as a decision"
+        )
+
+    def test_prose_that_merely_opens_with_on_is_left_alone(self) -> None:
+        """Why the marker demands an address in the span rather than any span."""
+        body = (
+            "On the migration I think we should wait.\n"
+            "Bob wrote: keep it simple.\n"
+            "So please proceed."
+        )
+        assert strip_quoted_reply(body, "Re: Plan") == body

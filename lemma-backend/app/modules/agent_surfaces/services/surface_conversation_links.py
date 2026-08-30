@@ -23,7 +23,8 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfaceMode,
+    ThreadShape,
+    thread_shape,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
@@ -60,7 +61,7 @@ class SurfaceConversationLinkMixin:
         )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
-            if self._should_reset_dm_conversation(
+            if self._should_start_a_new_conversation(
                 surface=surface,
                 link=link,
                 route=route,
@@ -125,7 +126,7 @@ class SurfaceConversationLinkMixin:
         )
         return created_link, conversation.title
 
-    def _should_reset_dm_conversation(
+    def _should_start_a_new_conversation(
         self,
         *,
         surface: AgentSurfaceEntity,
@@ -133,8 +134,19 @@ class SurfaceConversationLinkMixin:
         route: ResolvedSurfaceRoute | None = None,
         current_conversation_agent_id: UUID | None = None,
     ) -> bool:
-        if surface.mode is not SurfaceMode.DM:
-            return False
+        """Has this thread stopped being the conversation it was?
+
+        Two reasons, and they are not the same reason.
+
+        A **different agent** is a different conversation on every shape. This
+        check used to sit inside a ``surface.mode is DM`` guard, so an email
+        thread re-routed to another agent kept the old one indefinitely.
+
+        A **cold thread** is only a fresh conversation where one thread id
+        carries all of them. On a channel or an email thread the platform
+        already bounded the topic, and cutting it on a timer discards history
+        the person can still see above your reply.
+        """
         if (
             route is not None
             and current_conversation_agent_id is not None
@@ -143,6 +155,11 @@ class SurfaceConversationLinkMixin:
             return True
         if route is not None and link.routed_agent_id != route.agent_id:
             return True
+        shape = thread_shape(
+            link.conversation_kind or (route.conversation_kind if route else None)
+        )
+        if shape is not ThreadShape.MULTIPLEXED:
+            return False
         reset_hours = surface.config.dm_conversation_reset_after_hours
         if reset_hours <= 0:
             return False

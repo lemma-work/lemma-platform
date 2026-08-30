@@ -12,8 +12,8 @@ import structlog
 from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.repositories import (
-    conversation_repository as cts_repo,
+from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+    ConversationOpeningTexts,
 )
 from app.modules.agent.services import conversation_title_service as cts
 from app.modules.agent.services.conversation_title_service import (
@@ -130,7 +130,7 @@ class _FakeRepo:
                     return message.text.strip()
             return None
 
-        return cts_repo.ConversationOpeningTexts(
+        return ConversationOpeningTexts(
             user_text=_first("user"), assistant_text=_first("assistant")
         )
 

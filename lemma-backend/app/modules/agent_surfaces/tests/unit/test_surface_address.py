@@ -85,10 +85,10 @@ def test_resend_mailboxes_share_a_key_but_not_an_address():
 def test_unidentified_surfaces_fall_back_to_their_own_id():
     """Nothing known yet is not evidence of a shared address."""
     first = _surface(
-        SurfacePlatform.GMAIL, credential_mode=SurfaceCredentialMode.CUSTOM
+        SurfacePlatform.RESEND, credential_mode=SurfaceCredentialMode.CUSTOM
     )
     second = _surface(
-        SurfacePlatform.GMAIL, credential_mode=SurfaceCredentialMode.CUSTOM
+        SurfacePlatform.RESEND, credential_mode=SurfaceCredentialMode.CUSTOM
     )
 
     assert contended_surface_ids([first, second]) == set()

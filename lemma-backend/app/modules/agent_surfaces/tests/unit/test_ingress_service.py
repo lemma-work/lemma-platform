@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from types import MethodType
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
@@ -31,8 +32,14 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
 from app.modules.agent_surfaces.services import surface_egress
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    EnvelopeFile,
+    PartDelivery,
+)
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
+    PodFileParts,
 )
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
@@ -42,7 +49,12 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
     maybe_resume_pending_interaction,
+)
+from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.email_one_reply import (
+    EmailOneReplyMixin,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
@@ -110,21 +122,6 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         mode=SurfaceMode.DM,
         account_id=None,
         config=SurfaceConfig(),
-        is_active=True,
-    )
-
-
-def _gmail_surface() -> AgentSurfaceEntity:
-    return AgentSurfaceEntity(
-        id=uuid4(),
-        pod_id=uuid4(),
-        name="gmail",
-        agent_id=uuid4(),
-        surface_type=SurfacePlatform.GMAIL,
-        mode=SurfaceMode.EMAIL,
-        account_id=uuid4(),
-        config=SurfaceConfig(),
-        surface_identity_email="assistant@gmail.test",
         is_active=True,
     )
 
@@ -205,6 +202,41 @@ class _EmptyScalarResult:
 class _EmptyExecuteResult:
     def scalars(self):
         return _EmptyScalarResult()
+
+
+def _delivering_adapter(platform: str = "SLACK") -> AsyncMock:
+    """An adapter mock that runs the real ``deliver`` over stubbed platform verbs.
+
+    Egress hands the platform one envelope now instead of calling a verb per
+    kind of content, so a fully mocked adapter returns a mock from ``deliver``
+    and never reaches ``_render_decision`` at all. Binding the real delivery
+    methods keeps these tests asserting what they were written to assert: which
+    verb the ladder tries, and what it falls back to.
+    """
+    adapter = AsyncMock()
+    adapter.platform = platform
+    for cls in BaseSurfaceAdapter.__mro__:
+        for name, function in vars(cls).items():
+            if name == "deliver" or name.startswith(
+                ("_deliver", "_send_text_fallback")
+            ):
+                setattr(adapter, name, MethodType(function, adapter))
+    if _delivers_one_reply(platform):
+        # A one-reply platform folds the whole envelope into a single send, so
+        # the mock borrows that too -- otherwise `deliver` stops at a mocked
+        # `_render_one` and the transport is never reached.
+        adapter._render_one = MethodType(EmailOneReplyMixin._render_one, adapter)
+    return adapter
+
+
+def _delivers_one_reply(platform: str) -> bool:
+    from app.modules.agent_surfaces.platforms.platform_capabilities import (
+        DeliveryCardinality,
+        get_platform_capabilities,
+    )
+
+    caps = get_platform_capabilities(platform)
+    return bool(caps and caps.delivery_cardinality is DeliveryCardinality.ONE)
 
 
 def _build_service(
@@ -948,88 +980,6 @@ async def test_prepare_webhook_ignores_duplicate_external_message():
     service.conversation_service.create_conversation.assert_not_called()
 
 
-async def test_prepare_surface_context_ignores_self_sent_gmail_message():
-    surface = _gmail_surface()
-    parsed_event = ParsedInboundSurfaceEvent(
-        platform="GMAIL",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_channel_id="assistant@gmail.test",
-        external_thread_id="gmail-thread-1",
-        external_message_id="gmail-message-1",
-        sender_external_user_id="assistant@gmail.test",
-        sender_email="assistant@gmail.test",
-        sender_display_name="Lemma",
-        message_text="Loopback",
-        is_dm=True,
-        mentioned_agent=True,
-        reply_target={"recipient_email": "assistant@gmail.test"},
-    )
-    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
-
-    context = await service._prepare_surface_context(
-        surface=surface,
-        parsed=parsed_event,
-        adapter=AsyncMock(),
-    )
-
-    assert context is None
-
-
-async def test_prepare_surface_context_ignores_self_sent_outlook_after_enrich():
-    # Outlook triggers deliver a minimal payload with no sender; the sender is
-    # only known after enrichment. The surface must still drop its own outgoing
-    # reply (sender == surface identity) instead of looping on the signup reply.
-    surface = AgentSurfaceEntity(
-        id=uuid4(),
-        pod_id=uuid4(),
-        name="outlook",
-        agent_id=uuid4(),
-        surface_type=SurfacePlatform.OUTLOOK,
-        mode=SurfaceMode.EMAIL,
-        account_id=uuid4(),
-        config=SurfaceConfig(),
-        surface_identity_email="assistant@outlook.test",
-        is_active=True,
-    )
-    minimal_event = ParsedInboundSurfaceEvent(
-        platform="OUTLOOK",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_channel_id="assistant@outlook.test",
-        external_thread_id="outlook-thread-1",
-        external_message_id="outlook-message-1",
-        sender_external_user_id=None,
-        sender_email=None,
-        message_text="",
-        is_dm=True,
-        mentioned_agent=True,
-        reply_target={},
-    )
-    enriched_event = minimal_event.model_copy(
-        update={
-            "sender_external_user_id": "assistant@outlook.test",
-            "sender_email": "assistant@outlook.test",
-            "message_text": "Email subject: Re\n\nLoopback body",
-        }
-    )
-    adapter = AsyncMock()
-    adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: (
-        enriched_event
-    )
-
-    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
-    service.event_dedup_store = AsyncMock(claim_message=AsyncMock(return_value=True))
-    service._resolve_credentials = AsyncMock(return_value={})
-
-    context = await service._prepare_surface_context(
-        surface=surface,
-        parsed=minimal_event,
-        adapter=adapter,
-    )
-
-    assert context is None
-    adapter.enrich_inbound_event.assert_awaited_once()
-
-
 async def test_execute_chat_sends_direct_replies():
     parsed_event = _slack_event()
     adapter = AsyncMock()
@@ -1489,7 +1439,7 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -1522,7 +1472,7 @@ async def test_send_agent_message_strips_thinking_tokens_before_delivery():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -1595,7 +1545,7 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[surface],
@@ -1611,8 +1561,8 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     )
 
     assert sent is True
-    adapter.send_display_resource.assert_awaited_once()
-    render_plan = adapter.send_display_resource.await_args.kwargs["render_plan"]
+    adapter._render_resource.assert_awaited_once()
+    render_plan = adapter._render_resource.await_args.kwargs["render_plan"]
     assert isinstance(render_plan, SurfaceDisplayRenderPlan)
     assert render_plan.title == "Table: deals"
     assert render_plan.primary_action is not None
@@ -1640,12 +1590,23 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    service = _build_service(
-        adapter=AsyncMock(), surfaces=[surface], existing_link=link
-    )
+    adapter = _delivering_adapter()
+    adapter._render_file.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    delivered = AsyncMock(return_value=PodFileDelivery(delivered=True))
-    monkeypatch.setattr(surface_egress, "deliver_pod_file", delivered)
+    resolve = AsyncMock(
+        return_value=PodFileParts(
+            files=[
+                EnvelopeFile(
+                    file_name="shiplog.pdf",
+                    content=b"%PDF",
+                    mime_type="application/pdf",
+                )
+            ],
+            facts=PodFileDelivery(delivered=True),
+        )
+    )
+    monkeypatch.setattr(surface_egress, "resolve_pod_file_parts", resolve)
 
     sent = await service.send_display_resource_for_conversation(
         conversation_id=conversation_id,
@@ -1654,7 +1615,7 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
     )
 
     assert sent is True
-    assert delivered.await_args.kwargs["caption"] is None
+    assert resolve.await_args.kwargs["caption"] is None
 
 
 async def _ask_user_link(surface, conversation_id, parsed_event):
@@ -1687,8 +1648,8 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
-    adapter.send_questions.return_value = True
+    adapter = _delivering_adapter()
+    adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_ask_user.return_value = {
@@ -1701,14 +1662,14 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
     assert sent is True
-    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert isinstance(plan, SurfaceQuestionRenderPlan)
     assert [q.header for q in plan.questions] == ["color"]
     assert plan.callback_id == f"{conversation_id}|tool-1"
     adapter.send_message.assert_not_awaited()
 
     # When native render returns False, it falls back to a formatted text message.
-    adapter.send_questions.return_value = False
+    adapter._render_choices.return_value = False
     sent = await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
@@ -1725,8 +1686,8 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
-    adapter.send_questions.return_value = True
+    adapter = _delivering_adapter()
+    adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_ask_user.return_value = {
@@ -1739,11 +1700,11 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
     assert sent is True
-    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert [q.header for q in plan.questions] == ["color"]
 
     # Native False → guaranteed text fallback still fires with the flat shape.
-    adapter.send_questions.return_value = False
+    adapter._render_choices.return_value = False
     await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
@@ -1801,6 +1762,55 @@ async def test_handle_interaction_resumes_via_approval_path():
     assert kwargs["response"] == {"answers": {"color": "Teal"}}
     # An ask_user answer must NOT be injected as a plain user message.
     service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "link_id, sender_id, why",
+    [
+        ("U-owner", "U-mallory", "somebody else in the channel"),
+        (None, "U-mallory", "a link that never learned who it belongs to"),
+        ("U-owner", None, "a payload that named no submitter"),
+    ],
+)
+async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, why):
+    """The control in front of a native Approve, exercised end to end.
+
+    It runs between the replay-dedup claim and `resolve_user_approval_internal`,
+    so whatever it lets through is what executes. Two of these three used to be
+    allowed: the match returned True whenever *either* id was empty, and both
+    are empty in ordinary traffic.
+    """
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link.external_user_id = link_id
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(
+            return_value=SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
+        )
+    )
+
+    await service.handle_interaction(
+        ParsedSurfaceInteraction(
+            platform=SurfacePlatform.SLACK,
+            external_channel_id=parsed_event.external_channel_id,
+            external_thread_id=parsed_event.external_thread_id,
+            external_user_id=sender_id,
+            callback_id=f"{conversation_id}|tool-1",
+            values={"decision": "APPROVE_ONCE"},
+            dedup_id="m-refused",
+        )
+    )
+
+    service.conversation_service.resolve_user_approval_internal.assert_not_awaited()
+    service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
+    # And the person is told, or the button just looks broken.
+    said = adapter.acknowledge_interaction.await_args.kwargs["text"]
+    assert "reply" in said.lower(), f"{why}: should point at the typed reply"
 
 
 @pytest.mark.parametrize(
@@ -1971,8 +1981,8 @@ async def test_send_approval_prompt_renders_native_buttons():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
-    adapter.send_approval.return_value = True  # platform rendered native buttons
+    adapter = _delivering_adapter()
+    adapter._render_decision.return_value = True  # platform rendered native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_approval.return_value = {
@@ -1987,7 +1997,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     )
     assert sent is True
     # Native render is attempted; the plan carries Approve + Deny and the callback.
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    plan = adapter._render_decision.await_args.kwargs["approval_plan"]
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
     assert plan.callback_id == f"{conversation_id}|tool-2"
     assert plan.title == "Write a record"
@@ -2017,7 +2027,9 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    adapter.send_approval.return_value = True
+    adapter.deliver.return_value = DeliveryReceipt(
+        parts={"decision": PartDelivery.NATIVE}
+    )
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
 
@@ -2050,7 +2062,11 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     )
 
     assert sent is True
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    # Through `deliver`, not `send_approval`: the per-content outbound verbs
+    # became `_render_*` hooks only `deliver` calls, and this assertion was
+    # left naming a method nothing invokes -- so it read `await_args` off a
+    # never-awaited mock and died on None rather than checking the plan.
+    plan = adapter.deliver.await_args.kwargs["envelope"].decision
     assert plan.title == "Write a record"
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
 
@@ -2060,8 +2076,8 @@ async def test_send_approval_prompt_falls_back_to_text():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
-    adapter.send_approval.return_value = False  # platform has no native buttons
+    adapter = _delivering_adapter()
+    adapter._render_decision.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_approval.return_value = {
@@ -2086,8 +2102,8 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
-    adapter.send_approval.return_value = True
+    adapter = _delivering_adapter()
+    adapter._render_decision.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_approval.return_value = {
@@ -2103,7 +2119,7 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
     )
-    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    plan = adapter._render_decision.await_args.kwargs["approval_plan"]
     assert [b.decision for b in plan.buttons] == [
         "APPROVE_ONCE",
         "DENY",
@@ -2128,39 +2144,35 @@ async def test_send_approval_prompt_skips_when_no_pending():
     adapter.send_message.assert_not_awaited()
 
 
-async def test_interactive_prompts_suppressed_on_email_surface():
-    """Email is non-interactive: ask_user and request_approval renders are
-    suppressed (the run never pauses for a reply that can't come back)."""
-    surface = _gmail_surface()
+async def test_an_email_surface_delivers_the_question_in_its_one_reply():
+    """Email is asked, not suppressed. The prompt rides in the reply as text."""
+    surface = _resend_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = AgentSurfaceConversationLink(
         surface_id=surface.id,
         conversation_id=conversation_id,
-        platform="GMAIL",
+        platform="RESEND",
         external_channel_id=parsed_event.external_channel_id,
         external_thread_id=parsed_event.external_thread_id,
         external_user_id=parsed_event.sender_external_user_id,
         last_event=parsed_event.model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter("RESEND")
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_ask_user.return_value = {
+        "tool_call_id": "tool-1",
+        "tool_args": _ASK_USER_TOOL_ARGS,
+        "agent_run_id": uuid4(),
+    }
 
-    questions_sent = await service.send_questions_for_conversation(
-        conversation_id=conversation_id
+    sent = await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
     )
-    assert questions_sent is False
-    adapter.send_questions.assert_not_awaited()
 
-    approval_sent = await service.send_approval_prompt_for_conversation(
-        conversation_id=conversation_id
-    )
-    assert approval_sent is False
-    adapter.send_message.assert_not_awaited()
-    # The email surface never even reads pending interaction state.
-    service.conversation_service.get_pending_ask_user.assert_not_awaited()
-    service.conversation_service.get_pending_user_interaction.assert_not_awaited()
+    assert sent is True
+    assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
 
 
 async def test_send_to_member_reuses_existing_thread():
@@ -2169,7 +2181,7 @@ async def test_send_to_member_reuses_existing_thread():
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.pod_membership_port = SimpleNamespace(
@@ -2220,7 +2232,7 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
             chat_id="latest-chat", message_id="latest-message"
         ).model_dump(mode="json"),
     )
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter, surfaces=[surface], existing_link=older_link
     )
@@ -2289,7 +2301,7 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         system_link.conversation_id: system_link,
         custom_link.conversation_id: custom_link,
     }
-    adapter = AsyncMock()
+    adapter = _delivering_adapter()
     service = _build_service(
         adapter=adapter,
         surfaces=[system_surface, custom_surface],
@@ -2401,7 +2413,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
     resumed = await maybe_resume_pending_interaction(
         ctx, "approve", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )
@@ -2433,7 +2445,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     resumed = await maybe_resume_pending_interaction(
         ctx, "no", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )
@@ -2465,7 +2477,7 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
     resumed = await maybe_resume_pending_interaction(
         ctx, "2", conversation_service=service.conversation_service
     )
-    assert resumed is True
+    assert resumed is ResumeOutcome.CONSUMED
     kwargs = (
         service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     )

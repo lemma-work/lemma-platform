@@ -206,38 +206,6 @@ async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailab
     assert repo.updated == []
 
 
-async def test_gmail_falls_back_to_account_display_name():
-    surface = _surface(
-        surface_type=SurfacePlatform.GMAIL,
-        surface_identity_id=None,
-        surface_identity_email="bot@example.com",
-    )
-    repo = FakeSurfaceRepository()
-
-    reach = await SurfaceReachResolver().resolve(
-        surface,
-        credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Gmail Mailbox"),
-        surface_repository=repo,
-    )
-
-    assert reach.handle == "Gmail Mailbox"
-    assert repo.updated == []
-
-
-async def test_outlook_falls_back_to_account_display_name():
-    surface = _surface(surface_type=SurfacePlatform.OUTLOOK, surface_identity_id=None)
-
-    reach = await SurfaceReachResolver().resolve(
-        surface,
-        credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Outlook Mailbox"),
-        surface_repository=FakeSurfaceRepository(),
-    )
-
-    assert reach.handle == "Outlook Mailbox"
-
-
 async def test_resend_falls_back_to_surface_email():
     surface = _surface(
         surface_type=SurfacePlatform.RESEND,

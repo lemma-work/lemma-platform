@@ -83,8 +83,6 @@ async def test_modes_reflect_native_credentials(monkeypatch):
     for platform in (
         SurfacePlatform.SLACK,
         SurfacePlatform.TEAMS,
-        SurfacePlatform.GMAIL,
-        SurfacePlatform.OUTLOOK,
     ):
         assert surfaces[platform].supported_credential_modes == [_CUSTOM]
 
@@ -147,11 +145,11 @@ async def test_inactive_connector_marked_unavailable(monkeypatch):
 
 async def test_no_lemma_capability_does_not_raise(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
-    gmail = surface_connector_id(SurfacePlatform.GMAIL)
+    resend = surface_connector_id(SurfacePlatform.RESEND)
     resp = await build_available_surfaces(
-        connector_service=_connector_service(no_lemma={gmail})
+        connector_service=_connector_service(no_lemma={resend})
     )
-    surface = _by_platform(resp)[SurfacePlatform.GMAIL]
+    surface = _by_platform(resp)[SurfacePlatform.RESEND]
     assert surface.connector_available is False
     assert surface.connect is None
 

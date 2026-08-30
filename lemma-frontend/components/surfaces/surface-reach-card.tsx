@@ -38,8 +38,6 @@ const NAME_NOT_ADDRESS = new Set(['SLACK', 'TEAMS']);
 /** How to use the handle, where there is no link or QR to make it obvious. */
 function reachCaption(surface: AssistantSurface): string | null {
     switch (getSurfacePlatformKey(surface)) {
-        case 'GMAIL':
-        case 'OUTLOOK':
         case 'RESEND':
             return 'Mail sent here becomes work:';
         default:

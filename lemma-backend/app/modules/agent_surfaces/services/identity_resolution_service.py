@@ -61,6 +61,61 @@ class _KnownSender:
         )
 
 
+def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
+    """May this inbound email's ``From:`` be resolved to a Lemma user?
+
+    Only email is asked. Every chat platform asserts its sender inside a payload
+    whose signature was already verified, so there is nothing here to doubt --
+    ``sender_authentication`` is None for them and this passes.
+
+    **There is no setting.** There used to be one, defaulting to "believe an
+    unauthenticated ``From:``", on the reasoning that not every provider writes
+    ``Authentication-Results`` and refusing blind would stop resolving every
+    inbound sender. That reasoning rested on a question nobody had asked the
+    provider: 20 of 20 real inbound messages carry the header, written by
+    ``amazonses.com``, because Resend receives through SES. So the config was
+    protecting against something that does not happen, at the price of leaving
+    account takeover a single environment variable away -- and a flag whose safe
+    value is the default is not a flag, it is an unexploited hole.
+
+    What is left is the rule ``PS-SURF-022`` already stated and the code did not
+    keep: a sender the receiving mail service did not vouch for does not become
+    a member. They are a stranger, and the unresolved-sender path tells them how
+    to get access -- which is what should happen to someone we cannot identify.
+
+    ``None`` on an email surface is UNKNOWN, not "nothing to check". Only
+    ``merge_received_email`` ever sets the verdict, so it is absent whenever
+    enrichment did not run: no ``email_id`` on the webhook, an ``HTTPError`` on
+    the body fetch, or the whole polling receiver. Reading that as the chat
+    platforms' "no question to ask" meant an attacker who could make the fetch
+    fail -- or a deployment in polling mode -- skipped this check entirely.
+    """
+    from app.modules.agent_surfaces.platforms.email_authentication import (
+        EmailAuthenticationVerdict,
+    )
+
+    verdict = event.sender_authentication
+    if verdict is None and not event.platform.is_email:
+        return True
+    if verdict == EmailAuthenticationVerdict.PASS:
+        return True
+    if verdict == EmailAuthenticationVerdict.FAIL:
+        logger.warning(
+            "agent_surfaces.identity.email_sender_failed_authentication.degraded",
+            platform=str(event.platform),
+            sender_email=event.sender_email,
+        )
+        return False
+    # UNKNOWN. Nothing vouched for this address, so it names nobody here.
+    logger.warning(
+        "agent_surfaces.identity.email_sender_unauthenticated.degraded",
+        platform=str(event.platform),
+        sender_email=event.sender_email,
+        resolved=False,
+    )
+    return False
+
+
 class SurfaceIdentityResolutionService:
     """Resolve an inbound platform message sender to an internal Lemma user.
 
@@ -92,6 +147,21 @@ class SurfaceIdentityResolutionService:
         sender_profile: SurfaceSenderProfile | None = None,
     ) -> ResolvedSurfaceUser:
         known = _KnownSender.of(sender_profile or SurfaceSenderProfile(), event)
+
+        # ── 0. An email sender is only who they say they are if the receiving
+        #      mail service said so ──────────────────────────────────────────
+        #
+        # Above the cache, and that placement is the whole control. On an email
+        # surface the external_user_id *is* the From address, so a spoofed
+        # message from an address that resolved once before would hit the cache
+        # hit below and never reach a check placed with the other matches.
+        if not _email_sender_is_believable(event):
+            return ResolvedSurfaceUser(
+                internal_user_id=None,
+                external_user_id=known.external_user_id,
+                email=known.email,
+                display_name=known.display_name,
+            )
 
         # ── 1. Upsert the ExternalSurfaceUser row with whatever we know ─────
         external_user = None

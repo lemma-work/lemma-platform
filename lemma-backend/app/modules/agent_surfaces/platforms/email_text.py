@@ -123,6 +123,20 @@ def plain_text_from_html(value: str | None) -> str:
 # anchors, so they bought nothing and truncated real content.
 _QUOTE_MARKERS = (
     re.compile(r"^\s*On .{0,200}?wrote:\s*$", re.IGNORECASE | re.MULTILINE),
+    # The same attribution, soft-wrapped. Gmail breaks a long one mid-address --
+    # "On <date> Name <\n address> wrote:" -- and the single-line marker above
+    # cannot see across the newline, so the whole quoted thread survived into
+    # the message. On an email surface that is not just noise in the prompt: a
+    # one-word reply like "approve" stopped being a decision, fell through to
+    # the ordinary message path, and superseded the very approval it was
+    # answering.
+    #
+    # Requiring an address in the span is what keeps this off ordinary prose
+    # that happens to open with "On " and reach a "wrote:" a line later.
+    re.compile(
+        r"^\s*On .{0,300}?@.{0,200}?wrote:\s*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    ),
     re.compile(
         r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE | re.MULTILINE
     ),

@@ -41,6 +41,28 @@ def file_name_from_path(path: str) -> str:
     return Path(path).name or "attachment"
 
 
+def outbound_paths_for_reply(deps: Any, requested: list[str]) -> list[str]:
+    """Everything this reply should carry: what the agent asked for, and what it showed.
+
+    ``display_resource`` on an email surface has nowhere to deliver to, so it
+    holds the file for the one reply instead. Draining it here is what makes
+    that promise true, and doing it in one helper is what keeps the three reply
+    tools from drifting on it.
+
+    The agent's own ``attachment_paths`` come first and win a tie: a file it
+    listed deliberately is the same file, not a second copy of it.
+    """
+    from app.modules.agent_surfaces.services.pending_envelope import (
+        take_display_paths,
+    )
+
+    conversation_id = getattr(deps, "conversation_id", None)
+    held = take_display_paths(conversation_id) if conversation_id else []
+    merged = list(requested)
+    merged.extend(path for path in held if path not in merged)
+    return merged
+
+
 async def resolve_outbound_email_attachments(
     deps: Any,
     paths: list[str],

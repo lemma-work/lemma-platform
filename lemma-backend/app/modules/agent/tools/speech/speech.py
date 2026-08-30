@@ -177,16 +177,40 @@ def _voice_note_format_for(platform: str | None) -> str:
 
 
 async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
-    """Best-effort native voice-note delivery on a chat surface (skips email)."""
+    """Get the audio to the person, however this surface delivers.
+
+    Branching by the platform's delivery cardinality rather than by whether it
+    happens to be email, which is what `display_resource` already does:
+
+    * MANY (Slack/Teams/Telegram/WhatsApp) — deliver now, as a voice note where
+      the platform has them and as an audio file where it does not.
+    * ONE (email) — hold it for the single reply, which drains what was held
+      when it sends.
+    * not a surface run (web/app/subagent) — nothing to deliver to; the file
+      path is the answer, and the player is in the workspace.
+
+    That middle branch used to `return False` here, on the reasoning that "email
+    composes one reply via the reply tool; the agent attaches the audio there".
+    There is no reply tool any more — the run observer sends the one reply — so
+    the audio was synthesized, billed, written to the pod, and never delivered,
+    while `say` told the model it had spoken.
+    """
     platform = getattr(deps, "surface_platform", None)
     conversation_id = getattr(deps, "conversation_id", None)
     if not platform or not conversation_id:
         return False
-    from app.composition.agent_surface_runtime import platform_supports_chat_delivery
+    from app.composition.agent_surface_runtime import (
+        platform_delivers_one_reply,
+        platform_supports_chat_delivery,
+    )
 
+    if platform_delivers_one_reply(platform):
+        from app.composition.agent_surface_runtime import hold_display_for_one_reply
+
+        # Attached to the reply rather than sent as a second one: a surface that
+        # gets one message gets one message, audio included.
+        return hold_display_for_one_reply(conversation_id, path)
     if not platform_supports_chat_delivery(platform):
-        # Email composes one reply via the reply tool; the agent attaches the
-        # audio there. Web/non-surface just gets the file path (audio player).
         return False
     try:
         from app.composition.agent_surface_runtime import deliver_voice_note
