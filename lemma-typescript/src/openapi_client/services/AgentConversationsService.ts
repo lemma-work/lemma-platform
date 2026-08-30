@@ -258,6 +258,36 @@ export class AgentConversationsService {
         });
     }
     /**
+     * Append Pod Conversation Message
+     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.
+     * @param podId
+     * @param conversationId
+     * @param requestBody
+     * @returns AgentRunStartResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationMessageAppend(
+        podId: string,
+        conversationId: string,
+        requestBody: SendMessageRequest,
+    ): CancelablePromise<AgentRunStartResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/append',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Conversation was not found or is not visible`,
+                422: `Validation Error`,
+                429: `The account usage limit was exceeded`,
+            },
+        });
+    }
+    /**
      * Retry Failed Pod Conversation Run
      * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.
      * @param podId

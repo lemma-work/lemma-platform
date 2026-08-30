@@ -169,6 +169,108 @@ def test_whatsapp_approval_buttons_and_parse_round_trip():
 # --- Telegram (Redis token store mocked) ----------------------------------
 
 
+def _telegram_event():
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+        SurfacePlatform,
+    )
+
+    return ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="123",
+        message_text="hi",
+        is_dm=True,
+        reply_target={"chat_id": "123"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_approval_builds_an_inline_keyboard():
+    """Telegram was the only platform whose approval *render* had no test.
+
+    Every other platform above round-trips render → tap. Telegram only ever
+    covered the tap, so nothing asserted that the buttons are built at all —
+    and "the approval arrived as words with no buttons" is precisely the
+    failure the dev scenario suite reports.
+    """
+    from app.modules.agent_surfaces.platforms.telegram.adapter import (
+        TelegramSurfaceAdapter,
+    )
+
+    adapter = TelegramSurfaceAdapter()
+    plan = _plan(allow_session=True)
+    tokens = iter(["tok-approve", "tok-session", "tok-deny"])
+    with (
+        patch(
+            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            new=AsyncMock(side_effect=lambda payload: next(tokens)),
+        ),
+        patch(
+            "app.modules.agent_surfaces.platforms.telegram.service."
+            "TelegramPlatformService.send_message",
+            new=AsyncMock(),
+        ) as send_message,
+    ):
+        ok = await adapter.send_approval(
+            credentials={"bot_token": "x"},
+            event=_telegram_event(),
+            approval_plan=plan,
+        )
+
+    assert ok is True
+    keyboard = send_message.await_args.kwargs["metadata"]["reply_markup"][
+        "inline_keyboard"
+    ]
+    assert [row[0]["text"] for row in keyboard] == [
+        button.label for button in plan.buttons
+    ]
+    # Short tokens, not the callback id: Telegram caps callback_data at 64 bytes.
+    assert [row[0]["callback_data"] for row in keyboard] == [
+        "tok-approve",
+        "tok-session",
+        "tok-deny",
+    ]
+    assert all(len(row[0]["callback_data"]) <= 64 for row in keyboard)
+
+    # The body has to carry the words too — buttons alone say nothing about
+    # what is being approved.
+    body = send_message.await_args.args[1]
+    assert body.strip()
+    assert plan.title in body
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_approval_without_a_chat_target_falls_back():
+    """No chat to send to means the caller must render text instead."""
+    from app.modules.agent_surfaces.platforms.telegram.adapter import (
+        TelegramSurfaceAdapter,
+    )
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+        SurfacePlatform,
+    )
+
+    nowhere = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="123",
+        message_text="hi",
+        is_dm=True,
+        reply_target={},
+    )
+
+    ok = await TelegramSurfaceAdapter().send_approval(
+        credentials={"bot_token": "x"},
+        event=nowhere,
+        approval_plan=_plan(),
+    )
+
+    assert ok is False
+
+
 @pytest.mark.asyncio
 async def test_telegram_approval_token_parse():
     from app.modules.agent_surfaces.platforms.telegram.adapter import (

@@ -3303,6 +3303,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn process_ledger_reclaims_only_an_exact_owned_process() {
+        use std::os::unix::process::ExitStatusExt;
+
         let root = tempdir().unwrap();
         let ledger_path = root.path().join("processes.json");
         let installation_id = "0123456789abcdef0123456789abcdef";
@@ -3328,13 +3330,29 @@ mod tests {
         )
         .unwrap();
 
+        // Reaped in parallel, which is the whole trick.
+        //
+        // `terminate_verified_process` signals, then waits for the PID to stop
+        // existing before escalating. A dead child nobody has reaped is a
+        // zombie, and a zombie still answers `kill(pid, 0)` -- so this test's
+        // process could never be observed to exit, the wait ran its full five
+        // seconds every time, and the assertion that followed was left racing
+        // whatever the runner did next. Production never has this problem: a
+        // reclaimed process belonged to a previous locald and is reaped by
+        // init, so its PID really does go away.
+        //
+        // Reaping here restores that, and the exit status is then an exact
+        // answer rather than a deadline: signalled means reclaimed, and a
+        // process that was missed runs out its own 30 seconds and fails
+        // saying so.
+        let reaper = thread::spawn(move || child.wait().unwrap());
         reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(child.try_wait().unwrap().is_some());
+        let status = reaper.join().unwrap();
+        assert!(
+            status.signal().is_some(),
+            "the reclaimed process exited on its own rather than being killed: \
+             {status:?}",
+        );
         assert!(read_process_ledger(&ledger_path)
             .unwrap()
             .entries

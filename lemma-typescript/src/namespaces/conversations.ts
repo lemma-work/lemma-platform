@@ -304,6 +304,22 @@ export class ConversationsNamespace {
     });
   }
 
+  appendMessage(
+    conversationId: string,
+    payload: SendMessageRequest,
+    options: { pod_id?: string | null; signal?: AbortSignal } = {},
+  ): Promise<AgentRunStartResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<AgentRunStartResponse>(
+      "POST",
+      `/pods/${podId}/conversations/${conversationId}/messages/append`,
+      {
+        body: payload,
+        signal: options.signal,
+      },
+    );
+  }
+
   retryFailedRun(
     conversationId: string,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},

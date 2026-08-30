@@ -247,13 +247,12 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
+    #: An already-terminal run whose conversation this call put back in step.
+    conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
-    {
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.STOP_REQUESTED,
-    }
+    {AgentRunStatus.RUNNING, AgentRunStatus.STOP_REQUESTED}
 )
 
 RESUMABLE_AGENT_RUN_STATUSES = frozenset({AgentRunStatus.INTERRUPTED})

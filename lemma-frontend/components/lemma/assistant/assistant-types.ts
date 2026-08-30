@@ -49,6 +49,8 @@ export interface AssistantControllerView {
   streamingTool?: AssistantStreamingTool | null;
   selectConversation(conversationId: string | null): void;
   sendMessage(content: string, options?: { forceNewConversation?: boolean }): Promise<void>;
+  /** Append a follow-up to a conversation that already has a run in flight. */
+  steerMessage(content: string): Promise<void>;
   retryFailedMessage?(): Promise<void>;
   uploadFiles(files: File[], options?: { deferUntilSend?: boolean }): Promise<void>;
   removePendingFile(fileKey: string): void;

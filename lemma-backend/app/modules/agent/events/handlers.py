@@ -55,6 +55,9 @@ from app.modules.agent.domain.events import (
     AgentRunStopRequestedEvent,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    settle_stranded_conversations,
+)
 from app.modules.agent.infrastructure.harnesses import (
     HarnessRegistry,
     PydanticAIHarness,
@@ -483,6 +486,11 @@ async def reconcile_orphaned_agent_runs() -> None:
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
+            # The other half: a conversation left active by a run that already
+            # finished, which a sweep keyed on run status cannot see.
+            await settle_stranded_conversations(
+                repo, cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS
+            )
     except Exception:
         logger.error(
             "agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True

@@ -285,6 +285,7 @@ export function AssistantExperienceView({
   const isConversationEmpty = controllerMessages.length === 0 && !isConversationBusy && !isInitialMessageLoading;
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
+  const steerMessage = controller.steerMessage;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -467,19 +468,27 @@ export function AssistantExperienceView({
   const liveRunStatus = statusPlacement === "inline" ? runStatusModel : null;
 
   const handleSubmit = useCallback(async () => {
-    if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy || interactionPending) return;
+    if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
     const message = draft.trim();
     setDraft("");
     scrollToBottom("smooth");
-    await sendMessage(message);
-  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, setDraft]);
+    // A run already in flight takes the follow-up as a steer: it joins that run
+    // rather than starting a second one. Otherwise identical to a send —
+    // attachments included, because the two go to the same endpoint shape and a
+    // dropped file with no explanation is worse than either outcome.
+    await (isConversationBusy ? steerMessage(message) : sendMessage(message));
+  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
+  // Only the empty state offers suggestions, and it renders under
+  // `showEmptyState={isConversationEmpty}` — which requires nothing to be
+  // running. So there is no busy case to handle here; a branch for one was
+  // unreachable code that read like a second, disagreeing rule.
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
-    if (!message || isConversationBusy) return;
+    if (!message || interactionPending) return;
     scrollToBottom("smooth");
     await sendMessage(message);
-  }, [isConversationBusy, scrollToBottom, sendMessage]);
+  }, [interactionPending, scrollToBottom, sendMessage]);
 
   // Stable identities for the memoized transcript: an inline lambda here would
   // be a new prop every render and defeat the memo.

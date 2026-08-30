@@ -66,6 +66,10 @@ class AppAssetDocument(BaseModel):
     etag: str | None = None
     not_modified: bool = False
     is_entrypoint: bool = False
+    # Response headers this asset needs beyond the shared cache/ETag pair. Only
+    # the service worker uses one, and only because a worker registered for a
+    # scope above its own directory is refused without ``Service-Worker-Allowed``.
+    headers: dict[str, str] | None = None
 
 
 def public_app_url(public_slug: str) -> str | None:
