@@ -1765,6 +1765,55 @@ async def test_handle_interaction_resumes_via_approval_path():
 
 
 @pytest.mark.parametrize(
+    "link_id, sender_id, why",
+    [
+        ("U-owner", "U-mallory", "somebody else in the channel"),
+        (None, "U-mallory", "a link that never learned who it belongs to"),
+        ("U-owner", None, "a payload that named no submitter"),
+    ],
+)
+async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, why):
+    """The control in front of a native Approve, exercised end to end.
+
+    It runs between the replay-dedup claim and `resolve_user_approval_internal`,
+    so whatever it lets through is what executes. Two of these three used to be
+    allowed: the match returned True whenever *either* id was empty, and both
+    are empty in ordinary traffic.
+    """
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link.external_user_id = link_id
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(
+            return_value=SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
+        )
+    )
+
+    await service.handle_interaction(
+        ParsedSurfaceInteraction(
+            platform=SurfacePlatform.SLACK,
+            external_channel_id=parsed_event.external_channel_id,
+            external_thread_id=parsed_event.external_thread_id,
+            external_user_id=sender_id,
+            callback_id=f"{conversation_id}|tool-1",
+            values={"decision": "APPROVE_ONCE"},
+            dedup_id="m-refused",
+        )
+    )
+
+    service.conversation_service.resolve_user_approval_internal.assert_not_awaited()
+    service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
+    # And the person is told, or the button just looks broken.
+    said = adapter.acknowledge_interaction.await_args.kwargs["text"]
+    assert "reply" in said.lower(), f"{why}: should point at the typed reply"
+
+
+@pytest.mark.parametrize(
     "decision_value, expected",
     [
         ("APPROVE_ONCE", AgentRunApprovalDecision.APPROVE_ONCE),

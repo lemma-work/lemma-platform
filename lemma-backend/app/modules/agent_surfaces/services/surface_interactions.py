@@ -156,18 +156,28 @@ class SurfaceInteractionMixin:
             # Authz: only the surface user who owns the conversation may submit
             # the answer that was shown to them.
             if not interaction_sender_matches(link, parsed):
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic",
+                # Warning, not debug: this is the control in front of a native
+                # Approve, and it now also fires where neither side identified
+                # anybody. An operator has to be able to see that happening --
+                # `LOG_LEVEL=INFO` drops debug before it is formatted.
+                logger.warning(
+                    "agent_surfaces.ingress_service.interaction_submitter_refused.degraded",
                     external_user_id=parsed.external_user_id,
                     conversation_id=conversation_id,
                 )
-                # Say so. Refusing in silence is indistinguishable from the
-                # button being broken, and the person tries again.
+                # Say so, and say which of the two it is. Refusing in silence is
+                # indistinguishable from the button being broken, and "not yours
+                # to answer" is wrong when the truth is that nothing identified
+                # the person who tapped. Either way the typed reply still works,
+                # so the sentence has to point at it.
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
-                        text="This one is not yours to answer.",
+                        text=(
+                            "I can't tell that this is yours to answer. Reply "
+                            "with your decision instead and I'll take it."
+                        ),
                         show_alert=True,
                     )
                 return

@@ -35,12 +35,34 @@ def parse_interaction_target(parsed) -> tuple[UUID, str] | None:
         return None
 
 
+def _external_id(value) -> str:
+    """One external user id, folded so two spellings of a person are one person.
+
+    Neither side was normalized before, so a platform that varies the case of an
+    id between a message and an interaction read as a different human.
+    """
+    return str(value or "").strip().casefold()
+
+
 def interaction_sender_matches(link, parsed) -> bool:
-    return not (
-        link.external_user_id
-        and parsed.external_user_id
-        and link.external_user_id != parsed.external_user_id
-    )
+    """May this person resolve the interaction shown in this conversation?
+
+    Both ids must be present and equal. This used to return True whenever
+    *either* was empty, which is fail-open on the only authorization control
+    standing in front of a native Approve button: the tap resolves a
+    `request_approval`, and the action it approves then runs. Both sides can be
+    empty in ordinary traffic -- a thread opened by a notification whose
+    channel had no address, a Slack payload with no `event.user`, a Teams one
+    with neither `aadObjectId` nor `from.id` -- so "we could not tell who tapped"
+    was a common state, and it meant "anyone may".
+
+    Refusing when we cannot tell costs a person the button and not the answer:
+    typing the decision resolves the same pause through
+    `maybe_resume_pending_interaction`, which does not consult this.
+    """
+    link_id = _external_id(getattr(link, "external_user_id", None))
+    sender_id = _external_id(getattr(parsed, "external_user_id", None))
+    return bool(link_id) and bool(sender_id) and link_id == sender_id
 
 
 async def resolve_interaction_delivery(
