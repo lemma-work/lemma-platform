@@ -37,6 +37,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.conversation_repository.conversation_status_reconciled.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.conversation_status_repair.stranded_conversations_settled.degraded': EventSpec('warning', frozenset({'count'})),
     'agent.conversation_title.generation.failed': EventSpec('error', frozenset({'conversation_id'})),
+    'agent.conversation_title.language_mismatch.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.conversation_title.llm_call.failed': EventSpec('error', frozenset({'conversation_id'})),
     'agent.executor.approved_tool_r_returning_result.degraded': EventSpec('warning', frozenset()),
     'agent.final_answer.persist_failed.degraded': EventSpec('warning', frozenset()),

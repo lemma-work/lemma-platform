@@ -98,13 +98,14 @@ class ChatScreen(Screen[None]):
         if not message:
             return
         event.input.value = ""
-        if self._streaming:
-            self.notify(
-                "A turn is already streaming — Esc to stop it first.",
-                severity="warning",
-            )
-            return
         self._mount_widget(UserMessage(message))
+        if self._streaming:
+            # A follow-up joins the turn already running rather than waiting for
+            # it. `send_stream` would be wrong here: it opens a second SSE
+            # subscription for the same run, and the stream this screen is
+            # already reading is the one carrying the answer.
+            self.append_turn(message)
+            return
         self.stream_turn(message)
 
     def action_stop_or_back(self) -> None:
@@ -157,6 +158,31 @@ class ChatScreen(Screen[None]):
             app.call_from_thread(self.handle_event, ErrorEvent(str(exc)))
         finally:
             app.call_from_thread(self._set_streaming, False)
+
+    @work(thread=True, group="chat-append")
+    def append_turn(self, message: str) -> None:
+        """Add a message to the run in flight, without a stream of its own.
+
+        Its own worker group, not ``chat``: that group is exclusive and holds
+        the stream reading the answer, so appending there would cancel the very
+        stream this message is waiting on.
+        """
+        conversation_id = self.conversation_id
+        app = self.app
+        if not conversation_id:
+            return
+        try:
+            with client_session(self.state) as client:
+                pod_id = resolve_pod_id(self.state) or ""
+                result = to_plain(
+                    client.pod(pod_id).conversations.append(conversation_id, message)
+                )
+            if not result.get("started_new_run", True):
+                app.call_from_thread(self.notify, "Added to the running turn.")
+        except Exception as exc:
+            app.call_from_thread(
+                self.notify, f"Could not send that: {exc}", severity="error"
+            )
 
     @work(thread=True, group="chat-stop")
     def stop_run(self) -> None:

@@ -808,6 +808,38 @@ var LemmaUI = (() => {
           throw normalized;
         }
       });
+      /**
+       * Send a follow-up into a run that is already working.
+       *
+       * `sendMessage` is the wrong call for this. It cancels the stream in flight
+       * and opens a second subscription for the same run, so the events between the
+       * two are simply lost — the person sees their turn stop mid-answer. This
+       * persists the message instead (joining the active run where the harness can
+       * steer, queued for the next one where it cannot) and reattaches whatever
+       * stream should be watching, which is what makes the answer arrive.
+       */
+      __publicField(this, "appendMessage", async (content, input = {}) => {
+        var _a, _b, _c, _d, _e;
+        this.patch({ error: null });
+        try {
+          const id = requireConversationId((_a = input.conversationId) != null ? _a : this.state.conversationId);
+          const scope = normalizeScope(this.client, this.scopeDefaults);
+          const scopedClient = applyPodScope(this.client, scope.podId);
+          await scopedClient.conversations.appendMessage(
+            id,
+            { content, metadata: (_b = input.metadata) != null ? _b : void 0 },
+            { pod_id: (_c = scope.podId) != null ? _c : void 0 }
+          );
+          this.autoResumedKey = null;
+          void this.resumeIfRunning(id).catch(() => {
+          });
+        } catch (appendError) {
+          const normalized = normalizeError(appendError, "Failed to send agent message.");
+          this.patch({ error: normalized });
+          (_e = (_d = this.options).onError) == null ? void 0 : _e.call(_d, appendError);
+          throw normalized;
+        }
+      });
       __publicField(this, "resume", async (input) => {
         var _a, _b, _c, _d;
         this.patch({ error: null });
@@ -1492,6 +1524,10 @@ ${BASE_STYLES}
       const controller = this.ensureController();
       if (!controller.getState().conversationId) {
         await controller.createConversation({ setActive: true });
+      }
+      if (controller.getState().isStreaming) {
+        await controller.appendMessage(content);
+        return;
       }
       await controller.sendMessage(content);
     }

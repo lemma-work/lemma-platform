@@ -15,6 +15,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.conversation.create` | POST | `/pods/{pod_id}/conversations` | Create Pod Agent Conversation |
 | `agent.conversation.get` | GET | `/pods/{pod_id}/conversations/{conversation_id}` | Get Pod Conversation |
 | `agent.conversation.list` | GET | `/pods/{pod_id}/conversations` | List Pod Agent Conversations |
+| `agent.conversation.message.append` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/append` | Append Pod Conversation Message |
 | `agent.conversation.message.list` | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | List Pod Conversation Messages |
 | `agent.conversation.message.send` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages` | Send Pod Conversation Message |
 | `agent.conversation.retry` | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | Retry Failed Pod Conversation Run |
