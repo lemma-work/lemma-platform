@@ -27,7 +27,6 @@ class AsyncSessionMaker(Protocol):
 
     def __call__(self) -> AsyncSession:
         """Open a new session."""
-        ...
 
 
 @runtime_checkable
