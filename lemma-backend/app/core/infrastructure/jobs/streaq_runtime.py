@@ -265,13 +265,21 @@ _SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
 # advertises a deadline to something outside this process (an Agent Host on a
-# user's machine) and hands it a credential that expires. If the task dies
-# first, Lemma reports the run failed while the remote agent keeps executing
-# tools for it. This must therefore stay strictly above the Agent Host run
-# window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, 50 min) with enough margin
-# for the harness to cancel the host run and finalize, and strictly below the
-# one-hour validity of the MCP credential minted at dispatch.
-AGENT_RUN_JOB_TIMEOUT_SECONDS = 3300
+# user's machine). If the task dies first, Lemma reports the run failed while
+# the remote agent keeps executing tools for it. This must therefore stay above
+# the Agent Host run window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS) with
+# enough margin for the harness to cancel the host run and finalize.
+#
+# It used to also have to stay under the one-hour validity of the MCP
+# credential minted at dispatch. That stopped being true when the harness
+# started refreshing that credential mid-run, and the note saying otherwise
+# outlived the constraint it described -- long enough to hold every run to
+# fifty minutes for a reason that no longer applied.
+#
+# A task this long occupies an interactive-lane slot for its whole life. That
+# is affordable at the default concurrency of 50 and is the real thing to watch
+# if these runs ever become common.
+AGENT_RUN_JOB_TIMEOUT_SECONDS = 14700
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24

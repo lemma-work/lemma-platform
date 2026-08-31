@@ -64,7 +64,7 @@ def usage_totals(usage: object, carried: dict[str, int]) -> dict[str, int]:
 
 
 def _warn_if_implausible(totals: dict[str, int]) -> None:
-    """Say so when a provider reports a count that cannot be true.
+    """Say so when a reported count cannot be true, in either direction.
 
     Observed in production: one Fireworks model reported 656 million prompt
     tokens for a single request -- escalating request over request within one
@@ -83,3 +83,17 @@ def _warn_if_implausible(totals: dict[str, int]) -> None:
                 usage_field=field,
                 reported_value=value,
             )
+    # The same failure wearing the other face. A request that reached a provider
+    # carried a prompt, so no input tokens against a non-zero request count
+    # cannot be true either -- and it is the more dangerous of the two, because
+    # a total of zero is not recorded at all rather than recorded wrong: the run
+    # then looks exactly like one that never happened. Streaming makes it
+    # reachable. The accumulation this harness selects replaces the running
+    # total with each chunk's usage, and a chunk carrying none maps to zeros, so
+    # any chunk after the last usage-bearing one would erase the figure.
+    if totals.get("requests", 0) > 0 and totals.get("input_tokens", 0) <= 0:
+        logger.warning(
+            "agent.usage.missing_provider_count.degraded",
+            usage_field="input_tokens",
+            request_count=totals["requests"],
+        )

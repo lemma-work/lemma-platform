@@ -65,3 +65,47 @@ class TestCarriedUsageStillAccumulates:
     def test_a_missing_field_counts_as_zero_rather_than_raising(self) -> None:
         """A billing read must never be what fails a run."""
         assert usage_totals(_Usage(input_tokens=10), {})["output_tokens"] == 0
+
+
+class TestAMissingCountIsReportedToo:
+    """The same failure in the other direction, and the more dangerous one.
+
+    A total of zero is not recorded wrong -- it is not recorded at all, because
+    the recorder drops a usage record whose token counts are all zero. The run
+    then looks identical to one that never happened, so nothing downstream has
+    anything to notice.
+    """
+
+    def test_requests_without_a_prompt_are_flagged(self, caplog) -> None:
+        """A request that reached a provider carried a prompt, so this pair
+        cannot both be true."""
+        with caplog.at_level("WARNING"):
+            usage_totals(_Usage(requests=1, input_tokens=0, output_tokens=0), {})
+
+        assert "missing_provider_count" in caplog.text
+
+    def test_a_run_that_never_reached_the_provider_says_nothing(self, caplog) -> None:
+        """No requests and no tokens is consistent -- a run can end before it
+        asks the model anything, and warning there would be noise."""
+        with caplog.at_level("WARNING"):
+            usage_totals(_Usage(requests=0, input_tokens=0, output_tokens=0), {})
+
+        assert "missing_provider_count" not in caplog.text
+
+    def test_a_sane_run_says_nothing(self, caplog) -> None:
+        with caplog.at_level("WARNING"):
+            usage_totals(_Usage(requests=2, input_tokens=40_000, output_tokens=900), {})
+
+        assert "missing_provider_count" not in caplog.text
+
+    def test_a_carried_prompt_from_an_earlier_attempt_counts(self, caplog) -> None:
+        """The attempt that dropped mid-stream already had a prompt billed, so
+        the total is not missing anything even when this attempt reports zero."""
+        carried: dict[str, int] = {}
+        accumulate_usage(carried, _Usage(requests=1, input_tokens=120))
+
+        with caplog.at_level("WARNING"):
+            totals = usage_totals(_Usage(requests=1, input_tokens=0), carried)
+
+        assert totals["input_tokens"] == 120
+        assert "missing_provider_count" not in caplog.text
