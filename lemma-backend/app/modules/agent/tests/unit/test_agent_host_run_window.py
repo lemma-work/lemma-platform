@@ -23,6 +23,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 from app.modules.agent.events.handlers import _ORPHANED_RUN_CUTOFF_SECONDS
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
+    DEFAULT_RUN_LEASE_SECONDS,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
@@ -63,6 +64,29 @@ class TestTheCeilingsAgree:
 
     def test_the_orphan_sweep_never_reaps_a_healthy_run(self) -> None:
         assert _ORPHANED_RUN_CUTOFF_SECONDS > AGENT_RUN_JOB_TIMEOUT_SECONDS
+
+    def test_a_run_may_last_hours(self) -> None:
+        """An agent host run is a person's real task, not a request.
+
+        A run doing steady work was killed at minute fifty with "run deadline
+        elapsed". The number came from a chain of ceilings whose binding link --
+        the one-hour MCP credential -- stopped binding once the harness began
+        refreshing it in flight, and the note explaining the number outlived the
+        constraint it described.
+        """
+        assert DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS >= 4 * 60 * 60
+
+    def test_a_host_that_goes_away_is_caught_by_the_lease_not_the_deadline(
+        self,
+    ) -> None:
+        """Why a long deadline is safe.
+
+        The deadline does not detect a host that crashed, slept or lost its
+        network -- the lease does, and it is an order of magnitude shorter. If
+        that ever stopped being true, a dead host would sit RUNNING for hours.
+        """
+        assert DEFAULT_RUN_LEASE_SECONDS < 300
+        assert DEFAULT_RUN_LEASE_SECONDS * 10 < DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
 
     def test_a_permission_parked_mid_run_can_still_be_answered(self) -> None:
         """When the run is shorter than the host's permission window, every
@@ -128,9 +152,15 @@ class TestCredentialBoundedTimeout:
         assert seconds == DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
         assert bounded is False
 
-    def test_a_short_credential_shortens_the_run(self) -> None:
-        """The bridge sends this token verbatim for the run's whole life with no
-        refresh, so outliving it means every lemma_* call 401s in silence."""
+    def test_a_short_credential_no_longer_shortens_the_run(self) -> None:
+        """The token is renewed in flight, so its expiry is a starting point.
+
+        This used to clamp the window to whatever was left of the credential.
+        Harmless while the window was fifty minutes -- a fresh one-hour token
+        outlived it, so the clamp never fired -- and wrong against a window
+        measured in hours, where it would fire on every run and quietly put the
+        old ceiling back.
+        """
         seconds, bounded = credential_bounded_timeout(
             configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
             credential_expires_at=_now() + timedelta(minutes=20),
@@ -138,10 +168,21 @@ class TestCredentialBoundedTimeout:
             agent_run_id=uuid7(),
         )
 
-        assert bounded is True
-        assert seconds < DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
-        # Stops short of the expiry, so the last tool call still has a live token.
-        assert seconds < 20 * 60
+        assert bounded is False
+        assert seconds == DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+
+    def test_a_fresh_credential_does_not_cap_a_multi_hour_window(self) -> None:
+        """The regression that raising the window would otherwise have hit: a
+        one-hour token against a four-hour run."""
+        seconds, bounded = credential_bounded_timeout(
+            configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+            credential_expires_at=_now() + timedelta(hours=1),
+            now=_now(),
+            agent_run_id=uuid7(),
+        )
+
+        assert bounded is False
+        assert seconds == DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
 
     def test_an_almost_expired_credential_refuses_to_dispatch(self) -> None:
         with pytest.raises(RuntimeError, match="expires too soon"):
