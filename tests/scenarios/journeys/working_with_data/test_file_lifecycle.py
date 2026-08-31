@@ -6,7 +6,7 @@ import pytest
 
 
 from harness import capability, covers, journey, proves, scenario, stack_lane
-from harness.waiting import eventually, never
+from harness.waiting import eventually, never, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [journey("Working with data"), capability("Put documents in")]
 
@@ -144,7 +144,7 @@ async def _the_promise_about_an_unreachable_extractor(alice, pod, report):
         lambda: alice.opens_file(report["path"], in_pod=pod),
         lambda f: str(f.get("status")) != "PROCESSING",
         describe=f"{report['path']} to settle out of PROCESSING",
-        timeout=60.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     # The rest is only observable where there is no extractor to reach. This
@@ -213,7 +213,7 @@ async def test_supplied_markdown_is_used(pod_with_file):
         # the staging pool on purpose. CI shards by journey and never sees this,
         # a local run of the whole directory does, and a wait costs nothing when
         # things are fast.
-        timeout=150.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert any(c["name"] == "document.md" for c in children), children
 

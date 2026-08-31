@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [journey("Platform"), capability("Agent hosts")]
 
@@ -184,7 +184,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
             first_claim,
             bool,
             describe="the paired host to be offered the dispatched run",
-            timeout=120.0,
+            timeout=UNTIL_A_RUN_SETTLES,
         )
         assert len(commands) == 1, (
             f"one message became {len(commands)} START_RUN claims on the host: "

@@ -9,7 +9,7 @@ from typing import Any
 
 from harness.run import a_name_for
 from harness.drivers.api import every_item, items_of
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_MODEL_ACTS
 
 JSON = dict[str, Any]
 
@@ -394,13 +394,29 @@ class AgentSteps:
         return response.json() if response.content else {}
 
     async def waits_for_an_approval_in(
-        self, conversation: JSON, *, in_pod: JSON, after: int = 0, timeout: float = 60.0
+        self,
+        conversation: JSON,
+        *,
+        in_pod: JSON,
+        after: int = 0,
+        timeout: float = UNTIL_A_MODEL_ACTS,
     ) -> list[JSON]:
-        """Wait until the run has asked a person for permission."""
+        """Wait until the run has asked a person for permission.
+
+        On the model budget, not the run one. What is being waited for is a
+        model reading its instructions and *choosing* to call the question
+        tool — a queued run reaches that two turns in, and at sixty seconds
+        this reported "it never happened" three times in thirty-one runs while
+        the product was working perfectly.
+        """
         return await eventually(
             lambda: self.approvals_in(conversation, in_pod=in_pod),
             lambda requests: len(requests) > after,
-            describe=f"an approval request in conversation {conversation['id']}",
+            describe=(
+                f"an approval request in conversation {conversation['id']} — "
+                f"the agent was told to ask before acting and had "
+                f"{timeout:.0f}s to do it"
+            ),
             timeout=timeout,
         )
 
