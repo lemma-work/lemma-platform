@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.value_objects import AgentKind
 from app.composition import agent_email_surface
 from app.modules.agent.services import agent_service as agent_service_module
 from app.modules.agent.services.agent_service import AgentService
@@ -15,7 +16,7 @@ from app.modules.agent.services.agent_service import AgentService
 
 @pytest.mark.asyncio
 async def test_delete_agent_revokes_delegation(monkeypatch):
-    agent = SimpleNamespace(id=uuid4(), user_id=uuid4())
+    agent = SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER)
     repo = AsyncMock()
     uow = AsyncMock()
     service = AgentService(
@@ -47,7 +48,10 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
     assistant's mailbox is. `surfaces_for_agent` then finds two for the
     assistant and the pod can answer from a deleted agent's address.
     """
-    pod_id, agent = uuid4(), SimpleNamespace(id=uuid4(), user_id=uuid4())
+    pod_id, agent = (
+        uuid4(),
+        SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER),
+    )
     repo = AsyncMock()
     uow = AsyncMock()
     service = AgentService(
@@ -71,7 +75,7 @@ async def test_the_surfaces_go_before_the_agent_row_does(monkeypatch):
     would have the database null that column out from under it, leaving nothing
     to match and the mailbox behind.
     """
-    agent = SimpleNamespace(id=uuid4(), user_id=uuid4())
+    agent = SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER)
     repo = AsyncMock()
     uow = AsyncMock()
     service = AgentService(

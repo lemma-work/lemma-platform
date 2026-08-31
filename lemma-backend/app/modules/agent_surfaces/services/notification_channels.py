@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
@@ -287,14 +288,22 @@ class NotificationChannelResolver:
         """
         if not email_is_configured() or self.surface_provisioner is None:
             return None, UndeliverableReason.EMAIL_NOT_CONFIGURED
-        # No agent id means the pod assistant, and its mailbox is the pod's own:
-        # `acme@`, not `pod-default.acme@`. The name travelling with a
-        # notification is the assistant's internal one ("pod_default"), which is
-        # not something to ask a person to type — and passing it produced
-        # exactly that address on dev.
+        # The assistant's mailbox is the pod's own: `acme@`, not
+        # `pod-default.acme@`. The name travelling with a notification is the
+        # assistant's internal one ("pod_default"), which is not something to
+        # ask a person to type — and passing it produced exactly that address
+        # on dev.
+        #
+        # Keyed on *which agent this is*, not on whether an id was supplied. It
+        # used to read `agent_id is not None`, which meant the assistant only
+        # by virtue of having no id; now that it has one, that test inverts and
+        # starts passing "pod_default" through to the address builder. The bug
+        # would not raise -- it would mint a second, wrong address for a pod
+        # that already had the right one.
+        is_default = is_pod_default_agent(agent_id, pod_id=pod_id)
         try:
             surface, cause = await self.surface_provisioner(
-                pod_id, agent_id, agent_name if agent_id is not None else None
+                pod_id, agent_id, None if is_default else agent_name
             )
         except (AgentSurfaceError, OSError) as exc:
             # ``failure_type``/``failure_code``, not ``error``: the log pipeline

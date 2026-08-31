@@ -7,6 +7,7 @@ the conversation's surface metadata in step.
 
 from __future__ import annotations
 
+from app.core.authorization.delegation import effective_agent_id
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -147,13 +148,26 @@ class SurfaceConversationLinkMixin:
         already bounded the topic, and cutting it on a timer discards history
         the person can still see above your reply.
         """
+
+        # Compared through `effective_agent_id`, because the two sides are
+        # written in different eras and the assistant has more than one spelling.
+        # A conversation now names it by the pod's own id; a route computed from
+        # surface configuration still names it by naming nobody. Raw, those two
+        # differ, and this reads "the agent changed" for a thread whose agent
+        # never changed -- cutting a fresh conversation and stranding the history
+        # the person can still see above the reply.
+        def same_agent(left: UUID | None, right: UUID | None) -> bool:
+            return effective_agent_id(
+                left, pod_id=surface.pod_id
+            ) == effective_agent_id(right, pod_id=surface.pod_id)
+
         if (
             route is not None
             and current_conversation_agent_id is not None
-            and current_conversation_agent_id != route.agent_id
+            and not same_agent(current_conversation_agent_id, route.agent_id)
         ):
             return True
-        if route is not None and link.routed_agent_id != route.agent_id:
+        if route is not None and not same_agent(link.routed_agent_id, route.agent_id):
             return True
         shape = thread_shape(
             link.conversation_kind or (route.conversation_kind if route else None)

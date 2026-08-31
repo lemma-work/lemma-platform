@@ -6,11 +6,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, literal, literal_column, select, update
+from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
 
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.events import (
     AgentDomainEvent,
@@ -60,9 +59,6 @@ from app.modules.agent.infrastructure.repositories.conversation_approval_queries
 from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
     ConversationOpeningTextsMixin,
 )
-
-_DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
-
 
 class ConversationRepository(
     ConversationApprovalQueriesMixin,
@@ -273,11 +269,16 @@ class ConversationRepository(
         else:
             stmt = stmt.where(ConversationModel.parent_id == parent_id)
         if agent_selection.scope is not ConversationAgentScope.ALL:
-            selected_agent_id = DEFAULT_POD_AGENT_ID
+            # The assistant is named by the pod's own id, and a conversation
+            # written before it had a row still names it by naming nobody. The
+            # COALESCE covers both, and `ix_agent_conv_user_pod_agent_roots_v2`
+            # is defined on exactly this expression -- change one and the index
+            # stops being used, silently.
+            selected_agent_id = pod_id
             if agent_selection.scope is ConversationAgentScope.NAMED:
                 selected_agent_id = agent_selection.named_value
             agent_scope_id = func.coalesce(
-                ConversationModel.agent_id, _DEFAULT_POD_AGENT_ID_SQL
+                ConversationModel.agent_id, ConversationModel.pod_id
             )
             stmt = stmt.where(agent_scope_id == selected_agent_id)
         if status is not None:

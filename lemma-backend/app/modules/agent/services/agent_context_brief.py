@@ -28,7 +28,7 @@ from uuid import UUID
 
 from app.core.authorization.context import ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+from app.modules.agent.domain.value_objects import AgentKind
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -145,7 +145,7 @@ class AgentContextBriefBuilder:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
         # thing the conversation contributes, so it is resolved into the key.
-        is_default = conversation.is_pod_assistant or agent.id == DEFAULT_POD_AGENT_ID
+        is_default = agent.kind is AgentKind.POD_DEFAULT
         with run_phase("context_brief") as span:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
             cached = await _get_cached_brief(key)
@@ -249,7 +249,9 @@ class AgentContextBriefBuilder:
             agents, agent_total = await AgentRepository(uow).list_by_pod(
                 pod_id=pod_id, limit=_MAX_RESOURCES
             )
-        named = [a for a in agents if a.id != DEFAULT_POD_AGENT_ID]
+        # The assistant has a row now, so it comes back in this listing --
+        # and without this it would offer itself as an agent to delegate to.
+        named = [a for a in agents if a.kind is not AgentKind.POD_DEFAULT]
         if named:
             lines.append("\n## Agents")
             lines.extend(

@@ -23,6 +23,7 @@ from app.modules.agent.domain.errors import (
     AgentValidationError,
 )
 from app.modules.agent.domain.value_objects import (
+    AgentKind,
     AgentRuntimeConfig,
     AgentToolset,
     JsonObject,
@@ -39,6 +40,21 @@ def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     except ValueError as exc:
         raise AgentValidationError(f"Invalid visibility: {value}") from exc
     return visibility.value
+
+
+def _refuse_pod_default(agent: Agent, *, verb: str) -> None:
+    """The pod's own assistant is not editable, and not deletable.
+
+    Checked before the permission check on purpose. A pod admin genuinely holds
+    `agent.update`, so a 403 would be a lie about why this was refused -- the
+    answer is not "you may not", it is "this one cannot be".
+
+    The database says so too, through `ck_agents_pod_default_immutable` and the
+    name and identity checks beside it. This is the readable half; that is the
+    half that holds when something bypasses the service.
+    """
+    if agent.kind is AgentKind.POD_DEFAULT:
+        raise AgentValidationError(f"The pod's default assistant cannot be {verb}.")
 
 
 class AgentService:
@@ -243,6 +259,7 @@ class AgentService:
         ctx: Context | None = None,
     ) -> Agent:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
+        _refuse_pod_default(agent, verb="edited")
         await self._require_action(
             requester_user_id=requester_user_id,
             action=Permissions.AGENT_UPDATE,
@@ -303,6 +320,7 @@ class AgentService:
         ctx: Context | None = None,
     ) -> None:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
+        _refuse_pod_default(agent, verb="deleted")
         # A delegated workload must always route through authz — agent.delete is
         # destructive and gated — so the owner shortcut (creator deletes their
         # own agent) never lets a workload bypass it.

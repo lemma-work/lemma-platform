@@ -25,13 +25,15 @@ from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
+    effective_agent_id,
+    is_pod_default_agent,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
+from app.modules.agent.domain.value_objects import AgentKind
 from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 
 POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
@@ -60,7 +62,13 @@ def validate_conversation_access(
         raise ConversationNotFoundError()
     if conversation.pod_id != pod_id:
         raise ConversationNotFoundError()
-    if agent_id is not None and conversation.agent_id != agent_id:
+    # Compared through the assistant's several spellings: a caller that asked
+    # for it by name holds the row's id, while a conversation written before
+    # that row existed still holds null. Raw, those two disagree and a
+    # perfectly reachable conversation reads as missing.
+    if agent_id is not None and effective_agent_id(
+        conversation.agent_id, pod_id=pod_id
+    ) != effective_agent_id(agent_id, pod_id=pod_id):
         raise ConversationNotFoundError()
     return conversation
 
@@ -72,32 +80,38 @@ async def resolve_agent(
     agent_repository: AgentRepository,
     agent_name: str | None = None,
 ) -> Agent:
-    """The agent answering on this conversation, real or the pod assistant.
+    """The agent answering on this conversation.
 
-    A conversation with no `agent_id` is answered by the pod's default
-    assistant, which has no row of its own — it is synthesised here so every
-    caller downstream can treat it like any other agent.
+    There is no longer a synthesised arm here: the pod's assistant has a row
+    like every other agent, and a conversation naming nobody still names it,
+    because that row's id is the pod's own.
+
+    What the row deliberately does not hold is its behaviour. ``toolsets`` is
+    stored empty and filled in here from the constant the assistant is actually
+    run with, so the two can never disagree -- a stored list would freeze
+    per-pod at whatever the constant said on the day the pod was made, and
+    adding a toolset later would need a data migration to reach pods that
+    already exist. This is the only place that substitution happens.
     """
-    if conversation.agent_id is None:
+    agent_id = conversation.agent_id or conversation.pod_id
+    agent = await agent_repository.get(agent_id)
+    if agent is None:
+        raise AgentNotFoundError(str(agent_id))
+    if agent_name is not None and agent.name != agent_name:
+        raise AgentNotFoundError(agent_name)
+    if agent.kind is AgentKind.POD_DEFAULT:
         # Lazy import: the registry imports the subagents toolset, which imports
         # the conversation service — importing it at module load would cycle.
         from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
-        return Agent(
-            id=POD_ASSISTANT_AGENT_ID,
-            pod_id=conversation.pod_id,
-            user_id=user_id,
-            name=DEFAULT_POD_AGENT_NAME,
-            instruction="",
-            agent_runtime=conversation.agent_runtime,
-            toolsets=list(POD_DEFAULT_AGENT_TOOLSETS),
+        return agent.model_copy(
+            update={
+                "toolsets": list(POD_DEFAULT_AGENT_TOOLSETS),
+                # The runtime a conversation was started with wins, exactly as
+                # it did when this entity was built from nothing.
+                "agent_runtime": conversation.agent_runtime,
+            }
         )
-
-    agent = await agent_repository.get(conversation.agent_id)
-    if agent is None:
-        raise AgentNotFoundError(str(conversation.agent_id))
-    if agent_name is not None and agent.name != agent_name:
-        raise AgentNotFoundError(agent_name)
     return agent
 
 
@@ -188,9 +202,16 @@ async def require_agent_actions(
     ctx = get_current_context()
     if ctx is None:
         raise RuntimeError("Context is required for conversation authorization")
+    # The assistant authorizes against the *pod*, and keeps doing so now that
+    # it has a row. Both arms would name the same id -- the row's id is the
+    # pod's -- but the resource *type* is not cosmetic: grants match on
+    # (type, id), and an AGENT-typed check would newly hit the resource-owner
+    # shortcut for whoever created the pod. Nobody asked for that, and it
+    # would arrive as a silent widening rather than as a decision.
+    is_default = is_pod_default_agent(agent_id, pod_id=pod_id)
     resource = ResourceRef(
-        resource_type=ResourceType.AGENT if agent_id is not None else ResourceType.POD,
-        resource_id=agent_id or pod_id,
+        resource_type=ResourceType.POD if is_default else ResourceType.AGENT,
+        resource_id=pod_id if is_default else agent_id,
         pod_id=pod_id,
     )
     await ctx.require_all([(action, resource) for action in actions])

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentKind, AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
@@ -166,8 +166,21 @@ def stubbed(monkeypatch):
     yield agents_md
 
 
-def _named_agent():
-    return SimpleNamespace(id=uuid4(), name="agent", description=None)
+def _named_agent(kind: AgentKind = AgentKind.USER):
+    return SimpleNamespace(id=uuid4(), name="agent", description=None, kind=kind)
+
+
+def _pod_default_agent():
+    """The assistant, which is now a row like any other -- and is told apart
+    by its kind rather than by the absence of one."""
+    pod_id = uuid4()
+    return SimpleNamespace(
+        id=pod_id,
+        pod_id=pod_id,
+        name="pod_default",
+        description=None,
+        kind=AgentKind.POD_DEFAULT,
+    )
 
 
 def _conversation(is_pod_assistant: bool):
@@ -192,8 +205,8 @@ async def test_default_assistant_brief_never_overlaps_uows(stubbed):
     factory = RecordingUoWFactory()
     builder = AgentContextBriefBuilder(factory)
     await builder.build(
-        agent=_named_agent(),
-        conversation=_conversation(True),  # pod assistant -> full inventory path
+        agent=_pod_default_agent(),  # the assistant -> full inventory path
+        conversation=_conversation(True),
         user_id=uuid4(),
         pod_id=uuid4(),
     )
@@ -253,25 +266,31 @@ async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
 async def test_the_two_brief_shapes_never_share_a_cache_entry(stubbed, monkeypatch):
     """The correctness guard on dropping the conversation id.
 
-    Whether the conversation is the pod default assistant selects between the
-    full pod inventory and the agent's own grants -- two different briefs from
-    the same agent, pod and user. That is the one thing the conversation
-    contributes, so it has to stay in the key.
+    The assistant sees the whole pod; a named agent sees only what it was
+    granted. Two different briefs, and they must never be served to each other.
+
+    Which of the two is now decided by the *agent* rather than by the
+    conversation: the assistant has a row of its own, so the agent id in the key
+    already tells them apart. It used to be read off the conversation, because
+    the assistant had no id to be told apart by -- and that made a named agent
+    on an assistant conversation a describable state, which it no longer is.
     """
     monkeypatch.setattr(
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
     )
     factory = RecordingUoWFactory()
     builder = AgentContextBriefBuilder(factory)
-    agent = _named_agent()
     uid, pid = uuid4(), uuid4()
 
     granted = await builder.build(
-        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+        agent=_named_agent(), conversation=_conversation(False), user_id=uid, pod_id=pid
     )
     opened_after_first = factory.opened
     inventory = await builder.build(
-        agent=agent, conversation=_conversation(True), user_id=uid, pod_id=pid
+        agent=_pod_default_agent(),
+        conversation=_conversation(True),
+        user_id=uid,
+        pod_id=pid,
     )
 
     assert factory.opened > opened_after_first  # rebuilt, not served the other

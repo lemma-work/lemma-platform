@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.core.authorization.context import ResourceType
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.value_objects import (
     AgentKind,
@@ -162,7 +163,15 @@ class Conversation(Entity):
 
     @property
     def is_pod_assistant(self) -> bool:
-        return self.agent_id is None
+        """Whether the pod's own assistant answers here.
+
+        This drives which base prompt the run is built from, so reading it
+        wrongly does not raise -- it quietly makes the assistant a different
+        agent. Which is why it delegates rather than testing ``agent_id is
+        None`` in place: a conversation now names the assistant by its row, and
+        older rows still name it by naming nobody.
+        """
+        return is_pod_default_agent(self.agent_id, pod_id=self.pod_id)
 
     def next_sequence(self) -> int:
         if not self.messages:

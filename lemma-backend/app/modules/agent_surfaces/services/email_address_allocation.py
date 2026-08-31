@@ -23,6 +23,10 @@ from __future__ import annotations
 import re
 import secrets
 
+# The one name that must never reach an address. Imported rather than
+# spelled again so it cannot drift from the row it describes.
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+
 # RFC 5321 caps the local part at 64 octets. Longer and the address is silently
 # truncated or rejected somewhere downstream, and the reply never comes back.
 MAX_LOCAL_PART = 64
@@ -157,10 +161,18 @@ def build_local_part(
 
     Bare is also why :func:`is_reserved` exists: ``acme@`` is fine and
     ``postmaster@`` is not, and only the assistant's form can produce either.
+
+    The assistant's *stored* name is treated the same as no name. It has a row
+    now, so callers that used to hold ``None`` for it hold ``"pod_default"``
+    instead, and that is an internal identifier rather than something to ask a
+    person to type -- letting it through would mint ``pod-default.acme@`` for a
+    pod that already answers at ``acme@``. Refused here as well as at the call
+    sites, because the cost of missing one is a second address that then has to
+    keep working forever.
     """
     pod = slugify(pod_name, fallback="pod")
     tail = f"-{suffix}" if suffix else ""
-    if agent_name is None:
+    if agent_name is None or agent_name == DEFAULT_POD_AGENT_NAME:
         return f"{pod[: MAX_LOCAL_PART - len(tail)]}{tail}".strip("-.")
 
     agent = slugify(agent_name)

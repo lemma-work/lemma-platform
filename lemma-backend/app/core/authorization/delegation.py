@@ -36,6 +36,45 @@ POD_DEFAULT_AGENT_SELECTOR_ALIASES = frozenset(
     {POD_DEFAULT_AGENT_SELECTOR, DEFAULT_POD_AGENT_NAME}
 )
 
+
+def is_pod_default_agent(agent_id: UUID | None, *, pod_id: UUID | None) -> bool:
+    """Whether this id names the pod's own assistant.
+
+    Three shapes answer yes, and they are three eras rather than three cases:
+
+    * ``pod_id`` -- the assistant's row, whose id *is* its pod's.
+    * ``None`` -- every conversation written before that row existed, and
+      anything an older process is still writing during a rolling deploy.
+    * ``DEFAULT_POD_AGENT_ID`` -- the sentinel the assistant was named by in
+      delegation tokens, which are signed and outlive the deploy that stopped
+      issuing them.
+
+    The null arm is not a transition measure to be tidied away later. It is
+    what makes an accidental loss of the row degrade to *correct*: the foreign
+    key from a conversation is ``ON DELETE SET NULL``, and a null still reads
+    as the assistant here rather than as a deleted named agent.
+
+    Deliberately free of I/O. The per-request check in
+    ``app/core/authorization/dependencies.py`` runs this on a token's claims,
+    and answering it with a row lookup would put a query on every request.
+    """
+    if agent_id is None:
+        return True
+    if agent_id == DEFAULT_POD_AGENT_ID:
+        return True
+    return pod_id is not None and agent_id == pod_id
+
+
+def effective_agent_id(agent_id: UUID | None, *, pod_id: UUID) -> UUID:
+    """The id this agent is known by, with the assistant's absences normalised.
+
+    Use when comparing two agent references that may have been written in
+    different eras -- a conversation backfilled to ``pod_id`` against a surface
+    route still holding ``None`` means the same agent, and comparing them raw
+    says they differ.
+    """
+    return pod_id if is_pod_default_agent(agent_id, pod_id=pod_id) else agent_id
+
 # No workload — the default pod agent included — performs these by default.
 # A workload needs either an explicit grant of the destructive permission
 # (standing authority; keeps headless schedules/functions working) or a live
