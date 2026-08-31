@@ -35,7 +35,6 @@ class UnitOfWorkFactory(Protocol):
 
     def __call__(self) -> AbstractAsyncContextManager[SqlAlchemyUnitOfWork]:
         """Create and yield a UoW instance."""
-        ...
 
 
 class SessionUnitOfWorkFactory:
