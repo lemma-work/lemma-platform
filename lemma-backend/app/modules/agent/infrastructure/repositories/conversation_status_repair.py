@@ -24,7 +24,7 @@ from app.modules.agent.infrastructure.repository_status import (
     conversation_status_values_for_db,
     run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import StrandedConversationRef
+from app.modules.agent.domain.run_projections import StrandedConversationRef
 from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
 
 logger = get_logger(__name__)

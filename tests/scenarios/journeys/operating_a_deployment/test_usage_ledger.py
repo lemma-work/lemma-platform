@@ -14,7 +14,7 @@ from harness import capability, covers, journey, proves, scenario
 from harness.credentials import needs
 from harness.environment import MODEL_IS_REAL
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Operating a deployment"),
@@ -52,7 +52,7 @@ async def test_a_run_is_always_recorded(after_a_run):
         lambda: _events(alice, organization),
         bool,
         describe="the run to reach the usage ledger",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
 
     assert recorded, "a completed agent run left no usage record at all"
@@ -80,7 +80,7 @@ async def test_a_usage_record_is_attributed(after_a_run):
         lambda: _events(alice, organization),
         bool,
         describe="the run to reach the usage ledger",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     entry = recorded[0]
 
@@ -150,7 +150,7 @@ async def test_a_failed_run_is_recorded_too(world, run):
         lambda: _events(alice, organization),
         bool,
         describe="a run that did not get what it wanted to reach the ledger",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert recorded, (
         "a run that spent tokens and then failed left no usage record, so its "

@@ -9,7 +9,7 @@ no memory of their first. And a file sent to the bot has to reach the agent, or
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario, stack_lane
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -66,7 +66,7 @@ async def test_a_separate_chat_is_a_separate_conversation(reachable):
         reachable.conversations,
         lambda found: len(found) >= 2,
         describe="a second chat to get its own conversation",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert len(threads) == 2, (
         f"two separate chats share one conversation, so each sees the other's "
@@ -121,7 +121,7 @@ async def test_an_attachment_reaches_the_pod(reachable):
         lambda: reachable.alice.paths_in(reachable.pod, directory=TELEGRAM_FOLDER),
         lambda found: any(path.endswith("quarter.csv") for path in found),
         describe="the attachment to reach the pod",
-        timeout=90.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     landed = sorted(path for path in arrived if path.endswith("quarter.csv"))[0]
 

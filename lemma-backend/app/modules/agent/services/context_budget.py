@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.value_objects import JsonObject
 
 logger = get_logger(__name__)
 
@@ -168,7 +169,7 @@ def configured_model_context_windows() -> dict[str, int]:
 
 def catalog_metadata_for(
     model_name: str, *, discovered_window: int | None = None
-) -> dict[str, int]:
+) -> JsonObject:
     """The `metadata` a catalog entry should carry for this model.
 
     An operator's declaration wins over whatever the provider advertised: they

@@ -15,6 +15,7 @@ from app.core.authorization.context import (
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import (
     AgentAlreadyExistsError,
@@ -46,9 +47,11 @@ class AgentService:
     def __init__(
         self,
         *,
+        uow: SqlAlchemyUnitOfWork,
         agent_repository: AgentRepository,
         authorization_service: object,
     ):
+        self.uow = uow
         self.agent_repository = agent_repository
         self.authorization_service = authorization_service
 
@@ -139,7 +142,7 @@ class AgentService:
         from app.composition.agent_email_surface import provision_agent_email_surface
 
         await provision_agent_email_surface(
-            self.agent_repository.uow,
+            self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
             agent_name=agent.name,
@@ -166,7 +169,7 @@ class AgentService:
         from app.composition.agent_memory import derive_agent_memory_grant
 
         await derive_agent_memory_grant(
-            self.agent_repository.uow,
+            self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
             toolsets=agent.toolsets,
@@ -239,7 +242,6 @@ class AgentService:
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
     ) -> Agent:
-        sentinel = UNSET
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
         await self._require_action(
             requester_user_id=requester_user_id,
@@ -249,25 +251,31 @@ class AgentService:
             ctx=ctx,
         )
 
-        if description is not sentinel:
+        # `isinstance` rather than `is not UNSET`, matching the other PATCH
+        # services here: an identity test against the singleton reads the same
+        # but narrows nothing, so every assignment below stayed `| UnsetType`.
+        if not isinstance(description, UnsetType):
             agent.description = description
-        if icon_url is not sentinel:
+        if not isinstance(icon_url, UnsetType):
             agent.icon_url = icon_url
-        if instruction is not sentinel:
-            if instruction is not None and not instruction.strip():
+        if not isinstance(instruction, UnsetType):
+            # `None` is rejected alongside blank, not accepted: the entity's
+            # instruction is a `str`, so clearing it wrote a null into a field
+            # that has no null.
+            if instruction is None or not instruction.strip():
                 raise AgentValidationError("Agent instruction is required")
             agent.instruction = instruction
-        if agent_runtime is not sentinel:
+        if not isinstance(agent_runtime, UnsetType):
             agent.agent_runtime = agent_runtime
-        if toolsets is not sentinel:
+        if not isinstance(toolsets, UnsetType):
             agent.toolsets = toolsets or []
-        if input_schema is not sentinel:
+        if not isinstance(input_schema, UnsetType):
             agent.input_schema = input_schema
-        if output_schema is not sentinel:
+        if not isinstance(output_schema, UnsetType):
             agent.output_schema = output_schema
-        if visibility is not sentinel:
+        if not isinstance(visibility, UnsetType):
             agent.visibility = _normalize_agent_visibility(visibility)
-        if metadata is not sentinel:
+        if not isinstance(metadata, UnsetType):
             agent.metadata = metadata
 
         updated = await self.agent_repository.update(agent)
@@ -317,9 +325,7 @@ class AgentService:
         # and the pod starts answering from a deleted agent's address.
         from app.composition.agent_email_surface import teardown_agent_surfaces
 
-        await teardown_agent_surfaces(
-            self.agent_repository.uow, pod_id=pod_id, agent_id=agent.id
-        )
+        await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
         await self.agent_repository.delete(agent.id)
         # Revoke any in-flight delegated token minted for this agent so it stops
         # working immediately rather than lingering until the token expires.

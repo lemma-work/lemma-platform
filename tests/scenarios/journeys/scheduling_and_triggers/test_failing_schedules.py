@@ -16,7 +16,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [
     journey("Scheduling and triggers"),
@@ -78,7 +78,7 @@ async def test_repeated_failure_stops_a_schedule(doomed):
         lambda: alice.opens_schedule(schedule, in_pod=pod),
         lambda state: state.get("is_active") is False,
         describe="the schedule to give up after a run of failures",
-        timeout=180.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     assert stopped.get("paused_by_failures") is True, (
@@ -104,7 +104,7 @@ async def test_a_stopped_schedule_explains_itself(doomed):
         lambda: alice.opens_schedule(schedule, in_pod=pod),
         lambda state: state.get("is_active") is False,
         describe="the schedule to give up after a run of failures",
-        timeout=180.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     # "It stopped" without "here is what went wrong" leaves a person with
@@ -146,7 +146,7 @@ async def test_a_stopped_schedule_can_be_restarted(doomed):
         lambda: alice.opens_schedule(schedule, in_pod=pod),
         lambda state: state.get("is_active") is False,
         describe="the schedule to give up after a run of failures",
-        timeout=180.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     await alice.resumes_schedule(schedule, in_pod=pod)

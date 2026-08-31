@@ -320,6 +320,11 @@ jobs:
         run: |
           mkdir -p coverage-backend
           echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
+      # `junit-*.phases.json` is the per-phase breakdown written beside each
+      # JUnit. Kept because the JUnit alone cannot answer the question the
+      # budget step above raises -- whether a test is slow, or merely went
+      # first and paid for the session fixtures -- and reconstructing that by
+      # hand is what investigating a budget failure costs otherwise.
       - name: Upload backend e2e coverage
         if: always()
         uses: actions/upload-artifact@v7
@@ -334,6 +339,7 @@ jobs:
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/junit-*.xml
+            lemma-backend/coverage-backend/junit-*.phases.json
           if-no-files-found: ignore
 
   e2e-passed:

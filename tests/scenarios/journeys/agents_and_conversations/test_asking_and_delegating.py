@@ -9,6 +9,7 @@ rather than disappearing into a side channel.
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
+from harness.waiting import UNTIL_A_MODEL_ACTS
 from harness.credentials import needs
 from harness.environment import MODEL_IS_REAL
 from harness.steps.datastore import column
@@ -218,7 +219,7 @@ async def test_an_agent_delegates_to_a_subagent(world):
         ),
     )
     await alice.waits_for_the_run_to_settle(
-        conversation=conversation, in_pod=pod, timeout=120.0
+        conversation=conversation, in_pod=pod, timeout=UNTIL_A_MODEL_ACTS
     )
 
     # The parent's own transcript is where a person looks, and the delegation

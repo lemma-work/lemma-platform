@@ -532,9 +532,8 @@ class AgentRunnerService:
                 repo = ConversationRepository(uow)
                 runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
                 agent_run = self._find_agent_run(runs, agent_run_id)
-                conversation = await repo.get_conversation(agent_run.conversation_id)
-                validate_conversation_access(
-                    conversation,
+                conversation = validate_conversation_access(
+                    await repo.get_conversation(agent_run.conversation_id),
                     user_id=user_id,
                     pod_id=pod_id,
                 )

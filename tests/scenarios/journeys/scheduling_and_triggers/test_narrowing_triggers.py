@@ -14,7 +14,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [
     journey("Scheduling and triggers"),
@@ -74,7 +74,7 @@ async def test_a_change_below_the_condition_is_skipped(watching_for_done):
         lambda: alice.opens_schedule(schedule, in_pod=pod),
         lambda state: state.get("last_fire_status") is not None,
         describe="the trigger to be recorded even though it was skipped",
-        timeout=60.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     # Recorded at all is the first half of the promise: a trigger silently
@@ -104,7 +104,7 @@ async def test_a_change_meeting_the_condition_fires(watching_for_done):
         lambda: _runs(alice, schedule, pod),
         lambda runs: any(str(run.get("status")) in ACTED_ON for run in runs),
         describe="the trigger to fire for a row that met the condition",
-        timeout=90.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert acted, "a matching row triggered nothing"
 
@@ -133,7 +133,7 @@ async def test_skipped_and_fired_are_distinguishable(watching_for_done):
         lambda: _runs(alice, schedule, pod),
         lambda found: any(str(run.get("status")) in ACTED_ON for run in found),
         describe="the matching trigger to produce a run",
-        timeout=90.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     settled = await alice.opens_schedule(schedule, in_pod=pod)
 

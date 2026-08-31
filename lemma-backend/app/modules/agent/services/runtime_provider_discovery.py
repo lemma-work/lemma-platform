@@ -183,7 +183,7 @@ async def _validate_public_base_url(url: str) -> None:
             )
         except OSError as exc:
             raise ValueError(_PUBLIC_URL_ERROR) from exc
-        candidates.extend(info[4][0] for info in infos)
+        candidates.extend(str(info[4][0]) for info in infos)
     if not candidates:
         raise ValueError(_PUBLIC_URL_ERROR)
     for addr in candidates:

@@ -17,7 +17,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
 )
 from app.modules.agent.events import handlers
-from app.modules.agent.infrastructure.run_projections import (
+from app.modules.agent.domain.run_projections import (
     StaleAgentRunRef,
     StrandedConversationRef,
 )
