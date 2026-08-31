@@ -97,6 +97,18 @@ async def datastore_outbox_dispatcher(e2e_settings, db_manager):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _forget_document_processor_traffic(request):
+    """Give each test the shared fake with an empty ledger.
+
+    Autouse and lazy: it only touches the server for tests that actually asked
+    for it, so nothing else pays for a session fixture it does not use.
+    """
+    if "fake_document_processor_server" in request.fixturenames:
+        request.getfixturevalue("fake_document_processor_server").forget_traffic()
+    yield
+
+
 @pytest_asyncio.fixture(scope="session")
 async def fake_document_processor_server() -> AsyncIterator[
     FakeDocumentProcessorServer

@@ -358,13 +358,13 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
         },
     )
 
-    await adapter.send_display_resource(
+    await adapter._render_resource(
         credentials={},
         event=event,
         render_plan=SurfaceDisplayRenderPlan(
             resource_type="TABLE",
             title="Table: deals",
-            summary="A datastore view is ready.",
+            summary="3 of 41 records",
             detail_lines=["Filters: stage eq won"],
             actions=[
                 SurfaceDisplayAction(

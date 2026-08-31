@@ -8,8 +8,8 @@ import time
 from typing import Any
 
 from harness.run import a_name_for
-from harness.drivers.api import items_of
-from harness.waiting import eventually
+from harness.drivers.api import every_item, items_of
+from harness.waiting import eventually, UNTIL_A_MODEL_ACTS
 
 JSON = dict[str, Any]
 
@@ -113,8 +113,30 @@ class AgentSteps:
             what=f"{self.label} opening agent {name!r}",
         )
 
+    async def has_agent(self, name: str, *, in_pod: JSON) -> bool:
+        """Is this agent in this pod? Asked by name, and that is the point.
+
+        `agents_in` is the obvious way to answer it and the wrong one: the list
+        endpoint pages at 100, so on a pod holding more than that "not in the
+        list" means "not on the first page" and nothing more. Provisioning read
+        it as "does not exist", tried to create the standing agent, and a real
+        deployment answered 409 for a name that had been there all along.
+        """
+        answered = await self.api.call("GET", f"/pods/{in_pod['id']}/agents/{name}")
+        return answered.status_code == 200
+
     async def agents_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/agents"))
+        """Every agent in the pod, following the pages.
+
+        The cap here has already broken provisioning once: the list stops at
+        100, `works_in` decided whether the standing agent existed by looking
+        for it, and once a standing pod held more than a page of leftovers the
+        deployment answered 409 for a name that had been there all along. See
+        `has_agent`, which is still the right way to ask about one by name.
+        """
+        return await every_item(
+            lambda params: self.api.get(f"/pods/{pod['id']}/agents", params=params)
+        )
 
     async def deletes_agent(self, name: str, *, in_pod: JSON) -> None:
         await self.api.delete(
@@ -170,8 +192,26 @@ class AgentSteps:
             await self.says(saying, in_conversation=conversation, in_pod=in_pod)
         return conversation
 
-    async def conversations_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/conversations"))
+    async def conversations_in(self, pod: JSON, *, pages: int = 20) -> list[JSON]:
+        """Every conversation in the pod, following the pages.
+
+        Asking once returns twenty, ordered by id descending — and ids are
+        time-ordered, so that is newest first. On a pod that stands between runs
+        this buries anything an earlier run opened under everything opened
+        since, and a scenario looking for it concluded the product had lost the
+        message. The same shape as the agent list capped at 100: a default page
+        size read as "all of them".
+
+        `pages` is a bound rather than a limit anyone should hit — twenty pages
+        of a hundred is two thousand conversations. It exists so a bug in the
+        cursor cannot spin here forever.
+        """
+        return await every_item(
+            lambda params: self.api.get(
+                f"/pods/{pod['id']}/conversations", params=params
+            ),
+            pages=pages,
+        )
 
     async def opens_conversation(self, conversation: JSON, *, in_pod: JSON) -> JSON:
         return await self.api.get(
@@ -196,6 +236,26 @@ class AgentSteps:
             json={"content": message},
         )
 
+    async def adds_while_it_works(
+        self, message: str, *, in_conversation: JSON, in_pod: JSON
+    ) -> JSON:
+        """Say something without opening a stream to watch the answer arrive.
+
+        Not ``adds``: ``PodSteps.adds`` already owns that name, and ``Person``
+        mixes both in -- a second one is shadowed in silence and the scenario
+        fails on an argument name three files away from the cause.
+
+        What a person does when the agent is already working: the message joins
+        the run in flight rather than starting a second one. ``says`` is the
+        wrong call for that -- it opens a second Server-Sent Events
+        subscription for a run that already has one.
+        """
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/conversations/{in_conversation['id']}/messages/append",
+            what=f"{self.label} adding a message to a run already working",
+            json={"content": message},
+        )
+
     async def messages_in(self, conversation: JSON, *, in_pod: JSON) -> list[JSON]:
         return items_of(
             await self.api.get(
@@ -204,7 +264,12 @@ class AgentSteps:
         )
 
     async def waits_for_a_reply(
-        self, *, in_conversation: JSON, in_pod: JSON, after: int = 0, timeout: float = 60.0
+        self,
+        *,
+        in_conversation: JSON,
+        in_pod: JSON,
+        after: int = 0,
+        timeout: float = 60.0,
     ) -> list[JSON]:
         """Wait until the agent has added at least one message beyond ``after``.
 
@@ -214,11 +279,11 @@ class AgentSteps:
         """
         return await eventually(
             lambda: self.messages_in(in_conversation, in_pod=in_pod),
-            lambda messages: len(messages) > after
-            and any(m.get("role") == "assistant" for m in messages),
-            describe=(
-                f"the agent to reply in conversation {in_conversation['id']}"
+            lambda messages: (
+                len(messages) > after
+                and any(m.get("role") == "assistant" for m in messages)
             ),
+            describe=(f"the agent to reply in conversation {in_conversation['id']}"),
             timeout=timeout,
         )
 
@@ -227,8 +292,10 @@ class AgentSteps:
     ) -> JSON:
         return await eventually(
             lambda: self.opens_conversation(conversation, in_pod=in_pod),
-            lambda payload: str(payload.get("status") or "").upper() in SETTLED
-            or payload.get("status") is None,
+            lambda payload: (
+                str(payload.get("status") or "").upper() in SETTLED
+                or payload.get("status") is None
+            ),
             describe=f"conversation {conversation['id']} to reach a terminal state",
             timeout=timeout,
         )
@@ -327,13 +394,29 @@ class AgentSteps:
         return response.json() if response.content else {}
 
     async def waits_for_an_approval_in(
-        self, conversation: JSON, *, in_pod: JSON, after: int = 0, timeout: float = 60.0
+        self,
+        conversation: JSON,
+        *,
+        in_pod: JSON,
+        after: int = 0,
+        timeout: float = UNTIL_A_MODEL_ACTS,
     ) -> list[JSON]:
-        """Wait until the run has asked a person for permission."""
+        """Wait until the run has asked a person for permission.
+
+        On the model budget, not the run one. What is being waited for is a
+        model reading its instructions and *choosing* to call the question
+        tool — a queued run reaches that two turns in, and at sixty seconds
+        this reported "it never happened" three times in thirty-one runs while
+        the product was working perfectly.
+        """
         return await eventually(
             lambda: self.approvals_in(conversation, in_pod=in_pod),
             lambda requests: len(requests) > after,
-            describe=f"an approval request in conversation {conversation['id']}",
+            describe=(
+                f"an approval request in conversation {conversation['id']} — "
+                f"the agent was told to ask before acting and had "
+                f"{timeout:.0f}s to do it"
+            ),
             timeout=timeout,
         )
 
@@ -412,7 +495,9 @@ class AgentSteps:
             )
         )
 
-    async def opens_runtime_profile(self, profile_id: str, *, in_organization: JSON) -> JSON:
+    async def opens_runtime_profile(
+        self, profile_id: str, *, in_organization: JSON
+    ) -> JSON:
         return await self.api.get(
             f"/organizations/{in_organization['id']}/agent-runtime/profiles/{profile_id}"
         )

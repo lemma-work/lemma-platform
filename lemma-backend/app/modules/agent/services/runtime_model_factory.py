@@ -18,11 +18,12 @@ from dataclasses import replace
 
 import httpx
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -103,8 +104,8 @@ async def _aclose_quietly(client: httpx.AsyncClient) -> None:
     try:
         await client.aclose()
     except Exception:  # pragma: no cover - eviction is best-effort
-        logger.debug(
-            "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+        logger.warning(
+            "agent.runtime_model_factory.provider_client_close_failed.degraded",
             exc_info=True,
         )
 
@@ -193,10 +194,39 @@ async def close_agent_provider_clients() -> None:
         try:
             await client.aclose()
         except Exception:  # pragma: no cover - shutdown is best-effort
-            logger.debug(
-                "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+            logger.warning(
+                "agent.runtime_model_factory.provider_client_close_failed.degraded",
                 exc_info=True,
             )
+
+
+class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
+    """An OpenAI-compatible chat model that keeps `stream_options` to the spec.
+
+    pydantic-ai's ``openai_continuous_usage_stats`` does two unrelated things:
+    it puts ``continuous_usage_stats`` in the request's ``stream_options``, and
+    it switches the streaming handler from summing each chunk's usage to
+    replacing with it. Only the second is wanted here, and the two have to be
+    separated because they are not equally portable.
+
+    The replace half is what keeps a provider that reports a running cumulative
+    total on every chunk from being re-added on top of itself; without it a
+    single turn bills a multiple of what it used. The request half is a vLLM
+    extension rather than OpenAI's -- the openai SDK's own stream-options type
+    does not carry the field -- so a strict OpenAI-compatible endpoint rejects
+    the whole request for an unknown field. Models behind one provider disagree
+    about accepting it, and this profile fronts whatever endpoint an operator
+    points it at, so sending it makes streaming fail for some of them.
+
+    Dropping it costs nothing: a provider that sends cumulative usage does so on
+    its own, and the field cannot turn that off. So the setting stays on the
+    profile for the accumulation it selects, and never reaches the wire.
+    """
+
+    def _get_stream_options(
+        self, model_settings: OpenAIChatModelSettings
+    ) -> ChatCompletionStreamOptionsParam:
+        return {"include_usage": True}
 
 
 def pydantic_ai_model_from_runtime_profile(
@@ -254,7 +284,15 @@ def pydantic_ai_model_from_runtime_profile(
             # Connection reuse, split timeouts and transport-level retries all
             # come from the shared client; the SDK's own retry layer would only
             # duplicate it.
-            http_client=get_provider_http_client(
+            #
+            # Ignored, not cast: openai 3.x annotates this against `httpx2`,
+            # while the shared client is `httpx` -- which is not a preference,
+            # it is what pydantic-ai's `AsyncTenacityTransport` (the retry layer
+            # above) is built on, and the Anthropic SDK still wants. The two are
+            # duck-compatible for everything the SDK calls, so this works; it is
+            # marked rather than hidden because the day it stops working, this
+            # line is where to look.
+            http_client=get_provider_http_client(  # type: ignore[arg-type]
                 protocol="openai",
                 base_url=base_url,
                 api_key=api_key,
@@ -262,7 +300,7 @@ def pydantic_ai_model_from_runtime_profile(
             ),
             max_retries=0,
         )
-        return OpenAIChatModel(
+        return _UsageOnlyStreamOptionsChatModel(
             model_name_value,
             provider=OpenAIProvider(openai_client=client),
             # Inline `$defs`/`$ref` in tool schemas: some OpenAI-compatible

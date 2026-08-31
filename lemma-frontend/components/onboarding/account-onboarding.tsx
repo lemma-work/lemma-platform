@@ -24,6 +24,7 @@ import {
   subscribeToOnboardingSkippedFirstPod,
 } from "@/lib/pods/onboarding-skip";
 import { buildComposerLaunchHref } from "@/lib/pods/composer-launch";
+import { buildNewPodWelcomeHref } from "@/lib/pods/new-pod-conversation";
 import {
   trackOnboardingStep,
   trackPodReady,
@@ -66,6 +67,7 @@ import {
 
 import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
 import {
+  firstPodName,
   hasUsableProfileName,
   inferFullName,
   nextTeamSetupStep,
@@ -183,9 +185,11 @@ export function AccountOnboarding({
   const [setupActive, setSetupActive] = useState(false);
 
   // Hosted accounts with nothing yet are provisioned rather than interviewed.
-  // A local installation is excluded: it still owes the user a model before a
-  // pod means anything, which is what its own steps are for. A draft means a
-  // half-finished run of the old flow, which stays with the old flow.
+  // A local installation is provisioned too, but not from here: it still owes
+  // the user a model before a pod means anything, so its organization and its
+  // pod are created either side of that question by `SetupAssistant` rather
+  // than in one step that navigates away from it. A draft means a half-finished
+  // run of the old flow, which stays with the old flow.
   const isLocal = isLocalDeployment();
   const canAutoProvision =
     !isLocal &&
@@ -398,8 +402,19 @@ function SetupAssistant({
   const [allowDomainJoin, setAllowDomainJoin] = useState(
     initialDraft?.allowDomainJoin ?? Boolean(normalizedWorkDomain),
   );
+  // Never on a local install.
+  //
+  // The backend suggests an organization on a domain match alone, and the
+  // consent toggle that would let someone decline lives on a step the local
+  // flow skips. So on a machine where an `EMAIL_DOMAIN` organization already
+  // exists, the next person to sign up with an address at that domain was
+  // joined to it silently -- and told so by a success toast, after the fact.
+  //
+  // The org-creation path was gated for exactly this reason; this is the other
+  // half of it, and the one that was still open.
   const suggestedOrganizations = useSuggestedOrganizations({
     enabled:
+      !isLocal &&
       Boolean(profile?.email) &&
       organizations.length === 0,
   });
@@ -462,7 +477,22 @@ function SetupAssistant({
    * one call that cannot fail on a name.
    */
   const createFirstOrganization = async (): Promise<Organization> => {
-    const useDomainJoin = Boolean(normalizedWorkDomain);
+    // Respects the consent toggle, where it used to infer domain-join purely
+    // from the address. On a local install that inference was never shown to
+    // anyone: this runs from the identity step, and the flow then jumps
+    // straight to intelligence, skipping the step the toggle lives on. So the
+    // owner got an organization anyone with an address at their work domain
+    // could join, without being asked and without being told.
+    //
+    // That is not theoretical on a shared installation. Email verification is
+    // off for local mode, so the address is never proven — typing one is
+    // enough to be auto-joined as a member, which grants the full member
+    // roster and the ability to create pods inside the owner's organization.
+    //
+    // `allowDomainJoin` defaults to true when a work domain is present, so a
+    // hosted signup that *does* see the toggle behaves exactly as before.
+    const useDomainJoin =
+      allowDomainJoin && Boolean(normalizedWorkDomain) && !isLocal;
 
     return createOrganization.mutateAsync({
       name: organizationNameCandidate({
@@ -476,6 +506,81 @@ function SetupAssistant({
       resolve_name_conflicts: true,
     });
   };
+
+  /**
+   * The workspace a local install stops asking for.
+   *
+   * Hosted signups have not been asked for a name or a first pod since
+   * `useFirstPodProvisioning` landed — and a local one was still asked for
+   * both, which is the wrong way round: it is the deployment with the most to
+   * set up, not the least. So the organization is created here, before the
+   * first question, and the pod after the last one; what is left in between is
+   * the model, which is the one thing this machine cannot answer for itself.
+   *
+   * The order is not a preference. `LocalIntelligenceStep` saves a runtime
+   * profile into an organization, and withholds "Use in chats" entirely when
+   * there is none — so a model step reached without a workspace is a screen
+   * whose main action is missing.
+   *
+   * Nothing is joined, only created: `createFirstOrganization` already refuses
+   * a domain join on a local install, where an unverified address is enough to
+   * be let in, and the suggestion query behind that is disabled there too.
+   */
+  const [localWorkspaceFailed, setLocalWorkspaceFailed] = useState(false);
+  const localWorkspaceRef = useRef(false);
+  useEffect(() => {
+    if (!isLocal || activeOrganization || localWorkspaceRef.current) return;
+    // An invitation is a workspace already. Creating a second one beside it is
+    // the thing the hosted flow defers for, and it defers here too.
+    if (deferWorkspaceForInvitation) return;
+    localWorkspaceRef.current = true;
+    // This is setup, running: pin the wizard so a pods listing settling
+    // underneath it cannot hand the screen to the root redirect mid-flow.
+    onSetupStart();
+
+    void (async () => {
+      try {
+        // Derived, never asked — the same inference the hosted flow makes, and
+        // the profile page is where anyone who dislikes the result fixes it.
+        if (!hasUsableProfileName(profile)) {
+          const parsed = splitName(inferFullName(profile));
+          if (parsed.firstName) {
+            await updateProfile.mutateAsync({
+              first_name: parsed.firstName,
+              last_name: parsed.lastName || null,
+            });
+          }
+        }
+
+        const organization = await createFirstOrganization();
+        setCreatedOrganization(organization);
+        onOrganizationReady(organization);
+        // The name the server settled on, which a collision may have moved.
+        setWorkspaceName(organization.name);
+        saveOnboardingDraft({
+          step: "intelligence",
+          audience: "personal",
+          workspaceName: organization.name,
+          organizationId: organization.id,
+        });
+      } catch (error) {
+        // Loud, and then a way through. Silence here would leave the model step
+        // rendering with half its actions withheld and no explanation, so this
+        // falls back to the step that creates a workspace by asking for one.
+        toast.error(
+          error instanceof Error && error.message
+            ? `Could not set up your workspace: ${error.message}`
+            : "Could not set up your workspace.",
+        );
+        setLocalWorkspaceFailed(true);
+        setStep("identity");
+      }
+    })();
+    // Runs once per mount behind the ref. The creators it calls are new
+    // closures on every render, so listing them would only churn a dependency
+    // the guard already ignores.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOrganization, deferWorkspaceForInvitation, isLocal, profile]);
 
   const handleIdentitySubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -506,7 +611,10 @@ function SetupAssistant({
       }
 
       let organization = activeOrganization;
-      if (!organization && suggestedOrganization) {
+      // `!isLocal` again rather than relying on the query being disabled: a
+      // silent join is not something to leave resting on one condition several
+      // hundred lines away.
+      if (!organization && !isLocal && suggestedOrganization) {
         organization = await joinSuggestedOrganization.mutateAsync(
           suggestedOrganization.id,
         );
@@ -895,6 +1003,40 @@ function SetupAssistant({
     }
   };
 
+  /**
+   * The last local question, and the pod on the other side of it.
+   *
+   * A hosted account is handed a pod without picking a starting point; this is
+   * where a local one is. `createBasePod` is the same call the start step made,
+   * including adopting a coding agent chosen a step ago as the pod's default
+   * runtime — so what changed is who decides to make the pod, not how.
+   */
+  const handleLocalSharingContinue = async () => {
+    const pod =
+      basePod ||
+      (await createBasePod(
+        "personal",
+        "",
+        activeOrganization,
+        firstPodName(profile),
+      ));
+    // `createBasePod` has already said what went wrong. Staying on this step is
+    // the recovery — Continue tries again — rather than a dead end.
+    if (!pod) return;
+
+    clearOnboardingDraft();
+    trackPodReady("new_org", signupAt);
+    // The same door a hosted first pod opens behind: a conversation waiting on
+    // them, not a launcher asking them to choose again.
+    router.replace(
+      buildNewPodWelcomeHref({
+        podId: pod.id,
+        workDomain: normalizedWorkDomain,
+        isFirstPod: true,
+      }),
+    );
+  };
+
   const handleChooseStartPath = async (path: OnboardingStartPath) => {
     // Resolved before the pod exists, because it is what the pod gets called.
     // A pod restored from a draft keeps the name it already has — this only
@@ -911,7 +1053,7 @@ function SetupAssistant({
     if (path === "templates") {
       clearOnboardingDraft();
       trackPodReady("new_org", signupAt);
-      router.push(`/pod/${pod.id}/recipes`);
+      router.push(`/pod/${pod.id}`);
       return true;
     }
     if (path === "coding-agents") return false;
@@ -952,6 +1094,26 @@ function SetupAssistant({
     );
     return true;
   };
+
+  // Nothing to render until the workspace exists. The first local question
+  // saves into it, and a screen whose main action is withheld says less than a
+  // line of text explaining what is happening.
+  if (
+    isLocal &&
+    !activeOrganization &&
+    !localWorkspaceFailed &&
+    !deferWorkspaceForInvitation
+  ) {
+    return (
+      <SetupShell>
+        <WaitingScreen
+          title="Setting up your workspace"
+          description="This takes a moment. Then one question, and you are in."
+          className="w-full max-w-xl"
+        />
+      </SetupShell>
+    );
+  }
 
   if (step === "boot") {
     return (
@@ -1075,7 +1237,8 @@ function SetupAssistant({
         />
       ) : step === "sharing" ? (
         <LocalSharingStep
-          onContinue={() => goTo("start")}
+          onContinue={() => void handleLocalSharingContinue()}
+          isCreating={isCreatingPod}
           onBack={onBack}
           steps={orderedSteps}
         />

@@ -17,6 +17,10 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
+from app.modules.agent.domain.ports import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationAgentSelection,
@@ -40,8 +44,8 @@ class ConversationQueries:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: object,
-        agent_repository: object,
+        conversation_repository: ConversationRepository,
+        agent_repository: AgentRepository,
     ) -> None:
         self.uow = uow
         self.conversation_repository = conversation_repository
@@ -57,6 +61,7 @@ class ConversationQueries:
         type: ConversationType | None = None,
         metadata_filters: dict[str, object] | None = None,
         parent_id: UUID | None = None,
+        archived: bool = False,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]:
@@ -80,6 +85,7 @@ class ConversationQueries:
             conversation_type=type,
             metadata_filters=metadata_filters,
             parent_id=parent_id,
+            archived=archived,
             cursor=cursor,
             limit=limit,
         )
@@ -99,12 +105,11 @@ class ConversationQueries:
             agent_name=agent_name,
         )
         # The latest run carries the failure diagnostics and the retry decision.
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id,
-            include_runs=True,
-        )
-        validate_conversation_access(
-            conversation,
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(
+                conversation_id,
+                include_runs=True,
+            ),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
@@ -154,11 +159,8 @@ class ConversationQueries:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id
-        )
-        validate_conversation_access(
-            conversation,
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
@@ -189,11 +191,8 @@ class ConversationQueries:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id
-        )
-        validate_conversation_access(
-            conversation,
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,

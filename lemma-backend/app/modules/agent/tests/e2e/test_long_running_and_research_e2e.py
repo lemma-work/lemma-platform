@@ -16,10 +16,12 @@ Covers:
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from aiohttp import web
 from fastapi import status
 
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
@@ -42,6 +44,51 @@ from app.modules.test_support.e2e.waiters import eventually
 # invisible until something is held across the boundary: a pooled Postgres
 # connection opened during fixture setup and reused in the test body dies with
 # "got Future attached to a different loop".
+
+
+@dataclass
+class _FetchablePage:
+    """One page of HTML on loopback, so the good URL in the batch is local."""
+
+    url: str = ""
+    _runner: "web.AppRunner | None" = None
+
+    async def start(self) -> None:
+        app = web.Application()
+        app.router.add_get("/", self._page)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await site.start()
+        sockets = site._server.sockets if site._server else []  # noqa: SLF001
+        assert sockets
+        self.url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}/"
+
+    async def stop(self) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
+
+    async def _page(self, request: web.Request) -> web.Response:
+        del request
+        # Comfortably over `_THIN_CONTENT_CHARS` (120). Below it, extraction is
+        # read as degenerate and the fetch is retried through the browser --
+        # which is a real behaviour worth keeping, and would make the
+        # `fetched_with == "http"` assertion below silently untrue. The
+        # in-tree comment notes example.com extracts to 167 clean characters;
+        # this is deliberately in the same range.
+        return web.Response(
+            text=(
+                "<html><body><h1>A fetchable page</h1>"
+                "<p>This page exists so the plain HTTP fetch path has something "
+                "local to read. It carries enough ordinary prose to clear the "
+                "thin-content floor, so extraction succeeds on the first pass "
+                "and no browser render is spent re-reading a page that was "
+                "already read correctly.</p></body></html>"
+            ),
+            content_type="text/html",
+        )
+
+
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 # Long enough that it cannot finish inside one default wait window, short enough
@@ -454,27 +501,52 @@ async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
     fixed_test_org,
     fixed_test_user,
     configure_workspace_api_url,
+    monkeypatch,
 ):
     """`_validate` and `assert_safe_url` run for every URL before either fetch
-    path starts, and a bad URL in the batch must not sink the good ones."""
+    path starts, and a bad URL in the batch must not sink the good ones.
+
+    The good URL is served from this process. It used to be
+    `https://example.com/`, which put a live internet fetch inside a *required*
+    check — `@pytest.mark.fast_workspace` suppresses the `workspace` marker, so
+    this runs in the merge-gating `agent` shard, and `timeout(300)` meant a
+    slow DNS answer burned five minutes of it.
+
+    Reaching a loopback address needs the self-hosting hatch, and turning it on
+    makes the test say more rather than less: `_is_disallowed_address` keeps
+    link-local denied even with `allow_private` set, precisely because
+    169.254.169.254 is the cloud metadata service and never a fetch target. So
+    the metadata assertion below is now also a statement that opening the hatch
+    for your own subnet does not open it for your instance credentials.
+    """
     del configure_workspace_api_url
+    from app.core.config import settings
     from app.modules.agent.tools.web.models import WebFetchRequest
     from app.modules.agent.tools.web.web_fetch import web_fetch_internal
 
-    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
 
-    result = await web_fetch_internal(
-        ctx,
-        WebFetchRequest(
-            urls=[
-                "ftp://example.com/file",
-                "https://",
-                "http://169.254.169.254/latest/meta-data",
-                "https://example.com/",
-            ],
-            comment="mixed malformed, unsafe, and valid URLs",
-        ),
-    )
+    served = _FetchablePage()
+    await served.start()
+    try:
+        ctx = await _agent_context(
+            authenticated_client, fixed_test_org, fixed_test_user
+        )
+
+        result = await web_fetch_internal(
+            ctx,
+            WebFetchRequest(
+                urls=[
+                    "ftp://example.com/file",
+                    "https://",
+                    "http://169.254.169.254/latest/meta-data",
+                    served.url,
+                ],
+                comment="mixed malformed, unsafe, and valid URLs",
+            ),
+        )
+    finally:
+        await served.stop()
 
     assert result.success, "one good URL among the bad ones must still succeed"
     by_url = {page.url: page for page in result.pages}
@@ -482,9 +554,9 @@ async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
     assert "no host" in (by_url["https://"].error or "")
     assert "not a permitted fetch target" in (
         by_url["http://169.254.169.254/latest/meta-data"].error or ""
-    )
-    assert by_url["https://example.com/"].success
-    assert by_url["https://example.com/"].fetched_with == "http"
+    ), "the metadata service must stay refused even with private targets allowed"
+    assert by_url[served.url].success
+    assert by_url[served.url].fetched_with == "http"
 
 
 @pytest.mark.fast_workspace

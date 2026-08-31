@@ -29,6 +29,34 @@ logger = get_logger(__name__)
 
 _TOKEN_KINDS = ("text", "thinking", "tool")
 
+#: What a `ThinkingPart` carries besides its text, and the metadata key each is
+#: stored under. Without these a thought cannot be replayed: pydantic-ai reads
+#: `id` and `provider_name` to decide whether a stored thought goes back to the
+#: provider in its own reasoning field, and falls back to writing it into the
+#: assistant's *content* as `<think>` tags when it cannot tell. That fallback is
+#: what taught the model to answer in `<think>` tags from turn three onward.
+#: `signature` is the Anthropic half of the same question.
+_THINKING_IDENTITY_FIELDS = (
+    ("id", "thinking_part_id"),
+    ("provider_name", "thinking_provider_name"),
+    ("signature", "thinking_signature"),
+)
+
+
+def _thinking_identity(part: Any) -> dict[str, str]:
+    """Where a thought came from, so `pydantic_ai_history` can put it back.
+
+    Absent fields are omitted rather than stored as null: a row either says
+    where the thought came from or says nothing, and the rebuild treats "says
+    nothing" as "cannot be replayed faithfully".
+    """
+    identity: dict[str, str] = {}
+    for attribute, key in _THINKING_IDENTITY_FIELDS:
+        value = getattr(part, attribute, None)
+        if isinstance(value, str) and value:
+            identity[key] = value
+    return identity
+
 
 class StreamingParts:
     """The parts of one model request, as they arrive.
@@ -100,15 +128,31 @@ class StreamingParts:
 
         A part that streamed has its text in ``part_content``; one that did not
         carries it on the part itself. Empty either way means there is nothing
-        to persist.
+        to persist -- and "empty" has to mean whitespace too. A model that goes
+        straight from a response into a tool call emits its text part as a bare
+        ``"\n\n"``, which is truthy, so each one was stored as a message and
+        rendered as its own chat bubble: one run produced twelve.
+
+        What is *not* decided here is whether text is the final answer. This
+        runs per part, at the moment the part ends, and a text part ends before
+        the tool call beside it has arrived -- so the one fact that would settle
+        it, whether the response went on to call a tool, is not known yet. Text
+        is therefore left unmarked and ``RunMessageWriter`` defaults it to
+        ``is_final_answer``, which is right for the last part of a run and wrong
+        for every preamble before a tool call. Deciding it needs the whole
+        response, the way the agent-host harness's ``_flush_messages`` does.
         """
         if isinstance(part, TextPart) or part_kind == "text":
             text = part_content if part_content is not None else part.content
-            return MessageDraft.of_text(text) if text else None
+            return MessageDraft.of_text(text) if (text or "").strip() else None
 
         if isinstance(part, ThinkingPart) or part_kind == "thinking":
             thinking = part_content if part_content is not None else part.content
-            return MessageDraft.of_thinking(thinking) if thinking else None
+            if not (thinking or "").strip():
+                return None
+            return MessageDraft.of_thinking(
+                thinking, metadata=_thinking_identity(part) or None
+            )
 
         if isinstance(part, ToolCallPart) or part_kind == "tool_call":
             return self._tool_call_message(part)

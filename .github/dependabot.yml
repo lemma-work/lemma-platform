@@ -62,6 +62,17 @@ updates:
       github-actions-security-updates:
         applies-to: security-updates
         patterns: ["*"]
+    # `dtolnay/rust-toolchain`'s tag is not the action's version, it is the Rust
+    # version the action installs -- so Dependabot reads the newest Rust release
+    # tag on the action repository and proposes it as an upgrade. It proposed
+    # 1.100.0, which is not a Rust release at all, and every desktop job in the
+    # group PR died with "could not download nonexistent rust version". Worse,
+    # a tag that *does* exist would be just as wrong: rust-toolchain.toml pins
+    # the channel, the two must agree, and Dependabot only ever moves one of
+    # them. Bumping Rust here is the deliberate two-file change CONTRIBUTING
+    # describes, not something to receive monthly.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
 
   - package-ecosystem: docker
     directories:

@@ -21,9 +21,9 @@ from uuid import UUID
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.runtime_config import inject_runtime_config
+from app.core.runtime_config import app_api_url, inject_runtime_config
 from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
-from app.modules.apps.domain.errors import AppNotFoundError
+from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
 from app.core.concurrency.offload import run_blocking
@@ -114,7 +114,15 @@ class AppStoragePhase:
                 else False
             )
             if has_extension:
-                raise AppNotFoundError(f"App asset '{normalized_asset_path}' not found")
+                # Not just a 404. An app whose markdown links to a pod file --
+                # `library/rust/ownership.md` -- resolves that link against its
+                # own origin and arrives here, and the person who clicked it is
+                # owed somewhere to go rather than a JSON body in a window.
+                raise AppAssetNotFoundError(
+                    f"App asset '{normalized_asset_path}' not found",
+                    pod_id=inputs.pod_id,
+                    asset_path=normalized_asset_path,
+                )
             index_path = f"{inputs.dist_root_path}index.html"
             try:
                 content = await storage.read_file(index_path)
@@ -128,6 +136,9 @@ class AppStoragePhase:
                 app=inputs.app,
                 app_id=getattr(inputs, "app_id", None),
                 branding=inputs.branding,
+                # An app talks to the API through its own origin, so the
+                # session cookie is first-party. See APP_ORIGIN_API_URL.
+                api_url=app_api_url(),
             )
         return AppAssetDocument(
             content=content,

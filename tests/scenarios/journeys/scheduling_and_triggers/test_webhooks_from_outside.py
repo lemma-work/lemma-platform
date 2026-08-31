@@ -75,9 +75,6 @@ async def test_a_bad_verification_token_is_refused(unauthenticated):
     )
 
 
-
-
-
 @scenario("A delivery for an unknown surface is refused rather than guessed at")
 @proves("PS-SCHED-010")
 @covers("surface.webhook.handle_surface", "surface.webhook.verify_surface")

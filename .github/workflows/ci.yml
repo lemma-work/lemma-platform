@@ -27,6 +27,7 @@ jobs:
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
+      desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -68,6 +69,12 @@ jobs:
               - 'lemma-typescript/scripts/generate_openapi_client.sh'
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              # The published copy of the spec is generated from it too. It
+              # belongs to this filter and not `frontend`, because the change
+              # that staled it is a spec regeneration -- a lemma-python edit,
+              # which never starts the frontend job.
+              - 'lemma-frontend/public/openapi.json'
+              - 'lemma-frontend/scripts/sync-openapi-spec.mjs'
               - '.github/workflows/ci.yml'
             desktop:
               # desktop/** is now every Rust crate the app ships: the shell,
@@ -109,6 +116,25 @@ jobs:
               - 'desktop/runtime/lemma-local.json'
               # See the note in the `desktop` filter above: ci.yml is left out
               # on purpose.
+            # What can change the *desktop* meaning of a backend or frontend
+            # edit. `desktop` deliberately does not list these -- it starts two
+            # 90-minute jobs -- but `build_local_host_pack.py` packs the backend
+            # and the frontend into the host pack the app ships and supervises,
+            # and no CI job ran that script at all. A backend dependency without
+            # an arm64 wheel, or a Next config change that breaks the standalone
+            # output, merged green and was discovered in a release run.
+            #
+            # This one is cheap enough to list ci.yml, so a change to the
+            # desktop CI steps finally runs something desktop-shaped.
+            desktop_contract:
+              - 'lemma-backend/**'
+              - 'lemma-frontend/**'
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/build_local_guest_runtime.sh'
+              - 'desktop/locald/src/native_host_pack.rs'
+              - 'desktop/contracts/**'
+              - 'desktop/local-runtime/guest-image/**'
+              - '.github/workflows/ci.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -119,6 +145,9 @@ jobs:
               # desktop job and skipped the test that reads it.
               - 'scripts/build_local_host_pack.py'
               - 'scripts/prepare_desktop_test_runtime.py'
+              # The host-pack layout contract. Both halves of it have to run
+              # when it changes, and this is the half that lives in tests/.
+              - 'desktop/contracts/**'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
@@ -131,6 +160,15 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_ci_job_results.py'
+              - 'scripts/check_pytest_census.py'
+              - 'scripts/check_test_run.py'
+              # The recorded floors and ceilings themselves. Without these a PR
+              # that edits only a baseline runs nothing at all.
+              - '.github/pytest-census.json'
+              - '.github/test-run-baseline.json'
+              - 'scripts/_pytest_census_plugin.py'
+              - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
@@ -138,16 +176,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
+    # Inherits the workflow's `contents: read` / `pull-requests: read`. This
+    # job asked for `pull-requests: write` and `issues: write` back when it
+    # posted the coverage table as a PR comment; that moved to the job summary
+    # and then to backend-coverage.yml, and the grant stayed behind. Nothing
+    # here writes anything to GitHub but an artifact.
     defaults:
       run:
         working-directory: lemma-backend
     services:
       redis:
-        image: redis:7
+        # The same tag `test_utils.py` pins and the e2e workflow caches.
+        # This said `redis:7`, a second, different image (192MB against
+        # 42MB) pulled fresh for this job alone.
+        image: redis:7.4-alpine
         ports:
           - 6379:6379
         options: >-
@@ -155,8 +197,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # This lane runs `-m "not e2e"`, which includes the integration tests, and
-      # those skip themselves when no database answers. Without this service 57
+      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
+      # and those skip themselves when no database answers. Without this service 57
       # of them did -- the whole workspace integration suite: the sandbox state
       # machine, the repository, and every one of the sweeper's decisions about
       # what it may destroy. They passed locally and were absent here, which is
@@ -177,7 +219,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -187,25 +229,48 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
+      # Collection-time checks cannot see a test that starts and then skips
+      # itself from a fixture. 72 of this lane's tests do exactly that when
+      # Postgres is unreachable, and this job's own comment records what the
+      # same suite silently skipping 57 tests once cost.
+      - name: No suite skipped itself at runtime
+        if: always()
+        run: >-
+          python3 ../scripts/check_test_run.py --lane unit
+          coverage-backend/junit-unit.xml
+
       - name: Add backend coverage to job summary
         if: always()
         run: |
           if [ -f coverage-backend/comment.md ]; then
             cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-unit-coverage
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
-            lemma-backend/coverage-backend/html
+            # `make coverage-backend-unit` has always written this and nothing
+            # has ever collected it, so the unit lane's slow tail is invisible
+            # -- 195 seconds with no way to see whether that is a broad spread
+            # or three slow tests, which is the difference between needing
+            # per-worker database isolation for xdist and needing to split
+            # three tests. The e2e shards upload theirs and get a slowest-tests
+            # summary out of it; this is the same line.
+            lemma-backend/coverage-backend/junit-*.xml
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates
@@ -218,7 +283,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -252,11 +317,23 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # Production runs at INFO, so a broad `except` that logs at debug without
+      # exc_info reports nothing anywhere — and if it also stops the exception
+      # propagating, the job reports success. That pair is why 2,146 title jobs
+      # all said `succeeded` while the LLM path was failing.
+      - name: Swallowed errors (broad catches that leave no trace)
+        run: make lint-swallowed-errors
       # Also only ever ran in `make quality`. Main had drifted 35 modules above
       # its baseline before anybody looked, which is precisely what this gate
       # exists to prevent -- growth nobody decided on.
       - name: Import budget
         run: make lint-import-budget
+      # Counts what collection actually found, against a committed floor. Two
+      # suites had already gone quiet without anything saying so: a directory
+      # missing from `testpaths`, and twenty environment-gated tests collected
+      # into a lane that reports "passed" and skipping every one of them.
+      - name: Test census (no suite has quietly stopped running)
+        run: python3 ../scripts/check_pytest_census.py
       # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
       # from eroding back into ~50 duplicated hand-rolled poll loops.
       - name: e2e wait patterns (no new hand-rolled poll loops)
@@ -305,7 +382,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync
@@ -327,13 +404,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
       # what a release verifies cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-python-sdk
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-stack/uv.lock
@@ -374,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Build sdist + wheel the way the release does
@@ -396,7 +473,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -413,15 +490,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: lemma-typescript/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Regenerate Python client from committed spec
@@ -436,7 +513,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
@@ -445,6 +522,13 @@ jobs:
         run: |
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
+      # lemma-frontend/public/openapi.json is what lemma.work/openapi.json
+      # serves, generated from the same committed spec. `npm run check` in the
+      # frontend job verifies it too, but that job does not run on a
+      # lemma-python-only change -- so this is the gate that sees a spec
+      # regeneration. No `npm ci`: the script is dependency-free Node.
+      - name: Fail on published OpenAPI spec drift
+        run: node lemma-frontend/scripts/sync-openapi-spec.mjs --check
 
   # Was two jobs. They were byte-identical for their first four steps -- two
   # checkouts, two `npm ci` pairs, and the lemma-typescript build that every
@@ -462,7 +546,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -473,7 +557,7 @@ jobs:
       # is cold. Keyed on the lockfile plus the source, restoring from any
       # earlier build of the same dependency set.
       - name: Cache the Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: lemma-frontend/.next/cache
           key: >-
@@ -516,7 +600,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Run dev workflow tests
@@ -525,8 +609,12 @@ jobs:
       # workflow file was ever run. The other two cover the scripts that build
       # the host pack and stage a bundled runtime -- both of which the desktop
       # installers now depend on.
+      # pyyaml because two of these gates read the workflow files themselves --
+      # the aggregator check and the skipped-job check. Without it their tests
+      # fail to *import*, which pytest reports as a collection error rather
+      # than a failure, and which is easy to skim past.
       - name: Run repo tooling tests
-        run: uv run --with pytest python -m pytest tests/ -q
+        run: uv run --with pytest --with pyyaml python -m pytest tests/ -q
       # The two required checks are aggregator jobs, so their `needs:` lists
       # are the merge gate. This asserts nothing has fallen out of one -- the
       # failure ci.yml's own comment records -- and that every job still
@@ -547,10 +635,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install lemma-cli from local checkout
@@ -608,6 +696,46 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  # The cheap desktop lane: contract checks only, no app compiler and no VM.
+  #
+  # This exists because the expensive `desktop` job is deliberately not
+  # triggered by backend or frontend changes -- it costs 476s on macOS and 940s
+  # on Windows -- while `build_local_host_pack.py` packs both of them into the
+  # host pack the app ships. Nothing connected the two, so a backend change
+  # that broke the desktop stack merged with CI fully green.
+  #
+  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  desktop-contract:
+    timeout-minutes: 20
+    name: Desktop contracts
+    needs: changes
+    if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-contract
+
+      # The host-pack layout locald hard-codes, and the guest protocol the
+      # backend's stub stands in for. Both are pure assertions over committed
+      # files, so they need neither the app crate nor a runtime.
+      - name: Host pack and guest contracts
+        working-directory: desktop
+        run: cargo test -p lemma-locald -p lemma-guestd --locked
+
+      # `make desktop-lint` has always run this; CI never did, and it guards a
+      # guest-kernel Oops during first setup.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
   # most of managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build
@@ -624,7 +752,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -632,13 +760,13 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       # The Agent Host's ACP integration tests spawn a scripted Python agent
       # over stdio, and panic outright when there is no interpreter to spawn.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -714,6 +842,11 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
+      # One second, and it guards a guest-kernel Oops during first setup.
+      # `make desktop-lint` has always run it; CI never did.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -753,9 +886,25 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build and codesign online DMG
+      # The .app always; the .dmg only where a broken one would be caught.
+      #
+      # The same trade the Windows job already makes for NSIS, for the same
+      # reason: wrapping the .app in a disk image is the one step here whose
+      # output is discarded, and nothing outside `desktop_packaging` can change
+      # its result. It is also the flakiest thing in this job -- `bundle_dmg.sh`
+      # fails on a busy `hdiutil` often enough to have shown up twice in the
+      # last twenty runs -- so on an ordinary Rust pull request it is pure
+      # noise. Everything this job actually asserts (it compiles, it codesigns,
+      # the sidecars are embedded, the refusal marker survives) is asserted on
+      # the .app, which is built either way.
+      - name: Build and codesign the online app
         working-directory: desktop
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+        env:
+          BUNDLES: >-
+            ${{ (github.event_name == 'push'
+            || needs.changes.outputs.desktop_packaging == 'true')
+            && 'app,dmg' || 'app' }}
+        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
 
       - name: Verify application signature
         shell: bash
@@ -793,8 +942,34 @@ jobs:
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
 
+      # The build-check DMG is meant to refuse to install, by name rather than
+      # by failing a DNS lookup -- `artifact_install.rs` recognises
+      # `artifact_source: ci-build-check` and says so specifically. There is a
+      # unit test for the recognition; nothing checked that the *shipped
+      # artifact* still carries the marker. A packaging change that dropped it
+      # would leave whoever tried it debugging a network error for an hour.
+      - name: The build-check app refuses to install, and says why
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="desktop/target/release/bundle/macos/Lemma.app/Contents/Resources/lemma-local.json"
+          test -f "${manifest}"
+          python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          if data.get("artifact_source") != "ci-build-check":
+              raise SystemExit(
+                  "the build-check app lost its refusal marker, so it now fails "
+                  "with a generic network error instead of naming itself"
+              )
+          ' "${manifest}"
+
+      # Only exists when the step above was asked for it.
       - name: Upload macOS build-check DMG
-        uses: actions/upload-artifact@v4
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
@@ -804,6 +979,103 @@ jobs:
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  # Build the artifact the app actually ships, and prove its interpreters run.
+  #
+  # `desktop-contract` proves the *layout* both sides agree on; nothing proved
+  # the pack can be produced at all. It is built by a release job, from the
+  # backend and the frontend, using a relocatable CPython and a copied Node --
+  # and the ways that breaks are all invisible to every other job here: a
+  # backend dependency with no arm64 wheel, a Next config change that stops
+  # emitting standalone output, an interpreter whose baked prefix points at the
+  # build machine.
+  #
+  # That last one is the reason this cannot just be a build. A relocatable
+  # CPython with a wrong `sys.prefix` unpacks, passes every file-existence
+  # check, has the right version, and fails the moment it is asked to import
+  # anything -- on a user's machine, four minutes into a first run. So the
+  # packed interpreters are executed here, not merely produced.
+  #
+  # Merge-to-main only. It is ~25 minutes on a macOS runner and it guards
+  # release-time breakage rather than review-time correctness, so a red one is
+  # "look in the morning", not a blocked PR. It is deliberately absent from the
+  # `ci` aggregator for the same reason, and exempted in
+  # scripts/check_ci_aggregators.py where that decision is written down.
+  host-pack-macos:
+    name: Host pack builds and runs (macOS)
+    timeout-minutes: 60
+    needs: changes
+    if: >-
+      github.event_name == 'push' &&
+      (needs.changes.outputs.desktop_contract == 'true' ||
+       needs.changes.outputs.desktop == 'true')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # `.nvmrc`, like every other Node job here and — the reason this matters
+      # — like release-local-images.yml, which builds the pack that actually
+      # ships. This said `node-version: 22`, the one literal pin left in the
+      # repository, and the two facts it hid took three days of red main to
+      # surface: both package.json files declare `engines: node >=24 <25`, so
+      # the frontend was built by an interpreter it does not support, and the
+      # runner's tool-cache build of 22.23.1 links `@rpath/libnode.127.dylib`
+      # while 24.x is a single static executable. `copy_node_runtime` copies
+      # the executable alone, so the packed Node could not start at all.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # Digests nobody resolves. The pack embeds a release manifest, and this
+      # job is about the pack's own layout and interpreters -- not about which
+      # images a release points at. Placeholders keep it off the network and
+      # out of the release workflow's way.
+      - name: Stage a release manifest
+        run: |
+          mkdir -p host-pack-out
+          python3 - <<'PY'
+          import json, pathlib
+          image = lambda name: {
+              "ref": f"ghcr.io/lemma-work/{name}:0.0.0-ci",
+              "digest": "sha256:" + "0" * 64,
+          }
+          pathlib.Path("host-pack-out/host-release.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "version": "0.0.0-ci",
+                      "min_admin_version": "0.1.0",
+                      "images": {
+                          name: image(f"lemma-{name}")
+                          for name in ("backend", "frontend", "workspace", "function")
+                      },
+                      "infra": {
+                          "postgres": image("postgres"),
+                          "redis": image("redis"),
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n"
+          )
+          PY
+
+      # The build smoke-executes the packed Python itself, importing FastMCP,
+      # uvicorn, keyring and the local sandbox provider. That is the check a
+      # wrong `sys.prefix` fails.
+      - name: Build the host pack
+        run: |
+          uv run --no-project python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-pack-out/host-release.json
+
+      # And the same question asked of the frontend half, which the build does
+      # not ask: a copied Node that cannot resolve its own standalone server is
+      # a frontend that never serves.
+      - name: The packed runtimes execute
+        run: uv run --no-project python scripts/check_host_pack.py host-pack-out/local-runtime
 
   # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
   # compiles, so the macOS workspace run says nothing about the code that
@@ -862,7 +1134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -981,6 +1253,7 @@ jobs:
       - dev-workflow
       - windows-cli
       - desktop
+      - desktop-contract
       - desktop-guestd
       - desktop-windows
     runs-on: ubuntu-latest
@@ -990,4 +1263,20 @@ jobs:
         run: |
           echo "::error::One or more required CI suites failed or were cancelled."
           exit 1
+      # The step above cannot see the third way this check goes green: a job
+      # that skipped although its filter said to run it. `skipped` is not
+      # `failure`, so a suite that stopped running reads exactly like a suite
+      # that was correctly unaffected. This compares each job's result against
+      # the filter it actually gates on, read back out of this file.
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: No gated job skipped while its filter was live
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          # So a merge-to-main-only job's skip on a PR reads as correct rather
+          # than as one more job this gate stopped covering.
+          CI_EVENT_NAME: ${{ github.event_name }}
+        run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."

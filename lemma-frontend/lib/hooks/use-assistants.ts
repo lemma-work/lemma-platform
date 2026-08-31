@@ -152,7 +152,10 @@ export function useConversations(podId: string, assistantName: string, params?: 
     });
 }
 
-export function useScopedConversations(scope: ConversationScope, params?: { limit?: number; cursor?: string; enabled?: boolean }) {
+export function useScopedConversations(
+    scope: ConversationScope,
+    params?: { limit?: number; cursor?: string; enabled?: boolean; archived?: boolean },
+) {
     return useQuery({
         queryKey: ['conversations', scope, params],
         queryFn: async () => {
@@ -160,12 +163,43 @@ export function useScopedConversations(scope: ConversationScope, params?: { limi
             const response = await getLemmaClient(scope.podId || undefined).conversations.list({
                 pod_id: scope.podId ?? undefined,
                 agent_name: agentName,
+                archived: params?.archived,
                 limit: params?.limit,
                 page_token: params?.cursor,
             });
             return asPaginatedArray<Conversation>(response);
         },
         enabled: params?.enabled !== false,
+    });
+}
+
+/**
+ * Rename a conversation, or put it away.
+ *
+ * One mutation for both because the server has one endpoint for both, and
+ * because they invalidate the same thing: every conversation list in the app
+ * hangs off the `['conversations']` prefix, and a renamed or archived
+ * conversation changes what belongs in all of them.
+ *
+ * A blank title is sent as null rather than as "": null is what makes the
+ * conversation eligible for auto-titling again, which is the only way back to
+ * a generated name once someone has typed over it.
+ */
+export function useUpdateConversation() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({ podId, conversationId, data }: {
+            podId: string;
+            conversationId: string;
+            data: { title?: string | null; is_archived?: boolean };
+        }) =>
+            getLemmaClient(podId).conversations.update(conversationId, data, {
+                pod_id: podId,
+            }) as Promise<Conversation>,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        },
     });
 }
 

@@ -155,7 +155,7 @@ class SlackChannelReadsMixin:
         request with ``missing_scope``, so the first failure retries with public
         channels only rather than leaving the picker empty.
         """
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         channels: list[SurfaceChannelInfo] = []
         cursor: str | None = None
         channel_types = "public_channel,private_channel"
@@ -197,7 +197,7 @@ class SlackChannelReadsMixin:
             )
 
         try:
-            client = build_slack_client(self.credentials)
+            client = await build_slack_client(self.credentials)
             response = await client.conversations_history(
                 **_build_channel_history_kwargs(
                     channel=str(channel),
@@ -258,7 +258,7 @@ class SlackChannelReadsMixin:
         self, *, channel: str, thread_ts: Any, limit: int
     ) -> list[Any]:
         """The thread's replies when we are inside one, else channel history."""
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         if thread_ts and str(thread_ts) != str(channel):
             response = await client.conversations_replies(
                 channel=channel, ts=str(thread_ts), limit=limit
@@ -294,7 +294,7 @@ class SlackChannelReadsMixin:
             )
 
         try:
-            client = build_slack_client(self.credentials)
+            client = await build_slack_client(self.credentials)
             matches: list[SlackChannelMessageSnapshot] = []
             cursor: str | None = None
             remaining = request.scan_limit

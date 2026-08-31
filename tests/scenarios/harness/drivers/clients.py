@@ -87,9 +87,15 @@ class CliDriver:
         # which is the entrypoint a user actually has on their PATH. `python -m
         # lemma_cli` is not it — the package has no `__main__`.
         command = [
-            "uv", "run", "--project", str(CLI_PROJECT), "lemma",
-            "--base-url", self.base_url,
-            "--token", self.token,
+            "uv",
+            "run",
+            "--project",
+            str(CLI_PROJECT),
+            "lemma",
+            "--base-url",
+            self.base_url,
+            "--token",
+            self.token,
         ]
         if org:
             command += ["--org", org]
@@ -162,9 +168,20 @@ class TypescriptSdkDriver:
 
     def evaluate(self, body: str) -> Any:
         script = (
-            "const { Lemma } = require('./dist/index.js');\n"
-            f"const lemma = new Lemma({{ baseUrl: {self.base_url!r}, "
-            f"token: {self.token!r} }});\n"
+            # `LemmaClient`, not `Lemma`: that is the name `src/index.ts`
+            # exports and the one the package README tells people to import.
+            # The old spelling exists nowhere in the SDK, so this script failed
+            # on `new Lemma(...)` being undefined long before it reached the
+            # API -- which read as the SDK being unloadable and was filed as
+            # half of `DEV-SDK-001`.
+            "const { LemmaClient } = require('./dist/index.js');\n"
+            # `apiUrl` and `token`, which is what `LemmaConfig` actually names.
+            # This used to say `new Lemma({baseUrl, token})` — a class the SDK
+            # does not export and two fields the config does not have — so the
+            # script failed before it reached the API and read as the package
+            # being unloadable.
+            f"const lemma = new LemmaClient({{ apiUrl: {self.base_url!r}, "
+            f"authUrl: {self.base_url!r}, token: {self.token!r} }});\n"
             "(async () => {\n"
             f"{body}\n"
             "})().catch((e) => { console.error(e); process.exit(1); });\n"

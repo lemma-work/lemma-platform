@@ -28,9 +28,7 @@ from app.modules.agent_surfaces.services.telegram_mini_app_service import (
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
-    SurfaceAuthConfigInfo,
 )
-from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 
 pytestmark = pytest.mark.asyncio
 
@@ -501,302 +499,6 @@ async def test_create_telegram_surface():
     assert entity.surface_type == SurfacePlatform.TELEGRAM
 
 
-async def test_create_gmail_surface_builds_inbox_filtered_trigger():
-    from app.modules.agent_surfaces.domain.ports import SurfaceAccountInfo
-
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    agent_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email="assistant@gmail.test",
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="gmail",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    config = SurfaceConfig()
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="gmail:gmail_new_gmail_message")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="gmail:gmail_new_gmail_message",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.GMAIL,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        config=config,
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email == "assistant@gmail.test"
-    schedule_payload = schedule_service.create_schedule.await_args.args[0]
-    assert schedule_payload.connector_trigger_id == "gmail:gmail_new_gmail_message"
-    assert schedule_payload.config["labelIds"] == "INBOX"
-    assert schedule_payload.config["query"] == "label:inbox -from:assistant@gmail.test"
-    assert schedule_payload.config["userId"] == "me"
-
-
-async def test_create_outlook_surface_keeps_trigger_config_minimal():
-    from app.modules.agent_surfaces.domain.ports import SurfaceAccountInfo
-
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    agent_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email="assistant@outlook.test",
-        connector_id="outlook",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="outlook",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    config = SurfaceConfig()
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="outlook:outlook_message_trigger")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="outlook:outlook_message_trigger",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.OUTLOOK,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        config=config,
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email == "assistant@outlook.test"
-    schedule_payload = schedule_service.create_schedule.await_args.args[0]
-    assert schedule_payload.connector_trigger_id == "outlook:outlook_message_trigger"
-    assert "query" not in schedule_payload.config
-    assert "labelIds" not in schedule_payload.config
-
-
-async def test_create_outlook_surface_allows_account_without_email():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email=None,
-        connector_id="outlook",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="outlook",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="outlook:outlook_message_trigger")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="outlook:outlook_message_trigger",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.OUTLOOK,
-        pod_id=pod_id,
-        agent_id=uuid4(),
-        config=SurfaceConfig(),
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email is None
-    schedule_service.create_schedule.assert_awaited()
-
-
-async def test_create_gmail_surface_requires_account_email():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=uuid4(),
-        auth_config_id=auth_config_id,
-        email=None,
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="gmail",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-
-    with pytest.raises(AgentSurfaceValidationError, match="email address"):
-        await service.create_surface(
-            platform=SurfacePlatform.GMAIL,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            config=SurfaceConfig(),
-            mode=SurfaceMode.EMAIL,
-            account_id=account_id,
-        )
-
-
-async def test_create_gmail_surface_requires_composio_account():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    config = SurfaceConfig()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=uuid4(),
-        auth_config_id=auth_config_id,
-        email="assistant@gmail.test",
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="package",
-        connector_id="gmail",
-    )
-    repo.create.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    with pytest.raises(AgentSurfaceValidationError, match="Composio-backed"):
-        await service.create_surface(
-            platform=SurfacePlatform.GMAIL,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            config=config,
-            mode=SurfaceMode.EMAIL,
-            account_id=account_id,
-        )
-
-    schedule_service.create_schedule.assert_not_awaited()
-
-
 async def test_get_surface_raises_not_found():
     repo = AsyncMock()
     repo.get.return_value = None
@@ -1025,16 +727,17 @@ async def test_slack_surface_matches_workspace_from_connected_account():
 
 
 async def test_surface_event_mode_defaults_and_validation():
-    gmail = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.GMAIL,
+    email = AgentSurfaceEntity.create(
+        surface_type=SurfacePlatform.RESEND,
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
         account_id=uuid4(),
     )
-    # Email platforms default to EMAIL mode + COMPOSIO_TRIGGER without explicit args.
-    assert gmail.mode is SurfaceMode.EMAIL
-    assert gmail.event_mode is SurfaceEventMode.COMPOSIO_TRIGGER
+    # Email still defaults to EMAIL mode, and now receives over a webhook like
+    # everything else -- polling existed only for the Composio mailboxes.
+    assert email.mode is SurfaceMode.EMAIL
+    assert email.event_mode is SurfaceEventMode.WEBHOOK
 
     telegram = AgentSurfaceEntity.create(
         surface_type=SurfacePlatform.TELEGRAM,
@@ -1043,14 +746,6 @@ async def test_surface_event_mode_defaults_and_validation():
     )
     assert telegram.mode is SurfaceMode.DM
     assert telegram.event_mode is SurfaceEventMode.WEBHOOK
-
-    with pytest.raises(AgentSurfaceValidationError, match="COMPOSIO_TRIGGER"):
-        AgentSurfaceEntity.create(
-            surface_type=SurfacePlatform.TELEGRAM,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            event_mode=SurfaceEventMode.COMPOSIO_TRIGGER,
-        )
 
     with pytest.raises(AgentSurfaceValidationError, match="EMAIL mode"):
         AgentSurfaceEntity.create(
@@ -1067,8 +762,10 @@ async def test_surface_platform_from_source():
     assert SurfacePlatform.from_source("teams") == SurfacePlatform.TEAMS
     assert SurfacePlatform.from_source("whatsapp") == SurfacePlatform.WHATSAPP
     assert SurfacePlatform.from_source("telegram") == SurfacePlatform.TELEGRAM
-    assert SurfacePlatform.from_source("gmail") == SurfacePlatform.GMAIL
-    assert SurfacePlatform.from_source("outlook") == SurfacePlatform.OUTLOOK
+    assert SurfacePlatform.from_source("resend") == SurfacePlatform.RESEND
+    # Not surfaces any more. Still connectors an agent can use.
+    assert SurfacePlatform.from_source("gmail") is None
+    assert SurfacePlatform.from_source("outlook") is None
     assert SurfacePlatform.from_source("unknown") is None
 
 

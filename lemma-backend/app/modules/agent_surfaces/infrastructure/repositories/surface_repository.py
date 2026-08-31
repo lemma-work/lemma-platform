@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -24,6 +25,18 @@ from app.modules.agent_surfaces.infrastructure.models import (
 )
 from app.composition.surface_identity import Pod
 from app.composition.surface_agent import ConversationModel
+
+
+#: A surface belongs to a pod, and a deleted pod has no business answering on
+#: it. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
+#: stopped -- and a surface is the one piece of standing work that keeps running
+#: without anybody in Lemma asking it to, because the trigger comes from
+#: outside. The surface row itself stays ACTIVE on purpose: deletion is soft, so
+#: nothing is rewritten and an undelete would restore a working surface. What
+#: changes is that the pod is joined and checked here, once, rather than by each
+#: of the ingress paths remembering to.
+def _in_a_live_pod():
+    return (Pod.id == AgentSurface.pod_id) & (Pod.is_deleted.is_(False))
 
 
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
@@ -54,7 +67,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
 
     async def get(self, id: UUID) -> AgentSurfaceEntity | None:
         model = await self.session.get(AgentSurface, id)
-        return model.to_entity() if model else None
+        return model.to_entity_or_none() if model else None
 
     async def get_by_pod_and_name(
         self,
@@ -69,7 +82,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         )
         result = await self.session.execute(stmt)
         model = result.scalars().first()
-        return model.to_entity() if model else None
+        return model.to_entity_or_none() if model else None
 
     async def list_by_pod(
         self,
@@ -97,7 +110,16 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             next_cursor = models[limit - 1].id
             models = models[:limit]
 
-        return [model.to_entity() for model in models], next_cursor
+        # A row naming a retired platform drops out rather than taking the
+        # whole page with it; see `AgentSurface.to_entity_or_none`.
+        # A row naming a retired platform drops out rather than taking the
+        # whole page with it; see `AgentSurface.to_entity_or_none`.
+        entities = [
+            entity
+            for entity in (model.to_entity_or_none() for model in models)
+            if entity is not None
+        ]
+        return entities, next_cursor
 
     async def get_active_by_address(
         self,
@@ -130,6 +152,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 AgentSurface.surface_type == surface_type,
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
+            .join(Pod, _in_a_live_pod())
             .order_by(AgentSurface.created_at, AgentSurface.id)
         )
         result = await self.session.execute(stmt)
@@ -149,18 +172,11 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 ),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
+            .join(Pod, _in_a_live_pod())
             .order_by(AgentSurface.surface_type, AgentSurface.id)
         )
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
-
-    async def get_by_email_schedule_id(
-        self, schedule_id: UUID
-    ) -> AgentSurfaceEntity | None:
-        stmt = select(AgentSurface).where(AgentSurface.schedule_id == schedule_id)
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
 
     async def get_by_platform_and_account_id(
         self,
@@ -230,7 +246,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             stmt = stmt.where(AgentSurface.id != exclude_surface_id)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
+        # Org-wide and platform-blind, so a retired row sharing this account
+        # would otherwise 500 the creation of an unrelated surface.
+        return model.to_entity_or_none() if model else None
 
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
         model = AgentSurface(
@@ -262,7 +280,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_id=entity.surface_identity_id,
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
-            schedule_id=entity.schedule_id,
             surface_identity_email=entity.surface_identity_email,
             webhook_secret=get_secret_cipher().encrypt_str(entity.webhook_secret),
         )
@@ -299,7 +316,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_id = entity.surface_identity_id
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
-        model.schedule_id = entity.schedule_id
         model.surface_identity_email = entity.surface_identity_email
         model.webhook_secret = get_secret_cipher().encrypt_str(entity.webhook_secret)
         await self.session.flush()
@@ -410,29 +426,59 @@ class SurfaceConversationLinkRepository:
         (and its valid reply target) to reach a member proactively — bots can't
         cold-DM, so a prior interaction is required.
 
+        One member's slice of ``list_latest_by_surface_and_external_users``,
+        which owns the ordering — see there for why it is inbound recency.
+        """
+        links = await self.list_latest_by_surface_and_external_users(
+            surface_id=surface_id, external_user_ids=[external_user_id]
+        )
+        return links.get(external_user_id)
+
+    async def list_latest_by_surface_and_external_users(
+        self,
+        *,
+        surface_id: UUID,
+        external_user_ids: Sequence[str],
+    ) -> dict[str, AgentSurfaceConversationLink]:
+        """``{external_user_id: their most recent thread}`` on one surface.
+
         Ordered by inbound recency, not ``updated_at``: an outbound message also
         bumps ``updated_at``, so ranking by it would mean "the thread we last
         talked *at* them on" rather than "the thread they last talked to us on".
         Only the second is evidence of where they are actually looking. COALESCE
         keeps pre-migration rows, where the two were the same thing, in the sort.
+
+        DISTINCT ON picks per person in the database rather than dragging a busy
+        surface's whole history back to reduce it here. The single-member form
+        delegates to this one so a reachability check and the send that follows
+        it can never disagree about which thread is theirs.
         """
+        if not external_user_ids:
+            return {}
+        recency = func.coalesce(
+            AgentSurfaceConversationLinkModel.last_inbound_at,
+            AgentSurfaceConversationLinkModel.updated_at,
+        )
         stmt = (
             select(AgentSurfaceConversationLinkModel)
             .where(
                 AgentSurfaceConversationLinkModel.surface_id == surface_id,
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
+                AgentSurfaceConversationLinkModel.external_user_id.in_(
+                    external_user_ids
+                ),
             )
+            .distinct(AgentSurfaceConversationLinkModel.external_user_id)
             .order_by(
-                func.coalesce(
-                    AgentSurfaceConversationLinkModel.last_inbound_at,
-                    AgentSurfaceConversationLinkModel.updated_at,
-                ).desc()
+                AgentSurfaceConversationLinkModel.external_user_id,
+                recency.desc(),
             )
-            .limit(1)
         )
         result = await self.session.execute(stmt)
-        model = result.scalars().first()
-        return model.to_entity() if model else None
+        return {
+            link.external_user_id: link
+            for link in (model.to_entity() for model in result.scalars().all())
+            if link.external_user_id
+        }
 
     async def get_by_conversation_id(
         self,

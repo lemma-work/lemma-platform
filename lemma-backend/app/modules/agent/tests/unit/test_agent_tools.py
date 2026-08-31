@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-import inspect
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -483,6 +482,45 @@ def test_display_resource_validates_widget_form_and_table_payloads():
     assert "filters require name" in _payload_error(
         type=DisplayResourceType.TABLE,
         filters=[{"field": "status", "op": "eq", "value": "OPEN"}],
+    )
+
+
+def test_display_resource_rejects_the_agents_own_sandbox_paths():
+    """A workspace path is caught here, where the agent can still fix it.
+
+    `/workspace/...` is the agent's cwd, so it is the path in hand when it
+    decides to show a file it just made. It used to pass validation and fail
+    three layers down, where the only thing left was a card whose "Open file"
+    button pointed into a pod directory that does not exist.
+    """
+    error = _payload_error(
+        type=DisplayResourceType.FILE,
+        path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
+    )
+    assert "sandbox path" in error
+    # The message has to carry the fix, or the model retries the same call.
+    assert "lemma files upload" in error
+
+    for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
+        assert _payload_error(type=DisplayResourceType.FILE, path=private_root)
+
+    # A pod path is still a pod path, including one that merely starts with the
+    # same letters.
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/me/reports/q3.pdf"
+            )
+        )
+        is None
+    )
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/workspaces/notes.md"
+            )
+        )
+        is None
     )
 
 
@@ -1744,7 +1782,14 @@ def test_surface_history_window_trims_by_message_count(monkeypatch):
 
     # Only the most recent run survives the count budget.
     assert set(grouped) == {runs[-1].id}
-    assert len(grouped[runs[-1].id]) == 5
+    # Its own five messages. The sixth is the notice saying the older runs were
+    # dropped -- the cap announces itself rather than trimming in silence.
+    real = [m for m in grouped[runs[-1].id] if m.kind is not MessageKind.NOTIFICATION]
+    assert len(real) == 5
+    assert any(
+        (m.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
+        for m in grouped[runs[-1].id]
+    )
 
 
 def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
@@ -1780,26 +1825,48 @@ def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch
     assert len(grouped) == 4
 
 
-def test_history_processors_summarize_then_enforce_a_hard_ceiling():
+def test_history_processors_compact_then_enforce_a_hard_ceiling():
     """Two processors, in this order, for two different failure modes.
 
-    The summarizer keeps the prompt small on the happy path. The ceiling guard
-    exists because the summarizer swallows its own failures and returns the
-    ORIGINAL history — safe for the data, fatal for the request that follows.
+    The compactor keeps the prompt small on the happy path. The ceiling guard is
+    the backstop for what it cannot cover -- a tail that is over the ceiling on
+    its own.
     """
+    from pydantic_ai._utils import takes_run_context
+
+    from app.modules.agent.domain.value_objects import (
+        DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES,
+        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
+    )
+
     processors = build_history_processors(
         HarnessOptions(model_name="kimi-k2.6"),
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 2
-    assert processors[0].trigger == ("tokens", 70_000)
-    assert processors[0].keep == ("messages", 40)
-    # A real tokenizer, not the library's len(text)/4 estimate — and an async
-    # one, because tokenizing a large history is ~30ms of CPU per model request
-    # and the worker runs many agent runs on a single core.
-    assert processors[0].token_counter.__name__ == "_count_tokens_off_loop"
-    assert inspect.iscoroutinefunction(processors[0].token_counter)
+    # Detach stale images, compact, the ceiling backstop, then the provider
+    # shape guarantee.
+    assert [
+        getattr(processor, "__name__", type(processor).__name__)
+        for processor in processors
+    ] == [
+        "_detach_stale_images",
+        "HistoryCompactor",
+        "_ceiling_guard",
+        "_ensure_leading_user_message",
+    ]
+    compactor = processors[1]
+    # Thresholds come from what the run's model affords
+    # (services/context_budget), so assert against the resolved default rather
+    # than a literal that has to be chased every time a window changes.
+    assert compactor.trigger_tokens == DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
+    assert compactor.keep_messages == DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
+    assert compactor.model == "openai:gpt-4.1"
+    # Load-bearing: pydantic-ai decides whether to hand the processor the run
+    # context by inspecting the first parameter's annotation, and silently calls
+    # it with one argument when that annotation is anything else. Without the
+    # context the summarization call is unbilled -- which is what it was.
+    assert takes_run_context(compactor)
 
 
 def test_disabling_summarization_keeps_the_ceiling_guard():
@@ -1812,11 +1879,18 @@ def test_disabling_summarization_keeps_the_ceiling_guard():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 1
-    assert processors[0].__name__ == "_ceiling_guard"
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ceiling_guard",
+        "_ensure_leading_user_message",
+    ]
 
 
-def test_everything_can_be_disabled_explicitly():
+def test_compaction_can_be_disabled_but_image_detachment_always_runs():
+    """The two compaction stages are policy and can be turned off. Detaching
+    images the model has already read is not: pydantic-ai re-uploads every image
+    on every model request for the life of the run, whatever the thresholds say.
+    """
     processors = build_history_processors(
         HarnessOptions(
             model_name="kimi-k2.6",
@@ -1826,7 +1900,10 @@ def test_everything_can_be_disabled_explicitly():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert processors == []
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ensure_leading_user_message",
+    ]
 
 
 def test_conversation_instructions_are_appended_to_agent_prompt():
@@ -1856,7 +1933,7 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "private to this conversation" in prompt
+    assert "The workspace is the user's, not this conversation's" in prompt
     assert "/me/<topic>/" in prompt
     assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
@@ -1889,7 +1966,12 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     )
 
     assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "Structure for state, prose for knowledge" in prompt
+    assert "## Where the work lands" in prompt
+    # Reply discipline is not keyed to a toolset: every agent replies, and the
+    # reply is the one thing the person always sees. It rode in on the surface
+    # fragment for a long time, which meant a run with no surface platform --
+    # the web UI -- was told nothing about length or narration.
+    assert "## Your reply is a chat message" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that

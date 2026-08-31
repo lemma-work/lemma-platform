@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-from email import message_from_bytes
 
 import pytest
 from pydantic import BaseModel
@@ -23,8 +21,6 @@ from app.modules.agent_surfaces.platforms.common import (
     render_attachment_summary_suffix,
     select_attachment,
 )
-from app.modules.agent_surfaces.platforms.gmail.service import GmailPlatformService
-from app.modules.agent_surfaces.platforms.outlook.service import OutlookPlatformService
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
@@ -116,42 +112,6 @@ def _whatsapp_event() -> ParsedInboundSurfaceEvent:
     )
 
 
-def _gmail_event() -> ParsedInboundSurfaceEvent:
-    return ParsedInboundSurfaceEvent(
-        platform="GMAIL",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_thread_id="gmail-thread-1",
-        external_message_id="gmail-message-1",
-        sender_external_user_id="sender@example.test",
-        sender_email="sender@example.test",
-        sender_display_name="Sender",
-        message_text="hello",
-        should_start_conversation=True,
-        reply_target={
-            "recipient_email": "sender@example.test",
-            "subject": "Contract Subject",
-            "thread_id": "gmail-thread-1",
-            "in_reply_to": "<gmail-message-1@example.test>",
-            "references": ["<gmail-root@example.test>"],
-        },
-    )
-
-
-def _outlook_event() -> ParsedInboundSurfaceEvent:
-    return ParsedInboundSurfaceEvent(
-        platform="OUTLOOK",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        external_thread_id="outlook-thread-1",
-        external_message_id="outlook-message-1",
-        sender_external_user_id="sender@example.test",
-        sender_email="sender@example.test",
-        sender_display_name="Sender",
-        message_text="hello",
-        should_start_conversation=True,
-        reply_target={"message_id": "outlook-message-1"},
-    )
-
-
 def _resend_event() -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="RESEND",
@@ -235,7 +195,12 @@ async def test_telegram_final_answer_contract_and_retry(fake_telegram, message_s
             "api_base_url": f"{fake_telegram.api_base}/bot",
         }
     )
-    fake_telegram.fail_next["sendMessage"] = 1
+    # `sendRichMessage`, not `sendMessage`: that is the method a send is
+    # actually made with. This used to fail — and assert on — `sendMessage`,
+    # which was only ever reached because the mock carried no rich route and
+    # the fallback swallowed the 404. So the retry under test was the
+    # fallback's, and the real path was never exercised at all.
+    fake_telegram.fail_next["sendRichMessage"] = 1
 
     await service.send_message(
         event=_telegram_event(),
@@ -245,12 +210,43 @@ async def test_telegram_final_answer_contract_and_retry(fake_telegram, message_s
     messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
     payload = messages[-1]
     assert payload["_method"] == "POST"
-    assert payload["_path"] == "/bottelegram-contract-token/sendMessage"
+    assert payload["_path"] == "/bottelegram-contract-token/sendRichMessage"
     assert payload["chat_id"] == "424242"
     # A DM quotes nothing: the event an outbound is built from is the link's
     # last inbound, not the message being answered, so a quote here would tag
     # whatever arrived most recently.
     assert "reply_parameters" not in payload
+    # The rich method carries the markdown as written; escaping is the
+    # fallback's job, so there is no parse_mode on this one.
+    assert payload["rich_message"]["markdown"] == "Contract *reply*"
+
+
+async def test_telegram_falls_back_to_send_message_where_rich_is_unavailable(
+    fake_telegram, message_store
+):
+    """The older contract, kept covered now that rich is the path taken.
+
+    A bot API without `sendRichMessage` answers 404 and the reply must still
+    arrive — escaped as MarkdownV2, through `sendMessage`. Until the mock
+    carried a rich route this was the only path any Telegram e2e ever took, so
+    it was covered by accident; now it has to be asked for.
+    """
+    service = TelegramPlatformService(
+        {
+            "bot_token": "telegram-contract-token",
+            "api_base_url": f"{fake_telegram.api_base}/bot",
+        }
+    )
+    fake_telegram.unavailable.add("sendRichMessage")
+
+    await service.send_message(
+        event=_telegram_event(),
+        message="Contract *reply*",
+    )
+
+    messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    payload = messages[-1]
+    assert payload["_path"] == "/bottelegram-contract-token/sendMessage"
     assert payload["parse_mode"] == "MarkdownV2"
     assert "Contract" in payload["text"]
 
@@ -323,66 +319,6 @@ async def test_chat_surfaces_skip_outbound_when_credentials_are_missing(
 
     assert message_store.get_all("SLACK") == []
     assert message_store.get_all("WHATSAPP") == []
-
-
-async def test_gmail_final_answer_contract(fake_gmail, message_store):
-    service = GmailPlatformService(
-        {
-            "access_token": "gmail-contract-token",
-            "api_base_url": fake_gmail.api_base,
-        }
-    )
-
-    await service.send_message(event=_gmail_event(), message="Contract reply")
-
-    messages = await wait_for_messages(message_store, "GMAIL", min_count=1)
-    payload = messages[-1]
-    assert payload["_method"] == "POST"
-    assert payload["_path"] == "/gmail/v1/users/me/messages/send"
-    assert payload["_authorization"] == "Bearer gmail-contract-token"
-    assert payload["threadId"] == "gmail-thread-1"
-
-    raw = payload["raw"]
-    padding = "=" * (-len(raw) % 4)
-    email = message_from_bytes(base64.urlsafe_b64decode(raw + padding))
-    assert email["To"] == "sender@example.test"
-    assert email["Subject"] == "Re: Contract Subject"
-    assert email["In-Reply-To"] == "<gmail-message-1@example.test>"
-    assert email["References"] == "<gmail-root@example.test>"
-    # An agent's reply now goes out as markdown, so the message is
-    # multipart/alternative: the text part carries the source and the HTML part
-    # carries the rendered, styled version. A client shows whichever it can.
-    assert email.is_multipart(), "an HTML alternative should be offered"
-    parts = {part.get_content_type(): part for part in email.get_payload()}
-    assert set(parts) == {"text/plain", "text/html"}
-    assert "Contract reply" in parts["text/plain"].get_payload()
-    html_part = parts["text/html"].get_payload()
-    assert "Contract reply" in html_part
-    assert "font-family:" in html_part, "the HTML part reached the client unstyled"
-
-
-async def test_outlook_final_answer_contract(fake_outlook, message_store):
-    service = OutlookPlatformService(
-        {
-            "access_token": "outlook-contract-token",
-            "api_base_url": fake_outlook.api_base,
-        }
-    )
-
-    await service.send_message(event=_outlook_event(), message="Contract reply")
-
-    messages = await wait_for_messages(message_store, "OUTLOOK_REPLY", min_count=1)
-    payload = messages[-1]
-    assert payload["_method"] == "POST"
-    assert payload["_path"] == "/v1.0/me/messages/outlook-message-1/reply"
-    assert payload["_authorization"] == "Bearer outlook-contract-token"
-    assert payload["message_id"] == "outlook-message-1"
-    # HTML rather than Text: an agent writes markdown, and Graph is told which
-    # it is being given. See email_render / email_styles.
-    body = payload["body"]["message"]["body"]
-    assert body["contentType"] == "HTML"
-    assert "Contract reply" in body["content"]
-    assert "font-family:" in body["content"], "Graph got an unstyled body"
 
 
 async def test_resend_final_answer_contract(fake_resend, message_store):
@@ -502,7 +438,9 @@ def test_attachment_tool_hint_covers_every_platform_and_unknown():
     assert "teams_download_file" in attachment_tool_hint("TEAMS")
     assert "whatsapp_download_file" in attachment_tool_hint("WHATSAPP")
     assert "telegram_download_file" in attachment_tool_hint("TELEGRAM")
-    assert "gmail_download_attachment" in attachment_tool_hint("GMAIL")
+    # Email has no download tool: an inbound attachment is already ingested into
+    # pod files by the time the agent sees the message.
+    assert attachment_tool_hint("RESEND") is None
     assert attachment_tool_hint("SOME_UNKNOWN_PLATFORM") is None
 
 

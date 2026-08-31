@@ -159,8 +159,10 @@ const IMAGE_FILE_EXTENSIONS = new Set([
 export type OfficePreviewKind = 'docx' | 'other';
 
 export interface DocxPreviewData {
+    /** The document body, laid out as the pages Word would have printed. */
     html: string;
-    warnings: string[];
+    /** The document's own stylesheet, as the `<style>` elements it was built from. */
+    styles: string;
 }
 
 export function getDocumentPreviewType(filePath: string): DocumentPreviewType {
@@ -186,6 +188,19 @@ export function getDocumentPreviewType(filePath: string): DocumentPreviewType {
     if (CODE_FILE_EXTENSIONS.has(extension)) return 'code';
 
     return 'unsupported';
+}
+
+/**
+ * Whether this file is read as text rather than as bytes.
+ *
+ * The four types whose stored form *is* the thing a person edits — which is
+ * also, and not coincidentally, the set the viewer can save.
+ */
+export function isTextPreviewType(previewType: DocumentPreviewType): boolean {
+    return previewType === 'markdown'
+        || previewType === 'json'
+        || previewType === 'html'
+        || previewType === 'code';
 }
 
 /**
@@ -226,20 +241,28 @@ export function getOfficePreviewKind(filePath: string): OfficePreviewKind {
     return 'other';
 }
 
+/**
+ * Render a .docx into the markup and stylesheet of the pages it describes.
+ *
+ * `docx-preview` reads the OOXML and reproduces Word's own layout — page
+ * geometry, styles, numbering, tables, headers and footers — rather than
+ * reducing it to semantic HTML, so a document looks here like it looks in Word.
+ * It renders into DOM nodes, so the two halves are collected from detached
+ * containers and handed to `buildDocxPreviewSrcDoc` for the sandboxed frame
+ * that actually displays them.
+ */
 export async function renderDocxPreview(blob: Blob): Promise<DocxPreviewData> {
-    const mammoth = await import('mammoth');
-    const arrayBuffer = await blob.arrayBuffer();
-    const result = await mammoth.convertToHtml({ arrayBuffer });
-    const warnings = Array.isArray(result.messages)
-        ? result.messages
-            .map((message) => (typeof message.message === 'string' ? message.message.trim() : ''))
-            .filter((message) => message.length > 0)
-        : [];
+    const { renderAsync } = await import('docx-preview');
+    const body = document.createElement('div');
+    const styles = document.createElement('div');
 
-    return {
-        html: result.value || '',
-        warnings,
-    };
+    await renderAsync(blob, body, styles, {
+        // The frame these end up in has an opaque origin, and an object URL
+        // minted on this one does not survive the trip. Base64 does.
+        useBase64URL: true,
+    });
+
+    return { html: body.innerHTML, styles: styles.innerHTML };
 }
 
 export function pdfRenderPixelRatio(devicePixelRatio?: number): number {

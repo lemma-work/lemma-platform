@@ -62,7 +62,6 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.types import Attributes
 from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
-from pydantic_ai import Agent, InstrumentationSettings
 
 from app.core.log.log import get_logger
 from app.core.redaction import redact_text
@@ -703,6 +702,16 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     # is exactly what NoOpLoggerProvider + event_mode="attributes" used to force.
     # `version=2` is still honoured and is kept deliberately — the span shape here
     # is what the LLM-review tooling reads.
+    # Imported here rather than at module scope, which is where it was.
+    #
+    # This module is reached from `app.app` line 18, through
+    # `core.api.exception_handlers`, so every backend start paid pydantic_ai's
+    # 0.51s to configure tracing that the early return above usually declines
+    # to set up at all. Deferred, an install with LLM tracing off never imports
+    # it. `openinference.instrumentation.pydantic_ai` at the top of this file
+    # is not the same cost -- it does not pull pydantic_ai (295 modules).
+    from pydantic_ai import Agent, InstrumentationSettings
+
     Agent.instrument_all(
         InstrumentationSettings(
             tracer_provider=provider,

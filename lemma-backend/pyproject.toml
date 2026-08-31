@@ -1,6 +1,6 @@
 [project]
 name = "lemma-backend"
-version = "0.7.0"
+version = "0.7.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -120,6 +120,11 @@ dev = [
     "psycopg[binary,pool]>=3.3.2",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
+    # Redis's own semantics, in-process. The output buffer's cursor arithmetic
+    # depends on exactly what `LTRIM`/`LRANGE`/`LINDEX` do at their boundaries,
+    # and a hand-written stand-in only asserts what its author already believed
+    # those commands do -- which is how the cursor defect it now pins survived.
+    "fakeredis>=2.26.0",
     "kubernetes>=34.1.0",
     "nest-asyncio>=1.6.0",
     "pip-audit>=2.9.0",

@@ -14,6 +14,7 @@ import {
     routeWorkspaceTab,
     serializeWorkspaceTabs,
     syncAppWorkspaceTabs,
+    syncWorkspaceTabMetadata,
     upsertWorkspaceTab,
     type PodWorkspaceTab,
 } from './workspace-tabs';
@@ -248,5 +249,39 @@ describe('pod workspace tabs', () => {
             title: 'Running',
             status: null,
         });
+    });
+
+    /* A sub-agent's conversation is a child, and a pod's conversation list
+       holds roots — so the list alone can never name one, and the tab a reader
+       opens to watch a sub-agent work is the one tab that stays "Untitled
+       conversation" with no activity dot. `usePodWorkspaceTabs` fetches what
+       the list cannot account for and merges it in; these pin what the merge
+       has to be worth. */
+    it('names a conversation tab and shows its activity once the conversation is accounted for', () => {
+        const tabs: PodWorkspaceTab[] = [
+            HOME_WORKSPACE_TAB,
+            conversationWorkspaceTab('child-1'),
+        ];
+
+        expect(tabs[1]).toMatchObject({ title: 'Untitled conversation', status: null });
+
+        const synced = syncWorkspaceTabMetadata(tabs, [
+            { id: 'child-1', title: 'Research the tournament format', status: 'running' },
+        ] as Parameters<typeof syncWorkspaceTabMetadata>[1]);
+
+        expect(synced[1]).toMatchObject({
+            id: 'conversation:child-1',
+            title: 'Research the tournament format',
+            status: 'running',
+        });
+    });
+
+    it('leaves a tab alone when nothing accounts for its conversation', () => {
+        const tabs: PodWorkspaceTab[] = [
+            HOME_WORKSPACE_TAB,
+            conversationWorkspaceTab('child-1', { title: 'Draft the brief', status: 'running' }),
+        ];
+
+        expect(syncWorkspaceTabMetadata(tabs, [])).toBe(tabs);
     });
 });

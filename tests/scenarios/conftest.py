@@ -15,10 +15,11 @@ import pytest
 import pytest_asyncio
 
 from harness import environment, run as run_scope
+from harness.egress import Egress
 from harness.environment import Deployment
+from harness.provider_view import ProviderView
 from harness.provision import provision, sweep
 from harness.run import Run
-from harness.fake_platform import start_fake_provider
 from harness.stack import Stack, start_stack
 from harness.world import Sessions, World
 
@@ -168,16 +169,79 @@ async def a_pod_of_its_own(world: World, run: Run) -> AsyncIterator[tuple]:
         await daniel.deletes_pod(pod)
 
 
+@pytest_asyncio.fixture
+async def egress(stack: Stack) -> AsyncIterator[Egress]:
+    """What Lemma said to the outside world, during this scenario only.
+
+    Forgotten between scenarios, and for the same reason the old per-scenario
+    recorders were: a scenario asserting "the agent replied once" has to be
+    asking about *its* traffic. Shared, it would be asking about whatever ran
+    before it, which is a test that passes for the wrong reason on a good day
+    and flakes on a bad one.
+    """
+    live = stack.egress
+    # `is None` alone is not the question. A run with SCENARIOS_EGRESS=off
+    # against a stack it booted still has an Egress — in mode `off`, serving
+    # nothing — so scenarios needing a stand-in sailed past this skip and
+    # failed later against a proxy that was never going to answer. Asking
+    # whether anything is actually standing in covers both, and makes a local
+    # `off` run a faithful rehearsal of a deployment rather than a worse one.
+    if live is None or getattr(live, "mode", "off") not in {"fake", "replay"}:
+        # A deployment run owns no proxy, so nothing stands in for Telegram or
+        # the connector provider — and a scenario that needs one has nothing to
+        # talk to. A skip, not an error: `LOOPBACK_REACHABLE` used to say this
+        # before the stand-ins were retired, and deleting it took the sentence
+        # with it. Fifty-two scenarios turned from "skipped, and here is why"
+        # into a stack trace on every deployment run.
+        pytest.skip(
+            "no egress proxy: this run targets a deployment the suite does not "
+            "own, so nothing stands in for Telegram or the connector provider. "
+            "Run without --base-url to get these scenarios."
+        )
+    live.forget()
+    yield live
+
+
 @pytest.fixture
-def provider() -> Iterator[object]:
+def provider(egress) -> ProviderView:
     """A third-party HTTP API a connector can be pointed at.
 
-    Per-scenario rather than session-scoped: scenarios assert on exactly which
-    calls arrived, and a shared recorder would make that depend on what ran
-    before it.
+    Served by the proxy, at a reserved hostname the product connects to as it
+    would any other. Nothing is started here — the `egress` fixture has already
+    forgotten the previous scenario's traffic, which is what keeps "exactly
+    which calls arrived" a per-scenario question.
     """
-    fake = start_fake_provider()
-    try:
-        yield fake
-    finally:
-        fake.stop()
+    return ProviderView(egress)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Do not *ask* a deployment a question only a broken one can answer.
+
+    Three scenarios need the target configured to be missing something — no
+    document converter, no search provider, an organization capped at zero
+    spend. Each proves a real promise about how the product behaves when a
+    dependency is absent, and each runs for real in the fast lane, where
+    `harness/stack.py` boots precisely that deployment on purpose. Two of them
+    are the only place their promise is proved anywhere in the repository.
+
+    Against somebody else's Lemma they cannot run, and should not: a healthy
+    deployment is not in the state under test, and nobody is going to break dev
+    so a scenario can watch. They used to report as skips there, which is the
+    wrong word — a skip says "this could have run and did not", and it put three
+    permanent entries on a list whose whole value is that somebody reads it.
+
+    So they are deselected instead. `--base-url` is the question being asked:
+    with one, the lifecycle belongs to somebody else and the suite cannot decide
+    how the target is configured. Without one it booted the target itself and
+    knows exactly how, because it chose.
+    """
+    if not config.getoption("--base-url"):
+        return
+    kept, dropped = [], []
+    for item in items:
+        (dropped if item.get_closest_marker("stack_lane") else kept).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept

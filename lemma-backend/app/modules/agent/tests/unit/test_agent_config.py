@@ -30,6 +30,12 @@ EXPECTED = [
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
     ("history_summarization_model", "HISTORY_SUMMARIZATION_MODEL", None),
+    ("agent_model_context_windows", "AGENT_MODEL_CONTEXT_WINDOWS", ""),
+    (
+        "agent_default_context_window_tokens",
+        "AGENT_DEFAULT_CONTEXT_WINDOW_TOKENS",
+        128_000,
+    ),
     ("agent_model_stream_max_attempts", "AGENT_MODEL_STREAM_MAX_ATTEMPTS", 3),
     (
         "agent_model_http_connect_timeout_seconds",
@@ -45,6 +51,9 @@ EXPECTED = [
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),
     ("speech_provider", "SPEECH_PROVIDER", "auto"),
     ("deepgram_api_key", "DEEPGRAM_API_KEY", None),
+    ("speech_stt_language", "SPEECH_STT_LANGUAGE", "multi"),
+    ("speech_tts_voice", "SPEECH_TTS_VOICE", "aura-2-thalia-en"),
+    ("speech_tts_bitrate", "SPEECH_TTS_BITRATE", 48000),
     ("web_fetch_impersonate_browser", "WEB_FETCH_IMPERSONATE_BROWSER", True),
 ]
 FACTORY_FIELDS = {"local_agent_runtime_config_path"}

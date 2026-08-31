@@ -5,7 +5,8 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli import workspace_cli
+from app.modules.agent.tools.workspace_cli import helper as workspace_helper
+from app.modules.agent.tools.workspace_cli import process_visibility, workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ListProcessesRequest,
@@ -354,7 +355,7 @@ async def test_list_processes_internal_binds_running_processes(
                 {
                     "process_id": "proc-1",
                     "cmd": "npm run dev",
-                    "cwd": "/workspace",
+                    "cwd": "",
                     "tty": True,
                     "started_at": 123.0,
                     "completed": False,
@@ -379,11 +380,14 @@ async def test_list_processes_internal_binds_running_processes(
     assert runtime.bound_processes == [("proc-1", "session-1")]
 
 
-def _process(process_id: str) -> dict:
+def _process(process_id: str, cwd: str = "") -> dict:
     return {
         "process_id": process_id,
         "cmd": "npm run dev",
-        "cwd": "/workspace",
+        # Empty unless a test is about directories: an entry the provider
+        # recorded no directory for stays visible, so these keep testing the
+        # session binding they were written for.
+        "cwd": cwd,
         "tty": True,
         "started_at": 123.0,
         "completed": False,
@@ -421,3 +425,180 @@ async def test_list_processes_internal_hides_another_conversations_processes(
     # The unowned process is claimed; the one another session owns is untouched.
     assert runtime.bound_processes == [("mine", "session-1")]
     assert runtime.process_sessions["theirs"] == "session-other"
+
+
+class TestCommandOutputIsAlwaysBounded:
+    """One `npm ci` must not cost a conversation its context.
+
+    Only the PTY path was capped, and `tty` defaults to False -- so
+    `exec_command`, the tool an agent reaches for most often, was the uncapped
+    one. A large build log landed whole in the tool result, was persisted, and
+    was replayed on every subsequent turn of that conversation.
+    """
+
+    def _rendered(self, *, tty: bool, stdout: str = "", stderr: str = ""):
+        return workspace_helper.render_terminal_result(
+            {"stdout": stdout, "stderr": stderr}, tty=tty
+        )
+
+    def test_the_default_non_tty_path_is_capped(self) -> None:
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        stdout, _ = self._rendered(tty=False, stdout="x" * (CHARACTER_LIMIT_STDOUT * 3))
+
+        assert stdout is not None
+        assert len(stdout) < CHARACTER_LIMIT_STDOUT * 2
+
+    def test_truncation_says_so(self) -> None:
+        """Silently keeping the tail reads as a complete log, so an agent
+        reports 'no errors' for a build whose errors scrolled off."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        stdout, _ = self._rendered(tty=False, stdout="x" * (CHARACTER_LIMIT_STDOUT * 3))
+
+        assert "truncated" in stdout
+
+    def test_the_end_is_what_survives(self) -> None:
+        """A build's errors are at the bottom."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        noise = "warning\n" * CHARACTER_LIMIT_STDOUT
+        stdout, _ = self._rendered(tty=False, stdout=noise + "FATAL: build failed")
+
+        assert "FATAL: build failed" in stdout
+
+    def test_stderr_gets_its_own_smaller_limit(self) -> None:
+        """`CHARACTER_LIMIT_STDERR` existed and this path passed the stdout one."""
+        from app.modules.agent.tools.workspace_cli.helper import (
+            CHARACTER_LIMIT_STDERR,
+            CHARACTER_LIMIT_STDOUT,
+        )
+
+        _, stderr = self._rendered(tty=True, stderr="e" * (CHARACTER_LIMIT_STDOUT * 2))
+
+        assert stderr is not None
+        assert len(stderr) < CHARACTER_LIMIT_STDERR * 2
+
+    def test_output_under_the_cap_is_untouched(self) -> None:
+        stdout, stderr = self._rendered(tty=False, stdout="all good", stderr="")
+
+        assert stdout == "all good"
+        assert stderr == ""
+
+
+@pytest.mark.asyncio
+async def test_list_processes_hides_finished_processes_nobody_owns(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The stale-process complaint, in one case.
+
+    One sandbox serves every conversation a user has. Bindings are cleared when
+    a process completes, and nothing prunes the process index, so every command
+    any of that user's conversations had ever finished arrived here unowned --
+    and unowned was enough to be listed. An agent asking which processes exist
+    got a growing list of other conversations' corpses, carrying no command
+    line to tell them apart, and the tool docstring points it at that list to
+    recover a process id.
+    """
+    finished = _process("proc-old")
+    finished["completed"] = True
+    finished["exit_code"] = 0
+    runtime = _FakeRuntime({"processes": [finished, _process("proc-live")]})
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(
+        _context(),
+        ListProcessesRequest(),
+    )
+
+    assert [process.process_id for process in result.processes] == ["proc-live"]
+    # And it is not adopted on the way past: binding a dead process to this
+    # conversation is how a corpse becomes this agent's problem.
+    assert runtime.bound_processes == [("proc-live", "session-1")]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_process_this_session_owns_is_still_listed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only *unowned* corpses are hidden -- an agent must still be able to read
+    the outcome of the command it started itself."""
+    finished = _process("proc-mine")
+    finished["completed"] = True
+    finished["exit_code"] = 0
+    runtime = _FakeRuntime({"processes": [finished]})
+    runtime.process_sessions = {"proc-mine": "session-1"}
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(
+        _context(),
+        ListProcessesRequest(),
+    )
+
+    assert [process.process_id for process in result.processes] == ["proc-mine"]
+
+
+@pytest.mark.asyncio
+async def test_list_processes_hides_another_directorys_running_process(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A sandbox belongs to the user, not to one conversation.
+
+    Several conversations can be working in it at once, each in its own
+    directory. A running process nobody currently owns used to be shown to
+    whichever of them listed first -- and adopted by it, so a sibling
+    conversation's build became this agent's to poll and kill. The directory is
+    what tells them apart once a session binding is gone.
+    """
+    ctx = _context()
+    own_cwd = ctx.get_workspace_cwd()
+    runtime = _FakeRuntime(
+        {
+            "processes": [
+                _process("proc-theirs", cwd="/workspace/conversations/someone-else"),
+                _process("proc-mine", cwd=own_cwd),
+            ]
+        }
+    )
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(ctx, ListProcessesRequest())
+
+    assert [process.process_id for process in result.processes] == ["proc-mine"]
+    assert runtime.bound_processes == [("proc-mine", "session-1")]
+
+
+@pytest.mark.asyncio
+async def test_a_process_in_a_subdirectory_of_ours_is_ours(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ctx = _context()
+    runtime = _FakeRuntime(
+        {"processes": [_process("proc-sub", cwd=f"{ctx.get_workspace_cwd()}/video")]}
+    )
+    monkeypatch.setattr(workspace_cli, "get_workspace_tool_runtime", lambda: runtime)
+
+    result = await workspace_cli.list_processes_internal(ctx, ListProcessesRequest())
+
+    assert [process.process_id for process in result.processes] == ["proc-sub"]
+
+
+def test_a_process_with_no_recorded_directory_stays_visible() -> None:
+    """Older entries carry no directory, and the in-sandbox runtime reports
+    none. Excluding those would drop a live process out of the only listing
+    that can return its id."""
+    assert process_visibility.within("", "/workspace/conversations/a") is True
+    assert process_visibility.within(None, "/workspace/conversations/a") is True
+    # And a prefix that is not a path boundary is not a match.
+    assert (
+        process_visibility.within(
+            "/workspace/conversations/ab", "/workspace/conversations/a"
+        )
+        is False
+    )

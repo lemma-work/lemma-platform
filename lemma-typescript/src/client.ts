@@ -93,7 +93,9 @@ export class LemmaClient {
     this._currentPodId = this._config.podId;
     this._podId = this._config.podId;
 
-    this.auth = internalOptions.authManager ?? new AuthManager(this._config.apiUrl, this._config.authUrl);
+    this.auth =
+      internalOptions.authManager ??
+      new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
     this._http = new HttpClient(this._config.apiUrl, this.auth, {
       timeoutMs: this._config.timeoutMs,
       maxRetries: this._config.maxRetries,

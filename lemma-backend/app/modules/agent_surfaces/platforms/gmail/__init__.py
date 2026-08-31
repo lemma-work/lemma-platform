@@ -1,1 +1,0 @@
-"""Gmail agent surface adapter."""

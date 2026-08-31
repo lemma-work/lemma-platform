@@ -8,9 +8,8 @@ no memory of their first. And a file sent to the bot has to reach the agent, or
 
 from __future__ import annotations
 
-from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import FILE_CONTENTS
-from harness.waiting import eventually
+from harness import capability, covers, journey, proves, scenario, stack_lane
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -18,51 +17,56 @@ pytestmark = [
 ]
 
 
-async def _threads_in(reachable):
-    return await reachable.alice.conversations_in(reachable.pod)
-
-
 @scenario("Two messages in one chat continue one conversation")
 @proves("PS-SURF-013")
 @covers("agent.conversation.list", "agent.conversation.get")
-async def test_a_chat_is_one_conversation(reachable):
-    await reachable.says("first thing", update_id=101)
-    await reachable.waits_for_a_reply()
+async def test_a_chat_is_one_conversation(reachable, run):
+    # Named through `run` because a person has one chat with a bot and it stands
+    # between runs: last night's "first thing" is still in the conversation, so
+    # literal text would let this pass on messages it never sent. The promise is
+    # about *these two* messages ending up together.
+    first = run.name("first thing")
+    second = run.name("and a second thing")
 
-    await reachable.says("and a second thing", update_id=102)
-    await reachable.waits_for_a_reply(after=1)
+    await reachable.says(first)
+    # Wait for the message to land, not for the agent to answer it. Both are
+    # true things to want and only one of them is this promise: where a message
+    # goes is PS-SURF-013, and whether a model replies inside two minutes is
+    # PS-SURF-010, which has its own scenario. Waiting on the reply here made
+    # this fail in three runs out of five with "the agent never answered on
+    # Telegram" — a sentence about dev's round-trip latency, printed in place of
+    # the question the scenario exists to ask, which was never reached.
+    await reachable.waits_for_a_conversation_holding(first)
 
-    threads = await _threads_in(reachable)
-    assert len(threads) == 1, (
-        "a second message in the same chat started a second conversation, so "
-        f"the agent answers it having forgotten the first: {threads}"
-    )
+    await reachable.says(second)
 
-    # And both messages are in it, which is what "the same conversation" has to
-    # mean — a thread that exists but lost the first message is no better.
-    said = await reachable.alice.messages_in(threads[0], in_pod=reachable.pod)
-    spoken = " ".join(str(message.get("text") or "") for message in said)
-    assert "first thing" in spoken and "and a second thing" in spoken, (
-        f"the conversation does not hold both messages: {spoken[:400]}"
-    )
+    # `waits_for_a_conversation_holding` asserts the "one" itself: more than one
+    # conversation carrying these messages is the failure this scenario is for.
+    await reachable.waits_for_a_conversation_holding(first, second)
 
 
 @scenario("A different chat is a different conversation")
 @proves("PS-SURF-013")
 @covers("agent.conversation.list")
+@stack_lane("two chats at once only a forged delivery can produce")
 async def test_a_separate_chat_is_a_separate_conversation(reachable):
-    other_chat = reachable.chat_id + 1
+    # A person has exactly one chat with a bot: they cannot be in two places to
+    # prove the two are kept apart. Forging the second delivery is the only way
+    # to ask this question at all, so this scenario stays in the lane that can.
+    reachable.only_forged("two chats at once is something only a platform has")
 
-    await reachable.says("over here", update_id=111)
+    elsewhere = reachable.chat.in_another_chat()
+
+    await reachable.says("over here")
     await reachable.waits_for_a_reply()
-    await reachable.says("and over there", update_id=112, chat_id=other_chat)
-    await reachable.waits_for_a_reply(chat_id=other_chat)
+    await elsewhere.says("and over there")
+    await elsewhere.waits_for_a_reply()
 
     threads = await eventually(
-        lambda: _threads_in(reachable),
+        reachable.conversations,
         lambda found: len(found) >= 2,
         describe="a second chat to get its own conversation",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert len(threads) == 2, (
         f"two separate chats share one conversation, so each sees the other's "
@@ -73,11 +77,19 @@ async def test_a_separate_chat_is_a_separate_conversation(reachable):
 @scenario("A conversation from a surface says where it came from")
 @proves("PS-SURF-013")
 @covers("agent.conversation.get")
-async def test_a_surface_conversation_records_its_origin(reachable):
-    await reachable.says("hello from outside", update_id=121)
-    await reachable.waits_for_a_reply()
+async def test_a_surface_conversation_records_its_origin(reachable, run):
+    greeting = run.name("hello from outside")
 
-    [thread] = await _threads_in(reachable)
+    await reachable.says(greeting)
+
+    # By content rather than by novelty. A person has one chat with a bot and it
+    # stands between runs, so this message lands in the conversation an earlier
+    # run opened — nothing is created, and asking for "the conversation this
+    # scenario made" got an empty list and failed unpacking it. Named through
+    # `run` for the other half of the same fact: a literal greeting is already
+    # in that conversation from last night, so it would be found before this
+    # run's message had arrived at all.
+    thread = await reachable.waits_for_a_conversation_holding(greeting)
     opened = await reachable.alice.opens_conversation(thread, in_pod=reachable.pod)
 
     # Somebody reading this in the workspace has to be able to tell it arrived
@@ -89,57 +101,34 @@ async def test_a_surface_conversation_records_its_origin(reachable):
     )
 
 
-def _paths_in(tree) -> set[str]:
-    """Every file path in a pod, flattened.
-
-    The file *list* is the root directory only, so an attachment landing in a
-    folder is invisible to it — which is how a working feature reads as broken.
-    Ingested files go to the sender's own folder, so the tree is where to look.
-    """
-    found: set[str] = set()
-
-    def walk(node) -> None:
-        if not isinstance(node, dict):
-            return
-        if str(node.get("kind")) == "FILE":
-            found.add(str(node.get("path")))
-        for child in node.get("children") or []:
-            walk(child)
-
-    walk((tree or {}).get("tree"))
-    return found
+#: Where a surface saves what somebody sent it. Asking the directory directly is
+#: the difference between a listing that pages and a tree that truncates.
+TELEGRAM_FOLDER = "/me/telegram"
 
 
 @scenario("A file sent to the bot reaches the pod, contents and all")
 @proves("PS-SURF-014")
-@covers("surface.webhook.handle_platform", "file.tree", "file.download")
+@covers("surface.webhook.handle_platform", "file.list", "file.download")
 async def test_an_attachment_reaches_the_pod(reachable):
-    await reachable.says(
-        "here is the spreadsheet",
-        update_id=131,
-        document={
-            "file_id": "scenarios-doc-1",
-            "file_unique_id": "scenarios-doc-1",
-            "file_name": "quarter.csv",
-            "mime_type": "text/csv",
-            "file_size": len(FILE_CONTENTS),
-        },
-    )
+    sent = await reachable.sends_file("quarter.csv", caption="here is the spreadsheet")
 
-    async def paths():
-        return _paths_in(await reachable.alice.file_tree_of(reachable.pod))
-
+    # The paginated listing of the folder the file lands in, not the file tree.
+    # The tree returns three files per directory by default and says so only in
+    # `has_more_files`, so on a pod that stands between runs it reported this
+    # file missing for four consecutive nights while it sat there the whole
+    # time — the three older photos above it alphabetically were the whole cap.
     arrived = await eventually(
-        paths,
+        lambda: reachable.alice.paths_in(reachable.pod, directory=TELEGRAM_FOLDER),
         lambda found: any(path.endswith("quarter.csv") for path in found),
         describe="the attachment to reach the pod",
-        timeout=90.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
-    [landed] = [path for path in arrived if path.endswith("quarter.csv")]
+    landed = sorted(path for path in arrived if path.endswith("quarter.csv"))[0]
 
     # The bytes, not just the name. A file recorded but never fetched is the
     # failure this is really about: the agent is told there is a spreadsheet and
-    # finds nothing in it.
-    assert await reachable.alice.downloads(landed, in_pod=reachable.pod) == FILE_CONTENTS, (
+    # finds nothing in it. Compared against what was actually sent, because the
+    # two lanes cannot send the same thing by accident.
+    assert await reachable.alice.downloads(landed, in_pod=reachable.pod) == sent, (
         f"the file at {landed} does not contain what was sent"
     )

@@ -795,6 +795,36 @@
     "triggers": []
   },
   {
+    "name": "resend",
+    "title": "Email",
+    "description": "The mailbox Lemma runs for an agent. Inbound mail becomes work in the pod and the agent replies from the same address.",
+    "auth_method": "API_KEY",
+    "icon": null,
+    "credential_schema": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "title": "Resend API key",
+          "format": "password"
+        },
+        "inbound_domain": {
+          "type": "string",
+          "title": "Inbound domain"
+        },
+        "from_address": {
+          "type": "string",
+          "title": "From address"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_instruction": "Use the pod's own email address to receive mail and reply on the same thread.",
+    "is_active": true,
+    "triggers": []
+  },
+  {
     "name": "confluence",
     "title": "Confluence",
     "description": "Confluence connector for documentation and knowledge management",

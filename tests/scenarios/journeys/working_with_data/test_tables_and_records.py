@@ -53,7 +53,11 @@ async def test_a_table_is_created_from_its_columns(pod):
 
     table = await alice.creates_a_table(
         in_pod=the_pod,
-        columns=[column("subject", required=True), column("body"), column("votes", "INTEGER")],
+        columns=[
+            column("subject", required=True),
+            column("body"),
+            column("votes", "INTEGER"),
+        ],
     )
 
     reopened = await alice.opens_table(table["name"], in_pod=the_pod)
@@ -94,7 +98,9 @@ async def test_adding_and_removing_columns_keeps_the_records(pod):
         in_pod=the_pod, columns=[column("subject"), column("body")]
     )
     name = table["name"]
-    await alice.adds_record({"subject": "first", "body": "hello"}, to_table=name, in_pod=the_pod)
+    await alice.adds_record(
+        {"subject": "first", "body": "hello"}, to_table=name, in_pod=the_pod
+    )
 
     await alice.adds_column(column("priority"), to_table=name, in_pod=the_pod)
 
@@ -109,6 +115,40 @@ async def test_adding_and_removing_columns_keeps_the_records(pod):
     assert len(rows) == 1, "removing a column must not remove the record"
     assert rows[0]["subject"] == "first"
     assert "body" not in rows[0]
+
+
+@scenario("Removing the column that identifies a row is refused")
+@proves("PS-DATA-002")
+@covers("table.column.remove", "record.list")
+async def test_the_primary_key_column_cannot_be_removed(pod):
+    """Every other column is the person's to drop; this one is the row's identity.
+
+    Dropping it would leave records that nothing can address — no update, no
+    delete, no reference from a workflow or an agent — so the rows survive as
+    something a person can read and never change again. Refusing is the only
+    answer that keeps the table usable.
+    """
+    alice, the_pod = pod
+    name = (await alice.creates_a_table(in_pod=the_pod, columns=[column("subject")]))[
+        "name"
+    ]
+    await alice.adds_record(
+        {"subject": "keeps its identity"}, to_table=name, in_pod=the_pod
+    )
+    key = (await alice.opens_table(name, in_pod=the_pod))["primary_key_column"]
+
+    refused = await alice.api.call(
+        "DELETE", f"/pods/{the_pod['id']}/datastore/tables/{name}/columns/{key}"
+    )
+
+    assert refused.status_code >= 400, (
+        f"the primary key column {key!r} was removed ({refused.status_code}); "
+        f"the records it identified are now unaddressable"
+    )
+    rows = await alice.records_in(name, in_pod=the_pod)
+    assert len(rows) == 1 and rows[0]["subject"] == "keeps its identity", (
+        f"the refusal still damaged the table: {rows}"
+    )
 
 
 @scenario("A column name already used on the table is refused")
@@ -219,7 +259,9 @@ class TestRecords:
         doomed = await alice.adds_record(
             {"title": "doomed"}, to_table=table["name"], in_pod=the_pod
         )
-        await alice.adds_record({"title": "survivor"}, to_table=table["name"], in_pod=the_pod)
+        await alice.adds_record(
+            {"title": "survivor"}, to_table=table["name"], in_pod=the_pod
+        )
 
         await alice.deletes_record(doomed, in_table=table["name"], in_pod=the_pod)
 
@@ -277,7 +319,9 @@ class TestWhoCanSeeData:
     async def test_an_outsider_cannot_read_a_table(self, world, pod):
         alice, the_pod = pod
         table = await alice.creates_a_table(in_pod=the_pod)
-        await alice.adds_record({"title": "secret"}, to_table=table["name"], in_pod=the_pod)
+        await alice.adds_record(
+            {"title": "secret"}, to_table=table["name"], in_pod=the_pod
+        )
 
         outsider = await world.person("hannah")
 
@@ -291,12 +335,16 @@ class TestWhoCanSeeData:
     @scenario("On a shared table, a pod viewer reads every row but writes none")
     @proves("PS-DATA-014")
     @covers("record.list", "record.create")
-    async def test_a_viewer_reads_a_shared_table_but_does_not_write(self, pod_with_a_teammate):
+    async def test_a_viewer_reads_a_shared_table_but_does_not_write(
+        self, pod_with_a_teammate
+    ):
         alice, the_pod, bob = pod_with_a_teammate
         table = await alice.creates_a_table(
             in_pod=the_pod, columns=[column("title")], shared=True
         )
-        await alice.adds_record({"title": "visible"}, to_table=table["name"], in_pod=the_pod)
+        await alice.adds_record(
+            {"title": "visible"}, to_table=table["name"], in_pod=the_pod
+        )
         await alice.adds(bob, to_pod=the_pod, as_role="POD_VIEWER")
 
         rows = await bob.records_in(table["name"], in_pod=the_pod)
@@ -313,7 +361,9 @@ class TestWhoCanSeeData:
         alice, the_pod, bob = pod_with_a_teammate
         # No `shared=True`, so rows belong to whoever wrote them.
         table = await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
-        await alice.adds_record({"title": "alice's"}, to_table=table["name"], in_pod=the_pod)
+        await alice.adds_record(
+            {"title": "alice's"}, to_table=table["name"], in_pod=the_pod
+        )
         await alice.adds(bob, to_pod=the_pod, as_role="POD_EDITOR")
 
         assert await bob.records_in(table["name"], in_pod=the_pod) == [], (
@@ -321,9 +371,9 @@ class TestWhoCanSeeData:
         )
 
         await bob.adds_record({"title": "bob's"}, to_table=table["name"], in_pod=the_pod)
-        assert [r["title"] for r in await bob.records_in(table["name"], in_pod=the_pod)] == [
-            "bob's"
-        ]
+        assert [
+            r["title"] for r in await bob.records_in(table["name"], in_pod=the_pod)
+        ] == ["bob's"]
         # Alice administers the pod, but the default view is still her own rows.
         # Seeing everyone's is a deliberate ask, not a side effect of being admin.
         assert [
@@ -336,13 +386,13 @@ class TestWhoCanSeeData:
     async def test_admin_mode_shows_every_row_and_is_gated(self, pod_with_a_teammate):
         alice, the_pod, bob = pod_with_a_teammate
         table = await alice.creates_a_table(in_pod=the_pod, columns=[column("title")])
-        await alice.adds_record({"title": "alice's"}, to_table=table["name"], in_pod=the_pod)
+        await alice.adds_record(
+            {"title": "alice's"}, to_table=table["name"], in_pod=the_pod
+        )
         await alice.adds(bob, to_pod=the_pod, as_role="POD_EDITOR")
         await bob.adds_record({"title": "bob's"}, to_table=table["name"], in_pod=the_pod)
 
-        everyones = await alice.records_in(
-            table["name"], in_pod=the_pod, everyones=True
-        )
+        everyones = await alice.records_in(table["name"], in_pod=the_pod, everyones=True)
         assert sorted(r["title"] for r in everyones) == ["alice's", "bob's"]
 
         await bob.is_refused_everyones_records(table["name"], in_pod=the_pod)

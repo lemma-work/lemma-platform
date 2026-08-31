@@ -8,6 +8,7 @@ its queries nor its sweeps can ever see production's, and vice versa.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from sandbox_runtime.errors import (
     SandboxPathNotFound,
@@ -207,6 +208,25 @@ async def ensure_runtime_serving(
             f"e2b sandbox {provider_id} is running but its runtime answered "
             f"{status}; the process inside has died"
         )
+
+
+def budget_until(deadline_at: datetime) -> float:
+    """How long a readiness poll may run, from the caller's deadline.
+
+    `wait_ready` took `deadline_at` and threw it away, so every readiness
+    poll ran for `ensure_serving`'s own 20s default no matter what the
+    caller asked for. Both directions were wrong: `_ensure` allows 15s and
+    was overrun by five, while the 60s adopt and resume paths gave up at
+    twenty on a sandbox that was still legitimately coming up -- the
+    provider deciding a timeout the service had already decided. Docker's
+    `wait_ready` forwards the deadline; this one is the outlier.
+
+    Floored at zero rather than clamped to a minimum: an expired deadline
+    still gets the one attempt `_poll_agent` makes before it looks at the
+    clock, which is what makes an already-late caller fail fast instead of
+    waiting out a fresh budget.
+    """
+    return max(0.0, (deadline_at - datetime.now(timezone.utc)).total_seconds())
 
 
 async def ensure_serving(

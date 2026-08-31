@@ -25,6 +25,11 @@ So the candidate set is the surfaces this agent serves, and the ordering is:
    has the notification. What must never happen is a silent nothing, so the
    reason travels with the result and reaches the API.
 
+An agent that has a reason to prefer one channel says so, and then the ranking
+above is not consulted at all: the request is honoured or it fails, never
+quietly rerouted. See :func:`surfaces_on_channel` and
+``NotificationChannelResolver._resolve_on_channel``.
+
 The recipient's own ``UserPreferences.default_surfaces`` deliberately plays no
 part here. It remains authoritative for *inbound* routing
 (``ingress_service._select_surface``), where the question is genuinely "which of
@@ -48,6 +53,72 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
+
+
+# The name an agent uses for "reach them by mail", whichever provider carries it.
+EMAIL_CHANNEL = "email"
+
+
+def channel_for_platform(platform: SurfacePlatform) -> str:
+    """The channel name an agent uses for a platform.
+
+    Every mail platform collapses to ``email``. Which provider carries it is a
+    deployment detail — an agent asked to choose between "gmail" and "resend" is
+    being asked a question it has no way to answer, and whose answer it cannot
+    act on. Chat platforms keep their own name, because that name is the thing
+    the recipient is actually looking at.
+    """
+    capabilities = get_platform_capabilities(platform.value)
+    if capabilities is not None and capabilities.is_email:
+        return EMAIL_CHANNEL
+    return platform.value.lower()
+
+
+def channel_label(channel: str) -> str:
+    """How to name a channel inside a sentence — "WhatsApp", not "whatsapp"."""
+    if channel == EMAIL_CHANNEL:
+        return EMAIL_CHANNEL
+    capabilities = get_platform_capabilities(channel)
+    return capabilities.display_name if capabilities is not None else channel
+
+
+def surfaces_on_channel(
+    surfaces: list[AgentSurfaceEntity], *, channel: str
+) -> list[AgentSurfaceEntity]:
+    """The subset of an agent's surfaces that sit on one channel.
+
+    More than one is normal and is the reason this returns a list: an agent can
+    hold two Slack workspaces or two bots on the same platform, and "send it on
+    Slack" means any of them that can actually reach the person.
+    """
+    return [
+        surface
+        for surface in surfaces
+        if channel_for_platform(surface.surface_type) == channel
+    ]
+
+
+def channels_of(candidates: list["DeliveryChannel"]) -> list[str]:
+    """The distinct channels a resolved candidate set covers."""
+    return sorted({channel_for_platform(channel.platform) for channel in candidates})
+
+
+def channel_refused(channel: str, *, cause: str, alternatives: list[str]) -> str:
+    """Why a requested channel could not carry this, and what could instead.
+
+    Always ends by saying nothing was sent elsewhere. An agent that named a
+    channel had a reason for naming it, and quietly using another one leaves it
+    believing something happened that did not — which would make the argument
+    advisory in all but name. Naming the alternatives is what makes the refusal
+    actionable: send again on one of them, or tell the person why you did not.
+    """
+    if alternatives:
+        reachable = ", ".join(channel_label(name) for name in alternatives)
+        return f"{cause} Nothing was sent elsewhere; {reachable} would reach them."
+    return (
+        f"{cause} Nothing was sent elsewhere, and no other channel can reach "
+        "them either."
+    )
 
 
 class UndeliverableReason:
@@ -92,6 +163,30 @@ class UndeliverableReason:
         "The pod's only mailbox surface cannot start a new email thread. Ask "
         "them to email the pod address once, or connect a chat surface."
     )
+
+    # The four below take the channel the agent asked for. They are methods
+    # rather than constants because a refusal that does not name the channel
+    # reads as though routing failed, when what happened is that a specific
+    # request could not be met — a different thing to tell an agent, and a
+    # different thing for it to do next.
+    @staticmethod
+    def no_surface_on(channel: str) -> str:
+        return f"This agent has no {channel_label(channel)} surface to send from."
+
+    @staticmethod
+    def never_interacted_on(channel: str) -> str:
+        return (
+            f"They have not messaged this agent on {channel_label(channel)}, and "
+            "chat bots cannot start a conversation."
+        )
+
+    @staticmethod
+    def window_closed_on(channel: str) -> str:
+        return f"Their {channel_label(channel)} reply window has closed."
+
+    @staticmethod
+    def no_address_on(channel: str) -> str:
+        return f"No {channel_label(channel)} address is on file for this person."
 
 
 @dataclass(frozen=True)

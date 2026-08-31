@@ -259,7 +259,9 @@ class TestLettingPeopleAskToJoin:
 
     @scenario("A person asks for access and an admin grants it")
     @proves("PS-POD-021")
-    @covers("pod.join_request.create", "pod.join_request.list", "pod.join_request.approve")
+    @covers(
+        "pod.join_request.create", "pod.join_request.list", "pod.join_request.approve"
+    )
     async def test_a_join_request_is_approved(self, world, run):
         alice = await world.person("priya")
         pod = await alice.creates_a_pod(named=run.name("pod"))
@@ -272,3 +274,32 @@ class TestLettingPeopleAskToJoin:
         await alice.approves(pending[0], for_pod=pod, as_role="POD_USER")
 
         await bob.can_read(pod)
+
+
+@scenario("Changing one pod setting leaves the others alone")
+@proves("PS-POD-003")
+@covers("pod.update", "pod.get")
+async def test_a_partial_update_leaves_the_rest_of_the_settings(world, run):
+    """A settings write is a merge, not a replace.
+
+    `PS-POD-003` read `covered` on the strength of an icon upload, which says
+    nothing about what happens to the settings a request did not mention. It
+    matters because the interface sends one field at a time: a save that
+    replaced the whole object would silently reset a pod's join policy every
+    time somebody edited its description, and nothing would report it.
+    """
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("settings"))
+    await alice.opens_pod_to(pod, who="ORG_MEMBERS")
+
+    await alice.api.put(
+        f"/pods/{pod['id']}",
+        what="changing only the description",
+        json={"description": "a pod whose join policy must survive this"},
+    )
+
+    reopened = await alice.opens_pod(pod)
+    assert reopened.get("description") == "a pod whose join policy must survive this"
+    assert (reopened.get("config") or {}).get("join_policy") == "ORG_MEMBERS", (
+        f"changing the description reset the join policy: {reopened.get('config')}"
+    )

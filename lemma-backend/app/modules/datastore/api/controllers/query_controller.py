@@ -58,7 +58,7 @@ async def execute_query(
         description=_QUERY_MODE_DESCRIPTION,
     ),
 ) -> DatastoreQueryResponse:
-    rows, total = await record_service.execute_readonly_query(
+    rows, total, _truncated = await record_service.execute_readonly_query(
         pod_id=pod_id,
         query=data.query,
         user_id=user.id,

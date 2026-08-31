@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_telegram
+from harness.telegram_view import TelegramView
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -14,31 +14,20 @@ pytestmark = [
 
 
 @pytest.fixture
-async def connected(world, run):
-    fake = start_fake_telegram()
-    try:
-        alice = await world.person("daniel")
-        organization = alice.organization
-        pod = await alice.creates_a_pod(named=run.name("pod"))
-        agent = await alice.creates_an_agent(in_pod=pod)
-        auth_config = await alice.installs_connector("telegram", in_organization=organization)
-        account = await alice.connects_account(
-            in_organization=organization, auth_config=auth_config,
-            credentials={"bot_token": "424242:managed", "api_base_url": fake.api_base},
-        )
-        surface = await alice.connects_a_surface(
-            in_pod=pod, platform="TELEGRAM", named="tg",
-            agent=agent["name"], account=account,
-        )
-        yield alice, pod, agent, surface, fake
-    finally:
-        fake.stop()
+async def connected(world, run, egress):
+    fake = TelegramView(egress)
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
+    surface = await alice.becomes_reachable_on_telegram(in_pod=pod, agent=agent["name"])
+    yield alice, pod, agent, surface, fake
 
 
 @scenario("A person reads a connected surface and how far its setup got")
 @proves("PS-SURF-001")
-@covers("agent.surface.get", "agent.surface.setup", "agent.surface.list",
-        "surface.connected")
+@covers(
+    "agent.surface.get", "agent.surface.setup", "agent.surface.list", "surface.connected"
+)
 async def test_a_surface_reads_back(connected):
     alice, pod, _agent, surface, _fake = connected
 
@@ -101,6 +90,26 @@ async def test_a_slack_manifest_is_generated(connected):
     )
 
 
+@scenario("An app definition made for one agent carries that agent's name")
+@proves("PS-SURF-002")
+@covers("agent.surface.slack_manifest")
+async def test_a_slack_manifest_is_named_for_its_agent(connected):
+    """One Slack app is one bot user, so a bot for one agent is named for it.
+
+    The manifest is the only chance to set that name without a person editing
+    it in Slack afterwards — which is the step this whole path exists to
+    remove.
+    """
+    alice, _pod, _agent, _surface, _fake = connected
+
+    response = await alice.slack_manifest(for_agent="Triage")
+
+    assert response.status_code == 200, response.text[:300]
+    manifest = response.json()
+    assert manifest["display_information"]["name"] == "Triage", manifest
+    assert manifest["features"]["bot_user"]["display_name"] == "Triage", manifest
+
+
 @scenario("Deleting a surface stops it accepting messages")
 @proves("PS-SURF-003")
 @covers("agent.surface.delete", "agent.surface.list", "surface.webhook.handle_surface")
@@ -113,10 +122,18 @@ async def test_deleting_a_surface_stops_it(connected):
 
     assert surface["name"] not in {s["name"] for s in await alice.surfaces_in(pod)}
     delivered = await alice.api.call(
-        "POST", path,
-        json={"update_id": 1, "message": {"message_id": 1, "date": 1700000000,
-              "chat": {"id": 999, "type": "private"},
-              "from": {"id": 999, "is_bot": False, "first_name": "S"}, "text": "hi"}},
+        "POST",
+        path,
+        json={
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "date": 1700000000,
+                "chat": {"id": 999, "type": "private"},
+                "from": {"id": 999, "is_bot": False, "first_name": "S"},
+                "text": "hi",
+            },
+        },
         headers={"X-Telegram-Bot-Api-Secret-Token": secret},
     )
     assert delivered.status_code >= 400, (
@@ -145,7 +162,8 @@ async def test_a_managed_bot_setup_says_what_is_missing(connected):
     alice, pod, agent, _surface, _fake = connected
 
     started = await alice.api.call(
-        "POST", f"/pods/{pod['id']}/telegram-bot-setups",
+        "POST",
+        f"/pods/{pod['id']}/telegram-bot-setups",
         json={"name": "managed", "default_agent_name": agent["name"]},
     )
 
@@ -171,13 +189,13 @@ async def test_the_manager_webhook_rejects_unsigned(world, connected):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
-        "POST", "/surfaces/webhooks/telegram-manager",
+        "POST",
+        "/surfaces/webhooks/telegram-manager",
         json={"update_id": 1, "message": {"text": "/start"}},
     )
 
     assert response.status_code >= 400, (
-        f"an unsigned delivery to the manager bot was accepted "
-        f"({response.status_code})"
+        f"an unsigned delivery to the manager bot was accepted ({response.status_code})"
     )
 
 
@@ -188,7 +206,8 @@ async def test_a_consent_callback_without_a_grant_is_refused(world):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
-        "GET", "/surfaces/teams/admin-consent/callback",
+        "GET",
+        "/surfaces/teams/admin-consent/callback",
         params={"tenant": "not-a-tenant", "state": "not-a-state"},
     )
 

@@ -51,8 +51,14 @@ from app.modules.agent.infrastructure.repository_status import (
 )
 
 
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    reconcile_conversation_to_terminal,
+)
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
     ConversationApprovalQueriesMixin,
+)
+from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+    ConversationOpeningTextsMixin,
 )
 
 _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
@@ -60,6 +66,7 @@ _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
 
 class ConversationRepository(
     ConversationApprovalQueriesMixin,
+    ConversationOpeningTextsMixin,
     ConversationRunQueriesMixin,
 ):
     """Repository for conversations, agent runs, and messages."""
@@ -97,6 +104,7 @@ class ConversationRepository(
             output_data=conversation.output,
             parent_id=conversation.parent_id,
             conversation_metadata=conversation.metadata,
+            is_archived=conversation.is_archived,
         )
         self.session.add(model)
         await self.session.flush()
@@ -142,6 +150,7 @@ class ConversationRepository(
         model.status = conversation.status.value if conversation.status else None
         model.output_data = conversation.output
         model.conversation_metadata = conversation.metadata
+        model.is_archived = conversation.is_archived
         await self.session.flush()
         return model.to_entity()
 
@@ -245,12 +254,17 @@ class ConversationRepository(
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
+        archived: bool = False,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[ConversationEntity], UUID | None]:
+        # One list or the other, never both: the archive is a place you go, not
+        # a tail on the end of the history. Equality rather than "not archived"
+        # so the same query serves both without a second code path.
         stmt = select(ConversationModel).where(
             ConversationModel.user_id == user_id,
             ConversationModel.pod_id == pod_id,
+            ConversationModel.is_archived.is_(archived),
         )
         # Default: root conversations only. With parent_id: that conversation's
         # children (sub-agent conversations).
@@ -387,6 +401,15 @@ class ConversationRepository(
             .with_for_update()
         )
         conversation = lock_result.scalar_one()
+        # Archiving says "I am done with this"; a new message says otherwise,
+        # whoever wrote it. Without this an archived conversation can still be
+        # live -- a Slack thread is found by its origin and keeps receiving, a
+        # run that was mid-flight when it was archived still answers -- and the
+        # one place that would show you is the list it has been removed from.
+        # The row is already locked FOR UPDATE here, and every writer in the
+        # module goes through this method, so this is the one place it belongs.
+        if conversation.is_archived:
+            conversation.is_archived = False
         sequence_result = await self.session.execute(
             select(func.coalesce(func.max(MessageModel.sequence), -1)).where(
                 MessageModel.conversation_id == conversation_id
@@ -461,10 +484,21 @@ class ConversationRepository(
             current_status.value
         )
         if current_status in TERMINAL_AGENT_RUN_STATUSES:
+            # Nothing to end — but this used to report a `conversation_status`
+            # it had only *inferred* from the run row and never written, so a
+            # conversation out of step stayed that way. Nothing else recovers
+            # one: the orphan sweep keys on `agent_runs.status`, so a terminal
+            # run is invisible to it. This is the only place seeing both rows.
+            repaired = await reconcile_conversation_to_terminal(
+                self.session,
+                conversation_id=model.conversation_id,
+                status=resolved_conversation_status,
+            )
             return AgentRunFinishResult(
                 status=current_status,
                 conversation_status=resolved_conversation_status,
                 updated=False,
+                conversation_repaired=repaired,
             )
 
         next_status = status
@@ -472,7 +506,8 @@ class ConversationRepository(
             current_status == AgentRunStatus.STOP_REQUESTED
             and status in TERMINAL_AGENT_RUN_STATUSES
         ):
-            next_status = AgentRunStatus.STOPPED
+            # Stopped, not failed: it must not inherit a failure's message.
+            next_status, error = AgentRunStatus.STOPPED, None
 
         model.status = next_status.value
         model.error = error

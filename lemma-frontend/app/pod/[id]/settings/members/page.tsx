@@ -7,6 +7,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
+import { AddPeopleDialog } from '@/components/members/add-people-dialog';
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
@@ -22,7 +23,6 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
@@ -32,13 +32,10 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useInviteMember, useOrganizationInvitations, useOrganizationMembers, useRevokeInvitation } from '@/lib/hooks/use-organizations';
-import { useApps } from '@/lib/hooks/use-app';
+import { useOrganizationInvitations, useOrganizationMembers, useRevokeInvitation } from '@/lib/hooks/use-organizations';
 import { useApprovePodJoinRequest, usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import {
     usePodMembers,
-    useAddPodMember,
     useRemovePodMember,
     useUpdatePodMemberRoles,
     usePodRoles,
@@ -51,7 +48,6 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { OrganizationRole, PodRole } from '@/lib/types';
-import { buildPodInviteRedirectUri, getPodInviteRedirectOptions } from '@/lib/utils/invite-redirects';
 import { PodSettingsLedgerFill } from '@/components/pod/route-skeletons';
 import { SettingsPanel } from '@/components/settings/settings-kit';
 import { StepLoader } from '@/components/brand/loader';
@@ -79,7 +75,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     const { data: pod } = usePod(podId);
     const { data: profile } = useProfile();
     const { data: membersData, isLoading: loadingMembers } = usePodMembers(podId);
-    const { data: apps = [] } = useApps(podId);
     const { data: orgMembersData } = useOrganizationMembers(pod?.organization_id || '');
     const { data: invitationsData, isLoading: loadingInvitations } = useOrganizationInvitations(pod?.organization_id || '');
     const {
@@ -107,11 +102,9 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
 
     const { mutate: removeMember, isPending: isRemoving } = useRemovePodMember(podId);
     const { mutate: updateRoles, isPending: isUpdatingRoles } = useUpdatePodMemberRoles(podId);
-    const { mutate: addMember, isPending: isAdding } = useAddPodMember(podId);
     const { data: rolesData } = usePodRoles(podId);
     const { data: permissionCatalogData } = usePodPermissionCatalog(podId);
     const { mutate: approveJoinRequest, isPending: isApprovingJoinRequest } = useApprovePodJoinRequest(podId);
-    const { mutate: inviteMember, isPending: isInviting } = useInviteMember(pod?.organization_id || '');
     const { mutate: revokeInvitation, isPending: isRevokingInvitation } = useRevokeInvitation(pod?.organization_id || '');
     const { mutate: createPodRole, isPending: isCreatingRole } = useCreatePodRole(podId);
     const { mutate: updatePodRole, isPending: isSavingRole } = useUpdatePodRole(podId);
@@ -119,12 +112,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
 
     const [addDialogOpen, setAddDialogOpen] = useState(false);
     const [createRoleDialogOpen, setCreateRoleDialogOpen] = useState(false);
-    const [selectedOrgMemberId, setSelectedOrgMemberId] = useState('');
-    const [selectedRole, setSelectedRole] = useState<PodRole>(PodRole.POD_USER);
-    const [inviteEmail, setInviteEmail] = useState('');
-    const [inviteOrgRole, setInviteOrgRole] = useState<OrganizationRole>(OrganizationRole.ORG_MEMBER);
-    const [invitePodRole, setInvitePodRole] = useState<PodRole>(PodRole.POD_USER);
-    const [selectedInviteRedirectUri, setSelectedInviteRedirectUri] = useState<string | null>(null);
     const [revokingInvitationId, setRevokingInvitationId] = useState<string | null>(null);
     const [memberPendingRemove, setMemberPendingRemove] = useState<{ id: string; label: string } | null>(null);
     const [invitationPendingRevoke, setInvitationPendingRevoke] = useState<{ id: string; email: string } | null>(null);
@@ -150,22 +137,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     const activeEditingRoleName = editingRoleName || roles[0]?.name || null;
     const editingRole = roles.find((role) => role.name === activeEditingRoleName) || null;
     const groupedPermissions = useMemo(() => groupPermissionCatalog(permissionCatalog), [permissionCatalog]);
-    const defaultInviteRedirectUri = useMemo(
-        () => buildPodInviteRedirectUri({
-            podId,
-            podRole: invitePodRole,
-            apps,
-        }),
-        [apps, invitePodRole, podId]
-    );
-    const redirectOptions = useMemo(
-        () => getPodInviteRedirectOptions({ podId, apps }),
-        [apps, podId]
-    );
-    const inviteRedirectUri = redirectOptions.some((option) => option.value === selectedInviteRedirectUri)
-        ? selectedInviteRedirectUri as string
-        : defaultInviteRedirectUri;
-
     const resolveApprovalConfig = (requestId: string) =>
         approvalConfigByRequestId[requestId] || {
             orgRole: OrganizationRole.ORG_MEMBER,
@@ -190,53 +161,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 },
             };
         });
-    };
-
-    const handleAddMember = () => {
-        if (!canManageMembers || !selectedOrgMemberId) return;
-
-        addMember(
-            { organization_member_id: selectedOrgMemberId, role: selectedRole },
-            {
-                onSuccess: () => {
-                    toast.success('Member added to pod');
-                    setAddDialogOpen(false);
-                    setSelectedOrgMemberId('');
-                    setSelectedRole(PodRole.POD_USER);
-                },
-                onError: (err) => toast.error(`Failed to add member: ${err.message}`),
-            }
-        );
-    };
-
-    const handleInviteByEmail = () => {
-        const email = inviteEmail.trim();
-        if (!email || !pod?.organization_id) return;
-        if (!canInviteByEmail) {
-            toast.error('Only organization owners and editors can invite new people by email.');
-            return;
-        }
-
-        inviteMember(
-            {
-                email,
-                role: inviteOrgRole,
-                pod_id: podId,
-                pod_role: invitePodRole,
-                redirect_uri: inviteRedirectUri.trim() || defaultInviteRedirectUri,
-            },
-            {
-                onSuccess: () => {
-                    toast.success(`Invitation sent to ${email}`);
-                    setAddDialogOpen(false);
-                    setInviteEmail('');
-                    setInviteOrgRole(OrganizationRole.ORG_MEMBER);
-                    setInvitePodRole(PodRole.POD_USER);
-                    setSelectedInviteRedirectUri(null);
-                },
-                onError: (err) => toast.error(getInviteErrorMessage(err)),
-            }
-        );
     };
 
     const handleRevokeInvitation = () => {
@@ -367,148 +291,15 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     return (
         <PodSettingsShell
             podId={podId}
-            title="Access"
+            title="Members"
             action={canManageMembers ? (
-                <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-                    <DialogTrigger asChild>
-                        <Button variant="primary" className="gap-2">
-                            <Plus className="h-4 w-4" />
-                            Add person
-                        </Button>
-                    </DialogTrigger>
-                    <DialogContent className="sm:max-w-[520px] gap-3">
-                        <DialogHeader className="pr-8">
-                            <DialogTitle>Add access to pod</DialogTitle>
-                            <DialogDescription>
-                                Invite by email or add an existing organization member.
-                            </DialogDescription>
-                        </DialogHeader>
-                        <Tabs defaultValue={canInviteByEmail ? 'email' : 'existing'} className="pt-2">
-                            <TabsList className={`grid w-full ${canInviteByEmail ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                                {canInviteByEmail ? <TabsTrigger value="email">Invite by email</TabsTrigger> : null}
-                                <TabsTrigger value="existing">Existing member</TabsTrigger>
-                            </TabsList>
-                            {canInviteByEmail ? (
-                                <TabsContent value="email" className="mt-4 space-y-3">
-                                    <div className="space-y-1.5">
-                                        <label htmlFor="pod-invite-email" className="text-sm font-medium">Email</label>
-                                        <Input
-                                            id="pod-invite-email"
-                                            type="email"
-                                            autoComplete="email"
-                                            placeholder="person@example.com"
-                                            value={inviteEmail}
-                                            onChange={(event) => setInviteEmail(event.target.value)}
-                                        />
-                                    </div>
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                        <div className="space-y-1.5">
-                                            <label className="text-sm font-medium">Organization role</label>
-                                            <Select value={inviteOrgRole} onValueChange={(value) => setInviteOrgRole(value as OrganizationRole)}>
-                                                <SelectTrigger>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value={OrganizationRole.ORG_OWNER}>Owner</SelectItem>
-                                                    <SelectItem value={OrganizationRole.ORG_EDITOR}>Editor</SelectItem>
-                                                    <SelectItem value={OrganizationRole.ORG_MEMBER}>Member</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                        <div className="space-y-1.5">
-                                            <label className="text-sm font-medium">Pod role</label>
-                                            <Select value={invitePodRole} onValueChange={(value) => setInvitePodRole(value as PodRole)}>
-                                                <SelectTrigger>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value={PodRole.POD_ADMIN}>Admin</SelectItem>
-                                                    <SelectItem value={PodRole.POD_EDITOR}>Editor</SelectItem>
-                                                    <SelectItem value={PodRole.POD_USER}>User</SelectItem>
-                                                    <SelectItem value={PodRole.POD_VIEWER}>Viewer</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-1.5">
-                                        <label htmlFor="pod-invite-redirect" className="text-sm font-medium">Redirect after accept</label>
-                                        <Select
-                                            value={inviteRedirectUri}
-                                            onValueChange={setSelectedInviteRedirectUri}
-                                        >
-                                            <SelectTrigger id="pod-invite-redirect">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {redirectOptions.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                        <p className="break-all text-xs text-[var(--text-tertiary)]">
-                                            {inviteRedirectUri}
-                                        </p>
-                                    </div>
-                                    <DialogFooter className="pt-1">
-                                        <Button variant="quiet" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-                                        <Button variant="primary" onClick={handleInviteByEmail} disabled={!inviteEmail.trim() || !pod?.organization_id || isInviting}>
-                                            {isInviting ? 'Sending...' : 'Send invite'}
-                                        </Button>
-                                    </DialogFooter>
-                                </TabsContent>
-                            ) : null}
-                            <TabsContent value="existing" className="mt-4 space-y-3">
-                                {!canInviteByEmail ? (
-                                    <div className="surface-panel-muted px-4 py-3 text-sm text-[var(--text-secondary)]">
-                                        Only organization owners and editors can invite new people by email. You can still add existing organization members to this pod.
-                                    </div>
-                                ) : null}
-                                <div className="space-y-1.5">
-                                    <label className="text-sm font-medium">Member</label>
-                                    <Select value={selectedOrgMemberId} onValueChange={setSelectedOrgMemberId}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select a member" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {availableMembers.map((member) => (
-                                                <SelectItem key={member.id} value={member.id}>
-                                                    {member.user?.full_name || member.user?.email || 'Unknown User'}
-                                                </SelectItem>
-                                            ))}
-                                            {availableMembers.length === 0 ? (
-                                                <div className="p-2 text-center text-sm text-[var(--text-tertiary)]">No more members to add</div>
-                                            ) : null}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <label className="text-sm font-medium">Role</label>
-                                    <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as PodRole)}>
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value={PodRole.POD_ADMIN}>Admin</SelectItem>
-                                            <SelectItem value={PodRole.POD_EDITOR}>Editor</SelectItem>
-                                            <SelectItem value={PodRole.POD_USER}>User</SelectItem>
-                                            <SelectItem value={PodRole.POD_VIEWER}>Viewer</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <DialogFooter className="pt-1">
-                                    <Button variant="quiet" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-                                    <Button variant="primary" onClick={handleAddMember} disabled={!selectedOrgMemberId || isAdding}>
-                                        {isAdding ? 'Adding...' : 'Add member'}
-                                    </Button>
-                                </DialogFooter>
-                            </TabsContent>
-                        </Tabs>
-                    </DialogContent>
-                </Dialog>
+                <Button variant="primary" className="gap-2" onClick={() => setAddDialogOpen(true)}>
+                    <Plus className="h-4 w-4" />
+                    Add people
+                </Button>
             ) : null}
         >
+            <AddPeopleDialog podId={podId} open={addDialogOpen} onOpenChange={setAddDialogOpen} />
             {/* The view strip and the "Add person" action are known before the
                 member list is, so the wait fills the ledger and leaves the rest
                 of the page where it already was. */}
@@ -517,7 +308,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 <ResourceMetricStrip className="lemma-index-tabs-left">
                     <ResourceMetricButton active={activeView === 'people'} label="People" count={members.length} onClick={() => setActiveView('people')} />
                     <ResourceMetricButton active={activeView === 'invites'} label="Email invites" count={pendingPodInvitations.length} onClick={() => setActiveView('invites')} />
-                    <ResourceMetricButton active={activeView === 'requests'} label="Access requests" count={pendingJoinRequests.length} onClick={() => setActiveView('requests')} />
+                    <ResourceMetricButton active={activeView === 'requests'} label="Join requests" count={pendingJoinRequests.length} onClick={() => setActiveView('requests')} />
                     <ResourceMetricButton active={activeView === 'roles'} label="Roles" count={roles.length || ROLE_GUIDANCE.length} onClick={() => setActiveView('roles')} />
                     {canManageMembers ? (
                         <ResourceMetricButton active={activeView === 'available'} label="Available" count={availableMembers.length} onClick={() => setActiveView('available')} />

@@ -279,3 +279,77 @@ async def test_dispatch_with_fairness_disabled_falls_back_to_bounded_fifo():
     repo.list_pending_dispatch_candidates.assert_awaited_once_with(
         per_pod_limit=25, global_limit=25
     )
+
+
+# --- Backing off a dead extractor -----------------------------------------
+#
+# `PS-DATA-041` refunds the attempt when the converter is unreachable, so an
+# outage never exhausts a file's retry budget. That is deliberate and it works.
+# What it does not do on its own is bound how *often* the hopeless claim is
+# retried: this dispatcher re-picks every PENDING file on every pass, so a file
+# no converter can reach is re-driven as fast as the queue allows. Four such
+# files were enough to stall the worker's event loop, and the symptom showed up
+# as slow agent replies in unrelated pods.
+
+
+@pytest.mark.asyncio
+async def test_dispatch_runs_now_while_the_extractor_is_healthy():
+    """The common case pays nothing: no circuit open, no deferral."""
+    from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+        reset_kreuzberg_circuit,
+    )
+
+    reset_kreuzberg_circuit()
+    repo = _dispatch_repo([_file(uuid4())])
+    queue = AsyncMock()
+    queue.enqueue.return_value = True
+
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    await service.dispatch_pending_files(per_pod_limit=1, global_limit=10)
+
+    assert queue.enqueue.await_args.kwargs["defer_until"] is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_defers_the_batch_while_the_extractor_is_down():
+    """A known-down extractor slows the re-drive instead of stopping it.
+
+    Deferred rather than skipped, so the backlog still drains by itself when
+    the extractor returns rather than waiting for the next cron tick. The
+    attempt counter is untouched either way — this bounds the rate, not the
+    budget, so `PS-DATA-041` is unaffected.
+    """
+    from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+        get_kreuzberg_circuit,
+        reset_kreuzberg_circuit,
+    )
+
+    reset_kreuzberg_circuit()
+    circuit = get_kreuzberg_circuit()
+    for _ in range(50):  # comfortably past any configured threshold
+        circuit.record_failure()
+    assert circuit.is_open, "the breaker did not open; this test proves nothing"
+
+    repo = _dispatch_repo([_file(uuid4()), _file(uuid4())])
+    queue = AsyncMock()
+    queue.enqueue.return_value = True
+
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    try:
+        await service.dispatch_pending_files(per_pod_limit=5, global_limit=10)
+
+        deferrals = [
+            call.kwargs["defer_until"] for call in queue.enqueue.await_args_list
+        ]
+        assert all(when is not None for when in deferrals), (
+            f"the extractor is down and the batch was still dispatched now: {deferrals}"
+        )
+        assert len(set(deferrals)) == 1, (
+            "one pass should share one deadline, so the queue de-duplicates it"
+        )
+    finally:
+        reset_kreuzberg_circuit()

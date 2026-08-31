@@ -28,6 +28,10 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
+from app.modules.agent.domain.ports import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
@@ -65,14 +69,25 @@ from app.modules.agent.tools.snooze.models import (
 logger = get_logger(__name__)
 
 
+def _scope_allows(scope: object) -> bool:
+    """Whether one usage window still has headroom.
+
+    `get_usage_limits` answers with a `dict[str, object]`, so each window
+    arrives untyped. Anything unreadable counts as allowed: this list only
+    names the limits to report, and the decision to block was already made by
+    the `allowed` flag above.
+    """
+    return not isinstance(scope, dict) or bool(scope.get("allowed", True))
+
+
 class TurnCoordinator:
     """Starts the run that answers a message, and stops the one in flight."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: object,
-        agent_repository: object,
+        conversation_repository: ConversationRepository,
+        agent_repository: AgentRepository,
         approvals: ApprovalCoordinator,
         pauses: PauseResume,
         usage_service: UsageService | None,
@@ -134,7 +149,7 @@ class TurnCoordinator:
                     self.uow, pod_id=conversation.pod_id
                 )
             )
-            await self._assert_usage_preflight_allowed(
+            await self.assert_usage_preflight_allowed(
                 organization_id=conversation.organization_id,
                 user_id=user_id,
                 agent_runtime=selected_agent_runtime,
@@ -146,9 +161,12 @@ class TurnCoordinator:
                 metadata={"source": "user_message"},
             )
 
+        # The flag goes on *after* the caller's metadata, not before it: a
+        # surface builds this dict out of webhook fields, and the run this
+        # message belongs to is not something the sender gets a vote on.
         metadata = {
-            "during_active_run": not started_new_run,
             **(message_metadata or {}),
+            "during_active_run": not started_new_run,
         }
         metadata.pop("author_user_id", None)
         metadata.pop("agent_run_id", None)
@@ -200,6 +218,107 @@ class TurnCoordinator:
             started_new_run=started_new_run,
         )
 
+    async def start_queued_followup(
+        self,
+        *,
+        conversation: Conversation,
+        completed_run_id: UUID,
+    ) -> tuple[UUID, list[Message]] | None:
+        """The backstop for messages no run ever read.
+
+        Normally nothing reaches here. A message sent while a run is in flight is
+        steered into that run by `PendingUserMessagesCapability`, which claims it
+        and hands it to the model -- so by the time the run ends there is nothing
+        left owing. Two cases still get past that, and both leave a person
+        waiting on an answer that will otherwise never come:
+
+        - **A run with no capabilities.** Only the in-process LEMMA harness is
+          built out of them; an Agent Host run has no `ctx.enqueue` to steer.
+        - **A run that died before draining**, so the messages are still
+          unclaimed.
+
+        Returns the new run's id and the live UI frames the caller owes the
+        conversation, or None when there is nothing to answer. The frames come
+        back rather than going out from here because publishing is a Redis round
+        trip and this still holds a pooled connection -- and unlike `start`,
+        whose caller commits again later and drains `after_commit`, the caller
+        here is a worker job with no second commit to hang them on.
+
+        This cannot recur: the queued messages belong to ``completed_run_id``,
+        never to the run started here, so the run started here has an empty
+        queue of its own unless the person types during it too -- which is the
+        case that should chain.
+        """
+        if run_enqueue_suppressed():
+            # The caller executes runs itself and only asked for the ones it
+            # started. Creating one here would leave a RUNNING row nobody runs.
+            return None
+        if conversation.status == ConversationStatus.WAITING:
+            # The run ended by asking the person something. Starting a turn now
+            # would auto-deny that question before they had a chance to see it,
+            # and the queue does not need it: their answer starts a run whose
+            # history rebuild picks these messages up along the way.
+            return None
+        if not await self.conversation_repository.count_queued_user_messages(
+            completed_run_id
+        ):
+            return None
+
+        await self.conversation_repository.lock_conversation(conversation.id)
+        if await self.conversation_repository.get_active_agent_run_for_update(
+            conversation.id
+        ):
+            # Someone typed between that run finishing and this check. Their
+            # message started a turn whose history already covers the queue.
+            return None
+
+        # Same reason as in `start`: a pausing call left unresolved by the run
+        # that just ended would have no matching return in the next run's
+        # history rebuild, and would be dropped along with the model's memory of
+        # having asked.
+        superseded_returns = await self.approvals.supersede_stale_pending_interactions(
+            conversation=conversation,
+            user_id=conversation.user_id,
+        )
+        completed_run = await self.conversation_repository.get_agent_run(
+            completed_run_id
+        )
+        agent_runtime = (
+            (completed_run.agent_runtime if completed_run is not None else None)
+            or conversation.agent_runtime
+            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
+        )
+        # Continuing an unanswered message is still a run someone pays for.
+        await self.assert_usage_preflight_allowed(
+            organization_id=conversation.organization_id,
+            user_id=conversation.user_id,
+            agent_runtime=agent_runtime,
+        )
+        followup_run = await self.conversation_repository.create_agent_run(
+            conversation_id=conversation.id,
+            agent_id=conversation.agent_id,
+            agent_runtime=agent_runtime,
+            metadata={
+                "source": "queued_messages",
+                "queued_behind_agent_run_id": str(completed_run_id),
+            },
+        )
+        self.uow.collect_events(
+            [
+                AgentRunStartedEvent(
+                    conversation_id=conversation.id,
+                    agent_run_id=followup_run.id,
+                    user_id=conversation.user_id,
+                    pod_id=conversation.pod_id,
+                    # Resolved from the conversation, as it is for every run
+                    # nobody named an agent for.
+                    agent_name=None,
+                )
+            ]
+        )
+        await self.uow.commit()
+        return followup_run.id, superseded_returns
+
     async def stop_conversation(
         self,
         *,
@@ -213,11 +332,8 @@ class TurnCoordinator:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id
-        )
-        validate_conversation_access(
-            conversation,
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
@@ -298,13 +414,21 @@ class TurnCoordinator:
         if wait.external_ref:
             await cancel_snooze_wake(wait.external_ref)
 
-    async def _assert_usage_preflight_allowed(
+    async def assert_usage_preflight_allowed(
         self,
         *,
         organization_id: UUID | None,
         user_id: UUID,
         agent_runtime: AgentRuntimeConfig,
     ) -> None:
+        """Refuse to start a run the account has no headroom for.
+
+        Public because starting a turn is not the only way a run begins:
+        `ConversationRetryService.retry_failed_run` starts one too, and a retry
+        that skipped this would be a free way past a limit the first attempt
+        was held to. Reached through `ConversationService.turns`, like `start`
+        and `stop_conversation`.
+        """
         if self.usage_service is None:
             return
         if not agent_runtime.profile_id.startswith("system:"):
@@ -325,7 +449,7 @@ class TurnCoordinator:
                 ("user weekly", "user_weekly"),
                 ("user monthly", "user_monthly"),
             )
-            if not limits[key]["allowed"]
+            if not _scope_allows(limits[key])
         ]
         raise UsageLimitExceededError(
             "LLM usage limit exceeded: "

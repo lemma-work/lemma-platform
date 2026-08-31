@@ -15,8 +15,10 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
+    _user_lines,
 )
 
 
@@ -78,8 +80,8 @@ class _FakeBriefRepo:
     async def get_pod_name(self, pod_id):
         return "Acme"
 
-    async def get_user_email(self, user_id):
-        return "a@b.co"
+    async def get_user_profile(self, user_id):
+        return UserProfile(email="a@b.co")
 
     async def get_agent_grants(self, **kwargs):
         return []
@@ -223,9 +225,9 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
 async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
     """The reason the key dropped the conversation id.
 
-    89.9% of production runs are the first run of their conversation, so a
-    conversation-keyed brief missed on ~90% of runs and rebuilt from the
-    database on the hot path. Nothing in the brief is conversation-derived, so
+    Most runs are the first run of their conversation, so a conversation-keyed
+    brief missed on nearly every run and rebuilt from the database on the hot
+    path. Nothing in the brief is conversation-derived, so
     the second conversation must be served the first one's brief.
     """
     monkeypatch.setattr(
@@ -377,3 +379,128 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
 
     assert "second" in second
     assert "first" not in second
+
+
+class TestEveryCapSaysWhatItLeftOut:
+    """A silent cap is worse than a small one.
+
+    The brief caps tables, agents, functions, files, grants and columns. All six
+    were silent, so a pod's 51st table simply did not exist as far as the agent
+    was concerned -- and an agent that believes a table is absent does not go
+    looking for it, it tells the user there isn't one. The grants case is worse
+    still: the section is headed "These are pre-authorized for you", so a
+    truncated list makes the agent ask for approval it already has.
+    """
+
+    def test_nothing_is_said_when_nothing_was_dropped(self) -> None:
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        assert _more_note(shown=3, total=3, noun="tables") == []
+
+    def test_the_count_left_out_is_named(self) -> None:
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        (line,) = _more_note(shown=50, total=137, noun="tables")
+
+        assert "87 more tables" in line
+
+    def test_an_unknown_total_is_not_treated_as_nothing_more(self) -> None:
+        """A repository that does not count returns None. That is 'unknown',
+        and it must not crash prompt assembly either."""
+        from app.modules.agent.services.agent_context_brief import _more_note
+
+        assert _more_note(shown=5, total=None, noun="agents") == []
+
+    def test_hidden_columns_are_declared_on_the_table_line(self) -> None:
+        """A column the agent cannot see is one it omits from a write and is
+        then told is required, or reports to the user as not existing."""
+        from types import SimpleNamespace
+
+        from app.modules.agent.services.agent_context_brief import (
+            _MAX_COLUMNS,
+            _table_line,
+        )
+
+        table = SimpleNamespace(
+            table_name="orders",
+            primary_key_column="id",
+            columns=[
+                SimpleNamespace(name=f"c{index}", type="TEXT")
+                for index in range(_MAX_COLUMNS + 7)
+            ],
+        )
+
+        line = _table_line(table)
+
+        assert "+7 more columns" in line
+
+    def test_a_narrow_table_gets_no_note(self) -> None:
+        from types import SimpleNamespace
+
+        from app.modules.agent.services.agent_context_brief import _table_line
+
+        table = SimpleNamespace(
+            table_name="orders",
+            primary_key_column="id",
+            columns=[SimpleNamespace(name="id", type="UUID")],
+        )
+
+        assert "more columns" not in _table_line(table)
+
+    def test_extra_top_level_files_are_declared(self) -> None:
+        from app.modules.agent.services.agent_context_brief import (
+            _MAX_RESOURCES,
+            _top_level_file_entries,
+        )
+
+        tree = {
+            "children": [
+                {"path": f"/f{index}", "kind": "FILE"}
+                for index in range(_MAX_RESOURCES + 4)
+            ]
+        }
+
+        entries = _top_level_file_entries(tree)
+
+        assert any("4 more top-level entries" in entry for entry in entries)
+
+
+class TestTheUserLine:
+    """What the brief says about the person, which is all the agent knows.
+
+    Nothing else in the prompt carries a name or a timezone, so an omission
+    here is not a thinner brief -- it is an agent that greets an email address
+    and calls 09:00 UTC "this morning" to somebody eight hours away.
+    """
+
+    def test_a_name_leads_the_line_and_the_address_stays(self):
+        user_id = uuid4()
+
+        lines = _user_lines(
+            UserProfile(email="ada@example.com", display_name="Ada Lovelace"),
+            user_id,
+        )
+
+        assert lines[0] == f"- User: Ada Lovelace <ada@example.com> ({user_id})"
+
+    def test_an_unnamed_user_still_reads_as_it_always_did(self):
+        user_id = uuid4()
+
+        lines = _user_lines(UserProfile(email="ada@example.com"), user_id)
+
+        assert lines[0] == f"- User: ada@example.com ({user_id})"
+
+    def test_a_known_timezone_is_named_with_what_to_do_about_it(self):
+        lines = _user_lines(
+            UserProfile(email="ada@example.com", timezone="Asia/Kolkata"), uuid4()
+        )
+
+        assert "Asia/Kolkata" in lines[1]
+        assert "UTC" in lines[1]
+
+    def test_a_missing_timezone_is_said_rather_than_left_out(self):
+        """Silence reads as "the clock in front of you is theirs"."""
+        lines = _user_lines(UserProfile(email="ada@example.com"), uuid4())
+
+        assert "not set" in lines[1]
+        assert "UTC" in lines[1]

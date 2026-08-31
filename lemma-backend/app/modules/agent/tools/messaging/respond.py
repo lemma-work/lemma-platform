@@ -81,7 +81,8 @@ async def respond_to_notification(
     return RespondToNotificationResponse(
         success=True,
         message=(
-            "Recorded. The person who asked will see it the next time they check."
+            "Recorded. If this was the last thing the asking agent was owed, it "
+            "picks up again now; otherwise it does when the rest come in."
         ),
     )
 

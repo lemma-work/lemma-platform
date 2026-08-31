@@ -98,6 +98,70 @@ GitHub sidesteps the problem: a fine-grained PAT is a bearer token and is a real
 way to connect GitHub, so those scenarios run on a fresh stack with no browser
 involved.
 
+**Being a person on Telegram** is the third shape of this, and the sharpest. A
+bot never receives a message nobody sent it, and cannot send one *as* a human —
+so the half of a messaging surface that matters most could not be driven at all
+until the suite had a real account to be. That needs MTProto, which needs a
+session, and Telegram mints a session by sending a code to a phone.
+
+So it is a person's job, once:
+
+```bash
+cd tests/scenarios && uv run python -m harness.telegram_login
+```
+
+Put the `TELEGRAM_SESSION` it prints in the environment and the person-driven
+scenarios (`journeys/live/test_telegram.py`) run unattended from then on
+— text in and an answer out, an image the agent has to look at, a question
+answered by pressing a button, an approval offered as something to press.
+
+Two things that account needs, and both are what a real colleague has anyway:
+
+* **a @username** — Lemma resolves a Telegram sender by it, and without one every
+  message is from a stranger. The scenarios skip and say so.
+* **to have messaged the bot once** — a bot cannot open a conversation, which is
+  why the surface it talks to stands between runs (`tenant.STANDING_REACH`).
+
+The session is that account without a password prompt. Keep it out of the
+repository and out of anywhere shared.
+
+### One cast, or the person-driven scenarios cannot resolve anybody
+
+`SCENARIOS_MAILBOX` decides who the cast *is* — `you+daniel.okonkwo@…` when it
+is set, `daniel.okonkwo@example.com` when it is not — and it is read from the
+process environment only, never from `lemma-backend/.env`. Provision once with
+it and once without and the deployment ends up with two parallel casts in two
+organizations sharing a display name, which is a state nothing reports.
+
+It matters most here, because Telegram identity is deployment-wide:
+
+* `telegram_username` is unique across the deployment, so only one of the two
+  Daniels can hold `@you`. Whichever cast ran last owns it, and the other is
+  refused with a 409. The live fixture skips with that explanation rather than
+  erroring.
+* the resolution itself is **sticky by design** (`PS-SURF-012`: "shall keep
+  that resolution stable across later messages"). Once a Telegram account has
+  resolved to a user, changing `telegram_username` does not re-point it — so a
+  cast built after the link was made can never be recognised.
+
+So: **export `SCENARIOS_MAILBOX` in every command that touches a deployment**,
+including `make scenarios-provision`, and use the same answer every time. If a
+deployment already has two casts, the surviving link has to be removed before
+the other cast can be recognised; there is no API for that, on purpose.
+
+**Run the live lane with the proxy off.** The fast lane has the egress proxy
+answer for `api.telegram.org` so nothing leaves the machine, and that is exactly
+wrong here: the agent would reply to the fake while the person waits on real
+Telegram — two conversations that never meet, and a wait that times out saying
+nothing useful.
+
+```bash
+SCENARIOS_EGRESS=off uv run pytest -m live --base-url http://127.0.0.1:8000
+```
+
+The scenarios refuse to run against a faked Telegram rather than time out, so
+this is a message and not a mystery.
+
 ## Reporting
 
 The nightly workflow posts to Slack: how many scenarios passed, what was not run

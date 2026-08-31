@@ -13,6 +13,15 @@ export interface LemmaConfig {
   authUrl: string;
   /** Pod ID to scope all pod-level API calls */
   podId?: string;
+  /**
+   * A credential to send as `Authorization: Bearer`.
+   *
+   * The supported way to authenticate outside a browser — a Node script, a
+   * Lambda, an MCP server — where there is no session cookie to rely on. In a
+   * browser leave it unset: the cookie flow handles anti-CSRF and refresh, and
+   * a token pasted into page config is a token in the page.
+   */
+  token?: string;
   app?: LemmaAppConfig;
   /** Per-request timeout in ms (default 30000). */
   timeoutMs?: number;
@@ -91,10 +100,17 @@ export function resolveConfig(overrides: Partial<LemmaConfig> = {}): LemmaConfig
     win.podId ??
     fromEnv("POD_ID");
 
+  // `LEMMA_TOKEN` as well as the explicit field: a server-side caller usually
+  // has the credential in the environment already, and reading it here means
+  // the common case needs no code at all. Deliberately not read from
+  // `windowConfig()` — a token in page config is a token in the page.
+  const token = overrides.token ?? fromEnv("TOKEN");
+
   return {
     apiUrl: apiUrl.replace(/\/$/, ""),
     authUrl: authUrl.replace(/\/$/, ""),
     podId,
+    token,
     app: overrides.app ?? win.app,
     timeoutMs: overrides.timeoutMs ?? win.timeoutMs,
     maxRetries: overrides.maxRetries ?? win.maxRetries,

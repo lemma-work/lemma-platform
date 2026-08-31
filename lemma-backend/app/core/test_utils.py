@@ -23,7 +23,13 @@ SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # wire schema as 4.9.9, so no client change is needed.
 # The -core image fetches layout/OCR models from HuggingFace on first use.
 KREUZBERG_IMAGE = "ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2"
-MINIO_IMAGE = "quay.io/minio/minio:latest"
+# Pinned, like every other image here. `:latest` moved under CI: the tag
+# resolved to a different MinIO release whenever upstream published one,
+# which is both an unreviewed dependency bump and a cache that could not
+# notice -- the e2e image cache is keyed on this file, so the key stayed
+# identical while the image behind the tag changed. Multi-arch (amd64 for
+# CI, arm64 for a developer laptop), so a tag rather than a digest.
+MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 # Local-only credentials for a throwaway test container.
 MINIO_ROOT_USER = "minioadmin"
 MINIO_ROOT_PASSWORD = "minioadmin"

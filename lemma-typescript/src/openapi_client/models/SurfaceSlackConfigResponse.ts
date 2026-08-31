@@ -10,5 +10,6 @@
  */
 export type SurfaceSlackConfigResponse = {
     app_name?: (string | null);
+    dedicated_to_agent?: boolean;
     dm_agent_by_user?: Record<string, string>;
 };

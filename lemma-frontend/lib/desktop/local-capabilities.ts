@@ -189,3 +189,37 @@ export function useDesktopBridge(): boolean {
 export function desktopBridgeAvailable(): boolean {
   return typeof window !== "undefined" && readDesktopBridge();
 }
+
+/**
+ * Whether an app embedded in an iframe would still be signed in.
+ *
+ * On macOS it is not, and no cookie attribute can change that. `localhost` is
+ * not in the Public Suffix List, so WebKit cannot derive a registrable domain
+ * and treats every `*.lemma.localhost` host as its own site. An app iframed
+ * from `<slug>.apps.lemma.localhost` into a workspace on
+ * `app.lemma.localhost` is therefore third-party, and WebKit blocks its
+ * storage outright: measured in a WKWebView harness, the server's `Set-Cookie`
+ * is not stored, a `document.cookie` write is silently dropped and reads back
+ * empty, a credentialed fetch to `/_lemma/users/me` answers 401, and
+ * `document.hasStorageAccess()` is false. The app loads permanently signed out
+ * and its SDK refreshes for ever trying to fix it.
+ *
+ * Top-level is fine — the same host in its own window gets the session, which
+ * is why the answer is a window rather than a redesign.
+ *
+ * Derived rather than configured, from two things that are never stale.
+ * `platform` is baked from `std::env::consts::OS` and cannot change for the
+ * life of the process, unlike `mode` (see `readDesktopBridge` above for what
+ * that staleness already cost). `location.hostname` is read at render, so this
+ * corrects itself the moment the local hostnames move to a real registrable
+ * domain — no flag to flip, no shell change, and the fallback path when that
+ * domain cannot be resolved needs no coordination either.
+ *
+ * Chromium and WebView2 treat `*.localhost` as same-site, so a LAN browser, a
+ * public link, and the Windows build all keep their iframes.
+ */
+export function crossSiteFramesCarryCookies(): boolean {
+  if (typeof window === "undefined") return true;
+  if (window.__LEMMA_DESKTOP__?.platform !== "macos") return true;
+  return !window.location.hostname.endsWith(".localhost");
+}

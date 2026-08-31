@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelRequest,
     ModelResponse,
     ToolCallPart,
@@ -158,7 +159,14 @@ def test_the_ceiling_guard_is_wired_after_the_summarizer() -> None:
         HarnessOptions(model_name="glm-4.6"), summarization_model="openai:gpt-4.1"
     )
 
-    assert processors[-1].__name__ == "_ceiling_guard"
+    # Compaction first, the ceiling backstop after it, and the provider shape
+    # guarantee last so it sees whatever those produced.
+    names = [
+        getattr(processor, "__name__", type(processor).__name__)
+        for processor in processors
+    ]
+    assert names.index("_ceiling_guard") > names.index("HistoryCompactor")
+    assert names[-1] == "_ensure_leading_user_message"
 
 
 @pytest.mark.asyncio
@@ -179,9 +187,340 @@ async def test_the_guard_trims_when_summarization_returned_oversized_history() -
         ),
         summarization_model="openai:gpt-4.1",
     )
-    guard = processors[-1]
+    guard = processors[-2]
 
     oversized = [_text("filler " * 400) for _ in range(30)]
     result = await guard(oversized)
 
     assert count_model_message_tokens(result) <= 3_000
+
+
+def _png(size: int) -> bytes:
+    """Bytes that tokenize like a real image: high-entropy, not a run of zeros."""
+    return b"\x89PNG\r\n" + (bytes(range(256)) * (size // 256 + 1))[:size]
+
+
+def _image_exchange(
+    caption: str, *, size: int = 130_000, call_id: str = "img1"
+) -> list[object]:
+    """A `view_image` round-trip in the shape pydantic-ai actually produces.
+
+    The binary never arrives as bare `bytes`: it is a `BinaryContent` sitting in
+    a list next to its caption. That is precisely the shape the old top-level
+    `isinstance(value, bytes)` guard could not see.
+    """
+    return [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="view_image",
+                    args={"workspace_file_path": "shot.png"},
+                    tool_call_id=call_id,
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="view_image",
+                    content=[
+                        caption,
+                        BinaryContent(data=_png(size), media_type="image/png"),
+                    ],
+                    tool_call_id=call_id,
+                )
+            ]
+        ),
+    ]
+
+
+class TestImagesAreNotCountedAsText:
+    """The regression suite for a conversation that lost its own task.
+
+    A 129KB screenshot counted as 277k tokens against a 110k ceiling. The guard
+    then head-dropped a healthy 40-message history to 4 messages to fit a number
+    that was never real, taking the user's original request with it, and the
+    agent spent the next hour building something nobody asked for.
+    """
+
+    def test_an_image_costs_what_a_vision_model_charges_not_its_bytes(self) -> None:
+        """Bounded on both sides. One-sided, this passed with the per-image
+        price set to 1 — and a wrong per-image price is the entire incident."""
+        cost = count_model_message_tokens(_image_exchange("Read image"))
+
+        assert 1_000 < cost < 3_000
+
+    def test_image_cost_does_not_grow_with_file_size(self) -> None:
+        """The old counter billed per byte. A vision model bills per image."""
+        small = count_model_message_tokens(_image_exchange("shot", size=10_000))
+        large = count_model_message_tokens(_image_exchange("shot", size=400_000))
+
+        assert small == large
+
+    def test_an_image_in_the_tail_does_not_evict_the_conversation(self) -> None:
+        """The incident, in miniature: a screenshot at the end of a healthy
+        history must not cost the user the request that started it."""
+        messages: list[object] = [_text("Explain this architecture as a video")]
+        for index in range(12):
+            messages.extend(_tool_exchange(f"c{index}", "build output " * 100))
+        messages.extend(_image_exchange("Successfully read image", size=200_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=110_000)
+
+        assert trimmed == messages
+        assert any(
+            isinstance(part, UserPromptPart) and "video" in str(part.content)
+            for message in trimmed
+            for part in message.parts
+        )
+
+    def test_binary_nested_deeper_than_a_list_is_still_not_text(self) -> None:
+        """A document viewer returns one payload per page, inside a structure."""
+        pages = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="pod_view_document_pages",
+                    content={
+                        "pages": [
+                            {
+                                "page_number": number,
+                                "image": BinaryContent(
+                                    data=_png(80_000), media_type="image/png"
+                                ),
+                            }
+                            for number in range(10)
+                        ]
+                    },
+                    tool_call_id="doc1",
+                )
+            ]
+        )
+
+        # Two-sided: charging *nothing* for ten images also passed before, so
+        # deleting the dict recursion in `_binary_tokens` went unnoticed.
+        cost = count_model_message_tokens([pages])
+        assert 10 * 1_000 < cost < 25_000
+
+    def test_structured_tool_results_are_still_counted(self) -> None:
+        """Excluding binary must not excuse the counter from structured text --
+        under-counting JSON is the failure the real tokenizer was added for."""
+        rows = [{"id": index, "name": f"customer-{index}"} for index in range(200)]
+        message = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="pod_query",
+                    content={"rows": rows},
+                    tool_call_id="q1",
+                )
+            ]
+        )
+
+        assert count_model_message_tokens([message]) > 1_000
+
+
+def test_a_known_size_skips_the_measurement_it_was_given(monkeypatch) -> None:
+    """`known_size` exists to skip one re-tokenisation on the request path.
+
+    Comparing two calls to each other cannot show that: both sides move
+    together, so deleting the short-circuit entirely left the old version of
+    this test passing. Count the measurements instead.
+    """
+    from app.modules.agent.infrastructure.harnesses import history as history_module
+
+    calls: list[int] = []
+    real = history_module.count_model_message_tokens
+
+    def counted(messages):
+        calls.append(1)
+        return real(messages)
+
+    monkeypatch.setattr(history_module, "count_model_message_tokens", counted)
+    messages = [_text("filler " * 500) for _ in range(20)]
+    measured = real(messages)
+
+    calls.clear()
+    enforce_token_ceiling(messages, ceiling=5_000)
+    without = len(calls)
+    calls.clear()
+    enforce_token_ceiling(messages, ceiling=5_000, known_size=measured)
+    with_known = len(calls)
+
+    assert with_known == without - 1
+
+
+def test_a_known_size_under_the_ceiling_short_circuits(monkeypatch) -> None:
+    """The contract callers rely on: pass a size and it is believed."""
+    from app.modules.agent.infrastructure.harnesses import history as history_module
+
+    monkeypatch.setattr(
+        history_module,
+        "count_model_message_tokens",
+        lambda messages: pytest.fail("should not have measured"),
+    )
+    messages = [_text("filler " * 500) for _ in range(20)]
+
+    assert enforce_token_ceiling(messages, ceiling=5_000, known_size=10) == messages
+
+
+class TestTheCeilingGuardActuallyEnforces:
+    """Found by adversarial review of this branch.
+
+    The guard cut the unpinned middle, found the result still over the ceiling,
+    and returned it anyway: twelve of seventeen messages destroyed *and* a
+    prompt 43% over the window — the provider rejection it exists to prevent,
+    paid for twice — while logging that it had enforced one.
+    """
+
+    def _huge(self) -> list[object]:
+        messages: list[object] = [
+            _text("U0: reconcile the ledger"),
+            _text("U1: also check refunds — do NOT email anyone"),
+        ]
+        for index in range(7):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 240_000))
+        return messages
+
+    def test_it_gets_under_the_ceiling(self) -> None:
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        assert count_model_message_tokens(trimmed) <= 117_760
+
+    def test_every_pinned_turn_survives_not_just_the_first(self) -> None:
+        """The fallback kept exactly one pin. The turn it dropped is the kind
+        whose loss produces the incident: a mid-conversation correction, or a
+        negative constraint like 'do NOT email anyone'."""
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        kept = " ".join(
+            str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+        assert "reconcile the ledger" in kept
+        assert "do NOT email anyone" in kept
+
+    def test_the_model_is_told_messages_were_dropped(self) -> None:
+        """Every other cap on this branch announces itself. This was the largest
+        and the only silent one, so the model read a history where two unrelated
+        turns sat adjacent and reasoned confidently from it."""
+        trimmed = enforce_token_ceiling(self._huge(), ceiling=117_760)
+
+        assert any(
+            "did not fit" in str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+
+    def test_it_gives_up_pinned_turns_when_they_alone_do_not_fit(self) -> None:
+        """Stage two. Replacing it with `pins[:1]` left the whole class passing,
+        including the test written for exactly that."""
+        messages: list[object] = [
+            _text(f"U{index}: " + "word " * 1_600) for index in range(20)
+        ]
+        # Enough trailing tool traffic that the kept tail holds no user turn at
+        # all, so the newest one can only survive by being pinned. Without this
+        # it sits inside the tail and survives even when stage two is gutted.
+        for index in range(4):
+            messages.extend(_tool_exchange(f"c{index}", "small"))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=30_000)
+
+        assert count_model_message_tokens(trimmed) <= 30_000
+        kept = " ".join(
+            str(part.content)
+            for message in trimmed
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        )
+        # The first is the request; the newest is what they just said.
+        assert "U0:" in kept
+        assert "U19:" in kept
+
+    def test_it_shrinks_the_recent_tail_when_that_is_all_that_is_left(self) -> None:
+        """Stage three. Deleting the loop left the class passing."""
+        messages: list[object] = [_text("U0: the request")]
+        for index in range(4):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 400_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=60_000)
+
+        assert count_model_message_tokens(trimmed) <= 60_000
+
+    def test_the_notice_never_lands_between_a_call_and_its_result(self) -> None:
+        """Providers require a tool result to follow its call. Moving the notice
+        one slot later put it between them."""
+        messages: list[object] = [_text("U0: the request")]
+        for index in range(9):
+            messages.extend(_tool_exchange(f"c{index}", "x" * 200_000))
+
+        trimmed = enforce_token_ceiling(messages, ceiling=117_760)
+
+        for position, message in enumerate(trimmed[:-1]):
+            calls = [p for p in message.parts if isinstance(p, ToolCallPart)]
+            if not calls:
+                continue
+            following = trimmed[position + 1].parts
+            assert any(isinstance(p, ToolReturnPart) for p in following), (
+                "a tool call is not immediately followed by its result"
+            )
+
+    def test_the_newest_turn_is_still_last(self) -> None:
+        """A notice after the final turn competes with the thing being answered.
+        Reachable when every surviving message is pinned."""
+        messages = [_text("filler " * 400) for _ in range(30)]
+
+        trimmed = enforce_token_ceiling(messages, ceiling=2_000)
+
+        assert trimmed[-1] is messages[-1]
+
+
+class TestCountingSurvivesUnfamiliarShapes:
+    def test_bytes_under_any_field_name_are_not_charged_as_text(self) -> None:
+        """The guard being one attribute wide is how the original defect worked.
+        A payload whose bytes hang off another name was charged at its repr —
+        387k tokens for a 240KB image, the same failure by a different route.
+        """
+        from pydantic import BaseModel
+
+        class Odd(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            payload: bytes
+
+        message = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="t",
+                    content=Odd(payload=b"\xff" * 240_000),
+                    tool_call_id="c",
+                )
+            ]
+        )
+
+        assert count_model_message_tokens([message]) < 5_000
+
+    def test_a_multimodal_user_turn_is_still_the_users(self) -> None:
+        """`_is_synthetic` only inspected string content, so a list fell through
+        to 'synthetic' — and a user turn with an attachment stopped being pinned,
+        which is the one kind of message this module exists to keep."""
+        from pydantic_ai.messages import BinaryContent
+
+        from app.modules.agent.infrastructure.harnesses.history import (
+            is_pinned_message,
+        )
+
+        message = ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[
+                        "look at this",
+                        BinaryContent(
+                            data=b"\x89PNG" + b"\x00" * 100, media_type="image/png"
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        assert is_pinned_message(message)

@@ -1218,8 +1218,8 @@ class ConnectorService:
                     user_id=user_id,
                 )
             except Exception:
-                logger.debug(
-                    "connectors.connector_service.revoke_connection.diagnostic"
+                logger.error(
+                    "connectors.connector_service.revoke.failed", exc_info=True
                 )
 
         await self.account_repository.delete(account_id)

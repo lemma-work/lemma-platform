@@ -4,6 +4,7 @@ from secrets import token_hex
 from uuid import UUID
 from typing import Optional
 
+from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
 from app.modules.identity.contracts import OrganizationRole
@@ -40,6 +41,7 @@ class PodService:
         authorization_service: object | None = None,
         icon_service: IconCleanupPort | None = None,
         schedule_teardown: PodScheduleTeardownPort | None = None,
+        uow: object | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -48,6 +50,7 @@ class PodService:
         self.authorization_service = authorization_service
         self.icon_service = icon_service
         self.schedule_teardown = schedule_teardown
+        self._uow = uow
 
     async def create_pod(self, entity: PodEntity, creator_user_id: UUID) -> PodEntity:
         member = await self.organization_repository.get_member(
@@ -77,6 +80,26 @@ class PodService:
                 pod_member_id=created_member.id,
                 roles=[PodRole.ADMIN],
                 added_by_user_id=creator_user_id,
+            )
+
+        # The pod's assistant gets its mailbox here, the way an agent gets one in
+        # `create_agent`. It used to be minted on the assistant's first outbound
+        # notification instead, which reads as thrift and is not: inbound routes
+        # on the address, so until something was sent, mail to the obvious guess
+        # matched no surface and started nothing. A pod that cannot be written to
+        # is not cheaper than one that can.
+        #
+        # Best-effort by design, exactly as for an agent: creating a pod must not
+        # fail because a mail domain is unset. `_uow` is absent only where a
+        # caller built the service without one -- the same guard `delete_pod`
+        # uses for its role-cache hook.
+        if self._uow is not None:
+            from app.composition.agent_email_surface import (
+                provision_pod_assistant_email_surface,
+            )
+
+            await provision_pod_assistant_email_surface(
+                self._uow, pod_id=pod.id, pod_name=pod.name
             )
 
         return pod
@@ -165,7 +188,14 @@ class PodService:
             raise PodValidationError(str(exc)) from exc
 
     async def delete_pod(self, pod_id: UUID, requester_user_id: UUID) -> bool:
-        pod = await self.pod_repository.get(pod_id)
+        # Read through the soft delete, because deleting has to be safe to
+        # repeat (PS-POD-050). A client that never saw the first answer sends
+        # the request again, and `get` filters `is_deleted` -- so the retry used
+        # to come back 404 for a pod the caller had just successfully deleted,
+        # which is an error a person has no way to clear. A pod id that was
+        # never real is still 404; that is a different answer to a different
+        # question.
+        pod = await self.pod_repository.get_even_if_deleted(pod_id)
         if not pod:
             raise PodNotFoundError()
 
@@ -184,6 +214,12 @@ class PodService:
                 PodRole.ADMIN,
             ):
                 raise PodAccessDeniedError("Permission denied")
+
+        # Already gone: the permission checks above still ran, so this is not a
+        # way to learn a pod exists, and the work below is not repeated. The
+        # second call reports the same success as the first.
+        if pod.is_deleted:
+            return True
 
         old_icon_url = pod.icon_url
         pod.name = self._build_deleted_pod_name(pod.name)
@@ -208,6 +244,42 @@ class PodService:
             # inline would put an unbounded number of Composio round trips
             # inside this transaction.
             await self.schedule_teardown.disarm_all_for_pod(pod_id)
+        # The pod's inbound addresses go with it, in this request, for the same
+        # reason its schedules are disarmed here: the pod's *name* is freed
+        # above, the moment `_build_deleted_pod_name` renames it. Recreating a
+        # pod under that name before the pod-deleted event was consumed asked
+        # for an address the deleted pod still held, and got either a suffixed
+        # one — with the readable form orphaned on a row nobody can reach — or,
+        # once the worker caught up, the deleted pod's own address, still being
+        # written to by its correspondents. Which of the two came down to queue
+        # lag. Every pod holds an address now, so this stopped being a corner.
+        #
+        # Only the email surfaces, deliberately. The comment above is right that
+        # an unbounded number of Composio round trips must not go inside this
+        # transaction — but a Resend surface has none: it receives on a
+        # catch-all webhook, so `delete_surface` makes no provider call for it
+        # and `_sync_email_schedule` returns early. Bounded by the number of
+        # agents in the pod, and the rest still waits for the worker.
+        if self._uow is not None:
+            from app.composition.agent_email_surface import (
+                release_pod_inbound_addresses,
+            )
+
+            await release_pod_inbound_addresses(self._uow, pod_id=pod_id)
+        # Cached role snapshots outlive the pod otherwise, and they are what
+        # authorizes every pod-scoped request. The snapshot carries
+        # `pod_is_deleted`, so one written *before* this moment says the pod is
+        # alive and keeps saying so until it expires -- which is a deleted
+        # pod's records still readable for the length of a cache TTL. Dropped
+        # after commit, so a concurrent read cannot re-warm it from the row
+        # this transaction has not written yet.
+        #
+        # Cleared wholesale rather than per member: an organization owner
+        # reaches a pod with no membership row at all, so there is no list of
+        # affected principals to walk. Deleting a pod is rare, and the cost of
+        # over-clearing is re-derivation on next access, never stale authority.
+        if self._uow is not None:
+            self._uow.after_commit(invalidate_role_snapshot_cache)
         return True
 
     async def list_pods_by_organization(

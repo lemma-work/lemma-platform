@@ -18,6 +18,24 @@ async def pod(world, run):
     return alice, await alice.creates_a_pod(named=run.name("pod"))
 
 
+def _connected_by_a_person(surfaces: list) -> list:
+    """The surfaces somebody chose to connect, which is not all of them.
+
+    A pod is given its assistant's mailbox as it is created — nobody connected
+    it, and it is there before anyone opens the surfaces screen. These
+    scenarios are about what connecting does, so "the pod holds no surfaces at
+    all" stopped being the way to say "nothing is connected yet".
+    """
+    return [
+        surface
+        for surface in surfaces
+        if not (
+            str(surface.get("platform", "")).upper() == "RESEND"
+            and surface.get("uses_default_agent")
+        )
+    ]
+
+
 @scenario("A person sees which platforms they can connect")
 @proves("PS-SURF-001")
 @covers("agent.surface.available", "agent.surface.list")
@@ -27,8 +45,8 @@ async def test_available_platforms_are_listed(pod):
     available = await alice.platforms_available_to(the_pod)
 
     assert isinstance(available, list), available
-    assert await alice.surfaces_in(the_pod) == [], (
-        "a new pod is connected to nothing"
+    assert _connected_by_a_person(await alice.surfaces_in(the_pod)) == [], (
+        "a new pod has nothing connected to it yet"
     )
 
 
@@ -53,7 +71,7 @@ async def test_an_unconfigured_surface_is_refused(pod):
         in_pod=the_pod, platform="slack", config={}
     )
 
-    assert await alice.surfaces_in(the_pod) == [], (
+    assert _connected_by_a_person(await alice.surfaces_in(the_pod)) == [], (
         "a refused connection must leave nothing behind"
     )
 
@@ -78,7 +96,8 @@ async def test_an_outsider_cannot_touch_surfaces(world, pod):
 
     listed = await outsider.api.call("GET", f"/pods/{the_pod['id']}/surfaces")
     created = await outsider.api.call(
-        "POST", f"/pods/{the_pod['id']}/surfaces",
+        "POST",
+        f"/pods/{the_pod['id']}/surfaces",
         json={"platform": "slack", "name": "trespass"},
     )
 

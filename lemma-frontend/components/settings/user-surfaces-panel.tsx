@@ -12,8 +12,6 @@ import { StepLoader } from '@/components/brand/loader';
 const PLATFORM_LABEL: Record<string, string> = {
     SLACK: 'Slack',
     TEAMS: 'Teams',
-    GMAIL: 'Gmail',
-    OUTLOOK: 'Outlook',
     TELEGRAM: 'Telegram',
     WHATSAPP: 'WhatsApp',
     RESEND: 'Resend',

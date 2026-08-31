@@ -73,9 +73,9 @@ way a scenario says, do not edit the scenario.
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
-| Scenarios (live) | `make scenarios-live` | Nightly and before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
+| Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | — | Weekly, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go. |
-| Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. In CI on request only, via `backend-real-llm-e2e.yml`. |
+| Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. Not in CI. |
 
 The real-LLM lane is worth one paragraph, because its absence used to be
 invisible. Every `@pytest.mark.real_llm` test ran in **no** lane at all: the
@@ -84,11 +84,23 @@ sets `E2E_REAL=1` *together with* `E2E_LLM_MODE=mock` — and `conftest.py` read
 the explicit mode first, so they skipped there too. A test that runs nowhere
 still looks like coverage in a listing.
 
-It is `workflow_dispatch` only, with no schedule and above all no
-`pull_request`: this repository is public, so a fork must never be able to reach
-the credential. Its results deliberately do not feed `e2e-union.json` either — a
-coverage floor has to be reproducible from a pull request, and a number that
-moved because somebody spent money on a manual run is not.
+It runs locally only. There was a `workflow_dispatch` workflow for it, and in
+its whole life nobody dispatched it once — a lane that costs money per run and
+needs a person to decide to spend it does not get used by being available. The
+live scenario and E2B conformance crons went with it for a nearer reason: they
+ran on a schedule against credentials this deployment does not hold, so they
+reported green having executed nothing (`8 skipped in 84.85s`), which is worse
+than not running at all, because a listing counts them.
+
+None of the tests were deleted. `make test-e2e-real-llm`, `make scenarios-live`,
+and the E2B conformance files are all still here and still run on a machine that
+holds the credentials. What is gone is the pretence that CI was running them.
+
+Nothing in CI should reach a real provider anyway: this repository is public, so
+a fork must never be able to reach a credential, which is why none of these ever
+ran on `pull_request`. Their results also deliberately never fed
+`e2e-union.json` — a coverage floor has to be reproducible from a pull request,
+and a number that moved because somebody spent money on a manual run is not.
 
 ### What may run in front of the merge button
 
@@ -238,6 +250,70 @@ everywhere else, and each is now guarded — see
 
 **Wait on a condition, never on the clock.** A sleep is either too short and
 flakes under load, or too long and everyone pays for it on every run.
+
+**Never leave a process behind.** Anything that spawns background load — a
+stress loop, a dev server, a sidecar, a CPU hog used to reproduce a flake —
+tears it down from a `trap`, never from the last line of the script. The last
+line is not reached when the run times out, when the harness kills the command,
+or when the session simply ends; the children are reparented onto pid 1 and
+each one pins a core until a person notices. That is not hypothetical, and it
+is not rare: a busy loop once ran for 20+ hours, and a later agent
+reproducing a `locald` flake left nineteen `yes > /dev/null` spinners at ~45%
+CPU each for an hour and a half, on an 11-core machine, while every command it
+ran printed `load stopped`.
+
+Do not write the loop again.
+[`desktop/scripts/stress_test_under_load.sh`](../desktop/scripts/stress_test_under_load.sh)
+already does it correctly — it traps `EXIT INT TERM HUP`, kills by array,
+`wait`s, and enforces its own runtime ceiling so a hung test loop still tears
+the load down.
+
+Two details make the hand-rolled version fail silently, so both are worth
+knowing before you reach for one anyway:
+
+- **`kill` at the end of a script is not cleanup.** Only `trap` runs on the
+  paths that actually happen. `HUP` needs naming explicitly — bash's default
+  handler terminates *without* running the `EXIT` trap, so closing the terminal
+  leaks everything.
+- **Ad-hoc commands here run under `zsh`, which does not word-split.**
+  `PIDS="$PIDS $!"` followed by `kill $PIDS` is a correct *bash* idiom that
+  does nothing at all in zsh: the whole string arrives as a single argument,
+  `kill` exits 1, and the `2>/dev/null` everyone appends hides it. Collect into
+  an array and `kill "${PIDS[@]}"`. `jobs -p` is the same trap from the other
+  side — inside `$(...)` it is a subshell with an empty jobs table, so
+  `kill $(jobs -p)` reliably kills nothing.
+
+A script that owns background processes belongs in a file with a
+`#!/usr/bin/env bash` shebang, not inlined into a shell command, for exactly
+this reason.
+
+**A stub is legitimate only when a contract test pins both sides against one
+committed artifact.** A stand-in you wrote proves your half of an interface and
+certifies nothing about the half that ships. This is not hypothetical: the
+Python stub guest returned a top-level `sandbox_id` where the real guest nests
+it, and every test against the stub passed.
+
+Two pairs do this properly today, and both follow the same shape — one JSON
+file in the repo, asserted from both languages, with the failure it exists to
+catch written into the file itself:
+
+| Contract | Asserted from |
+|---|---|
+| `desktop/agent-host/tests/fixtures/wire_contract.json` | the Agent Host (Rust) and the backend (Python) |
+| `desktop/contracts/host-pack-layout.json` | `native_host_pack.rs` (consumer) and `build_local_host_pack.py` (producer) |
+
+The host-pack one is worth reading as the example, because it is the case where
+nothing *could* have caught the drift: the producer is a Python script run by a
+release job, the consumer hard-codes a dozen paths, and a PR runs the consumer's
+tests against a fixture the same PR wrote. A rename lands green on both sides
+and is found by whoever installs the release — as `NotFound` and the name of a
+file they have never heard of.
+
+Prefer running the producer to reading its source. Where a path is assembled
+from pieces rather than spelled out, a substring assertion proves nothing;
+`copy_node_runtime` and `copy_browser_assets` are both called for real against a
+temporary directory, and the contract marks those entries `producer_writes:
+null` so the weaker check knows to stand aside.
 
 **A failing test is evidence, not an obstacle.** If a scenario fails because the
 product is wrong, the finding goes in [`issues.md`](../issues.md) with a `DEV-`

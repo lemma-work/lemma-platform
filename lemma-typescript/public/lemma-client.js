@@ -9135,20 +9135,22 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
     const podId = (_h = (_g = overrides.podId) != null ? _g : win.podId) != null ? _h : fromEnv("POD_ID");
+    const token = (_i = overrides.token) != null ? _i : fromEnv("TOKEN");
     return {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
-      app: (_i = overrides.app) != null ? _i : win.app,
-      timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
-      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
-      client: (_l = overrides.client) != null ? _l : win.client,
-      appId: (_m = overrides.appId) != null ? _m : win.appId
+      token,
+      app: (_j = overrides.app) != null ? _j : win.app,
+      timeoutMs: (_k = overrides.timeoutMs) != null ? _k : win.timeoutMs,
+      maxRetries: (_l = overrides.maxRetries) != null ? _l : win.maxRetries,
+      client: (_m = overrides.client) != null ? _m : win.client,
+      appId: (_n = overrides.appId) != null ? _n : win.appId
     };
   }
 
@@ -9215,6 +9217,33 @@ var LemmaClient = (() => {
       recipeList: [
         import_session.default.init({
           tokenTransferMethod: "cookie",
+          /**
+           * How many times one request may be refreshed-and-retried before the
+           * session is called unusable. The library default is 10.
+           *
+           * This is the init the workspace and every pod app actually run --
+           * `LemmaAuth` constructs it -- while the ceiling that was set to 2 sits
+           * on the auth portal's own `SuperTokens.init`, which only the `/auth`
+           * routes reach. So the pages that make the most requests were the ones
+           * still retrying ten times each.
+           *
+           * That is the amplifier, not the cause: a refresh can answer 500
+           * forever when a browser holds two session cookies from a
+           * cookie-domain change, and at ten attempts per request across the
+           * queries a workspace screen makes, one install logged 30 refusals and
+           * 17 500s before anyone looked.
+           *
+           * Three rather than two, and the extra one is not slack. An install
+           * migrating off duplicate cookies spends both: the first refresh comes
+           * back carrying only the clearing cookies and no new tokens, and the
+           * second does the real refresh. At two, anything that consumes a third
+           * -- a second tab racing the refresh lock, an access token expiring in
+           * flight -- hits the ceiling, which the frontend reads as an
+           * unrepairable session and signs the user out. The ceiling exists to
+           * stop a session that cannot be repaired being hammered, not to fail
+           * the one case it was raised for.
+           */
+          maxRetryAttemptsForSessionRefresh: 3,
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -9237,8 +9266,9 @@ var LemmaClient = (() => {
     "st-refresh-token"
   ];
   var LOCALSTORAGE_TOKEN_KEY = "lemma_token";
+  var memoryToken = null;
   function readStorageToken() {
-    if (typeof window === "undefined") return null;
+    if (typeof window === "undefined") return memoryToken;
     try {
       return localStorage.getItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9246,14 +9276,20 @@ var LemmaClient = (() => {
     }
   }
   function writeStorageToken(token) {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = token;
+      return;
+    }
     try {
       localStorage.setItem(LOCALSTORAGE_TOKEN_KEY, token);
     } catch {
     }
   }
   function removeStorageToken() {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = null;
+      return;
+    }
     try {
       localStorage.removeItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9269,10 +9305,7 @@ var LemmaClient = (() => {
     removeStorageToken();
   }
   function detectInjectedToken() {
-    if (typeof window === "undefined") return null;
-    const localToken = readStorageToken();
-    if (localToken) return localToken;
-    return null;
+    return readStorageToken();
   }
   function normalizePath2(path) {
     const trimmed = path.trim();
@@ -9439,7 +9472,14 @@ var LemmaClient = (() => {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
   var AuthManager = class {
-    constructor(apiUrl, authUrl) {
+    /**
+     * @param token A credential to present as `Authorization: Bearer`. Supplying
+     *   it is the supported way to authenticate outside a browser, where there
+     *   is no session cookie and no `localStorage`. It wins over a token set
+     *   through `setTestingToken`, because it was passed for this client rather
+     *   than left lying in shared state.
+     */
+    constructor(apiUrl, authUrl, token) {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
@@ -9448,7 +9488,7 @@ var LemmaClient = (() => {
       __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
-      this.injectedToken = detectInjectedToken();
+      this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
       if (!this.injectedToken) {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
       }
@@ -9837,7 +9877,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.0";
+  var SDK_VERSION = "0.7.1";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
@@ -10264,7 +10304,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.0",
+    VERSION: "0.7.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -11404,6 +11444,7 @@ var LemmaClient = (() => {
           agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
+          archived: options.archived,
           limit: (_a = options.limit) != null ? _a : 20,
           page_token: options.page_token
         }
@@ -11486,6 +11527,17 @@ var LemmaClient = (() => {
           Accept: "text/event-stream"
         }
       });
+    }
+    appendMessage(conversationId, payload, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/messages/append`,
+        {
+          body: payload,
+          signal: options.signal
+        }
+      );
     }
     retryFailedRun(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
@@ -14899,14 +14951,22 @@ var LemmaClient = (() => {
      *
      * Signed-in access is the only gate, and that is enough: every value in here
      * is already public — this deployment's URLs and the scopes its own code
-     * asks for. It carries no credential and reveals nothing about a pod.
+     * asks for. It carries no credential and reveals nothing about a pod: the
+     * agent name is supplied by the caller and echoed back, never read from one.
+     * @param agentName Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.
      * @returns any Successful Response
      * @throws ApiError
      */
-    static agentSurfaceSlackManifest() {
+    static agentSurfaceSlackManifest(agentName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/surface-setup/slack/manifest"
+        url: "/surface-setup/slack/manifest",
+        query: {
+          "agent_name": agentName
+        },
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
   };
@@ -15001,10 +15061,14 @@ var LemmaClient = (() => {
      * Takes no pod: it describes the deployment, and it is what you need before
      * you have anything to scope it to — the app it creates is what issues the
      * client id that connects the account a surface is built on.
+     *
+     * `agentName` names the app after one agent, for a bot that answers as that
+     * agent alone. One Slack app is one bot user, so this is the only chance to
+     * set the name without a person editing it in Slack afterwards.
      */
-    slackManifest() {
+    slackManifest(agentName) {
       return this.client.request(
-        () => AgentSurfacesService.agentSurfaceSlackManifest()
+        () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
       );
     }
   };
@@ -16929,7 +16993,7 @@ var LemmaClient = (() => {
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
       this._podId = this._config.podId;
-      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl);
+      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,

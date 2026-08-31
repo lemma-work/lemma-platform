@@ -109,8 +109,8 @@ class FunctionDispatcher:
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
         # Spanned per phase because the gap between a run being created and
-        # reaching RUNNING was measurable (p50 ~0.7s warm and uncontended) but
-        # not attributable: this path had no instrumentation at all, so the only
+        # reaching RUNNING was measurable even warm and uncontended, but not
+        # attributable: this path had no instrumentation at all, so the only
         # visible boundary was the whole worker task. Each phase below is one of
         # the candidates, and the cache spans record hit or miss.
         with tracer.start_as_current_span("lemma.function.dispatch") as span:

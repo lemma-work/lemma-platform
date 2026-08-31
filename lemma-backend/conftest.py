@@ -196,8 +196,73 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
     e2e_base._cleanup_e2e_workspace_containers(sandboxes_only=True)
 
 
+#: Per-test phase durations, and which test paid for the session fixtures.
+#: Keyed by ``classname::name`` to match what the JUnit records.
+_PHASE_DURATIONS: dict[str, dict[str, float]] = {}
+_SESSION_SETUP_CARRIERS: set[str] = set()
+_WORKERS_SEEN: set[str] = set()
+
+
+def _junit_case_id(report) -> str:
+    """The `classname::name` the JUnit will write for this report.
+
+    Derived from the nodeid rather than read back out of the XML, because the
+    sidecar is written before the XML is.
+    """
+    path, _, name = report.nodeid.partition("::")
+    return f"{path.replace('/', '.').removesuffix('.py')}::{name.replace('::', '.')}"
+
+
+def pytest_runtest_logreport(report) -> None:
+    """Record what each phase of each test actually cost.
+
+    The JUnit records one number per test -- setup plus call plus teardown --
+    and that is the right number for the wall-clock summary. It is the wrong
+    number for the duration budget, because pytest charges session-scoped
+    fixture setup to whichever test happens to trigger it first. On the e2e
+    shards that is testcontainers, the schema build and a worker subprocess:
+    twenty-five to thirty-five seconds, landing on one arbitrary test.
+
+    So note who paid it. `scripts/e2e_durations.py --check` reads this and
+    judges that test on its own work instead.
+    """
+    case = _junit_case_id(report)
+    phases = _PHASE_DURATIONS.setdefault(case, {})
+    phases[report.when] = phases.get(report.when, 0.0) + report.duration
+    if report.when == "setup":
+        # Under xdist the controller sees every worker's reports, and each
+        # worker builds the session fixtures once, so "first" is per worker.
+        worker = getattr(report, "worker_id", "") or "master"
+        if worker not in _WORKERS_SEEN:
+            _WORKERS_SEEN.add(worker)
+            _SESSION_SETUP_CARRIERS.add(case)
+
+
+def _write_phase_sidecar(session: pytest.Session) -> None:
+    """Drop the phase breakdown beside the JUnit, if one was asked for."""
+    junit = getattr(session.config.option, "xmlpath", None)
+    if not junit or hasattr(session.config, "workerinput"):
+        # No JUnit means nothing reads this. An xdist worker would overwrite the
+        # controller's copy with its own partial view.
+        return
+    import json
+    from pathlib import Path
+
+    Path(junit).with_suffix(".phases.json").write_text(
+        json.dumps(
+            {
+                "session_setup_carriers": sorted(_SESSION_SETUP_CARRIERS),
+                "phases": _PHASE_DURATIONS,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    del session, exitstatus
+    del exitstatus
+    _write_phase_sidecar(session)
     from app.modules.test_support import e2e_base
 
     # Context managers remove only the containers owned by this pytest process.

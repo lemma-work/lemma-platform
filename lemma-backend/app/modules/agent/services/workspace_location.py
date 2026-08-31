@@ -36,6 +36,7 @@ import secrets
 import string
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
@@ -126,10 +127,17 @@ def generate_cwd_slug() -> str:
     return "".join(secrets.choice(_SLUG_ALPHABET) for _ in range(_SLUG_LENGTH))
 
 
+def default_cwd_for(*, conversation_id: UUID, created_at: datetime) -> str:
+    """A deterministic fallback for legacy rows missing persisted cwd metadata."""
+    date = created_at.date().isoformat()
+    return f"{_WORKSPACE_ROOT}/c/{date}/{conversation_id.hex[:_SLUG_LENGTH]}"
+
+
 def default_workspace_cwd(conversation: Conversation) -> str:
     """A deterministic fallback for legacy rows missing persisted cwd metadata."""
-    date = conversation.created_at.date().isoformat()
-    return f"{_WORKSPACE_ROOT}/c/{date}/{conversation.id.hex[:_SLUG_LENGTH]}"
+    return default_cwd_for(
+        conversation_id=conversation.id, created_at=conversation.created_at
+    )
 
 
 def new_workspace_cwd(conversation: Conversation) -> str:
@@ -138,8 +146,21 @@ def new_workspace_cwd(conversation: Conversation) -> str:
     return f"{_WORKSPACE_ROOT}/c/{date}/{generate_cwd_slug()}"
 
 
-def resolve_workspace_location(conversation: Conversation) -> WorkspaceLocation:
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+def workspace_location_for(
+    *,
+    metadata: object,
+    conversation_id: UUID,
+    created_at: datetime,
+) -> WorkspaceLocation:
+    """Resolve a location from the three conversation fields it actually reads.
+
+    Split from ``resolve_workspace_location`` so callers holding the fields but
+    not the entity -- the API response, which derives ``pod_cwd`` -- go through
+    the same ladder rather than reimplementing it. Two implementations of this
+    would put a person's attachment in a directory the agent's cwd never points
+    at, which is the bug this exists to prevent.
+    """
+    metadata = metadata if isinstance(metadata, dict) else {}
     workspace = metadata.get("workspace")
     workspace = workspace if isinstance(workspace, dict) else {}
     workspace_id = str(
@@ -157,9 +178,17 @@ def resolve_workspace_location(conversation: Conversation) -> WorkspaceLocation:
         workspace.get("cwd")
         or metadata.get("cwd")
         or (repo.cwd if repo else None)
-        or default_workspace_cwd(conversation)
+        or default_cwd_for(conversation_id=conversation_id, created_at=created_at)
     )
     return WorkspaceLocation(workspace_id=workspace_id, cwd=cwd, repo=repo)
+
+
+def resolve_workspace_location(conversation: Conversation) -> WorkspaceLocation:
+    return workspace_location_for(
+        metadata=conversation.metadata,
+        conversation_id=conversation.id,
+        created_at=conversation.created_at,
+    )
 
 
 async def apply_location_metadata(
@@ -278,6 +307,22 @@ def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     if workspace_cwd.startswith(f"{_WORKSPACE_ROOT}/"):
         return f"{_POD_ROOT}/{workspace_cwd[len(_WORKSPACE_ROOT) + 1 :]}"
     return f"{_POD_ROOT}/{workspace_cwd.lstrip('/')}"
+
+
+def pod_cwd_for(
+    *,
+    metadata: object,
+    conversation_id: UUID,
+    created_at: datetime,
+) -> str:
+    """``resolve_pod_cwd`` for a caller holding the fields, not the entity."""
+    return pod_cwd_from_workspace_cwd(
+        workspace_location_for(
+            metadata=metadata,
+            conversation_id=conversation_id,
+            created_at=created_at,
+        ).cwd
+    )
 
 
 def resolve_pod_cwd(conversation: Conversation) -> str:

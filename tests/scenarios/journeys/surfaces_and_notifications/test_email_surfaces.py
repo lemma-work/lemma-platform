@@ -20,15 +20,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import time
 from uuid import uuid4
 
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_resend
-from harness.stack import RESEND_INBOUND_DOMAIN, RESEND_WEBHOOK_SECRET
-from harness.waiting import eventually, never
+from harness.stack import inbound_email_domain, webhook_signing_secret
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -49,7 +49,7 @@ def _svix_headers(body: bytes) -> dict[str, str]:
     """
     message_id = f"msg_{uuid4().hex[:16]}"
     timestamp = str(int(time.time()))
-    secret = base64.b64decode(RESEND_WEBHOOK_SECRET.removeprefix("whsec_"))
+    secret = base64.b64decode(webhook_signing_secret().removeprefix("whsec_"))
     signature = base64.b64encode(
         hmac.new(
             secret, f"{message_id}.{timestamp}.{body.decode()}".encode(), hashlib.sha256
@@ -65,8 +65,15 @@ def _svix_headers(body: bytes) -> dict[str, str]:
 
 @pytest.fixture
 async def mailbox(world, run):
-    """A pod reachable by email, with the mail Lemma sends captured."""
-    fake = start_fake_resend()
+    """A pod reachable by email.
+
+    Nothing captures what Lemma *sends*, and nothing used to either. A Resend
+    surface authenticates with the deployment's own key and has no
+    `api_base_url` to point elsewhere, so outbound mail can only go to Resend —
+    the stand-in that used to be started here was never reached by anything.
+    Inbound is real: the scenarios below sign a Svix payload themselves and post
+    it to Lemma, which is what Resend does.
+    """
     try:
         alice = await world.person("daniel")
         organization = alice.organization
@@ -80,27 +87,60 @@ async def mailbox(world, run):
         surface = await alice.connects_a_surface(
             in_pod=pod, platform="RESEND", named="inbox", agent=agent["name"]
         )
-        fake.clear()
-        yield alice, pod, surface, fake
+        yield alice, pod, surface
     finally:
-        fake.stop()
+        pass
 
 
 async def _deliver(
-    alice, *, to: str, subject: str, text: str, message_id: str, sender: str | None = None
+    alice,
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    message_id: str,
+    sender: str | None = None,
+    authenticated: bool = True,
 ):
+    """One inbound email, shaped the way Resend delivers one.
+
+    Including its `Authentication-Results`, which is the part that is easy to
+    leave out and changes the answer. `From:` is text the sender chose, so Lemma
+    resolves it to a colleague only when the receiving mail service vouched for
+    it; without the header the sender is a stranger, and a stranger is told how
+    to get access rather than having a conversation opened for them. Both are
+    correct, and only one of them is what this file's scenarios are about.
+
+    Real mail always carries it — Resend receives through SES, which writes the
+    header on every message — so a forged delivery without one is not a
+    stricter test, it is a different message than any Lemma actually receives.
+    `authenticated=False` sends that different message on purpose, for the
+    scenario about a sender nobody vouched for.
+    """
     import json as _json
+
+    from_address = sender or alice.email
+    headers = {"message-id": message_id, "subject": subject}
+    if authenticated:
+        # SES's own shape, written against the sender's domain so SPF, DKIM and
+        # DMARC all align — an aligned pass is the whole of what "vouched for"
+        # means here.
+        domain = from_address.rpartition("@")[2]
+        headers["authentication-results"] = (
+            f"amazonses.com; spf=pass smtp.mailfrom={domain}; "
+            f"dkim=pass header.i=@{domain}; dmarc=pass header.from={domain}"
+        )
 
     body = _json.dumps(
         {
             "type": "email.received",
             "data": {
                 "email_id": f"em_{uuid4().hex[:12]}",
-                "from": sender or alice.email,
+                "from": from_address,
                 "to": [to],
                 "subject": subject,
                 "text": text,
-                "headers": {"message-id": message_id, "subject": subject},
+                "headers": headers,
             },
         }
     ).encode()
@@ -116,17 +156,30 @@ async def _deliver(
 @proves("PS-SURF-022")
 @covers("agent.surface.create", "agent.surface.get")
 async def test_an_email_surface_has_an_address(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     del alice, pod
 
     address = _address_of(surface)
 
-    assert address, (
-        f"an email surface with no address cannot be written to: {surface}"
-    )
-    assert address.endswith(RESEND_INBOUND_DOMAIN), (
+    assert address, f"an email surface with no address cannot be written to: {surface}"
+    assert address.endswith(inbound_email_domain()), (
         f"the surface's address is not under this deployment's inbound domain, "
         f"so mail to it will never arrive: {address!r}"
+    )
+
+    # Readable, because a person types it. Connecting a surface through the API
+    # used to fall to a `pod-<32 hex>@` form that only the database was happy
+    # with, so which of the two you got depended on whether your surface came
+    # from agent creation or from this endpoint. Asserted by shape rather than
+    # by slug so the scenario does not restate how the address is built: two
+    # halves separated by a dot, and not the hex form.
+    local_part = address.split("@", 1)[0]
+    assert not re.fullmatch(r"pod-[0-9a-f]{32}", local_part), (
+        f"the surface fell back to the unreadable per-pod address: {address!r}"
+    )
+    assert "." in local_part, (
+        f"an agent's address should read as agent-and-pod, not one opaque "
+        f"word: {address!r}"
     )
 
 
@@ -134,7 +187,7 @@ async def test_an_email_surface_has_an_address(mailbox):
 @proves("PS-SURF-022")
 @covers("surface.webhook.handle_platform", "agent.conversation.list")
 async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     address = _address_of(surface)
     incoming = f"<{uuid4().hex}@example.com>"
 
@@ -157,7 +210,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
         lambda: alice.conversations_in(pod),
         bool,
         describe="the email to open a conversation in the pod that owns the address",
-        timeout=120.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     # The thread is created before the message is persisted onto it, so reading
     # straight away finds an empty conversation and reports a working feature as
@@ -168,7 +221,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
             "take a look" in str(message.get("text") or "") for message in messages
         ),
         describe="the email's words to reach the conversation it opened",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert said, said
 
@@ -177,22 +230,20 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
 @proves("PS-SURF-022")
 @covers("surface.webhook.handle_platform")
 async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
-    alice, pod, _surface, fake = mailbox
+    alice, pod, _surface = mailbox
 
     await _deliver(
         alice,
-        to=f"nobody-{uuid4().hex[:8]}@{RESEND_INBOUND_DOMAIN}",
+        to=f"nobody-{uuid4().hex[:8]}@{inbound_email_domain()}",
         subject="Hello?",
         text="Is anyone there?",
         message_id=f"<{uuid4().hex}@example.com>",
     )
 
-    await never(
-        lambda: _sent_to(fake, alice.email),
-        bool,
-        describe="a reply to mail addressed to no surface",
-        within=8.0,
-    )
+    # There used to be an assertion here that no reply was sent. It could not
+    # fail: nothing routed Lemma's outbound mail to the recorder it watched, so
+    # the recorder was empty whatever happened. What is left is the half that
+    # was always doing the work.
     assert not await alice.conversations_in(pod), (
         "mail to an address no surface owns started a conversation anyway"
     )
@@ -202,7 +253,7 @@ async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
 @proves("PS-SURF-022", "PS-SURF-010")
 @covers("surface.webhook.handle_platform")
 async def test_an_unsigned_email_is_refused(mailbox):
-    alice, pod, surface, _fake = mailbox
+    alice, pod, surface = mailbox
     del pod
     address = _address_of(surface)
 
@@ -218,8 +269,90 @@ async def test_an_unsigned_email_is_refused(mailbox):
     )
 
 
-async def _sent_to(fake, address: str):
-    return fake.to(address)
+@scenario("Connecting email hands back the address the agent already has")
+@proves("PS-SURF-022")
+@covers("agent.surface.create", "agent.surface.list")
+async def test_connecting_email_does_not_mint_a_second_mailbox(world, run):
+    """An agent has one address, and connecting email is how you turn it on.
+
+    Every agent is given a mailbox as it is created, so by the time anyone
+    presses Connect the address already exists — which is what the button says
+    it does ("the address Lemma already runs for this agent"). Asking for one
+    anyway minted a *second* surface: the readable address was taken, by the
+    agent itself, so allocation fell through to a suffixed form and the person
+    who pressed the button was handed `reporter.acme-p7k3@` for an agent
+    already reachable at `reporter.acme@`.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    agent = await alice.creates_an_agent(in_pod=pod)
+
+    minted = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(minted) == 1, (
+        f"an agent should be created holding exactly one mailbox: {minted}"
+    )
+    original = _address_of(minted[0])
+
+    # No name, which is the plain "connect email" call and what the UI sends.
+    # A *named* request asks for a distinct surface and still mints one.
+    connected = await alice.connects_a_surface(
+        in_pod=pod, platform="RESEND", agent=agent["name"], unnamed=True
+    )
+
+    assert _address_of(connected) == original, (
+        f"connecting email minted a second address, {_address_of(connected)!r}, "
+        f"for an agent already reachable at {original!r}"
+    )
+
+    after = [
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if surface.get("agent_name") == agent["name"] and _address_of(surface)
+    ]
+    assert len(after) == 1, (
+        f"the agent ended up with {len(after)} mailboxes: "
+        f"{[_address_of(s) for s in after]}"
+    )
+
+
+@scenario("A pod is reachable by email without connecting anything")
+@proves("PS-SURF-022")
+@covers("agent.surface.list")
+async def test_a_new_pod_already_has_an_address(world, run):
+    """Inbound routes on the address, so it has to exist before the first send.
+
+    The pod assistant's mailbox used to be minted on its first *outbound*
+    notification. Until then mail to the obvious guess matched no surface and
+    started nothing — a pod nobody can write to, which is not cheaper than one
+    they can.
+    """
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+
+    addressed = [
+        _address_of(surface)
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ]
+
+    assert addressed, (
+        "a pod nobody has connected anything to still has to be writable-to, "
+        "and this one has no address at all"
+    )
+    # The assistant's mailbox is not named for the platform, because that is the
+    # name an unnamed request resolves to and the two collided.
+    assert all(
+        surface["name"] != "resend"
+        for surface in await alice.surfaces_in(pod)
+        if _address_of(surface)
+    ), "the pod assistant is back on the name a plain connect request wants"
+    assert all(a.endswith(inbound_email_domain()) for a in addressed), (
+        f"an address outside this deployment's inbound domain never arrives: {addressed}"
+    )
 
 
 def _address_of(surface) -> str:

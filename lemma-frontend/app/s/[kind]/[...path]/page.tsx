@@ -1,12 +1,16 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
+import { ContactLanding } from './contact-landing';
 import { ShareLanding } from './share-landing';
+import { contactCardDownloadPath, readContactCardSpec } from '@/lib/share/contact-card';
+import { config } from '@/lib/config';
 import {
     getShareKindCopy,
     isShareKind,
     resolveShareDestination,
     resolveShareName,
+    resolveSharePodId,
     resolveShareTarget,
     SHARE_NAME_PARAM,
     type ShareKind,
@@ -20,6 +24,16 @@ interface SharePageProps {
 
 function firstValue(value: string | string[] | undefined): string | undefined {
     return Array.isArray(value) ? value[0] : value;
+}
+
+/** The query as the card reader wants it, first value wins. */
+function toSearchParams(query: Record<string, string | string[] | undefined>): URLSearchParams {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+        const first = firstValue(value);
+        if (first !== undefined) params.set(key, first);
+    }
+    return params;
 }
 
 /**
@@ -46,8 +60,21 @@ async function readShare({ params, searchParams }: SharePageProps) {
     // Resolved on the server from the link alone — no backend call, so this page
     // still renders for a crawler that will never hold a session.
     const target = resolveShareTarget(kind, raw.path, query);
+    const podId = resolveSharePodId(raw.path);
 
-    return { kind, copy, destination, name, card, target };
+    // Read only for the one kind that has one, so an ordinary share link never
+    // pays for parsing params it does not carry.
+    const search = kind === 'contact' ? toSearchParams(query) : null;
+    const contact = search ? readContactCardSpec(search, name) : null;
+    const downloadHref = search ? contactCardDownloadPath(raw.path, search) : null;
+    // Built from the canonical site URL rather than read off the client after
+    // mount: the QR is the point of a card on a screen someone else is looking
+    // at, and one that appears a beat late is one nobody scans.
+    const pageUrl = search
+        ? `${config.SITE_URL.replace(/\/$/, '')}/s/${kind}/${(raw.path ?? []).join('/')}?${search}`
+        : null;
+
+    return { kind, copy, destination, name, card, target, podId, contact, downloadHref, pageUrl };
 }
 
 export async function generateMetadata(props: SharePageProps): Promise<Metadata> {
@@ -90,12 +117,27 @@ export default async function SharePage(props: SharePageProps) {
     const share = await readShare(props);
     if (!share) notFound();
 
+    // A contact card answers a reader who has no session and is not going to get
+    // one, so it renders straight from the link — no access check, nothing
+    // fetched, none of the signed-in branching `ShareLanding` exists to do.
+    if (share.kind === 'contact' && share.contact && share.downloadHref && share.pageUrl) {
+        return (
+            <ContactLanding
+                card={share.contact}
+                destination={share.destination}
+                downloadHref={share.downloadHref}
+                pageUrl={share.pageUrl}
+            />
+        );
+    }
+
     return (
         <ShareLanding
             destination={share.destination}
             name={share.name}
             kind={share.kind}
             target={share.target}
+            podId={share.podId}
             article={share.copy.article}
             detail={share.card.detail}
             cardPath={socialCardPath({

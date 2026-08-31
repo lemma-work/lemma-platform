@@ -33,7 +33,9 @@ async def test_a_file_lands_where_it_was_put(pod):
     alice, the_pod, home = pod
 
     uploaded = await alice.uploads(
-        content=b"hello from a scenario", named="notes.txt", directory=home,
+        content=b"hello from a scenario",
+        named="notes.txt",
+        directory=home,
         in_pod=the_pod,
     )
 
@@ -85,7 +87,10 @@ async def test_the_original_bytes_survive(pod):
     content = b"\x00\x01binary-ish content \xc3\xa9 and text"
 
     uploaded = await alice.uploads(
-        content=content, named="payload.bin", directory=home, in_pod=the_pod,
+        content=content,
+        named="payload.bin",
+        directory=home,
+        in_pod=the_pod,
         content_type="application/octet-stream",
     )
 
@@ -103,7 +108,11 @@ async def test_deleting_a_file_removes_it(pod):
 
     await alice.deletes_file(uploaded["path"], in_pod=the_pod)
 
-    assert uploaded["path"] not in str(await alice.file_tree_of(the_pod))
+    # The paginated listing of the folder, not the tree. An absence asserted
+    # against a truncated answer is the shape that fails open: the tree returns
+    # a few files per directory, so a file that is still there reads as gone the
+    # moment the folder holds more than the cap.
+    assert uploaded["path"] not in await alice.paths_in(the_pod, directory=home)
     await alice.is_refused_file(uploaded["path"], in_pod=the_pod)
 
 

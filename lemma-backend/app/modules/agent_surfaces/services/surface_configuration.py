@@ -197,6 +197,12 @@ class SurfaceConfigurationMixin(
         )
 
     async def _open_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
+        # A dedicated bot publishes no "Change" button, but a Home tab rendered
+        # before it became one still carries a live button — Slack keeps the
+        # view until it is republished. Opening a picker there would offer a
+        # choice this bot cannot honour, so it is refused at the action too.
+        if not surface.config.slack.offers_dm_agent_choice():
+            return
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
@@ -212,6 +218,11 @@ class SurfaceConfigurationMixin(
             )
 
     async def _submit_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
+        # Same stale-view case as `_open_dm_setup`, one step later: a modal
+        # opened before this became a dedicated bot can still be submitted.
+        # Storing the choice would be writing a preference nothing will read.
+        if not surface.config.slack.offers_dm_agent_choice():
+            return
         agent_name = await self._validated_agent_choice(
             surface=surface,
             ctx=ctx,
@@ -336,6 +347,7 @@ class SurfaceConfigurationMixin(
                 ),
                 workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
                 logo_url=surface_settings.slack_home_logo_url,
+                offers_dm_agent_choice=surface.config.slack.offers_dm_agent_choice(),
             )
 
     async def _home_apps(

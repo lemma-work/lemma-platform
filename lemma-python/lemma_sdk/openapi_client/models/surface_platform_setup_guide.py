@@ -21,7 +21,14 @@ class SurfacePlatformSetupGuide:
     """
     Attributes:
         docs_path (str):
-        platform (SurfacePlatform):
+        platform (SurfacePlatform): The platforms a pod can be reached on.
+
+            Email is Resend, and only Resend. Gmail and Outlook were here as
+            Composio-backed mailboxes, which made "an email surface" mean three
+            different transports with three attachment strategies between them -- bytes,
+            Graph drafts, and a signed URL the provider downloads server-side. Reaching
+            a Gmail *account* is still something an agent does, through the connector;
+            it is just not a surface.
         summary (str):
         title (str):
         connectors (list[SurfaceConnectorSetupGuide] | Unset):

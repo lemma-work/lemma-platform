@@ -57,4 +57,27 @@ describe('naming a new surface', () => {
         // match still has to count as taken.
         expect(deriveSurfaceName('TELEGRAM', 'Ops', named('Telegram'))).toBe('telegram-ops');
     });
+
+    describe('platforms the backend names itself', () => {
+        // Resend is Lemma's own mailbox: one per agent, minted with the agent,
+        // resolved by agent binding. Sending a name asks for a *second*
+        // surface, which is how connecting email produced a duplicate mailbox
+        // on a suffixed address instead of connecting the existing one.
+        it('never names a Resend surface, whatever the pod already holds', () => {
+            expect(deriveSurfaceName('RESEND', 'Ops Assistant', [])).toBeUndefined();
+            expect(deriveSurfaceName('RESEND', 'Ops Assistant', named('resend'))).toBeUndefined();
+            expect(deriveSurfaceName('RESEND', null, named('resend-assistant'))).toBeUndefined();
+        });
+
+        it('does not care what case the platform arrives in', () => {
+            expect(deriveSurfaceName('resend', 'Ops', named('resend'))).toBeUndefined();
+        });
+
+        it('still names the platforms a pod can hold several of', () => {
+            // The rule above is not "stop naming surfaces". A pod really can run
+            // two Telegram bots, and the second still needs a name of its own.
+            expect(deriveSurfaceName('TELEGRAM', 'Ops', named('telegram'))).toBe('telegram-ops');
+            expect(deriveSurfaceName('SLACK', 'Ops', named('slack'))).toBe('slack-ops');
+        });
+    });
 });

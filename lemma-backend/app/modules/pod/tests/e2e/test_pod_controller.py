@@ -188,7 +188,14 @@ async def _add_org_member(
 
 
 async def _assert_pod_fully_gone(client: AsyncClient, org_id: str, pod_id: str, **kw):
-    """A soft-deleted pod must not surface anywhere and re-deleting yields 404."""
+    """A soft-deleted pod surfaces nowhere, and deleting it again still succeeds.
+
+    The re-delete used to be asserted as 404, which contradicted `PS-POD-050`:
+    "the system shall keep deleting safe to repeat, so that a retried deletion
+    reports success rather than failing on the second attempt". A client that
+    never saw the first response sends the request again, and answering 404
+    turns a completed deletion into an error nobody can clear.
+    """
     detail = await client.get(f"/pods/{pod_id}", follow_redirects=True, **kw)
     assert detail.status_code == 404, detail.text
 
@@ -199,7 +206,7 @@ async def _assert_pod_fully_gone(client: AsyncClient, org_id: str, pod_id: str, 
     assert all(item["id"] != pod_id for item in listing.json().get("items", []))
 
     redelete = await client.delete(f"/pods/{pod_id}", follow_redirects=True, **kw)
-    assert redelete.status_code == 404, redelete.text
+    assert redelete.status_code == 204, redelete.text
 
 
 @pytest.mark.asyncio

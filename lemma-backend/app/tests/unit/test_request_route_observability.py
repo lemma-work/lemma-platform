@@ -7,11 +7,11 @@ because the router records its match by writing ``scope["route"]`` and
 writes to an object the observer never sees, and the request is logged as
 ``route: "unmatched"``.
 
-The first occurrence covered the whole apps product: 52 slow 404s and 21 slow
-200s in a day, none of them attributable to any route. The second was
+The first occurrence covered the whole apps product: every slow request it
+served was unattributable to any route. The second was
 ``TrailingSlashMiddleware``, which put every request whose path ends in a slash
-into the same bucket — the bucket in which production's fixed-cost 5.2s 404s
-were then investigated, twice, without success.
+into the same bucket — the bucket in which a fixed-cost class of slow 404s was
+then investigated, twice, without success.
 
 So this pins the property rather than either middleware: with the real
 middleware stack in the real order, a request that matches a route is logged

@@ -243,10 +243,9 @@ class ScheduleRunRepository:
 
         Bounded, because this runs on *every* run completion and the ledger is
         append-only. Unbounded, it read every completed run the schedule had
-        ever had: measured in production at 5,946 rows and a sort, 48ms, for the
-        busiest schedule — work proportional to the schedule's whole history,
-        paid again on each new run, and growing by ~1,000 rows a day with no
-        retention behind it.
+        ever had, plus a sort — work proportional to the schedule's whole
+        history, paid again on each new run, and growing without limit while
+        nothing pruned the ledger.
 
         The window is safe because of what the caller does with the number: it
         compares against a threshold of five, and ``schedule_max_consecutive_

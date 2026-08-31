@@ -103,19 +103,27 @@ class TestGrantingOneThing:
     async def test_a_grant_is_narrow(self, team):
         alice, bob, _outsider, pod = team
         granted = await alice.creates_a_table(
-            in_pod=pod, named="granted_table", columns=[column("title")],
-            visibility="RESTRICTED", shared=True,
+            in_pod=pod,
+            named="granted_table",
+            columns=[column("title")],
+            visibility="RESTRICTED",
+            shared=True,
         )
         withheld = await alice.creates_a_table(
-            in_pod=pod, named="withheld_table", columns=[column("title")],
-            visibility="RESTRICTED", shared=True,
+            in_pod=pod,
+            named="withheld_table",
+            columns=[column("title")],
+            visibility="RESTRICTED",
+            shared=True,
         )
         membership = await alice.membership_of(bob, in_pod=pod)
 
         await alice.grants(
             ["datastore.table.read", "datastore.record.read"],
-            on_type="datastore_table", on_name=granted["name"],
-            to_member=membership, in_pod=pod,
+            on_type="datastore_table",
+            on_name=granted["name"],
+            to_member=membership,
+            in_pod=pod,
         )
 
         await bob.opens_table(granted["name"], in_pod=pod)
@@ -137,14 +145,18 @@ class TestGrantingOneThing:
         membership = await alice.membership_of(bob, in_pod=pod)
         await alice.grants(
             ["datastore.table.read"],
-            on_type="datastore_table", on_name=table["name"],
-            to_member=membership, in_pod=pod,
+            on_type="datastore_table",
+            on_name=table["name"],
+            to_member=membership,
+            in_pod=pod,
         )
         await bob.opens_table(table["name"], in_pod=pod)
 
         await alice.revokes_access(
-            on_type="datastore_table", on_name=table["name"],
-            from_member=membership, in_pod=pod,
+            on_type="datastore_table",
+            on_name=table["name"],
+            from_member=membership,
+            in_pod=pod,
         )
 
         refused = await bob.api.call(
@@ -165,8 +177,10 @@ class TestGrantingOneThing:
         membership = await alice.membership_of(bob, in_pod=pod)
         await alice.grants(
             ["datastore.table.read"],
-            on_type="datastore_table", on_name=table["name"],
-            to_member=membership, in_pod=pod,
+            on_type="datastore_table",
+            on_name=table["name"],
+            to_member=membership,
+            in_pod=pod,
         )
 
         access = await alice.access_to(
@@ -210,8 +224,20 @@ class TestSoftwareActingForSomeone:
         agent = await alice.creates_an_agent(in_pod=pod)
 
         grants = await alice.grants_of_agent(agent["name"], in_pod=pod)
-        assert grants.get("grants") == [], (
-            f"a new agent should start with no resource grants: {grants}"
+        # Nothing that belongs to anybody else. An agent is now made with its
+        # own memory folder, which is its scratch space rather than access to
+        # somebody's work — the promise is that it never exceeds the person it
+        # acts for, and a folder created with it reaches nothing they cannot.
+        # Asserting on an empty list instead was a count, and #476 changed the
+        # count without changing what the promise says.
+        held = [
+            grant
+            for grant in grants.get("grants") or []
+            if not str(grant.get("resource_name", "")).startswith("/memory")
+        ]
+        assert held == [], (
+            f"a new agent should start with no access to anything of anybody "
+            f"else's: {held}"
         )
 
     @scenario("A function is created with no standing access of its own")
@@ -239,11 +265,15 @@ class TestSoftwareActingForSomeone:
         response = await bob.api.call(
             "PUT",
             f"/pods/{pod['id']}/agents/{agent['name']}/permissions",
-            json={"grants": [{
-                "resource_type": "datastore_table",
-                "resource_name": table["name"],
-                "permission_ids": ["datastore.table.delete"],
-            }]},
+            json={
+                "grants": [
+                    {
+                        "resource_type": "datastore_table",
+                        "resource_name": table["name"],
+                        "permission_ids": ["datastore.table.delete"],
+                    }
+                ]
+            },
         )
 
         assert response.status_code >= 400, (
@@ -261,7 +291,8 @@ class TestRefusals:
         alice, bob, _outsider, pod = team
 
         response = await bob.api.call(
-            "POST", f"/pods/{pod['id']}/datastore/tables",
+            "POST",
+            f"/pods/{pod['id']}/datastore/tables",
             json={"name": "not_allowed", "columns": [column("title")]},
         )
 

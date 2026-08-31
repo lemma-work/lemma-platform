@@ -7,7 +7,10 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 
-pytestmark = [journey("Building a pod"), capability("Define roles the built-ins do not cover")]
+pytestmark = [
+    journey("Building a pod"),
+    capability("Define roles the built-ins do not cover"),
+]
 
 
 @pytest.fixture
@@ -22,9 +25,7 @@ async def pod(world, run):
 async def test_a_custom_role_is_created_and_assignable(world, pod):
     alice, the_pod = pod
     catalog = await alice.permission_catalog_of(the_pod)
-    readable = [
-        p["id"] for p in catalog if str(p.get("id", "")).endswith(".read")
-    ][:3]
+    readable = [p["id"] for p in catalog if str(p.get("id", "")).endswith(".read")][:3]
     assert readable, catalog
 
     role = await alice.creates_a_role(
@@ -86,6 +87,24 @@ class TestDeletingAPod:
         again = await alice.creates_a_pod(named=reusable)
         assert again["name"] == reusable
         assert str(again["id"]) != str(named["id"])
+
+    @scenario("Deleting a pod twice reports success both times")
+    @proves("PS-POD-050")
+    @covers("pod.delete")
+    async def test_a_repeated_deletion_still_reports_success(self, pod):
+        """A retry is what a client does when it never saw the first answer.
+
+        Worth pinning because the pod stops answering for everything else the
+        moment it is deleted — its schedules, its agents, its records all 404
+        — and deletion is the one operation that has to keep working through
+        that, or a dropped response turns into an error a person cannot clear.
+        """
+        alice, the_pod = pod
+
+        await alice.deletes_pod(the_pod)
+        await alice.deletes_pod(the_pod)
+
+        await alice.does_not_see_pod(the_pod)
 
     @scenario("A pod member who is not an admin cannot delete the pod")
     @proves("PS-POD-050")

@@ -18,7 +18,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.run import a_name_for
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [
     journey("Working with data"),
@@ -121,7 +121,7 @@ async def test_a_declined_upload_can_be_retried(two_pods):
         lambda: _upload(alice, busy, retried),
         lambda response: response.status_code < 400,
         describe="the staging pool to take an upload again",
-        timeout=90.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
 
     stored = await alice.opens_file(landed.json()["path"], in_pod=busy)

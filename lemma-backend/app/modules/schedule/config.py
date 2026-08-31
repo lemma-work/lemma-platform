@@ -43,9 +43,9 @@ class ScheduleSettings(BaseSettings):
             "already inspected. Sets the worst-case delay on noticing a *lost* "
             "outcome event, so it trades detection latency against wasted target "
             "reads. Note the ceiling it competes with: the sweep reads 100 rows "
-            "every 5 minutes, so with the 1,375 rows production parks on human "
-            "form waits, a full round trip already takes ~69 minutes whatever "
-            "this is set to. Below that it stops the sweep hot-looping on a "
+            "every 5 minutes, so a standing backlog of runs parked on human form "
+            "waits already takes over an hour to work through whatever this is "
+            "set to. Below that it stops the sweep hot-looping on a "
             "small in-flight set; it cannot make detection faster than the "
             "backlog allows. Env: ``SCHEDULE_RUN_REINSPECT_AFTER_MINUTES``."
         ),

@@ -289,10 +289,11 @@ def test_the_open_error_is_distinguishable_from_a_provider_failure() -> None:
 # serving 4 live threads). Nothing else it does is worth an outage.
 #
 # Production found the cost of getting the boundary wrong. Composio answered
-# `413 Upstream_PayloadTooLarge` five times in 25 seconds -- an agent asking a
-# tool for more data than it could return -- each was reported as "provider
-# temporarily unavailable", and the fifth opened the breaker on a provider that
-# was healthy and answering in 3.4s. Seven later calls were refused.
+# `413 Upstream_PayloadTooLarge` in quick succession -- an agent asking a tool
+# for more data than it could return -- each was reported as "provider
+# temporarily unavailable", so a streak of them opened the breaker on a provider
+# that was healthy and answering normally. Every later call in the cooldown was
+# refused.
 
 
 def _classify(status: int | None, error: str = "boom"):

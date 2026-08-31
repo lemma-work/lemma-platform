@@ -151,27 +151,12 @@ def merge_other_answers(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_questions_as_text(plan: SurfaceQuestionRenderPlan) -> str:
-    """Render an ask_user plan as a well-formatted chat message.
+    """Deprecated alias for ``SurfaceQuestionRenderPlan.to_plain_text``.
 
-    Used as the fallback on platforms without native tappable choices (and on
-    any platform where the native render is unavailable). The user replies with
-    a number/label or free text, which the ingress routes back as the answer.
+    The degradation moved onto the plan so a delivery can ask any part for its
+    text without knowing which part it is holding.
     """
-    blocks: list[str] = []
-    multiple = len(plan.questions) > 1
-    for index, question in enumerate(plan.questions, start=1):
-        header = f"{index}. {question.question}" if multiple else question.question
-        lines = [header]
-        for opt_index, option in enumerate(question.options, start=1):
-            suffix = " (recommended)" if option.recommended else ""
-            detail = f" — {option.description}" if option.description else ""
-            lines.append(f"  {opt_index}. {option.label}{detail}{suffix}")
-        blocks.append("\n".join(lines))
-    prompt = "Reply with your choice"
-    if any(q.multi_select for q in plan.questions):
-        prompt += " (you can pick more than one)"
-    prompt += ", or type your own answer."
-    return "\n\n".join(blocks + [prompt])
+    return plan.to_plain_text()
 
 
 def build_display_resource_render_plan(
@@ -273,6 +258,13 @@ def build_display_resource_url(
             conversation_id,
         )
     if request.type is DisplayResourceType.APP:
+        # `page` carries the app's resource name, not a slug, on purpose. The
+        # workspace addresses an app page by the slug of its name and
+        # canonicalizes whatever the link carries on arrival, so the name
+        # resolves. Slugifying here instead would need this module to reproduce
+        # the frontend's slug rule exactly -- `normalize_public_slug` does not
+        # (`Ledger 2.0` -> `ledger-2-0` there, `ledger20` in the index) -- and a
+        # slug built by the wrong rule is one the workspace cannot resolve back.
         return _append_conversation(
             f"{pod_base}/app/view?{urlencode({'page': request.name})}"
             if request.name
@@ -302,27 +294,77 @@ def _widget_resource_url(
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:
-    name = request.name or request.path
+    """The card's headline: what this resource is *called*.
+
+    A FILE is titled by its file name alone. The full pod path used to be the
+    title, which on a chat surface is a line of directory noise where the
+    reader is looking for a name -- and it is also the caption stamped onto the
+    native attachment, so the ugliness survived even when delivery worked. The
+    folder is still shown, as a detail line, where a path belongs.
+    """
+    if request.type is DisplayResourceType.FILE:
+        return _file_display_name(request.path) or "Files"
+    if request.type is DisplayResourceType.TABLE and request.query:
+        return "Query results"
     kind = _display_resource_kind(request)
-    if name:
-        return f"{kind}: {name}"
+    if request.name:
+        return f"{kind}: {request.name}"
     if request.type is DisplayResourceType.BROWSER:
         return "Browser ready"
     return f"{kind} ready"
 
 
+def _file_display_name(path: str | None) -> str | None:
+    """The last segment of a pod file path, e.g. ``q3-report.pdf``."""
+    trimmed = str(path or "").replace("\\", "/").rstrip("/")
+    if not trimmed:
+        return None
+    return trimmed.rsplit("/", 1)[-1] or None
+
+
+def _file_display_folder(path: str | None) -> str | None:
+    """The directory a file sits in, or None at the root."""
+    trimmed = str(path or "").replace("\\", "/").rstrip("/")
+    if "/" not in trimmed:
+        return None
+    folder = trimmed.rsplit("/", 1)[0]
+    return folder or None
+
+
+# What each kind of resource is, said once, in the person's terms. These are
+# the fallbacks: when the surface can resolve the resource for real it replaces
+# them with something that counts (a file's size, a table's row count). A line
+# that says only "A datastore view is ready." is the shape of an answer without
+# the answer in it, so nothing here is allowed to be that.
+_SUMMARY_BY_TYPE: dict[DisplayResourceType, str] = {
+    DisplayResourceType.BROWSER: "A live browser you can watch and take over.",
+    DisplayResourceType.AGENT: "An agent in this pod.",
+    DisplayResourceType.FUNCTION: "A function in this pod.",
+    DisplayResourceType.WORKFLOW: "A workflow in this pod.",
+    DisplayResourceType.APP: "An app in this pod.",
+    DisplayResourceType.SCHEDULE: "A schedule in this pod.",
+}
+
+
 def _display_resource_summary(request: DisplayResourceRequest) -> str | None:
-    if request.type is DisplayResourceType.TABLE and request.query:
-        return "Read-only query results are ready in Lemma."
     if request.type is DisplayResourceType.TABLE:
-        return "A datastore view is ready."
+        return None if request.query else _table_summary(request)
     if request.type is DisplayResourceType.WIDGET:
-        return "A widget is ready."
+        # A widget is HTML, and no chat surface can render HTML. Saying where it
+        # does open is the only useful thing left; "Widget" under the heading
+        # "Widget ready" was the card repeating itself.
+        return "Opens in your browser." if request.public_url else "Opens in Lemma."
     if request.type is DisplayResourceType.FILE:
-        return "A file is ready to inspect."
-    if request.type is DisplayResourceType.BROWSER:
-        return "The live browser view is ready."
-    return "A Lemma resource is ready."
+        # Replaced by the real thing (kind + size) once the file resolves; a
+        # bare file name on its own line is already a decent fallback.
+        return None
+    return _SUMMARY_BY_TYPE.get(request.type)
+
+
+def _table_summary(request: DisplayResourceRequest) -> str | None:
+    if not request.name:
+        return "Every table in this pod."
+    return None
 
 
 def _display_resource_detail_lines(
@@ -330,6 +372,9 @@ def _display_resource_detail_lines(
     *,
     tool_output: object | None,
 ) -> list[str]:
+    if request.type is DisplayResourceType.FILE:
+        folder = _file_display_folder(request.path)
+        return [f"In {folder}"] if folder else []
     if request.type is DisplayResourceType.TABLE:
         if request.query:
             return [f"Query: {_compact(request.query, 240)}"]
@@ -344,10 +389,6 @@ def _display_resource_detail_lines(
                     for item in request.filters[:5]
                 )
             ]
-    if request.type is DisplayResourceType.WIDGET:
-        if request.public_url:
-            return ["External widget"]
-        return ["Widget"]
     if request.type is DisplayResourceType.BROWSER:
         output = _as_record(tool_output)
         expires_at = _as_nonempty_string(output.get("expires_at"))
@@ -355,16 +396,24 @@ def _display_resource_detail_lines(
     return []
 
 
+# The button says what it opens. "Open resource" was the label on every card
+# but four, and a button naming a category nobody outside Lemma uses is one
+# nobody presses.
+_ACTION_LABEL_BY_TYPE: dict[DisplayResourceType, str] = {
+    DisplayResourceType.WIDGET: "Open widget",
+    DisplayResourceType.FILE: "Open file",
+    DisplayResourceType.TABLE: "Open in Lemma",
+    DisplayResourceType.BROWSER: "Open browser",
+    DisplayResourceType.AGENT: "Open agent",
+    DisplayResourceType.FUNCTION: "Open function",
+    DisplayResourceType.WORKFLOW: "Open workflow",
+    DisplayResourceType.APP: "Open app",
+    DisplayResourceType.SCHEDULE: "Open schedules",
+}
+
+
 def _display_resource_action_label(request: DisplayResourceRequest) -> str:
-    if request.type is DisplayResourceType.WIDGET:
-        return "Open widget"
-    if request.type is DisplayResourceType.FILE:
-        return "Open file"
-    if request.type is DisplayResourceType.TABLE:
-        return "Open in Lemma"
-    if request.type is DisplayResourceType.BROWSER:
-        return "Open browser"
-    return "Open resource"
+    return _ACTION_LABEL_BY_TYPE.get(request.type, "Open in Lemma")
 
 
 def _display_resource_kind(request: DisplayResourceRequest) -> str:

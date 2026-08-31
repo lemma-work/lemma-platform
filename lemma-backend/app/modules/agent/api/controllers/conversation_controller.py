@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,7 +17,6 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
-from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.api.controllers.conversation_streaming import (
@@ -27,6 +26,10 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 )
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
+    _build_conversation_retry_service,
+    _build_conversation_service,
+    _parse_message_page_token,
+    _parse_metadata_filters,
     conversation_channel,
     iter_subscription,
 )
@@ -55,18 +58,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     ConversationStatus,
     ConversationType,
-    JsonObject,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
-from app.modules.agent.services.conversation_service import ConversationService
-from app.composition.authorization import create_authorization_service
-from app.composition.agent_usage import build_usage_service
 
 logger = get_logger(__name__)
 
@@ -92,44 +84,6 @@ CONVERSATION_MEMBERSHIP = require_pod_membership(_CONVERSATION_ACCESS)
 CONVERSATION_ENUMERATION = require_pod_membership(_CONVERSATION_ACCESS, enumerates=True)
 
 
-def _build_conversation_service(uow) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
-        usage_service=build_usage_service(uow),
-    )
-
-
-def _build_conversation_retry_service(uow) -> ConversationRetryService:
-    return ConversationRetryService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
-        usage_service=build_usage_service(uow),
-    )
-
-
-def _parse_metadata_filters(
-    *,
-    query_params: Iterable[tuple[str, str]],
-) -> JsonObject | None:
-    filters: JsonObject = {}
-    for raw_key, value in query_params:
-        if not raw_key.startswith("metadata."):
-            continue
-        key = raw_key.removeprefix("metadata.").strip()
-        if not key:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Metadata filters must use metadata.<key>=value format.",
-            )
-        filters[key] = value
-    return filters or None
-
-
 def _parse_conversation_agent_selection(
     agent_name: str | None,
 ) -> ConversationAgentSelection[str]:
@@ -143,18 +97,6 @@ def _parse_conversation_agent_selection(
     if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
         return ConversationAgentSelection.pod_default()
     return ConversationAgentSelection.named(agent_name)
-
-
-def _parse_message_page_token(page_token: str | None) -> int | None:
-    if page_token is None:
-        return None
-    try:
-        value = int(page_token)
-    except ValueError as exc:
-        raise BadRequestError("Invalid page_token") from exc
-    if value < 0:
-        raise BadRequestError("Invalid page_token")
-    return value
 
 
 @router.post(
@@ -203,7 +145,8 @@ async def create_conversation(
         "(or pod_default) to list default pod assistant conversations, or "
         "pass a name to list conversations for a specific pod agent. Child "
         "(sub-agent) conversations are omitted by default; pass parent_id to "
-        "list the children of a specific conversation instead."
+        "list the children of a specific conversation instead. Archived "
+        "conversations are omitted; pass archived=true for the archive."
     ),
 )
 async def list_conversations(
@@ -215,6 +158,7 @@ async def list_conversations(
     run_status: ConversationStatus | None = Query(default=None, alias="status"),
     conversation_type: ConversationType | None = Query(default=None, alias="type"),
     parent_id: UUID | None = Query(default=None),
+    archived: bool = Query(default=False),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -228,6 +172,7 @@ async def list_conversations(
             query_params=request.query_params.multi_items(),
         ),
         parent_id=parent_id,
+        archived=archived,
         cursor=parse_uuid_page_token(page_token),
         limit=limit,
     )
@@ -282,6 +227,10 @@ async def update_conversation(
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
+    # Null is not a state a conversation can be in: the field is optional so
+    # omitting it means "leave it alone", and an explicit null means the same.
+    if update_payload.get("is_archived") is None:
+        update_payload.pop("is_archived", None)
     conversation = await service.update_conversation(
         conversation_id=conversation_id,
         user_id=user.id,
@@ -449,6 +398,49 @@ async def send_message(
         conversation_id=conversation_id,
         start_run=start_run,
     )
+
+
+@router.post(
+    "/{conversation_id}/messages/append",
+    response_model=AgentRunStartResponse,
+    operation_id="agent.conversation.message.append",
+    summary="Append Pod Conversation Message",
+    description=(
+        "Append a user message without opening a Server-Sent Events stream. "
+        "When a run is already active for the conversation, the message joins "
+        "that run and the next harness step sees it in persisted history -- "
+        "any stream already subscribed to the conversation surfaces the "
+        "resulting events, so callers steering an in-flight run should attach "
+        "to that stream rather than opening a second one here. When no run is "
+        "active, this starts a new one exactly like the streaming send route, "
+        "just without attaching a stream to it."
+    ),
+    responses={
+        404: {"description": "Conversation was not found or is not visible"},
+        429: {"description": "The account usage limit was exceeded"},
+    },
+)
+async def append_message(
+    pod_id: UUID,
+    conversation_id: UUID,
+    data: SendMessageRequest,
+    user: CurrentUser,
+    request: Request,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> AgentRunStartResponse:
+    async with pod_context_scope(
+        uow_factory, request=request, user_id=user.id, pod_id=pod_id
+    ) as scope:
+        assert_pod_membership(scope.ctx, "use conversations in this pod")
+        service = _build_conversation_service(scope.uow)
+        result = await service.add_user_message_and_start_run(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            content=data.content,
+            pod_id=pod_id,
+            message_metadata=data.metadata,
+        )
+    return AgentRunStartResponse.model_validate(result)
 
 
 @router.post(

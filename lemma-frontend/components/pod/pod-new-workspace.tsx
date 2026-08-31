@@ -21,7 +21,6 @@ import {
     Workflow,
 } from '@/components/ui/icons';
 
-import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ConnectorIcon } from '@/components/connectors/connector-icon';
 import { formatRelativeTime } from '@/components/pod/recent-conversations';
 import { THEME_LOGOS } from '@/components/recipes/starter-theme-card';
@@ -256,12 +255,10 @@ function PromptRow({
 }
 
 function BuildPanel({
-    podId,
     disabled,
     onPreparePrompt,
     onLaunchThemePrompt,
 }: {
-    podId: string;
     disabled: boolean;
     onPreparePrompt: (prompt: string) => void;
     onLaunchThemePrompt: (theme: StarterTheme, recipeId: string, prompt: string) => void;
@@ -302,11 +299,6 @@ function BuildPanel({
                         onSelect={() => setChosenThemeId(theme.id)}
                     />
                 ))}
-                <LauncherTile
-                    spec={{ id: 'all-starters', title: 'All starters', hint: 'Full catalog', icon: ArrowRight }}
-                    muted
-                    href={`/pod/${podId}/recipes`}
-                />
             </TileGrid>
 
             <div className="mt-2 flex flex-col">
@@ -358,15 +350,13 @@ export function PodNewWorkspace({
     // nothing sits above the panel for a height change to disturb.
     const isBelowComposer = placement === 'below-composer';
     const panelHeight = isBelowComposer ? PANEL_HEIGHT_NATURAL : PANEL_HEIGHT;
-    const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
     const podName = formatPodName(pod?.name);
     const { launchRecipe } = useLaunchRecipe(podId, { podName });
     const { signals, recentConversations, isLoading } = usePodStartSignals(podId);
     const canWriteConversations = podAccess.can('conversation.write');
-    const isBusy = assistant.isLoading || assistant.isOpenedConversationRunning;
-    const disabled = !canWriteConversations || isBusy;
+    const disabled = !canWriteConversations;
 
     const facts = useMemo(() => buildPodFacts(signals), [signals]);
     const doActions = useMemo(() => buildPodDoActions(signals), [signals]);
@@ -449,7 +439,6 @@ export function PodNewWorkspace({
                 {/* A floor under every panel keeps the composer still between tabs. */}
                 <TabsContent value="build" className={panelHeight}>
                     <BuildPanel
-                        podId={podId}
                         disabled={disabled}
                         onPreparePrompt={onPreparePrompt}
                         onLaunchThemePrompt={(theme, recipeId, prompt) => {

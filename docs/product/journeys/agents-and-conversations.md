@@ -125,6 +125,9 @@ it happens.
   has stalled.
 - When a watcher connects to a run already in progress, the system shall give
   them what has happened so far and then continue live.
+- The system shall record an agent's reasoning as reasoning, and shall never
+  present it as the agent's answer or return it as a run's result — however the
+  model chose to write it.
 - When a run ends, the system shall close the stream.
 
 **Contracts:** `agent.conversation.stream`, `agent.conversation.get`
@@ -152,6 +155,23 @@ it happens.
 - If a person retries a run that did not fail, then the system shall refuse.
 
 **Contracts:** `agent.conversation.retry`, `agent.conversation.get`
+
+### PS-AGENT-015 — A person can add to what the agent is already doing
+**Status:** covered
+
+- When a person sends a message while a run is in flight, the system shall
+  accept it rather than making them wait for the run to end.
+- The system shall answer that message within the conversation, whichever
+  harness is running it: steered into the turn already working where the
+  harness can take it, and answered by a follow-up run where it cannot. A
+  message shall never be accepted and then left unanswered.
+- The system shall record whether the message joined a run already working or
+  started one, so a person can be told which happened rather than watching an
+  apparently unanswered message.
+- The system shall not require a second event stream for a run that already has
+  one.
+
+**Contracts:** `agent.conversation.message.append`, `agent.conversation.message.list`
 
 ### PS-AGENT-014 — A conversation is private to the pod
 **Status:** covered

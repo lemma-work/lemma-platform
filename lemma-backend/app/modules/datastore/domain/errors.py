@@ -100,6 +100,29 @@ class DatastoreInfrastructureError(DatastoreDomainError):
         )
 
 
+class DatastoreQueryUnavailableError(DatastoreDomainError):
+    """Direct querying is not available on this deployment.
+
+    `PS-DATA-021`: a person who wrote perfectly good SQL must not be told their
+    query was the problem. Ad-hoc SQL runs as a dedicated Postgres role
+    (`datastore_query_role`), and a managed Postgres that never provisioned it
+    leaves every query with nowhere to run — a fact about the deployment that
+    no amount of rewriting the query will change.
+
+    503 rather than 400 for exactly that reason, and rather than 500 because
+    the platform is not broken: this one facility is absent, everything else in
+    the datastore works, and an operator can fix it by granting the role.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message,
+            code="DATASTORE_QUERY_UNAVAILABLE",
+            status_code=503,
+            details=details,
+        )
+
+
 class DocumentExtractionUnavailableError(RuntimeError):
     """The extractor could not be reached — the document was never judged.
 

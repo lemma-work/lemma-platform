@@ -323,6 +323,13 @@ class Context:
     # pod allow) treat it as the user it is acting for — without widening
     # real (grant-backed) agent/function workloads, which leave it False.
     is_user_equivalent: bool = False
+    #: Whether the pod this context is scoped to has been deleted.
+    #:
+    #: A deleted pod is soft-deleted: its rows, its memberships and its role
+    #: snapshots all survive, which is why authorization on its own goes on
+    #: saying yes. Carrying the fact here is what lets one check refuse every
+    #: pod-scoped route without any of them paying a ``Pod`` read.
+    pod_is_deleted: bool = False
     _decision_cache: dict[
         tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
     ] = field(default_factory=dict)

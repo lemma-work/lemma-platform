@@ -17,17 +17,28 @@ from uuid import UUID
 
 
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.factory import create_authorization_data_service
 
 from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.composition.surface_datastore import build_file_service
+from app.modules.agent_surfaces.services.display_resource_content import (
+    apply_file_facts,
+    apply_table_rows,
+    resolve_pod_file_parts,
+    load_pod_file_bytes,
+    resolve_table_preview,
+)
+from app.modules.agent_surfaces.domain.envelope import (
+    EnvelopeVoice,
+    SurfaceEnvelope,
+)
+from app.modules.agent_surfaces.services.one_reply_attachments import (
+    files_held_for_one_reply,
+)
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
 )
@@ -46,17 +57,18 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_approval_render_plan,
     build_ask_user_render_plan,
     build_display_resource_render_plan,
-    render_questions_as_text,
 )
+from app.core.file_types import is_untyped_mime
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.services.free_text_answer import (
+    remember_a_prompt_that_arrived_as_words,
+)
 from app.modules.agent_surfaces.services.surface_egress_target import (
     SurfaceEgressTargetMixin,
 )
 
 logger = get_logger(__name__)
-
-# Recent thread/channel messages fetched per run for group-mention continuity.
 
 
 def _approval_plan(
@@ -112,19 +124,24 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         external_user_repository = getattr(self, "external_user_repository", None)
         if external_user_repository is None:
             return False
-        ext = await external_user_repository.get_by_resolved_user(
-            platform=surface.surface_type.value, resolved_user_id=user_id
+        # Every identity they hold on this platform, not just the most recently
+        # seen one: Slack ids are per workspace and Teams ids per tenant, so
+        # taking one made a pod's second workspace unreachable. The surface's own
+        # tenant narrows the list, permissively where none was ever recorded.
+        identities = await external_user_repository.list_by_resolved_users(
+            platform=surface.surface_type.value, resolved_user_ids=[user_id]
         )
-        if ext is None or not ext.external_user_id:
-            return False
-        link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
-            surface_id=surface.id, external_user_id=ext.external_user_id
-        )
-        if link is None:
-            return False
-        return await self.send_agent_message_for_conversation(
-            conversation_id=link.conversation_id, message=message
-        )
+        for ext in identities:
+            if not ext.external_user_id or not surface.matches_tenant(ext.tenant_id):
+                continue
+            link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
+                surface_id=surface.id, external_user_id=ext.external_user_id
+            )
+            if link is not None:
+                return await self.send_agent_message_for_conversation(
+                    conversation_id=link.conversation_id, message=message
+                )
+        return False
 
     async def open_cold_email_thread(
         self,
@@ -182,16 +199,20 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return False
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await target.adapter.send_message(
-                credentials=target.credentials,
-                event=target.event,
-                message=clean_message,
-                metadata=message_metadata,
-            )
-            return True
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(
+                text=clean_message,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                ),
+            ),
+            metadata=await self._egress_metadata_with_agent_name(target, metadata),
+            conversation_id=conversation_id,
+        )
 
     async def send_display_resource_for_conversation(
         self,
@@ -217,35 +238,77 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             tool_call_id=tool_call_id,
             tool_output=tool_output,
         )
+        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
         # A FILE resource is delivered as a native attachment when it fits the
-        # platform's cap; otherwise we fall through to the card+URL render plan.
-        if (
-            display_request.type is DisplayResourceType.FILE
-            and display_request.path
-            and await self._try_send_file_attachment(
+        # platform's cap; otherwise we fall through to the card render plan, whose
+        # action is a Lemma app deep link — openable only by a recipient with pod
+        # access, so this fallback is a dead end for an outside contact. Which is
+        # why that card carries the file's kind and size: it is the part a
+        # recipient who cannot follow the link can still act on.
+        if display_request.type is DisplayResourceType.FILE and display_request.path:
+            resolved = await resolve_pod_file_parts(
+                uow=self.uow,
+                conversation_service=self.conversation_service,
                 target=target,
                 conversation_id=conversation_id,
                 path=display_request.path,
-                caption=render_plan.title,
+                # No caption. The file name used to be one, and every platform
+                # already prints it on the bubble — so the single line the
+                # message could carry said what the reader could already see.
+                caption=None,
+                page_preview=True,
             )
-        ):
-            return True
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await target.adapter.send_display_resource(
-                credentials=target.credentials,
-                event=target.event,
-                render_plan=render_plan,
-                metadata=message_metadata,
+            if resolved.files:
+                # A PDF's page image and the document itself are one envelope,
+                # so they arrive in that order rather than as two sends racing
+                # to be first.
+                #
+                # The card goes with them as each file's fallback. A platform
+                # that cannot attach at all -- Teams has no outbound file upload
+                # -- would otherwise degrade to a line naming the file, which
+                # tells the recipient less than the link card it replaced.
+                return await self._deliver_envelope(
+                    target,
+                    envelope=SurfaceEnvelope(
+                        files=[
+                            item.model_copy(
+                                update={
+                                    "fallback": apply_file_facts(
+                                        render_plan, resolved.facts
+                                    )
+                                }
+                            )
+                            for item in resolved.files
+                        ]
+                    ),
+                    metadata=message_metadata,
+                    conversation_id=conversation_id,
+                )
+            render_plan = apply_file_facts(render_plan, resolved.facts)
+        elif display_request.type is DisplayResourceType.TABLE:
+            render_plan = apply_table_rows(
+                render_plan,
+                await resolve_table_preview(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                    request=display_request,
+                ),
             )
-            return True
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(resources=[render_plan]),
+            metadata=message_metadata,
+            conversation_id=conversation_id,
+        )
 
     async def send_questions_for_conversation(
         self,
         *,
         conversation_id: UUID,
         tool_call_id: str | None = None,
+        narration: str | None = None,
     ) -> bool:
         """Render the conversation's pending ``ask_user`` questions on its surface.
 
@@ -259,13 +322,6 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         if target is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        if target.surface.surface_type.is_email:
-            # Email is non-interactive: never pause for a tappable/typed answer.
-            logger.debug(
-                "agent_surfaces.ingress_service.ask_user_suppressed_email_surface.observed",
                 conversation_id=conversation_id,
             )
             return False
@@ -289,9 +345,12 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         try:
             request = AskUserRequest.model_validate(raw_request)
         except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic",
+            # Stored tool_args that will not validate is a bug in whatever wrote
+            # them, not a transient — and the question is dropped here.
+            logger.warning(
+                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return False
         if not request.questions:
@@ -305,47 +364,31 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             conversation_id=conversation_id,
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
         )
-        metadata = await self._egress_metadata_with_agent_name(target, None)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            try:
-                if await target.adapter.send_questions(
-                    credentials=target.credentials,
-                    event=target.event,
-                    question_plan=plan,
-                    metadata=metadata,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic",
+        return await self._deliver_envelope(
+            target,
+            # The lead-in and the question are one thing the person receives.
+            # Sent as two, they arrive as two on a chat surface and as two
+            # emails on a surface that only gets one.
+            envelope=SurfaceEnvelope(
+                text=narration,
+                choices=plan,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
                     conversation_id=conversation_id,
-                )
-            # Fallback: a well-formatted text message; the user replies in chat and the
-            # typed-reply path in start_agent_chat resumes the run with their answer.
-            # This is the guaranteed "never swallowed" path — if it ALSO fails, the
-            # question reaches nobody and the run is stuck WAITING, so surface it
-            # loudly and report failure to the caller (the observer logs it too).
-            try:
-                await target.adapter.send_message(
-                    credentials=target.credentials,
-                    event=target.event,
-                    message=render_questions_as_text(plan),
-                    metadata=metadata,
-                )
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic",
-                    conversation_id=conversation_id,
-                )
-                return False
-            return True
+                ),
+            ),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
+            conversation_id=conversation_id,
+        )
 
     async def send_approval_prompt_for_conversation(
         self,
         *,
         conversation_id: UUID,
         tool_call_id: str | None = None,
+        narration: str | None = None,
     ) -> bool:
         """Render a pending ``request_approval`` on the surface.
 
@@ -363,17 +406,16 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
                 conversation_id=conversation_id,
             )
             return False
-        if target.surface.surface_type.is_email:
-            # Email is non-interactive: never pause for an approve/deny reply.
-            # (The tool now fails fast on email before pausing; this stays as a
-            # defense-in-depth guard.)
-            logger.debug(
-                "agent_surfaces.ingress_service.request_approval_suppressed_email_surface.observed",
-                conversation_id=conversation_id,
-            )
-            return False
 
-        pending = await self.conversation_service.get_pending_user_interaction(
+        # The approval pause specifically, not "whatever this conversation is
+        # waiting on". `get_pending_user_interaction` answers the second, across
+        # every pausing tool, and the check below then threw away anything that
+        # was not an approval — so a single `ask_user` nobody ever tapped, being
+        # older, shadowed every approval that followed it in that conversation
+        # for good. On a chat surface, where one conversation stands for the
+        # whole relationship with a person, that is permanent: dev's standing
+        # Telegram chat stopped rendering approval cards entirely.
+        pending = await self.conversation_service.get_pending_approval(
             conversation_id=conversation_id
         )
         if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
@@ -388,6 +430,7 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             plan=_approval_plan(pending, conversation_id, tool_call_id),
             metadata=await self._egress_metadata_with_agent_name(target, None),
             conversation_id=conversation_id,
+            narration=narration,
         )
 
     async def _deliver_approval(
@@ -397,43 +440,81 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
         plan: Any,
         metadata: dict[str, Any],
         conversation_id: UUID,
+        narration: str | None = None,
     ) -> bool:
-        """Native buttons, then a text prompt, then admit it reached nobody.
+        """Native buttons, then a text prompt, then admit it reached nobody."""
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(
+                text=narration,
+                decision=plan,
+                files=await files_held_for_one_reply(
+                    uow=self.uow,
+                    conversation_service=self.conversation_service,
+                    target=target,
+                    conversation_id=conversation_id,
+                ),
+            ),
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
 
-        If both fail the run is stuck waiting on an approval nobody saw, so that
-        is reported rather than swallowed.
+    async def _deliver_envelope(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any],
+        conversation_id: UUID,
+    ) -> bool:
+        """Hand one envelope to the platform and say whether it arrived.
+
+        The ladder -- native, then the part's own text, then nothing -- lives in
+        ``BaseSurfaceAdapter.deliver`` now, and this is what is left once the two
+        hand-written copies of it are gone: resolve a target, release the
+        connection, report.
+
+        Returning ``False`` matters as much as delivering. A prompt that reached
+        nobody leaves the run WAITING on an answer that cannot come, so the
+        caller un-dedupes and a later WAITING event tries again.
         """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
-                if await target.adapter.send_approval(
+                receipt = await target.adapter.deliver(
                     credentials=target.credentials,
                     event=target.event,
-                    approval_plan=plan,
-                    metadata=metadata,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic",
-                    conversation_id=conversation_id,
-                )
-            # Fallback: a text prompt; the user replies "approve"/"deny" and the
-            # typed-reply path resumes the run with their decision.
-            try:
-                await target.adapter.send_message(
-                    credentials=target.credentials,
-                    event=target.event,
-                    message=plan.to_plain_text(),
+                    envelope=envelope,
                     metadata=metadata,
                 )
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic",
-                    conversation_id=conversation_id,
+            except AgentSurfaceError:
+                # An error, not a warning, and with the traceback. This is the
+                # end of every ladder: native, then text, then nobody. A run
+                # left WAITING on a prompt that reached nobody cannot be seen or
+                # acted on by the person it was for, and the two events this
+                # path replaced were deliberately raised to `error` on main for
+                # exactly that reason.
+                logger.error(
+                    "agent_surfaces.egress.envelope_reached_nobody.failed",
+                    conversation_id=str(conversation_id),
+                    platform=target.surface.surface_type.value,
+                    exc_info=True,
                 )
                 return False
-            return True
+            if receipt.degraded:
+                logger.debug(
+                    "agent_surfaces.egress.envelope_degraded.diagnostic",
+                    conversation_id=str(conversation_id),
+                    platform=target.surface.surface_type.value,
+                    parts=receipt.degraded,
+                )
+        await remember_a_prompt_that_arrived_as_words(
+            self.conversation_service.conversation_repository,
+            conversation_id=conversation_id,
+            envelope=envelope,
+            receipt=receipt,
+        )
+        return True
 
     async def send_voice_note_for_conversation(
         self,
@@ -453,121 +534,49 @@ class SurfaceEgressMixin(SurfaceEgressTargetMixin):
             return False
         # The caption is model-authored — strip any reasoning before delivery.
         caption = sanitize_user_visible_text(caption) if caption else caption
-        try:
-            conversation = await self.conversation_service.conversation_repository.get_conversation(
-                conversation_id
-            )
-            if conversation is None:
-                return False
-            auth_ctx = await create_authorization_data_service(
-                self.uow
-            ).build_user_context(
-                user_id=conversation.user_id,
-                pod_id=target.surface.pod_id,
-            )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(self.uow)
-                entity, content = await file_service.download_file_content_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-            finally:
-                reset_current_context(token)
-        except Exception:
+        loaded = await load_pod_file_bytes(
+            uow=self.uow,
+            conversation_service=self.conversation_service,
+            target=target,
+            conversation_id=conversation_id,
+            path=path,
+        )
+        if loaded is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
+        entity, content = loaded
 
-        mime = entity.mime_type or "audio/ogg"
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            try:
-                if await target.adapter.send_voice_note(
-                    credentials=target.credentials,
-                    event=target.event,
+        # `or` was not enough: a file stored without an extension is typed
+        # `application/octet-stream`, which is truthy, so the fallback never
+        # fired and Telegram was handed a blob where sendVoice wants OGG.
+        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
+
+        # Voice note, then the same bytes as an attachment (an audio player on
+        # most platforms), then the link card. Three rungs that used to be
+        # written out here; the envelope walks them.
+        return await self._deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(
+                voice=EnvelopeVoice(
                     file_name=entity.name,
-                    audio_bytes=content,
-                    mime=mime,
+                    content=content,
+                    mime_type=mime,
                     caption=caption,
-                ):
-                    return True
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic",
-                    conversation_id=conversation_id,
+                    fallback=build_display_resource_render_plan(
+                        pod_id=target.surface.pod_id,
+                        request=DisplayResourceRequest(
+                            type=DisplayResourceType.FILE, path=path
+                        ),
+                        conversation_id=conversation_id,
+                    ),
                 )
-            # Fallback: native file attachment (audio player), then a link card.
-            if await self._try_send_file_attachment(
-                target=target,
-                conversation_id=conversation_id,
-                path=path,
-                caption=caption,
-            ):
-                return True
-            return await self.send_display_resource_for_conversation(
-                conversation_id=conversation_id,
-                request=DisplayResourceRequest(
-                    type=DisplayResourceType.FILE, path=path
-                ),
-            )
-
-    async def _try_send_file_attachment(
-        self,
-        *,
-        target: SurfaceEgressTarget,
-        conversation_id: UUID,
-        path: str,
-        caption: str | None,
-    ) -> bool:
-        """Attach a pod file's bytes natively when it fits the platform cap.
-
-        Returns True only when the file was delivered natively; on any failure
-        or an oversize file returns False so the caller sends a URL link instead.
-        """
-        platform = target.surface.surface_type.value
-        try:
-            conversation = await self.conversation_service.conversation_repository.get_conversation(
-                conversation_id
-            )
-            if conversation is None:
-                return False
-            auth_ctx = await create_authorization_data_service(
-                self.uow
-            ).build_user_context(
-                user_id=conversation.user_id,
-                pod_id=target.surface.pod_id,
-            )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(self.uow)
-                entity = await file_service.get_file_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-                if not fits_inline(platform, entity.size_bytes):
-                    return False
-                _entity, content = await file_service.download_file_content_by_path(
-                    target.surface.pod_id, path, auth_ctx
-                )
-            finally:
-                reset_current_context(token)
-        except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_native_file_attach_skipped.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            return await target.adapter.send_file_attachment(
-                credentials=target.credentials,
-                event=target.event,
-                file_name=entity.name,
-                file_bytes=content,
-                mime_type=entity.mime_type or "application/octet-stream",
-                caption=caption,
-            )
+            ),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
+            conversation_id=conversation_id,
+        )
 
     async def send_processing_indicator_for_conversation(
         self,

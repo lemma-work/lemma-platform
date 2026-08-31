@@ -29,4 +29,4 @@ Use a normal MAJOR.MINOR.PATCH string.
 
 from __future__ import annotations
 
-API_VERSION = "0.7.0"
+API_VERSION = "0.7.1"

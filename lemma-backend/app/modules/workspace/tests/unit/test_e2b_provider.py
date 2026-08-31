@@ -50,6 +50,20 @@ def _deadline() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=30)
 
 
+def _expiring_deadline() -> datetime:
+    """A deadline for the tests that assert on giving up.
+
+    `wait_ready` now spends the caller's whole budget polling, so a test of
+    the never-answers path spends it too -- in real seconds. The 30s
+    `_deadline` made one of these the slowest test in the unit suite at 20s
+    (its poll capped at `ensure_serving`'s old default), and honouring the
+    deadline would have made it 30. What these two assert is the shape of
+    the giving-up, not how long a caller is willing to wait for it, so they
+    ask for the shortest budget that still gets a poll.
+    """
+    return datetime.now(timezone.utc) + timedelta(milliseconds=50)
+
+
 @pytest.fixture
 def world() -> FakeE2B:
     return FakeE2B()
@@ -1007,7 +1021,7 @@ async def test_a_sandbox_whose_runtime_died_is_not_ready(
 
     with pytest.raises(ProviderFailed) as failure:
         await provider.wait_ready(
-            instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_expiring_deadline()
         )
 
     assert "502" in str(failure.value)
@@ -1052,7 +1066,7 @@ async def test_a_workspace_whose_agent_died_is_not_ready(
 
     with pytest.raises(ProviderFailed):
         await provider.wait_ready(
-            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_expiring_deadline()
         )
 
 
@@ -1117,3 +1131,51 @@ async def test_python_and_the_shell_are_given_the_same_directory(
     # go to absolute paths under /tmp.
     assert world.command_cwds, "no command reached the sandbox"
     assert set(world.command_cwds) == {cwd}, world.command_cwds
+
+
+async def test_execute_python_is_visible_to_the_idle_sweep(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    """A long `execute_python` had no protection from being reclaimed.
+
+    The idle sweep decides what to release from the provider's process index,
+    and `execute_python` never wrote to it -- so a ten-minute analysis was
+    invisible to the busy check while it ran. The comment on its own timeout
+    argued the opposite, reasoning that the sweeper "will not release a sandbox
+    with live processes": true of `exec_command`, never true of this call.
+    """
+    from sandbox_runtime.protocol import ExecutePythonRequest, ProcessState
+
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+
+    cwd = "/workspace/c/2026-08-30/rkil98cd"
+    instance = await provider.create(_spec(uuid4()))
+    operation_id = uuid4()
+
+    await provider.execute_python(
+        instance,
+        LocalPythonSessionRef(session_id=uuid4(), cwd=cwd),
+        ExecutePythonRequest(
+            operation_id=operation_id,
+            code="print(1)",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+
+    tracked = str(operation_id)
+    assert tracked in buffer.pids, "execute_python never entered the process index"
+    assert buffer.directories[tracked] == cwd
+    assert buffer.deadlines[tracked] > 0
+    # And it does not stay busy once it has returned.
+    state, _exit_code = buffer.states[tracked]
+    assert state in {ProcessState.SUCCEEDED, ProcessState.FAILED}

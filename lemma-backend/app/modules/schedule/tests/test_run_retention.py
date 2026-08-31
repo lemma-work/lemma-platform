@@ -1,11 +1,11 @@
 """What the schedule-run pruner must never delete.
 
-The ledger had no retention at all — 81,334 rows growing by a thousand a day —
-and every index on the table pays for that forever. But it is also a live table
-with two properties a careless DELETE would break: production had 1,634 runs
-legitimately in flight for over a month (workflows parked on human form waits),
-and the circuit breaker decides whether to deactivate a schedule by counting
-back through its completed runs.
+The ledger had no retention at all — an append-only table that only ever grew —
+and every index on it pays for that forever. But it is also a live table with two
+properties a careless DELETE would break: runs sit legitimately in flight for
+months at a time (workflows parked on human form waits), and the circuit breaker
+decides whether to deactivate a schedule by counting back through its completed
+runs.
 
 So these tests are mostly about the negative space: the predicate, and the
 drain loop's stopping conditions.
@@ -76,7 +76,7 @@ async def test_only_finished_runs_are_eligible(deleted) -> None:
 
 
 def test_a_dispatched_run_awaiting_its_target_is_not_terminal() -> None:
-    """The 1,634-row case: DISPATCHED with no outcome is in flight, not old.
+    """The long-parked case: DISPATCHED with no outcome is in flight, not old.
 
     Asserted against the constant rather than the rendered SQL — SQLAlchemy
     compiles an IN list to a bind parameter, so a string check would pass

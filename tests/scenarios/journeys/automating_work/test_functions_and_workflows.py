@@ -109,9 +109,7 @@ class TestWorkflows:
         alice, the_pod = pod
         workflow = await alice.creates_a_workflow(in_pod=the_pod)
 
-        await alice.is_refused_creating_a_workflow(
-            in_pod=the_pod, named=workflow["name"]
-        )
+        await alice.is_refused_creating_a_workflow(in_pod=the_pod, named=workflow["name"])
 
     @scenario("A person can see the shape of a workflow without running it")
     @proves("PS-FLOW-002")
@@ -139,7 +137,7 @@ class TestWorkflows:
         assert workflow["name"] not in listed
 
     @scenario("Someone outside the pod cannot create a workflow in it")
-    @proves("PS-FLOW-014")
+    @proves("PS-POD-011")
     @covers("workflow.create")
     async def test_an_outsider_cannot_create_a_workflow(self, world, pod):
         alice, the_pod = pod

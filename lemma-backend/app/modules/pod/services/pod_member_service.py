@@ -274,7 +274,6 @@ class PodMemberService:
         pod_id: UUID,
         pod_member: PodMemberEntity,
         *,
-        org_member: object | None,
         verb: str,
     ) -> None:
         """Refuse to leave the pod with nobody in it who can administer it.
@@ -283,33 +282,29 @@ class PodMemberService:
         that hands ``pod.member.manage`` to a custom role is not told it has one
         administrator when it has four (see ``count_members_who_can``).
 
-        Organization owners are exempt, and that is the difference between this
-        and the organization-level guard beside it. Zero organization owners is
-        permanent -- no path mints one. A pod without a POD_ADMIN is not stuck
-        at all: its organization's owners reach every pod in the organization,
-        and the organization is guaranteed an owner by ``refuse_if_last_owner``.
-        Refusing an owner here would hand a sole operator advice they cannot
-        follow -- "appoint another admin first", in a pod where they are the
-        only person.
+        **Nobody is exempt, including an organization owner.** The rule is about
+        the pod, so an owner who is also its only administrator is refused like
+        anyone else -- they appoint a second administrator first, then step
+        down. An owner reaching the pod through their organization role is not
+        the same thing as the pod having an administrator: the pod's own member
+        list is what every pod-scoped permission check reads, and a pod whose
+        only administrator has just demoted themselves shows nobody who can
+        manage it.
+
+        This is deliberate and was decided against the alternative, which the
+        code held for a while: exempting owners on the grounds that they reach
+        every pod anyway. It made the guarantee conditional on a role held
+        somewhere else, which is exactly the shape that produces a pod nobody
+        can administer the moment that other role changes.
         """
         if not self._member_has_role(pod_member, PodRole.ADMIN):
-            return
-        if org_member is None:
-            org_member = await self.organization_repository.get_member_by_id(
-                pod_member.organization_member_id
-            )
-        if (
-            org_member is not None
-            and getattr(org_member, "role", None) == OrganizationRole.ORG_OWNER
-        ):
             return
         administrators = await self.pod_member_repository.count_members_who_can(
             pod_id, Permissions.POD_MEMBER_MANAGE
         )
         if administrators <= 1:
             raise PodConflictError(
-                f"Cannot {verb} the last admin of the pod; appoint another "
-                f"admin first, or ask an organization owner to do this"
+                f"Cannot {verb} the last admin of the pod; appoint another admin first"
             )
 
     async def remove_member_from_pod(
@@ -350,9 +345,7 @@ class PodMemberService:
         # Checked before anything is mutated, including the entity: a refusal
         # should leave the aggregate exactly as it found it rather than lean on
         # the transaction rolling back a `mark_removed` nobody asked for.
-        await self._refuse_if_last_administrator(
-            pod_id, pod_member, org_member=None, verb="remove"
-        )
+        await self._refuse_if_last_administrator(pod_id, pod_member, verb="remove")
 
         removed_user_id: UUID | None = None
         try:
@@ -450,9 +443,7 @@ class PodMemberService:
         # somebody with no say over the pod that it has exactly one admin left.
         # See PS-POD-041 and DEV-POD-002.
         if PodRole.ADMIN.value not in normalized_roles:
-            await self._refuse_if_last_administrator(
-                pod_id, pod_member, org_member=org_member, verb="demote"
-            )
+            await self._refuse_if_last_administrator(pod_id, pod_member, verb="demote")
 
         updated = await self.pod_member_repository.update(pod_member)
         if updated.user_id is None:

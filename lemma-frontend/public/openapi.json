@@ -2551,9 +2551,17 @@
             "title": "Updated At"
           },
           "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where no app host is served -- see `public_app_url`.",
             "readOnly": true,
-            "title": "Url",
-            "type": "string"
+            "title": "Url"
           },
           "user_id": {
             "format": "uuid",
@@ -4084,6 +4092,11 @@
             ],
             "title": "Instructions"
           },
+          "is_archived": {
+            "default": false,
+            "title": "Is Archived",
+            "type": "boolean"
+          },
           "last_run_error": {
             "anyOf": [
               {
@@ -4167,6 +4180,12 @@
             ],
             "title": "Parent Id"
           },
+          "pod_cwd": {
+            "description": "The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.",
+            "readOnly": true,
+            "title": "Pod Cwd",
+            "type": "string"
+          },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
@@ -4213,7 +4232,8 @@
           "user_id",
           "pod_id",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "pod_cwd"
         ],
         "title": "ConversationResponse",
         "type": "object"
@@ -4405,6 +4425,7 @@
             "description": "Optional resource grants to apply to the new agent in the same request. Equivalent to calling the permissions-replace endpoint right after create — grants are keyed by resource_name."
           },
           "toolsets": {
+            "description": "Toolsets the agent declares. Omit the field to start with web search and memory; pass an explicit empty list for none.",
             "items": {
               "$ref": "#/components/schemas/AgentToolset"
             },
@@ -7929,14 +7950,20 @@
             "type": "string"
           },
           "url": {
-            "title": "Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
           "id",
           "name",
-          "url",
           "status"
         ],
         "title": "HomeAppResponse",
@@ -13280,13 +13307,12 @@
         "type": "object"
       },
       "SurfacePlatform": {
+        "description": "The platforms a pod can be reached on.\n\nEmail is Resend, and only Resend. Gmail and Outlook were here as\nComposio-backed mailboxes, which made \"an email surface\" mean three\ndifferent transports with three attachment strategies between them -- bytes,\nGraph drafts, and a signed URL the provider downloads server-side. Reaching\na Gmail *account* is still something an agent does, through the connector;\nit is just not a surface.",
         "enum": [
           "SLACK",
           "TEAMS",
           "WHATSAPP",
           "TELEGRAM",
-          "GMAIL",
-          "OUTLOOK",
           "RESEND"
         ],
         "title": "SurfacePlatform",
@@ -13649,7 +13675,7 @@
       },
       "SurfaceSlackConfigInput": {
         "additionalProperties": false,
-        "description": "The Slack settings a *caller* owns.\n\nOnly ``app_name``. The per-person DM agent map is written from inside Slack\n— each person picks their own in the App Home — so it is readable here and\nnever writable, which keeps one editor from reassigning everybody.",
+        "description": "The Slack settings a *caller* owns.\n\nNot the per-person DM agent map: that is written from inside Slack — each\nperson picks their own in the App Home — so it is readable here and never\nwritable, which keeps one editor from reassigning everybody.\n\n``dedicated_to_agent`` is the caller's, though, and has to be: it says this\napp was made as one agent's own bot, which is a fact about why the app\nexists and cannot be read off the surface. Setting it is what withdraws the\nper-person choice, so it is the one Slack setting that decides whether the\nother is offered at all.",
         "properties": {
           "app_name": {
             "anyOf": [
@@ -13661,6 +13687,11 @@
               }
             ],
             "title": "App Name"
+          },
+          "dedicated_to_agent": {
+            "default": false,
+            "title": "Dedicated To Agent",
+            "type": "boolean"
           }
         },
         "title": "SurfaceSlackConfigInput",
@@ -13679,6 +13710,11 @@
               }
             ],
             "title": "App Name"
+          },
+          "dedicated_to_agent": {
+            "default": false,
+            "title": "Dedicated To Agent",
+            "type": "boolean"
           },
           "dm_agent_by_user": {
             "additionalProperties": {
@@ -14479,6 +14515,17 @@
               }
             ],
             "title": "Instructions"
+          },
+          "is_archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Archived"
           },
           "metadata": {
             "anyOf": [
@@ -15748,6 +15795,11 @@
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "shares_address": {
+            "default": false,
+            "title": "Shares Address",
+            "type": "boolean"
           }
         },
         "required": [
@@ -15760,7 +15812,7 @@
         "type": "object"
       },
       "UserSurfacePlatformGroup": {
-        "description": "All of a user's surfaces for one platform. ``conflict`` is true when more\nthan one surface could answer them (they should pick a ``default``).",
+        "description": "All of a user's surfaces for one platform. ``conflict`` is true when two\nof them answer at the same address, so the user has to say which pod hears\nthem (the ``shares_address`` surfaces are the ones to choose between).",
         "properties": {
           "conflict": {
             "default": false,
@@ -17579,7 +17631,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.0"
+    "version": "0.7.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -23547,7 +23599,7 @@
     },
     "/pods/{pod_id}/conversations": {
       "get": {
-        "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead.",
+        "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.",
         "operationId": "agent.conversation.list",
         "parameters": [
           {
@@ -23624,6 +23676,16 @@
                 }
               ],
               "title": "Parent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
             }
           },
           {
@@ -24214,6 +24276,100 @@
           "resource": "agent.conversation.message",
           "result": "entity",
           "verb": "send"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/messages/append": {
+      "post": {
+        "description": "Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.",
+        "operationId": "agent.conversation.message.append",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conversation was not found or is not visible"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account usage limit was exceeded"
+          }
+        },
+        "summary": "Append Pod Conversation Message",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.message",
+          "result": "entity",
+          "verb": "append"
         }
       }
     },
@@ -32082,8 +32238,29 @@
     },
     "/surface-setup/slack/manifest": {
       "get": {
-        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public — this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod.",
+        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public — this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
         "operationId": "agent.surface.slack_manifest",
+        "parameters": [
+          {
+            "description": "Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.",
+            "in": "query",
+            "name": "agent_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.",
+              "title": "Agent Name"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -32096,6 +32273,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Get Slack App Manifest",
@@ -32113,7 +32300,7 @@
     },
     "/surfaces/me": {
       "get": {
-        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when more than one could answer.",
+        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when two of them answer at the\nsame address.",
         "operationId": "agent.surface.list_mine",
         "responses": {
           "200": {

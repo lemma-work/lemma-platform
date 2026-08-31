@@ -42,6 +42,9 @@ async def start_and_stream_run(
             with anyio.CancelScope(shield=True):
                 await subscription.__aexit__(exc_type, exc, traceback)
         except Exception:
+            logger.warning(
+                "agent.streaming.subscription_close_failed.degraded", exc_info=True
+            )
             return
 
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
@@ -66,8 +69,17 @@ async def start_and_stream_run(
                 agent_run_id=str(result.agent_run_id),
                 exc_info=True,
             )
+            # `stream_error`, not `error`. The two say opposite things about
+            # the run: `error` is the run failing, and a client that sees one
+            # is right to stop and offer a retry. This is the *transport*
+            # giving up — the subscription was evicted or Redis dropped it —
+            # while the run carries on writing messages nobody is listening
+            # for. Sent under the same name, the sentence "Reconnect to
+            # continue" reached a client that had just decided the run was
+            # over, so the one frame that asks for a reconnect was the one
+            # frame that guaranteed there would not be one.
             yield encode_stream_chunk(
-                event_type="error",
+                event_type="stream_error",
                 data="Realtime stream interrupted. Reconnect to continue.",
                 agent_run_id=result.agent_run_id,
             )

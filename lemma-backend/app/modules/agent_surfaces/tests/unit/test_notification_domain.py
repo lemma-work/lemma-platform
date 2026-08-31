@@ -367,7 +367,7 @@ def test_an_outbound_notification_does_not_suppress_the_dm_reset():
         updated_at=now - timedelta(minutes=1),
     )
 
-    assert service._should_reset_dm_conversation(surface=_dm_surface(), link=link)
+    assert service._should_start_a_new_conversation(surface=_dm_surface(), link=link)
 
 
 def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
@@ -375,18 +375,22 @@ def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
     now = datetime.now(timezone.utc)
 
     recent_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(hours=1))
-    assert not service._should_reset_dm_conversation(
+    assert not service._should_start_a_new_conversation(
         surface=_dm_surface(), link=recent_legacy
     )
 
     old_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(days=3))
-    assert service._should_reset_dm_conversation(surface=_dm_surface(), link=old_legacy)
+    assert service._should_start_a_new_conversation(
+        surface=_dm_surface(), link=old_legacy
+    )
 
 
 def test_a_live_thread_is_not_reset():
     service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     link = _link(last_inbound_at=datetime.now(timezone.utc) - timedelta(minutes=10))
-    assert not service._should_reset_dm_conversation(surface=_dm_surface(), link=link)
+    assert not service._should_start_a_new_conversation(
+        surface=_dm_surface(), link=link
+    )
 
 
 # --------------------------------------------------------- the surface policy
@@ -460,3 +464,91 @@ def test_an_agent_with_its_own_surface_does_not_borrow_the_pods():
     own.agent_id = agent_id
 
     assert surfaces_for_agent([pod_surface, own], actor_agent_id=agent_id) == [own]
+
+
+def test_every_mail_platform_is_one_email_channel():
+    """An agent choosing a channel must not be asked which mail vendor.
+
+    Gmail, Outlook and Resend are the same choice to the person receiving it —
+    mail — and which one carries it depends on what the deployment connected,
+    which no agent can reason about. Chat platforms keep their own name, because
+    that name *is* the thing the recipient is looking at.
+    """
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        EMAIL_CHANNEL,
+        channel_for_platform,
+    )
+
+    assert {
+        channel_for_platform(platform) for platform in (SurfacePlatform.RESEND,)
+    } == {EMAIL_CHANNEL}
+    assert channel_for_platform(SurfacePlatform.WHATSAPP) == "whatsapp"
+
+
+def test_the_tool_offers_exactly_the_channels_routing_can_produce():
+    """The agent's vocabulary and the router's, held together.
+
+    ``MessageChannel`` is declared in the agent module because the agent module
+    must not import ``agent_surfaces``. That leaves two lists that have to agree
+    and no compiler to make them, so this is the thing that makes them: a
+    platform the router can route to and the tool cannot name is unreachable,
+    and a name the tool offers that the router cannot produce is a value the
+    model will spend a refused send discovering.
+    """
+    from app.modules.agent.tools.messaging.models import MessageChannel
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        channel_for_platform,
+    )
+
+    assert {channel.value for channel in MessageChannel} == {
+        channel_for_platform(platform) for platform in SurfacePlatform
+    }
+
+
+def test_a_channel_holds_every_surface_the_agent_has_on_that_platform():
+    """ "Send it on Slack" means any Slack bot that can reach them, not the first.
+
+    A pod with two workspaces has two Slack surfaces, and only one of them may
+    have a thread with this person.
+    """
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        surfaces_on_channel,
+    )
+
+    workspace_a = _surface(SurfacePlatform.SLACK)
+    workspace_b = _surface(SurfacePlatform.SLACK)
+    mailbox = _surface(SurfacePlatform.RESEND)
+
+    assert surfaces_on_channel(
+        [workspace_a, mailbox, workspace_b], channel="slack"
+    ) == [workspace_a, workspace_b]
+    assert surfaces_on_channel([workspace_a, mailbox], channel="email") == [mailbox]
+
+
+def test_a_refusal_says_nothing_was_sent_elsewhere_and_what_would_have():
+    """Both halves matter, and they matter to different readers.
+
+    "Nothing was sent elsewhere" is what stops an agent believing a message
+    landed somewhere it did not. Naming the alternatives is what lets it do
+    something about that in the same turn instead of asking a person.
+    """
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        UndeliverableReason,
+        channel_refused,
+    )
+
+    refused = channel_refused(
+        "whatsapp",
+        cause=UndeliverableReason.window_closed_on("whatsapp"),
+        alternatives=["email", "telegram"],
+    )
+    assert "WhatsApp reply window has closed" in refused
+    assert "Nothing was sent elsewhere" in refused
+    assert "email, Telegram would reach them" in refused
+
+    nowhere = channel_refused(
+        "telegram",
+        cause=UndeliverableReason.never_interacted_on("telegram"),
+        alternatives=[],
+    )
+    assert "no other channel can reach them either" in nowhere

@@ -22,8 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from pydantic import HttpUrl, SecretStr
 
 from app.core.config import reveal_secret, settings
+from app.modules.agent.services.context_budget import (
+    catalog_metadata_for,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
@@ -114,6 +118,9 @@ def _build_system_openai_catalog(
             capabilities=_openai_compat_model_capabilities(
                 model_name, vision_model_names
             ),
+            # These names come from configuration, not discovery, so nothing
+            # else can know their window -- see `catalog_metadata_for`.
+            metadata=catalog_metadata_for(model_name),
         )
         for model_name in model_names
     ]
@@ -169,10 +176,27 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
         default_model_name=default_model_name or model_catalog[0].name,
         model_catalog=model_catalog,
         config=OpenAICompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
-            or settings.lemma_openai_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_OPENAI_BASE_URL") or settings.lemma_openai_base_url
+            ),
+            # pydantic-ai defaults to `self._usage += chunk_usage` per streamed
+            # SSE chunk, correct only for a provider that sends usage once or
+            # sends true per-chunk deltas. Some models behind this provider
+            # instead repeat an already-cumulative total on every chunk, which
+            # the default then adds on top of itself, billing a turn as a
+            # multiple of what it used. `openai_continuous_usage_stats` switches
+            # pydantic-ai to replace rather than add, which lands on the right
+            # total under either convention. Set on the profile rather than per
+            # model: the catalog is heterogeneous, and replace is safe for every
+            # member of it.
+            #
+            # The same flag also puts a non-standard field in the request body,
+            # which a strict endpoint rejects outright.
+            # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
+            # see its docstring for why the two halves have to be separated.
+            model_settings={"openai_continuous_usage_stats": True},
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -206,6 +230,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
                 provider_model_name=model_name,
                 # Claude models are multimodal, so the vision-only `view_image`
                 # tool stays available on the Anthropic system profile.
+                metadata=catalog_metadata_for(model_name),
                 capabilities=[
                     RuntimeModelCapability.TEXT,
                     RuntimeModelCapability.TOOLS,
@@ -215,10 +240,12 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
             for model_name in model_names
         ],
         config=AnthropicCompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_ANTHROPIC_BASE_URL")
-            or settings.lemma_anthropic_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_ANTHROPIC_BASE_URL")
+                or settings.lemma_anthropic_base_url
+            ),
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -228,7 +255,7 @@ def system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
     return None
 
 
-def _env_or_setting(env_name: str, setting_value: object | None) -> str | None:
+def _env_or_setting(env_name: str, setting_value: SecretStr | str | None) -> str | None:
     value = os.getenv(env_name) or reveal_secret(setting_value)
     if value is None:
         return None
@@ -294,6 +321,7 @@ def agent_host_model_catalog(
                     display_name=display_name,
                     provider_model_name=name,
                     capabilities=list(capabilities),
+                    metadata=catalog_metadata_for(name),
                 )
             )
     return entries

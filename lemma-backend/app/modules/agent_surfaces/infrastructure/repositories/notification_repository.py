@@ -218,6 +218,32 @@ class NotificationRepository:
         )
         return [m.to_entity() for m in result.scalars().all()]
 
+    async def count_open_from_origin_conversation(self, conversation_id: UUID) -> int:
+        """How many asks this conversation made are still waiting on a person.
+
+        Read on the *origin* side, not the delivery side: the question is what
+        one asking conversation is still owed, across however many people it
+        reached. Zero is what lets a sleeping asker wake early.
+
+        Scoped to AGENT_RUN because that is the only origin a conversation has —
+        a workflow form is owed to its run, and resuming it is the workflow
+        engine's job, not a snoozed conversation's.
+
+        EXPIRED and CANCELLED count as settled, deliberately. They are not
+        answers, but they are no longer outstanding, and an asker held asleep by
+        a question nobody will ever answer is the worse failure.
+        """
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(NotificationModel)
+            .where(
+                NotificationModel.origin_kind == NotificationOriginKind.AGENT_RUN.value,
+                NotificationModel.origin_conversation_id == conversation_id,
+                NotificationModel.status == NotificationStatus.OPEN.value,
+            )
+        )
+        return int(result.scalar_one())
+
     async def list_past_due(
         self, *, limit: int = 100, now: datetime | None = None
     ) -> list[NotificationEntity]:

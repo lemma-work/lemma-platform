@@ -36,6 +36,7 @@ import {
 } from "@/lib/assistant/conversation-presentation";
 import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
+import { appPageSlugFromRouteParam } from "@/lib/utils/app-page-slugs";
 import { barOwnsTitle, resolveTabLabel } from "@/lib/pods/topbar-title";
 import type { Pod } from "@/lib/types";
 import type { PodContext } from "@/lib/types/ai";
@@ -109,9 +110,6 @@ function getPodSectionLabel(podId: string, pathname: string) {
             return "Widgets";
         case "app":
             return "Apps";
-        case "recipes":
-        case "kits":
-            return "Add capability";
         default:
             return formatDisplayName(section);
     }
@@ -154,8 +152,6 @@ function getPodRoutePolicyKey(podId: string, pathname: string): PodRoutePolicyKe
             return "settings";
         case "forms":
         case "widgets":
-        case "kits":
-        case "recipes":
             return null;
         default:
             return "home";
@@ -328,7 +324,12 @@ function PodShell({
     const pageSurfaceKey = isConversationRoute
         ? `/pod/${pod.id}/conversations`
         : pathname;
-    const appSlug = isAppViewRoute ? searchParams.get("page") : null;
+    // Canonical, not verbatim: a link from `display_resource` names the app the
+    // way its resource name reads ("Expense Tracker"), while the app index slugs
+    // it (`expense-tracker`). Normalizing here is what lets one route param feed
+    // the tab strip, the keep-alive host and the sidebar without any of them
+    // failing to find an app that exists.
+    const appSlug = isAppViewRoute ? appPageSlugFromRouteParam(searchParams.get("page")) : null;
     const isConversationStageEmbed =
         searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
     const sectionLabel = getPodSectionLabel(pod.id, pathname);
@@ -358,7 +359,7 @@ function PodShell({
     // A stable key for the "which app-workspace view is this" decision below:
     // changes when you switch apps, land on home, or leave for another section.
     const appNavIntent = isAppViewRoute
-        ? `app:${searchParams.get("page") || ""}`
+        ? `app:${appSlug || ""}`
         : isPodHome
             ? "home"
             : "other";

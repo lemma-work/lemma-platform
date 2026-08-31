@@ -370,7 +370,9 @@ class SandboxWorkspaceSession:
         return [
             {
                 "process_id": str(process.operation_id),
-                "cmd": "",
+                # Empty when the in-sandbox runtime is the source: it tracks
+                # what is running, not how it was asked for.
+                "cmd": getattr(process, "command", None) or "",
                 # Absent when the sandbox runtime is the source: it tracks what
                 # is running, not what a control plane once recorded about how
                 # it was started.
@@ -516,10 +518,12 @@ class SandboxWorkspaceSession:
                         deadline_at=self._deadline(30),
                     )
                 except Exception:
-                    logger.debug(
-                        "workspace.sandbox_session.python_session_delete_failed",
+                    # Leaks a session, not a sandbox: the sweeper reclaims that.
+                    logger.warning(
+                        "workspace.sandbox_session.python_session_delete.degraded",
                         sandbox_id=self.sandbox_id,
                         session_id=self.session_id,
+                        exc_info=True,
                     )
         finally:
             if self._owns_client:

@@ -1,6 +1,6 @@
 """Connectors and accounts → installing, connecting, using, and removing.
 
-The provider is a server this suite runs (`harness.fake_platform`), installed
+The provider is a server this suite runs (`harness.fake_upstreams`), installed
 through the `http` connector kind — which exists so anyone can connect an
 internal API described by its own OpenAPI spec. So the operations really
 execute, over HTTP, against something that records what it received.
@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.drivers.api import items_of
 
 pytestmark = [
     journey("Connectors and accounts"),
@@ -19,24 +20,113 @@ pytestmark = [
 
 
 @pytest.fixture
-async def installed(world, provider):
-    """An organization with the provider installed and an account connected."""
+async def installed(world, stack):
+    """An organization with a connector installed and an account connected.
+
+    Takes `stack` rather than `provider`, and that is the whole point. Most of
+    what this file proves is about the *installation* and the *account* —
+    scoping, renaming, disconnecting, listing what a connector offers, and what
+    uninstalling takes with it. None of that needs a third party to answer;
+    only the four scenarios that actually run an operation do, and those ask
+    for `provider` by name as well.
+
+    Asking for it here anyway meant all twelve skipped against a deployment,
+    where nothing stands in for anything. The eight that never touch it now run
+    there.
+
+    Where there is no proxy, the connector comes from the deployment's own
+    catalogue instead of from a spec the suite serves. It has to be a
+    credential-managed kind: an OAuth2 one cannot be connected without somebody
+    opening a browser, which is exactly the step a scenario cannot take.
+    """
     alice = await world.person("priya")
     organization = alice.organization
-    auth_config = await alice.installs_http_connector(
-        in_organization=organization,
-        server_url=provider.base_url,
-        spec_url=provider.spec_url,
-    )
+    # Not merely "is there an Egress object": a run with SCENARIOS_EGRESS=off
+    # against a stack it booted still has one, in mode `off`, serving nothing.
+    # Asking whether anything is actually standing in is the question that
+    # matters, and getting it wrong sends the fixture to install an HTTP
+    # connector from a spec URL nobody answers — a 500 from the deployment,
+    # which reads as the product being broken.
+    proxy = getattr(stack, "egress", None)
+    if proxy is not None and getattr(proxy, "mode", "off") in {"fake", "replay"}:
+        from harness.provider_view import ProviderView
+
+        proxy.forget()
+        served = ProviderView(proxy)
+        auth_config = await alice.installs_http_connector(
+            in_organization=organization,
+            server_url=served.base_url,
+            spec_url=served.spec_url,
+        )
+    else:
+        auth_config = await alice.installs_connector(
+            await _a_connector_anyone_can_connect(alice),
+            in_organization=organization,
+        )
     account = await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
         # `access_token` is the key the HTTP executor turns into a bearer
-        # header. A credential under any other name is stored and never sent.
+        # header. A credential under any other name is stored and never sent —
+        # which is why the same one works for a catalogue connector that has
+        # never heard of it: a credential-managed account stores what it is
+        # given, and nothing here asks it to be spent.
         credentials={"access_token": "alice-provider-token"},
     )
-    provider.clear()
     return alice, organization, auth_config, account
+
+
+async def _a_connector_anyone_can_connect(alice) -> str:
+    """A connector from the catalogue this fixture can install unaided.
+
+    Asked of the deployment rather than named here. Which connectors a
+    deployment carries is its own business — naming one would make this pass on
+    the deployment it was written against and skip on every other.
+
+    Three requirements, and the third is the one that bites. One kind only, so
+    installing it without saying which is unambiguous. Not OAuth2, because
+    connecting one of those means a person in a browser. And **nothing required
+    in its config schema**: installing is a single call with no configuration,
+    so a kind that needs a host, a spec URL or a broker key answers 400 and the
+    whole file fails on setup.
+
+    That last one is why a preference for a connector that carries operations
+    does not belong here. On a real deployment the two are close to disjoint —
+    everything with operations wants credentials or an address first, and the
+    ones that install unaided are messaging surfaces with none. Ranking on
+    operations picked `sql`, which needs `dialect`, `host` and `database`, and
+    took eleven scenarios down with it. `test_an_operation_is_readable` asks the
+    operations question for itself, where a lane can answer it.
+    """
+    catalogue = items_of(await alice.api.get("/connectors"))
+    connectable = [
+        str(connector["id"])
+        for connector in catalogue
+        if len(connector.get("kinds") or []) == 1
+        and str((connector["kinds"][0]).get("auth_scheme", "")).upper() != "OAUTH2"
+        and not ((connector["kinds"][0]).get("config_schema") or {}).get("required")
+    ]
+    for preferred in ("telegram",):
+        if preferred in connectable:
+            return preferred
+    if connectable:
+        return connectable[0]
+    pytest.skip(
+        "this deployment's catalogue has no single-kind connector that can be "
+        "installed without configuration and connected without consent, so "
+        "there is nothing to install that a scenario could also connect an "
+        "account to"
+    )
+
+
+def _a_provider_is_stood_in(stack) -> bool:
+    """Is something answering for a third party on this run?
+
+    The same question the `installed` fixture branches on, asked in one place so
+    a scenario can tell which kind of connector it ended up with.
+    """
+    proxy = getattr(stack, "egress", None)
+    return proxy is not None and getattr(proxy, "mode", "off") in {"fake", "replay"}
 
 
 @scenario("An admin installs a connector and its operations are discovered")
@@ -60,9 +150,10 @@ async def test_installing_discovers_operations(world, provider):
     installed = {c["name"] for c in await alice.auth_configs_in(organization)}
     assert auth_config["name"] in installed, installed
 
-    operations = {o["name"] for o in await alice.operations_of(
-        auth_config, in_organization=organization
-    )}
+    operations = {
+        o["name"]
+        for o in await alice.operations_of(auth_config, in_organization=organization)
+    }
     assert operations, "installing must discover what the provider offers"
     assert "create_a_widget" in operations, operations
 
@@ -98,9 +189,14 @@ async def test_an_outsider_cannot_install(world, installed, provider):
         "GET", f"/organizations/{organization['id']}/connectors/auth-configs"
     )
     created = await outsider.api.call(
-        "POST", f"/organizations/{organization['id']}/connectors/auth-configs",
-        json={"connector_id": "openapi", "kind": "http", "name": "trespass",
-              "config": {"server_url": provider.base_url, "spec_url": provider.spec_url}},
+        "POST",
+        f"/organizations/{organization['id']}/connectors/auth-configs",
+        json={
+            "connector_id": "openapi",
+            "kind": "http",
+            "name": "trespass",
+            "config": {"server_url": provider.base_url, "spec_url": provider.spec_url},
+        },
     )
 
     assert listed.status_code >= 400, listed.status_code
@@ -110,8 +206,15 @@ async def test_an_outsider_cannot_install(world, installed, provider):
 @scenario("An admin renames an installation and it keeps working")
 @proves("PS-CONN-010")
 @covers("connector.auth_config.update", "connector.operation.discover")
-async def test_an_installation_can_be_renamed(installed, provider):
+async def test_an_installation_can_be_renamed(installed):
     alice, organization, auth_config, _account = installed
+
+    before = {
+        str(operation["name"])
+        for operation in await alice.operations_of(
+            auth_config, in_organization=organization
+        )
+    }
 
     new_name = f"{auth_config['name']}_renamed"
     await alice.renames_auth_config(
@@ -120,10 +223,19 @@ async def test_an_installation_can_be_renamed(installed, provider):
 
     installed_now = {c["name"] for c in await alice.auth_configs_in(organization)}
     assert new_name in installed_now, installed_now
-    operations = await alice.operations_of(
-        {"name": new_name}, in_organization=organization
+    after = {
+        str(operation["name"])
+        for operation in await alice.operations_of(
+            {"name": new_name}, in_organization=organization
+        )
+    }
+    # Against what it offered before, not merely "some". The promise is that a
+    # rename does not disturb the installation, and "still has at least one
+    # operation" is true of an installation that quietly lost half of them. It
+    # also stops the assertion depending on which connector this run installed.
+    assert after == before, (
+        f"a rename lost discovered operations: {sorted(before - after)} went missing"
     )
-    assert operations, "a rename must not lose the discovered operations"
 
 
 class TestConnectingAnAccount:
@@ -131,8 +243,12 @@ class TestConnectingAnAccount:
 
     @scenario("A person connects an account and it belongs to them")
     @proves("PS-CONN-020")
-    @covers("connector.account.create", "connector.account.list",
-            "connector.account.get", "connector.connected")
+    @covers(
+        "connector.account.create",
+        "connector.account.list",
+        "connector.account.get",
+        "connector.connected",
+    )
     async def test_an_account_belongs_to_who_connected_it(self, installed):
         alice, organization, _auth_config, account = installed
 
@@ -160,7 +276,11 @@ class TestConnectingAnAccount:
 
     @scenario("A person disconnects their account and it stops being usable")
     @proves("PS-CONN-020")
-    @covers("connector.account.delete", "connector.account.list", "connector.operation.execute")
+    @covers(
+        "connector.account.delete",
+        "connector.account.list",
+        "connector.operation.execute",
+    )
     async def test_disconnecting_stops_the_account_working(self, installed):
         alice, organization, auth_config, account = installed
 
@@ -231,14 +351,41 @@ class TestUsingAConnector:
     @scenario("A person reads what an operation takes before running it")
     @proves("PS-CONN-030")
     @covers("connector.operation.detail", "connector.operation.search")
-    async def test_an_operation_is_readable(self, installed):
+    async def test_an_operation_is_readable(self, installed, stack):
         alice, organization, auth_config, _account = installed
 
+        # Whichever operation this connector offers, rather than one named
+        # here. The promise is that a person can read what an operation takes
+        # before running it — true of any operation, and naming one tied this
+        # to the spec the suite serves rather than to the product.
+        offered = await alice.operations_of(auth_config, in_organization=organization)
+        if not offered and not _a_provider_is_stood_in(stack):
+            # Which connector this run could install is the deployment's
+            # business, and the ones that install unaided are messaging
+            # surfaces that carry no operations — nothing here has failed.
+            #
+            # Not the skip this used to have, which fired in *either* lane and
+            # so stood down at exactly the moment discovery had broken. Where a
+            # provider is stood in the spec is served by this suite, operations
+            # are guaranteed, and an empty list falls through to the assert.
+            pytest.skip(
+                "the connector this deployment let the fixture install offers "
+                "no operations, so there is nothing whose shape a person could "
+                "read. Run against a stack the suite booted to get this one"
+            )
+        assert offered, (
+            "this connector discovered no operations at all, so there is nothing "
+            "whose shape a person could read before running it. The installation "
+            "succeeded and discovery produced nothing — that is the bug this "
+            "scenario is for, not a reason to stand down"
+        )
+        name = str(offered[0]["name"])
+
         detail = await alice.operation_detail(
-            "create_a_widget", auth_config=auth_config, in_organization=organization
+            name, auth_config=auth_config, in_organization=organization
         )
 
-        assert detail.get("name") == "create_a_widget", detail
+        assert detail.get("name") == name, detail
 
     @scenario("A person sees what a connector can notify them about")
     @proves("PS-CONN-040")

@@ -119,21 +119,22 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             event, message, metadata
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await TelegramPlatformService(credentials).send_display_resource(
+    ) -> bool:
+        await TelegramPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
+        return True
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -141,11 +142,11 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await TelegramPlatformService(credentials).send_questions(
+        return await TelegramPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -153,7 +154,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await TelegramPlatformService(credentials).send_approval(
+        return await TelegramPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
         )
 
@@ -271,7 +272,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             )
         ]
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],
@@ -289,7 +290,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             caption=caption,
         )
 
-    async def send_voice_note(
+    async def _render_voice(
         self,
         *,
         credentials: dict[str, Any],

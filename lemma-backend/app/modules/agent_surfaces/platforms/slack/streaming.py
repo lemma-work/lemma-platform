@@ -15,6 +15,7 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     truncate_slack_text as _truncate_slack_text,
@@ -64,7 +65,7 @@ class SlackStreamSurface:
         # and DMs alike — but never stream without one.
         if not token or not channel or not thread_ts:
             return progress_handle
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         title = _truncate_slack_text(progress_text.strip(), 200) or "Working…"
         try:
             if progress_handle and progress_handle.get("ts"):
@@ -139,7 +140,7 @@ class SlackStreamSurface:
             return StreamAppendResult(handle=progress_handle, appended=False)
         if not text and progress_handle:
             return StreamAppendResult(handle=progress_handle, appended=False)
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             if not (progress_handle and progress_handle.get("ts")):
                 progress_handle = await self._open_stream(
@@ -251,7 +252,7 @@ class SlackStreamSurface:
         Slack rejects a stopStream that tries to introduce the body itself, so
         append is the call that carries text and stop only finalises.
         """
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         ts = str(handle["ts"])
         sequence = int(handle.get("task_seq") or 0)
         combined: list[dict[str, Any]] = []
@@ -314,7 +315,7 @@ class SlackStreamSurface:
         token = slack_access_token(self.credentials)
         if not token:
             return
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         channel = progress_handle.get("channel") or event.reply_target.get("channel")
         sequence = int(progress_handle.get("task_seq") or 0)
         try:

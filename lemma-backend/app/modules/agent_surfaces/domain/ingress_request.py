@@ -25,20 +25,10 @@ class SurfaceDirectWebhookIngress(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
-class SurfaceScheduleIngress(BaseModel):
-    ingress_type: Literal["schedule"] = "schedule"
-    schedule_id: UUID
-    payload: dict[str, Any]
-    account_id: UUID | None = None
-    pod_id: UUID | None = None
-    user_id: UUID | None = None
-
-
 SurfaceIngressRequest = Annotated[
     Union[
         SurfacePlatformWebhookIngress,
         SurfaceDirectWebhookIngress,
-        SurfaceScheduleIngress,
     ],
     Field(discriminator="ingress_type"),
 ]

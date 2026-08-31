@@ -220,7 +220,7 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
               type="button"
               variant="quiet"
               onClick={() =>
-                void createAndGo("templates", (podId) => `/pod/${podId}/recipes`)
+                void createAndGo("templates", (podId) => `/pod/${podId}`)
               }
               disabled={Boolean(pending)}
               className="setup-detail-choice h-9 w-auto gap-2 px-3 text-sm font-normal"

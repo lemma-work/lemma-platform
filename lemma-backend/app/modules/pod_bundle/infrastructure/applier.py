@@ -24,6 +24,17 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.infrastructure.account_binding import (
+    validate_account_binding,
+)
+from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
+from app.modules.pod_bundle.infrastructure.existing_resources import (
+    _flow_exists,
+    _get_agent,
+    _get_function,
+    _get_schedule,
+    _get_table,
+)
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
@@ -69,7 +80,7 @@ class BundleApplier:
             StepKind.FUNCTION_GRANTS: self._apply_function_grants,
             StepKind.SCHEDULE: self._apply_schedule,
             StepKind.WORKFLOW: self._apply_workflow,
-            StepKind.SURFACE: self._apply_surface,
+            StepKind.SURFACE: self._surface_step,
             StepKind.FILE: self._apply_file,
         }.get(step.kind)
         if handler is None:
@@ -251,6 +262,36 @@ class BundleApplier:
                 ctx=self._ctx,
             )
 
+    async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
+        """Derive the `/memory` folder and grant the MEMORY toolset implies.
+
+        Why an imported agent needs this, and why it runs after the grants step
+        rather than before it, is on
+        `app.composition.pod_bundle_resources.sync_agent_memory_grant`.
+        """
+        from app.composition.pod_bundle_resources import sync_agent_memory_grant
+
+        if agent is None or getattr(agent, "id", None) is None:
+            return
+        await sync_agent_memory_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            toolsets=toolsets,
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
+
+    async def _surface_step(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `surface_apply.apply_surface`."""
+        await apply_surface(
+            step,
+            uow=self._uow,
+            ctx=self._ctx,
+            pod_id=self._pod_id,
+            load=self._load,
+        )
+
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
         once every resource it references has been applied.
@@ -308,6 +349,10 @@ class BundleApplier:
         await self._apply_grants(
             grantee_type="AGENT", grantee_id=agent.id, grants=grants
         )
+        # Replace semantics: whatever the bundle listed is now the whole set, so
+        # the toolset-derived grant has to be put back. From the agent as saved,
+        # not from the bundle -- the same rule the permissions endpoint follows.
+        await self._sync_memory_grant(agent, getattr(agent, "toolsets", None))
 
     # --- grants ----------------------------------------------------------
 
@@ -326,105 +371,6 @@ class BundleApplier:
         )
 
     # --- schedules -------------------------------------------------------
-
-    async def _validate_account_binding(
-        self,
-        *,
-        account_id: object,
-        expected_connector: object,
-        expected_kind: object,
-        resource_label: str,
-    ) -> None:
-        """Guard against a surface/schedule being wired to the wrong connector
-        account on import.
-
-        The bundle stamps every account reference with the ``connector_id`` and
-        ``connector_kind`` it was exported against; the importer supplies one of
-        *their own* org's account ids for the ``${..._account}`` variable. Here we
-        confirm that supplied account actually exists in the target org and matches
-        both — otherwise the resource is created pointing at a
-        missing/mismatched account and only fails opaquely when it next runs. The
-        connector match mirrors the surface account-binding rule
-        (``SurfaceAccountBindingResolver``), so an imported surface is held to the
-        same contract as a hand-configured one.
-
-        The kind check matters because one connector id can be installed more
-        than one way: a bundle exported against a vendored Slack package does
-        not work against a Composio Slack account, since the operation names
-        differ. Bundles written before kinds carry the old ``LEMMA``/``COMPOSIO``
-        vocabulary, which is compared in its own terms rather than rejected.
-        """
-        if not account_id or not expected_connector:
-            return
-        try:
-            account_uuid = (
-                account_id if isinstance(account_id, UUID) else UUID(str(account_id))
-            )
-        except (ValueError, TypeError) as exc:
-            raise PodBundleDomainError(
-                f"{resource_label} was given an invalid connector account id "
-                f"'{account_id}'.",
-                code="POD_BUNDLE_ACCOUNT_INVALID",
-            ) from exc
-
-        from app.composition.pod_bundle_resources import get_connector_service
-
-        service = get_connector_service(self._uow)
-        account = await service.account_repository.get(account_uuid)
-        if account is None:
-            raise PodBundleDomainError(
-                f"{resource_label} references a connector account that does not "
-                f"exist in this org. Connect a '{expected_connector}' account and "
-                "supply its id for this import.",
-                code="POD_BUNDLE_ACCOUNT_NOT_FOUND",
-            )
-        if str(account.connector_id).lower() != str(expected_connector).lower():
-            raise PodBundleDomainError(
-                f"{resource_label} needs a '{expected_connector}' account, but the "
-                f"supplied account is for '{account.connector_id}'. Connect a "
-                f"'{expected_connector}' account and re-run the import.",
-                code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
-            )
-        await self._validate_account_kind(
-            service=service,
-            account=account,
-            expected_kind=expected_kind,
-            expected_connector=expected_connector,
-            resource_label=resource_label,
-        )
-
-    async def _validate_account_kind(
-        self,
-        *,
-        service,
-        account,
-        expected_kind: object,
-        expected_connector: object,
-        resource_label: str,
-    ) -> None:
-        if not expected_kind:
-            return
-        actual = await service.get_account_kind(account)
-        if actual is None:
-            return
-        wanted = str(expected_kind).lower()
-        # Legacy bundles say LEMMA/COMPOSIO. LEMMA covered every non-composio
-        # kind, so it is satisfied by any of them rather than by `package`
-        # alone -- an MCP install exported before the rename would otherwise be
-        # unimportable.
-        if wanted in ("lemma", "composio"):
-            from app.modules.connectors.domain.connector import kind_to_provider
-
-            if kind_to_provider(actual).value.lower() == wanted:
-                return
-        elif actual.lower() == wanted:
-            return
-        raise PodBundleDomainError(
-            f"{resource_label} needs a '{expected_connector}' account installed "
-            f"as '{expected_kind}', but the supplied account's install is "
-            f"'{actual}'. Connect the right one and re-run the import.",
-            code="POD_BUNDLE_ACCOUNT_KIND_MISMATCH",
-        )
 
     async def _apply_schedule(self, step: PlanStep) -> None:
         from app.composition.pod_bundle_resources import get_schedule_service
@@ -448,7 +394,8 @@ class BundleApplier:
         fields["name"] = step.name
         fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
         fields["config"] = payload.get("config") or {}
-        await self._validate_account_binding(
+        await validate_account_binding(
+            self._uow,
             account_id=fields.get("account_id"),
             expected_connector=payload.get("connector_id"),
             expected_kind=payload.get("connector_kind") or payload.get("provider"),
@@ -485,151 +432,6 @@ class BundleApplier:
         )
 
     # --- surfaces (connectors) -------------------------------------------
-
-    async def _apply_surface(self, step: PlanStep) -> None:
-        """Create or update a pod surface, binding the connector ``account_id``
-        resolved from the required ``${..._account}`` variable. A pod may have
-        several surfaces per platform, each addressed by a stable pod-unique
-        ``name`` (defaults to the lowercased platform), so import is an idempotent
-        upsert keyed by that name — mirroring the surface create/update
-        controllers (reusing their config helpers) so an imported connector
-        behaves exactly like a hand-configured one."""
-        from app.composition.pod_bundle_resources import get_agent_service
-        from app.composition.pod_bundle_resources import (
-            _merge_surface_config,
-            _resolve_surface_config,
-        )
-        from app.composition.pod_bundle_resources import get_surface_service
-        from app.modules.agent_surfaces.contracts import SurfaceCreateRequest
-        from app.modules.agent_surfaces.contracts import (
-            AgentSurfaceEntity,
-            SurfacePlatform,
-        )
-        from app.modules.agent_surfaces.contracts import AgentSurfaceNotFoundError
-
-        payload = self._load("surfaces", step.name)
-        platform_raw = payload.get("platform")
-        if not platform_raw:
-            # An up-to-date exporter always writes platform explicitly; a
-            # missing value means a stale/hand-edited bundle, not something to
-            # silently paper over by guessing from the directory name.
-            raise PodBundleDomainError(
-                f"Surface '{step.name}' is missing its platform — re-export "
-                "this bundle.",
-                code="POD_BUNDLE_SURFACE_PLATFORM",
-            )
-        try:
-            platform = SurfacePlatform(str(platform_raw).upper())
-        except ValueError as exc:
-            raise PodBundleDomainError(
-                f"Unsupported surface platform '{platform_raw}'.",
-                code="POD_BUNDLE_SURFACE_PLATFORM",
-            ) from exc
-
-        # The surface's pod-unique name (defaults to the lowercased platform);
-        # the upsert is keyed by it so several surfaces of the same platform
-        # round-trip.
-        resolved_name = str(
-            payload.get("name") or ""
-        ).strip() or AgentSurfaceEntity.default_name_for(platform)
-
-        # Only the create-request fields (extra='forbid'); drop export-only keys.
-        # account_id has already been substituted from the provided account
-        # variable by self._load.
-        request = SurfaceCreateRequest.model_validate(
-            {
-                "platform": platform.value,
-                "name": resolved_name,
-                **{
-                    key: value
-                    for key, value in payload.items()
-                    if key
-                    in {
-                        "default_agent_name",
-                        "account_id",
-                        "credential_mode",
-                        "config",
-                        "is_enabled",
-                    }
-                },
-            }
-        )
-
-        await self._validate_account_binding(
-            account_id=request.account_id,
-            expected_connector=payload.get("connector_id"),
-            expected_kind=payload.get("connector_kind") or payload.get("provider"),
-            resource_label=f"Surface '{resolved_name}'",
-        )
-
-        agent_service = get_agent_service(self._uow)
-        service = get_surface_service(self._uow)
-
-        agent = (
-            await _get_agent(
-                agent_service, self._pod_id, request.default_agent_name, self._ctx
-            )
-            if request.default_agent_name
-            else None
-        )
-
-        try:
-            existing = await service.get_surface_by_name_in_pod(
-                pod_id=self._pod_id, name=resolved_name
-            )
-        except AgentSurfaceNotFoundError:
-            existing = None
-
-        if existing is None:
-            config = await _resolve_surface_config(
-                uow=self._uow,
-                pod_id=self._pod_id,
-                platform=platform,
-                config_input=request.config,
-                agent_service=agent_service,
-                ctx=self._ctx,
-            )
-            surface = await service.create_surface(
-                pod_id=self._pod_id,
-                agent_id=agent.id if agent else None,
-                platform=platform,
-                name=resolved_name,
-                config=config,
-                credential_mode=request.credential_mode,
-                account_id=request.account_id,
-                ctx=self._ctx,
-            )
-            if not request.is_enabled:
-                await service.update_surface(
-                    surface_id=surface.id, is_active=False, ctx=self._ctx
-                )
-            return
-
-        config = await _merge_surface_config(
-            uow=self._uow,
-            pod_id=self._pod_id,
-            platform=platform,
-            existing=existing.config,
-            config_input=request.config,
-            agent_service=agent_service,
-            ctx=self._ctx,
-        )
-        await service.update_surface(
-            surface_id=existing.id,
-            agent_id=agent.id if agent else None,
-            update_agent_id="default_agent_name" in request.model_fields_set,
-            config=config,
-            credential_mode=(
-                request.credential_mode
-                if "credential_mode" in request.model_fields_set
-                else None
-            ),
-            account_id=request.account_id,
-            is_active=(
-                request.is_enabled if "is_enabled" in request.model_fields_set else None
-            ),
-            ctx=self._ctx,
-        )
 
 
 # --- module helpers ----------------------------------------------------------
@@ -696,48 +498,6 @@ def _file_manifest_entry(files_root: Path, pod_path: str) -> dict[str, Any]:
         if isinstance(entry, dict) and str(entry.get("path") or "") == pod_path:
             return entry
     return {}
-
-
-async def _get_table(service, pod_id, name, ctx):
-    # get_table raises DatastoreTableNotFoundError when absent; treat as "create".
-    try:
-        return await service.get_table(pod_id, name, ctx)
-    except Exception:
-        return None
-
-
-async def _get_agent(service, pod_id, name, ctx):
-    try:
-        return await service.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
-    except Exception:
-        return None
-
-
-async def _get_function(service, pod_id, name, user_id, ctx):
-    try:
-        return await service.get_function_by_name(
-            pod_id, name, user_id, include_code=False, ctx=ctx
-        )
-    except Exception:
-        return None
-
-
-async def _get_schedule(service, pod_id, name, ctx):
-    # No get-by-name on the schedule service; list with a name filter.
-    try:
-        schedules, *_ = await service.list_schedules(pod_id=pod_id, name=name, ctx=ctx)
-        return schedules[0] if schedules else None
-    except Exception:
-        return None
-
-
-async def _flow_exists(service, pod_id, name, ctx) -> bool:
-    # get_workflow_by_name RETURNS None for a missing flow (it does not raise), so a
-    # bare try/except would treat "not found" as "exists" and skip the create.
-    try:
-        return await service.get_workflow_by_name(pod_id, name, ctx=ctx) is not None
-    except Exception:
-        return False
 
 
 def _read_csv(path: Path) -> list[dict[str, Any]]:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID
 
 from faststream import Depends, Logger
@@ -51,6 +50,10 @@ from app.modules.agent.domain.events import (
     AgentRunStopRequestedEvent,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    settle_stranded_conversations,
+    settle_stuck_stops,
+)
 from app.modules.agent.infrastructure.harnesses import (
     HarnessRegistry,
     PydanticAIHarness,
@@ -62,6 +65,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
+)
+from app.modules.agent.events.queued_followup import (
+    start_followup_run_for_queued_messages,
 )
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_service import ConversationService
@@ -89,6 +95,10 @@ _FILE_WRITE_EVENT_TYPES = frozenset(
         DatastoreFileDeletedEvent.get_event_type(),
     }
 )
+
+
+def agent_run_job_id(agent_run_id: UUID) -> str:
+    return f"agent-run:{agent_run_id}"
 
 
 @reliable_redis_stream_subscriber(
@@ -156,10 +166,6 @@ def build_harness_registry() -> HarnessRegistry:
     )
 
 
-def agent_run_job_id(agent_run_id: UUID) -> str:
-    return f"agent-run:{agent_run_id}"
-
-
 @reliable_redis_stream_subscriber(
     router,
     AGENT_EVENTS_STREAM,
@@ -198,16 +204,32 @@ async def _process_agent_control_event(
 ) -> None:
     if isinstance(parsed, AgentRunStartedEvent):
         await enqueue_agent_run(parsed, fs_logger=fs_logger, job_queue=job_queue)
-        return
-    if isinstance(parsed, AgentRunCompletedEvent):
-        # Generate a title once the first run finishes. The deterministic job id
-        # dedups across turns, so this runs at most once per conversation; the
-        # job itself no-ops if a title already exists.
+        # The title only needs the user's first message -- already saved by
+        # the time this event fires -- not the agent's reply, so it does not
+        # need to wait for the run to finish. Starting it here rather than on
+        # completion means a slow or long-running turn no longer leaves the
+        # conversation title-less for its whole duration. The deterministic
+        # job id dedups across turns, so this runs at most once per
+        # conversation; the job itself no-ops if a title already exists.
         await job_queue.enqueue(
             "generate_conversation_title",
             context={"conversation_id": str(parsed.conversation_id)},
             _job_id=conversation_title_job_id(parsed.conversation_id),
         )
+        return
+    if isinstance(parsed, AgentRunCompletedEvent):
+        # Belt and suspenders: the same deterministic job id means this is a
+        # no-op on the (now-common) path where the run-started enqueue above
+        # already generated the title, and a fallback for anything that
+        # reaches completion without having gone through that event.
+        await job_queue.enqueue(
+            "generate_conversation_title",
+            context={"conversation_id": str(parsed.conversation_id)},
+            _job_id=conversation_title_job_id(parsed.conversation_id),
+        )
+        # Anything the person sent while that run was busy has been sitting
+        # unanswered: the run it joined had already read its history.
+        await start_followup_run_for_queued_messages(parsed, uow_factory=uow_factory)
         return
     if isinstance(parsed, AgentRunStopRequestedEvent):
         job_id = agent_run_job_id(parsed.agent_run_id)
@@ -292,29 +314,20 @@ async def process_agent_run(
     )
     from app.composition.agent_surface_runtime import build_progress_observer
 
-    # Safety net: if a cancellation arrives before/during runner.execute (e.g.
-    # streaq task timeout, worker shutdown) and propagates as CancelledError
-    # past execute's own handler, swallow it here. Re-raising CancelledError
-    # into streaq's `with scope:` block triggers
-    # "Attempted to exit a cancel scope that isn't the current task's current
-    # cancel scope" — a RuntimeError that crashes the entire worker. The run
-    # is already finalized inside execute; there is nothing useful to do here.
-    try:
-        await runner.execute(
-            agent_run_id=agent_run_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-            observer=build_progress_observer(
-                uow_factory=worker_ctx.uow_factory,
-                service_factory=worker_ctx.build_surface_event_handler,
-            ),
-        )
-    except asyncio.CancelledError:
-        logger.debug(
-            "agent.handlers.process_agent_run_cancelled_run.diagnostic",
-            agent_run_id=agent_run_id,
-        )
+    # No try/except around this. A CancelledError from a worker shutting down
+    # must reach streaq: it only XACKs a task that returned, and relinquishes a
+    # cancelled one for the next worker to reclaim. See
+    # `AgentRunnerService.execute`.
+    await runner.execute(
+        agent_run_id=agent_run_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_name=agent_name,
+        observer=build_progress_observer(
+            uow_factory=worker_ctx.uow_factory,
+            service_factory=worker_ctx.build_surface_event_handler,
+        ),
+    )
 
 
 @streaq_task(name="reconcile_agent_approval")
@@ -407,16 +420,26 @@ async def process_conversation_title(
 # forever.
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
 
+# A live worker acts on a stop within a second, so one still pending after this
+# means no worker ever will. STOP_REQUESTED holds the conversation's one active
+# run slot, so until it settles a new message starts nothing and Retry refuses.
+_STUCK_STOP_CUTOFF_SECONDS = 120
+
 
 @streaq_cron("5-59/10 * * * *", name="reconcile_orphaned_agent_runs")
 async def reconcile_orphaned_agent_runs() -> None:
-    """Self-heal agent runs stuck non-terminal after a worker crash/restart.
+    """Self-heal runs a worker abandoned, and stops nobody picked up.
 
-    The grace_period on the worker lets a SIGTERM-interrupted run finalize
-    itself; this cron is the backstop for hard crashes (SIGKILL/OOM) and any
-    residual race where finalization lost to engine disposal. Marking the run
-    FAILED here publishes the same lifecycle + SSE events a normal finish does,
-    so the UI updates and any waiting workflow is unblocked.
+    A worker shut down with SIGTERM relinquishes its task for the queue to
+    redeliver, so what reaches here is what no worker got to hand back: SIGKILL,
+    OOM, and the race where finalization lost to engine disposal. Those cannot
+    be resumed safely -- nothing closed their outstanding tool calls, and
+    staleness alone cannot tell a dead worker from a live peer without a
+    heartbeat -- so they fail terminally, publishing the same lifecycle and SSE
+    events a normal finish does.
+
+    A run left STOP_REQUESTED is the other half, and settles as STOPPED: the
+    user asked for it to end, and it is holding the conversation's active slot.
     """
     worker_ctx: AppWorkerContext = streaq_worker.context
     try:
@@ -426,6 +449,11 @@ async def reconcile_orphaned_agent_runs() -> None:
                 cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
             )
             finalized: list[tuple[UUID, UUID, AgentRunStatus]] = []
+            finalized.extend(
+                await settle_stuck_stops(
+                    repo, cutoff_seconds=_STUCK_STOP_CUTOFF_SECONDS
+                )
+            )
             for run in stale:
                 finish_result = await repo.finish_agent_run(
                     agent_run_id=run.id,
@@ -449,6 +477,11 @@ async def reconcile_orphaned_agent_runs() -> None:
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
+            # The other half: a conversation left active by a run that already
+            # finished, which a sweep keyed on run status cannot see.
+            await settle_stranded_conversations(
+                repo, cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS
+            )
     except Exception:
         logger.error(
             "agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True

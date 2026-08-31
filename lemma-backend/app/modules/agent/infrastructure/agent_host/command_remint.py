@@ -17,6 +17,18 @@ TTL expires -- a spin, instead of a fast failure.
 So this module rewrites the payload before the command goes back on the queue,
 and counts its own attempts inside the ``rejection`` JSONB the command already
 carries.
+
+One shape of stale rejection is deliberately *not* repaired here, because it
+is not ours to repair. The host applies a publish only when it drains the
+channel that publish arrived on, and it used to drain only at the top of a
+loop iteration -- so a run could be refused as superseded while naming the
+newest revision, with the host's own copy the older of the two. Lemma and the
+host agreed; only the host's memory was behind, which is invisible from here
+and reads exactly like a genuine disagreement. Requeuing on that guess would
+resend an identical payload the host refuses again, which is the spin
+described above. It is fixed where it happens, in the Agent Host's
+``sync_harnesses_for_commands``, and the fence there now also asks the host to
+publish again immediately rather than waiting out its refresh interval.
 """
 
 from __future__ import annotations
@@ -89,25 +101,37 @@ def _refusal_for(
 ) -> str | None:
     """Why this command cannot be re-aimed, or ``None`` if it can.
 
-    Every branch here ends the run, so each one is a sentence someone reads.
+    Every branch here ends the run, so each one is a sentence someone reads --
+    and reads on its own, with nothing else about the failure alongside it,
+    because a run refused before it starts produces no events. Each therefore
+    names the agent it is about wherever we know which one that is.
     """
+    # Named rather than described. `harness` is None only when the agent has
+    # been unregistered since dispatch, which is its own branch below; every
+    # other sentence here can say which agent it means.
+    agent = harness.display_name if harness is not None else "This agent"
     if attempts > MAX_REMINT_ATTEMPTS:
         return (
-            "this agent's configuration kept changing while the run was being "
+            f"{agent}'s configuration kept changing while the run was being "
             "handed to it"
         )
     if harness is None or harness.host_id != command.host_id:
-        return "this agent is no longer registered on that computer"
+        return "This agent is no longer registered on that computer"
     if harness.health != AgentHostHarnessHealth.READY.value:
         # Re-aiming at a harness that cannot take work only moves the failure
         # later, and loses the reason on the way. `AUTH_REQUIRED` in particular
         # is a sentence the user can act on.
         return f"{harness.display_name} is not ready: {harness.health}"
     if harness.config_revision == payload.get("profile_revision"):
-        # We already told the host this revision and it refused. Either its
-        # publish has not reached us yet or it holds something older; requeuing
-        # the identical payload is the spin this module exists to avoid.
-        return "this computer and Lemma disagree about the agent's configuration"
+        # We already told the host this revision and it refused, so the two
+        # records genuinely disagree -- and requeuing an identical payload is
+        # the spin this module exists to avoid. See the note on the host's
+        # in-memory copy in this module's docstring for why this branch is
+        # narrower than it looks.
+        return (
+            f"That computer and Lemma disagree about how {harness.display_name} "
+            "is configured; try sending again in a moment"
+        )
     return None
 
 
@@ -129,7 +153,7 @@ async def remint_for_current_revision(
         return RemintOutcome(
             requeue=False,
             attempts=attempts,
-            refusal="the run was dispatched without a harness",
+            refusal="The run was dispatched without a harness",
         )
     harness = await session.get(AgentHostHarnessModel, UUID(str(raw_harness_id)))
     refusal = _refusal_for(

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -92,6 +93,95 @@ async def test_create_pod_success_adds_admin_and_domain_event(
     pod_member_create_arg = pod_member_repository_mock.create.await_args.args[0]
     assert pod_member_create_arg.role == PodRole.ADMIN
     assert pod_member_create_arg.organization_member_id == org_member.id
+
+
+@pytest.mark.asyncio
+async def test_create_pod_gives_the_pod_assistant_its_mailbox(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A pod is writable-to from the moment it exists.
+
+    The address used to be minted on the assistant's first outbound
+    notification. Inbound routes on that address, so until something had been
+    sent, mail to the obvious guess matched no surface and started nothing.
+    """
+    provision = AsyncMock(return_value="test-pod@mail.example.com")
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        provision,
+    )
+    uow = object()
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=uow,
+    )
+
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.return_value = pod
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    created = await service.create_pod(pod, creator_id)
+
+    provision.assert_awaited_once_with(uow, pod_id=created.id, pod_name=created.name)
+
+
+@pytest.mark.asyncio
+async def test_create_pod_survives_a_mailbox_that_cannot_be_minted(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A deployment with no mail domain still gets a perfectly good pod."""
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        AsyncMock(return_value=None),
+    )
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=object(),
+    )
+
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.return_value = pod
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    assert await service.create_pod(pod, creator_id) == pod
 
 
 @pytest.mark.asyncio
@@ -376,7 +466,7 @@ async def test_delete_pod_marks_deleted_and_updates(
     requester_id = uuid4()
     pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
 
-    pod_repository_mock.get.return_value = pod
+    pod_repository_mock.get_even_if_deleted.return_value = pod
     organization_repository_mock.get_member.return_value = _make_org_member(
         user_id=requester_id,
         organization_id=pod.organization_id,
@@ -396,6 +486,37 @@ async def test_delete_pod_marks_deleted_and_updates(
     assert events[0].event_type == "pod.deleted"
     assert events[0].pod_id == pod.id
     assert events[0].organization_id == pod.organization_id
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_already_deleted_pod_reports_success(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    """PS-POD-050: a retried deletion succeeds instead of failing.
+
+    A client that never saw the first answer sends the request again. The pod
+    row is still there, flagged deleted, so the second call must report the
+    same success -- and must not write, re-emit `pod.deleted`, or rename a pod
+    that already carries a generated deleted- name.
+    """
+    requester_id = uuid4()
+    pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
+    pod.is_deleted = True
+
+    pod_repository_mock.get_even_if_deleted.return_value = pod
+    organization_repository_mock.get_member.return_value = _make_org_member(
+        user_id=requester_id,
+        organization_id=pod.organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+
+    result = await pod_service.delete_pod(pod.id, requester_id)
+
+    assert result is True
+    pod_repository_mock.update.assert_not_called()
+    assert pod.collect_events() == []
 
 
 @pytest.mark.asyncio
@@ -482,3 +603,53 @@ async def test_list_pods_by_org_editor_sees_only_member_pods(
         None,
     )
     pod_repository_mock.list_by_org.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_pod_frees_its_inbound_addresses_in_the_same_request(
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    authorization_service_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The pod's name is freed here, so its addresses have to be too.
+
+    ``_build_deleted_pod_name`` renames the pod immediately, which releases the
+    org-unique name — while surface teardown waited on the pod-deleted event in
+    the worker. Recreating a pod under that name in between asked for an
+    address the deleted pod still held: either the new pod took a suffixed form
+    and the readable one was orphaned on a row nobody can reach, or, once the
+    worker caught up, it inherited an address the deleted pod's correspondents
+    are still writing to. Which one you got came down to queue lag.
+    """
+    release = AsyncMock(return_value=1)
+    monkeypatch.setattr(
+        "app.composition.agent_email_surface.release_pod_inbound_addresses", release
+    )
+    uow = SimpleNamespace(after_commit=lambda _hook: None)
+    service = PodService(
+        pod_repository=pod_repository_mock,
+        pod_member_repository=pod_member_repository_mock,
+        organization_repository=organization_repository_mock,
+        authorization_service=authorization_service_mock,
+        uow=uow,
+    )
+
+    requester_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=requester_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=requester_id)
+    organization_repository_mock.get_member.return_value = org_member
+    # `delete_pod` reads through the soft delete, so this is the accessor it
+    # actually uses; `get` would leave `is_deleted` a truthy mock and the
+    # already-deleted short circuit would return before any teardown ran.
+    pod_repository_mock.get_even_if_deleted.return_value = pod
+
+    assert await service.delete_pod(pod.id, requester_id) is True
+
+    release.assert_awaited_once_with(uow, pod_id=pod.id)

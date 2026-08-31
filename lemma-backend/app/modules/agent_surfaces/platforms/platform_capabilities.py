@@ -18,9 +18,31 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.modules.agent_surfaces.platforms.attachment_limits import (
+    MediaKind,
     attachment_cap,
+    email_inline_cap,
     inline_cap,
+    media_cap_summary,
 )
+
+
+class DeliveryCardinality(StrEnum):
+    """How many things a run may put in front of the person.
+
+    The fact ``is_email`` kept being asked to stand for. Email delivers one
+    composed reply, so everything a run wants to say -- narration, a file, a
+    question it cannot pause on -- has to become part of that one reply rather
+    than a message of its own. Chat has no such limit.
+
+    It is a property of the platform, not a second code path: the delivery
+    reads it and either sends each envelope as it comes or accumulates them and
+    flushes once.
+    """
+
+    #: Each envelope is delivered when it is ready (every chat platform).
+    MANY = "MANY"
+    #: Envelopes accumulate into one, flushed at the end of the run (email).
+    ONE = "ONE"
 
 
 class ProgressStyle(StrEnum):
@@ -68,9 +90,6 @@ class PlatformCapabilities:
     )
     formatting_style: str  # one-line human guidance, used verbatim in the fragment
     soft_char_limit: int  # rough per-message length budget for guidance
-    reply_tool: str | None = (
-        None  # email reply tool name (gmail/outlook); None for chat
-    )
     # Can the pod address someone who has never written to us first? Data, not a
     # rule in prose that every new call site has to remember. Chat bots cannot:
     # a Slack/Telegram/WhatsApp bot needs a prior interaction before it may DM.
@@ -81,6 +100,15 @@ class PlatformCapabilities:
     # ``ProgressStyle`` — the observer branches on this instead of on three
     # hand-maintained platform sets.
     progress_style: ProgressStyle = ProgressStyle.NONE
+    # Does the progress update land somewhere that holds only one line?
+    #
+    # Telegram's is a ``tg-thinking`` chip, and its HTML collapses newlines the
+    # way a browser does: a five-line checklist arrives as one run-on sentence
+    # with the ✅/⏳/⬜ marks stranded mid-paragraph, dimmed to the point of
+    # looking like glyphs the font is missing. The fix is not per-platform
+    # escaping — the text is already plain — it is sending one line where one
+    # line is what will be shown.
+    progress_is_one_line: bool = False
     # Hours after the person's last inbound message during which free-form
     # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
     # a send is refused unless it is a pre-approved template. None means no
@@ -100,6 +128,18 @@ class PlatformCapabilities:
     # address off one key *is* the design, so applying the identity rule here
     # let the first mailbox in an organization block every one after it.
     system_credential_is_identity: bool = True
+
+    @property
+    def delivery_cardinality(self) -> DeliveryCardinality:
+        """How many envelopes a run may deliver here.
+
+        Derived from ``is_email`` rather than declared, because the two are the
+        same fact today and a second field would be one more thing to keep in
+        step. It is a property so the call sites read as what they mean -- a
+        delivery asking how many sends it gets, not whether the platform
+        happens to be email.
+        """
+        return DeliveryCardinality.ONE if self.is_email else DeliveryCardinality.MANY
 
     @property
     def finishes_stream_with_answer(self) -> bool:
@@ -127,8 +167,26 @@ class PlatformCapabilities:
 
     @property
     def inline_mb_cap(self) -> int:
-        """Effective inline cap in MB: ``min(hard ceiling, 5 MB soft cap)``."""
-        return inline_cap(self.platform) // (1024 * 1024)
+        """Effective inline cap in MB, as the number to quote to the agent.
+
+        The two surface families measure the file differently, and quoting the
+        wrong one is how the prompt came to promise email attachments the
+        provider would reject: a chat cap is raw bytes bounded by the soft cap,
+        while an email cap is raw bytes whose *base64* form must clear the
+        provider ceiling. On a platform with per-media ceilings this is the
+        document number — ``media_cap_summary`` carries the smaller kinds.
+        """
+        effective = (
+            email_inline_cap(self.platform)
+            if self.is_email
+            else inline_cap(self.platform, media_kind=MediaKind.DOCUMENT)
+        )
+        return effective // (1024 * 1024)
+
+    @property
+    def media_cap_note(self) -> str | None:
+        """Phrase for kinds capped below ``inline_mb_cap``, or None if uniform."""
+        return None if self.is_email else media_cap_summary(self.platform)
 
 
 _SLACK_FORMATTING = (
@@ -177,7 +235,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         platform="TEAMS",
         display_name="Microsoft Teams",
         supports_native_choices=True,
-        supports_native_files=True,
+        # False, and not an oversight: `TeamsSurfaceAdapter` never overrides
+        # `_render_file`, so the base adapter's stub refuses and every
+        # Teams file — any size — is delivered as a link. Claiming True here told
+        # the agent its files would arrive as attachments, which they never do.
+        # Flip this back the day an outbound Teams file upload exists.
+        supports_native_files=False,
         is_email=False,
         is_channel_capable=True,
         markdown_mode="limited_markdown",
@@ -220,32 +283,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,
         progress_style=ProgressStyle.EDIT,
-    ),
-    "GMAIL": PlatformCapabilities(
-        platform="GMAIL",
-        display_name="Gmail",
-        supports_native_choices=False,
-        supports_native_files=True,
-        is_email=True,
-        is_channel_capable=False,
-        markdown_mode="html_rendered",
-        formatting_style=_EMAIL_FORMATTING,
-        soft_char_limit=6000,
-        reply_tool="gmail_reply_email",
-        can_cold_open=True,
-    ),
-    "OUTLOOK": PlatformCapabilities(
-        platform="OUTLOOK",
-        display_name="Outlook",
-        supports_native_choices=False,
-        supports_native_files=True,
-        is_email=True,
-        is_channel_capable=False,
-        markdown_mode="html_rendered",
-        formatting_style=_EMAIL_FORMATTING,
-        soft_char_limit=6000,
-        reply_tool="outlook_reply_email",
-        can_cold_open=True,
+        # A DM's live update is a thinking chip — one line, newlines collapsed.
+        # A group's is a plain edited message, which would hold a checklist, but
+        # a platform showing two different shapes of the same update is worth
+        # less than either shape: the DM is where nearly every run is watched,
+        # and one line is what a DM can show.
+        progress_is_one_line=True,
     ),
     "RESEND": PlatformCapabilities(
         platform="RESEND",
@@ -257,7 +300,6 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="html_rendered",
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
-        reply_tool="resend_reply_email",
         can_cold_open=True,
         # One API key, a catch-all domain, and a unique address per surface.
         # Sharing the key across pods is the point, not a conflict.
@@ -309,33 +351,67 @@ def platform_agent_guidance(platform: str | None) -> str:
         # display_resource. File paths attach inline or become download links.
         lines.append(
             "## Sending your reply\n"
-            f"The recipient only receives email. When your work is complete, call "
-            f"`{caps.reply_tool}` EXACTLY ONCE with your full reply in "
-            "`content` (markdown is rendered to HTML) and any workspace file paths "
-            "in `attachment_paths` — files up to "
-            f"{caps.inline_mb_cap} MB attach inline, larger files become "
-            "download links automatically. Do not send partial or progress "
-            "messages. `display_resource` does NOT reach the email recipient — "
-            "share files through the reply tool's `attachment_paths`."
+            "The recipient only receives email, and they receive exactly one: "
+            "everything you write this turn is composed into a single reply and "
+            "sent when you finish. Just write it. Markdown is rendered to HTML. "
+            "Show a file with `display_resource` (`type=FILE`, a pod path) and it "
+            f"is attached to that reply — up to {caps.inline_mb_cap} MB inline, "
+            "larger files become download links automatically. Do not narrate "
+            "progress; nothing you write before the end is sent separately."
         )
         lines.append(
-            "## Email is not interactive\n"
-            "This is email, not a chat — the conversation cannot pause for a "
-            "reply. Do NOT call `ask_user`, `request_approval`, `display_resource`, "
-            "or `say`; none of them reach an email recipient. When you would "
-            "otherwise ask, pick the most sensible default and proceed, then "
-            f"deliver everything in the single `{caps.reply_tool}` reply."
+            "## Asking on email\n"
+            "You can ask. `ask_user` and `request_approval` work here: the "
+            "question goes out as part of your reply, the person answers by "
+            "replying to it, and you pick up where you left off. What email "
+            "cannot do is ask twice in one turn -- each question is a whole "
+            "round trip through somebody's inbox.\n\n"
+            "So ask when the answer changes what you do, or when the action "
+            "needs their authority. For anything you could reasonably decide "
+            "yourself, decide it, and say in your reply what you assumed. Do "
+            "not call `say`; there is no voice note on email."
         )
     else:
         # Chat surfaces: files always, forms only where native.
         delivery: list[str] = ["## Delivering things"]
         if caps.supports_native_files:
+            media_note = (
+                f" {caps.display_name} is stricter about some kinds: "
+                f"{caps.media_cap_note} — over that they become a link too."
+                if caps.media_cap_note
+                else ""
+            )
             delivery.append(
-                "- Files: call `display_resource` with `type=FILE, path=<workspace "
-                "path>`. The surface delivers the file to the user automatically — "
-                "never paste raw bytes or a link. Files up to "
-                f"{caps.inline_mb_cap} MB attach natively; larger files are sent "
-                "as a download link automatically."
+                "- Files: call `display_resource` with `type=FILE, path=<pod file "
+                "path>` — a pod path such as `/me/reports/q3.pdf`. A "
+                "`/workspace/...` path is your sandbox and is rejected: upload it "
+                "with `lemma files upload` first and display the pod path that "
+                "comes back. The surface delivers the file to the user "
+                "automatically — never paste raw bytes or a link. Files up to "
+                f"{caps.inline_mb_cap} MB arrive as a real attachment in the chat."
+                f"{media_note} A file over the limit cannot be attached, so it is "
+                "sent as a link into Lemma instead — and that link only opens for "
+                "someone who can sign in to this pod. If the person may not have a "
+                "Lemma account, get the file under the limit (compress it, split "
+                "it, or send the part that matters) so it arrives as an attachment."
+            )
+            delivery.append(
+                "- Pictures: an image file arrives as a real picture in the chat, "
+                "and a PDF arrives with its first page shown above it. This is the "
+                f"only way anything visual can be seen on {caps.display_name} — a "
+                "WIDGET is a link here, not a rendering. So when the answer is a "
+                "chart, a diagram, a map or a layout, draw it, save it as a PNG in "
+                "pod files, and show that file."
+            )
+        else:
+            delivery.append(
+                "- Files: call `display_resource` with `type=FILE, path=<pod file "
+                "path>` — a pod path such as `/me/reports/q3.pdf`, never a "
+                f"sandbox/workspace path. {caps.display_name} cannot receive a file "
+                "attachment from Lemma, so the file is always delivered as a link "
+                "into Lemma, which only opens for someone who can sign in to this "
+                "pod. If the person may not have a Lemma account, put what the file "
+                "would have told them in your reply as well."
             )
         if caps.supports_native_choices:
             delivery.append(
@@ -350,6 +426,30 @@ def platform_agent_guidance(platform: str | None) -> str:
                 "formatted message and the user replies with their choice. For free-form "
                 "input, ask clearly in your reply."
             )
+        # Without this the agent knows `request_approval` only from its own tool
+        # docstring, which frames it as what to do after a permission error. So
+        # when someone says "ask me before you do that" and the action needs no
+        # extra permission, nothing points the model at the tool: it asks in
+        # prose, the run does not pause, and the person is left reading a
+        # question the product has already stopped waiting for an answer to.
+        approvals = (
+            "- Getting a go-ahead: when the person asks to approve something "
+            "before you do it, or the action is consequential enough to be worth "
+            "confirming, call `request_approval` rather than asking in prose. "
+        )
+        if caps.supports_native_choices:
+            approvals += (
+                f"It arrives in {caps.display_name} as buttons they can tap, and "
+                "the run pauses until they answer. Asking in your reply instead "
+                "leaves them nothing to press and nothing waiting for them."
+            )
+        else:
+            approvals += (
+                "It is sent as a formatted message and the run pauses until they "
+                "answer, so their decision is acted on rather than read back as "
+                "ordinary conversation."
+            )
+        delivery.append(approvals)
         delivery.append(
             "- Voice: reply with text by default. Only when the user wants a spoken "
             "reply, call `say` — it delivers a native voice note here and saves the "

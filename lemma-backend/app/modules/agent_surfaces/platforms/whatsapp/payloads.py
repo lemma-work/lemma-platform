@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
 )
+from app.modules.agent_surfaces.platforms.attachment_limits import media_kind_for_mime
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     balance_whatsapp_delimiters,
@@ -132,16 +133,17 @@ def build_whatsapp_approval_interactive(
 
 
 def resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
+    """The Cloud API media type this file will be sent as.
+
+    Delegates the ``auto`` case to ``media_kind_for_mime`` because Meta caps each
+    media type separately (an image at 5 MB, a document at 100 MB) and
+    ``attachment_cap`` reads those caps off the same classification. Two copies of
+    this branch would let the size check clear a file the send then rejects.
+    """
     requested = str(delivery_mode or "auto").lower()
     if requested != "auto":
         return requested
-    if mime_type.startswith("image/"):
-        return "image"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type.startswith("video/"):
-        return "video"
-    return "document"
+    return media_kind_for_mime(mime_type).value
 
 
 def whatsapp_message_bodies(message: str) -> list[str]:
@@ -232,6 +234,8 @@ def whatsapp_display_resource_text(
     if render_plan.summary:
         parts.append(render_plan.summary)
     parts.extend(render_plan.detail_lines[:5])
+    if render_plan.preview_block:
+        parts.append(f"```\n{render_plan.preview_block}\n```")
     action = render_plan.primary_action
     if include_action and action is not None:
         parts.append(f"{action.label}: {action.url}")

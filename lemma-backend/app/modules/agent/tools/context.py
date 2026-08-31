@@ -17,7 +17,10 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.agent.services.workspace_location import ProjectRepo
+from app.modules.agent.services.workspace_location import (
+    ProjectRepo,
+    pod_cwd_from_workspace_cwd,
+)
 from app.composition.agent_workspace import WorkspaceFileManager
 
 
@@ -81,9 +84,13 @@ class BaseAgentContext(AgentContext):
 
     def get_pod_cwd(self) -> str:
         # Callers on the main run path always set `pod_cwd` explicitly (see
-        # `resolve_pod_cwd`); this conversation_id-based fallback only covers
-        # secondary context-construction sites that haven't set it.
-        return self.pod_cwd or f"/me/conversations/{self.conversation_id}"
+        # `resolve_pod_cwd`); this fallback only covers secondary
+        # context-construction sites that haven't set it. It mirrors the
+        # workspace cwd rather than naming the conversation id, because the two
+        # directories are meant to be the same short path under two roots -- a
+        # fallback of its own shape scattered pod writes under
+        # `/me/conversations/<uuid>`, where nothing else ever looks.
+        return self.pod_cwd or pod_cwd_from_workspace_cwd(self.get_workspace_cwd())
 
     def get_workspace_scope_key(self) -> str:
         return f"workspace:{self.workspace_id}:conversation:{self.conversation_id}"

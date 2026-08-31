@@ -97,8 +97,6 @@ async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
                 toolsets=toolsets or [],
             ),
             agent_run_id=uuid4(),
-            malformed_tool_call_ids=set(),
-            emitted_tool_response_ids=set(),
             should_stop=should_stop,
         )
     ]
@@ -149,8 +147,6 @@ def _execute_events(model, monkeypatch, toolsets):
             toolsets=toolsets or [],
         ),
         agent_run_id=uuid4(),
-        malformed_tool_call_ids=set(),
-        emitted_tool_response_ids=set(),
         should_stop=None,
     )
 
@@ -337,8 +333,6 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
                 toolsets=[FunctionToolset(tools=[charge_card])],
             ),
             agent_run_id=uuid4(),
-            malformed_tool_call_ids=set(),
-            emitted_tool_response_ids=set(),
             should_stop=None,
         )
     ]
@@ -384,8 +378,6 @@ async def test_a_non_retryable_provider_error_fails_fast(monkeypatch) -> None:
                 model_name="test-model", history_summarization_enabled=False
             ),
             agent_run_id=uuid4(),
-            malformed_tool_call_ids=set(),
-            emitted_tool_response_ids=set(),
             should_stop=None,
         ):
             pass

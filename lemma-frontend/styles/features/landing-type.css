@@ -18,8 +18,14 @@
 
 @layer components {
   .lp-react {
-    --lp-font: var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+    --lp-font: var(--font-figtree, "Figtree"), system-ui, sans-serif;
     --lp-mono: var(--font-mono-family);
+
+    /* The landing page sets its own voice. tokens.css resolves both of these
+       to Inter for the product; re-pointing them here keeps the hero, the
+       section titles and the body on one family without touching the app. */
+    --font-display-family: var(--lp-font);
+    --font-body-family: var(--lp-font);
 
     /* Type scale — every landing size resolves to one of these. */
     --lp-t-hero: clamp(2rem, 3.4vw, 2.9rem);

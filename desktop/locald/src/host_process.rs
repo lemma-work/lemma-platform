@@ -123,6 +123,21 @@ pub struct HostSetupSpec {
     /// using in this session.
     #[serde(default)]
     pub optional: bool,
+    /// What this setup's result depends on. Re-run only when it changes.
+    ///
+    /// Both setups run on *every* start today, and the cost is not the SQL.
+    /// Alembic's no-op is one `SELECT`; the expense is `migrations/env.py`
+    /// importing the whole ORM graph -- several thousand modules -- before it
+    /// can decide there is nothing to do. `connector-catalog` is worse: it
+    /// re-upserts the entire native catalog every time, with a ten-minute
+    /// budget.
+    ///
+    /// The renderer sets this to something that changes exactly when the work
+    /// would produce a different result, so a warm start skips both. Absent, or
+    /// changed, the setup runs -- so a pack that predates this, or a manifest
+    /// that declines to declare one, behaves exactly as before.
+    #[serde(default)]
+    pub stamp: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -172,6 +187,24 @@ impl Default for RestartSpec {
             window_seconds: default_restart_window(),
             backoff_seconds: default_restart_backoff(),
         }
+    }
+}
+
+/// Whether a stamped setup has already been done, for this exact stamp.
+///
+/// A free function so it can be asserted on every platform. The tests that
+/// exercise it end to end have to spawn `/bin/sh`, so they are `#[cfg(unix)]` --
+/// and gating them left Windows covering none of this, which is the wrong trade
+/// for a decision that is pure and is the whole point of the feature.
+///
+/// No stamp means always run: that is how a setup opts out, and it is what
+/// everything did before stamps existed. A stamp that differs from the recorded
+/// one means the work is not the work that was done -- a new pack release, or
+/// migrations that changed within one.
+fn setup_is_already_done(stamp: Option<&str>, recorded: Option<&String>) -> bool {
+    match stamp {
+        None => false,
+        Some(stamp) => recorded.map(String::as_str) == Some(stamp),
     }
 }
 
@@ -238,6 +271,14 @@ struct ProcessState {
     restart_history: HashMap<String, VecDeque<Instant>>,
     restart_not_before: HashMap<String, Instant>,
     circuit_open: HashSet<String>,
+    /// How many times each component has tripped its restart circuit.
+    ///
+    /// `circuit_open` now flickers -- it closes after a quiet window so a
+    /// transient burst is survivable -- which on its own would let a flapping
+    /// service oscillate the UI between "error" and "starting". This is the
+    /// durable half: once a component has tripped, it keeps reading as failed
+    /// until something clears it deliberately.
+    circuit_trips: HashMap<String, u32>,
     last_exit: HashMap<String, String>,
 }
 
@@ -247,6 +288,10 @@ pub struct HostProcessStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub circuit_open: bool,
+    /// Times this component has exhausted its restart budget since the last
+    /// deliberate start. Survives the circuit closing, so a service that keeps
+    /// flapping does not read as healthy between bursts.
+    pub circuit_trips: u32,
     pub restart_count: usize,
     pub last_exit: Option<String>,
 }
@@ -287,6 +332,47 @@ impl HostProcessManager {
     }
 
     pub fn new(manifest: HostPackManifest, log_dir: PathBuf) -> io::Result<Arc<Self>> {
+        Self::build(manifest, log_dir, true)
+    }
+
+    /// A manager whose supervisor thread never starts.
+    ///
+    /// For tests that drive `reconcile_crashes` themselves. The supervisor
+    /// calls it once a second, and it is not a passive observer -- it spends
+    /// the restart budget and trips the circuit exactly as a manual call does.
+    /// A test that crashes a service and then reasons about which crash
+    /// exhausted the budget is therefore racing a second driver of the same
+    /// state machine.
+    ///
+    /// The race is not just interleaved bookkeeping. `reconcile_crashes`
+    /// decides `ready_to_spawn` under the state lock and then spawns *after
+    /// releasing it*, so a supervisor descheduled in that gap carries a
+    /// decision made before a crash across to after it, and respawns a service
+    /// whose circuit has since opened. That is what CI hit: `!backend.running`
+    /// failed because the supervisor had resurrected the backend the test had
+    /// just watched trip. Reproduced deterministically by stalling only the
+    /// unnamed (supervisor) thread between that decision and the spawn.
+    ///
+    /// Harmless in production, where the supervisor is the only caller and its
+    /// decisions are therefore serial. It is having a second driver that makes
+    /// it reachable, and that only ever happens in a test.
+    ///
+    /// Not a way of avoiding a hard test. That the supervisor restarts a
+    /// crashed service unprompted is asserted directly by
+    /// `the_supervisor_restarts_a_crashed_service_with_nobody_driving_it`,
+    /// which builds a supervised manager and touches nothing. What the circuit
+    /// tests are about is the transition table underneath, and that has to be
+    /// stepped deliberately to be asserted at all.
+    #[cfg(test)]
+    fn without_supervisor(manifest: HostPackManifest, log_dir: PathBuf) -> io::Result<Arc<Self>> {
+        Self::build(manifest, log_dir, false)
+    }
+
+    fn build(
+        manifest: HostPackManifest,
+        log_dir: PathBuf,
+        supervise: bool,
+    ) -> io::Result<Arc<Self>> {
         let ordered_ids = validate_and_order(&manifest)?;
         let by_id = manifest
             .services
@@ -326,11 +412,26 @@ impl HostProcessManager {
             windows_job,
             log_dir,
         });
-        let monitor = Arc::clone(&manager);
+        // `Weak`, not `Arc`. Holding a strong reference here kept the refcount
+        // above zero for the life of the process, which meant this thread ran
+        // forever *and* no `Drop` on the manager could ever fire. In a test
+        // binary that is 21 threads waking every second -- one per
+        // `manager_in` -- each still calling `reconcile_crashes`, which
+        // *respawns* a service whose test has already panicked past its
+        // `stop_all`. A supervisor nobody owns, re-forking shells.
+        if !supervise {
+            return Ok(manager);
+        }
+        let monitor = Arc::downgrade(&manager);
         thread::spawn(move || {
             let mut next_rotation = Instant::now() + SERVICE_LOG_ROTATE_INTERVAL;
             loop {
                 thread::sleep(Duration::from_secs(1));
+                // The owner is gone, so there is nothing left to supervise and
+                // this thread is what was keeping it alive.
+                let Some(monitor) = monitor.upgrade() else {
+                    return;
+                };
                 monitor.reconcile_crashes();
                 // Separate cadence from the crash check on purpose: this stats
                 // a file per service and nothing here needs it every second.
@@ -464,33 +565,52 @@ impl HostProcessManager {
 
     pub fn prepare_runtime_generation(&self) -> io::Result<String> {
         self.inspect_exits();
-        let has_children = !self
-            .state
-            .lock()
-            .expect("host process lock poisoned")
-            .children
-            .is_empty();
+        // The same question `start_all_inner` asks, asked the same way. These
+        // two used to disagree on a *partially* running stack: this one saw
+        // "some children" and kept the old generation, while `start_all_inner`
+        // saw "not all children" and minted a new one. Every phase, state and
+        // ready event then carried the old value while the manager ran the new
+        // one -- and the generation is not cosmetic. It is injected into each
+        // service at spawn and checked on the next launch to decide whether the
+        // recorded workspace is still the one serving, so a mixture of old and
+        // new made that check answerable by processes from two different runs.
+        let fully_up = self.stack_is_fully_up();
         let mut generation = self
             .runtime_generation
             .lock()
             .expect("runtime generation lock poisoned");
-        if !has_children {
+        if !fully_up {
             *generation = random_generation()?;
             self.generation_prepared.store(true, Ordering::Release);
         }
         Ok(generation.clone())
     }
 
-    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
-        self.inspect_exits();
-        if self
-            .state
+    /// Whether nothing at all is running.
+    fn state_is_empty(&self) -> bool {
+        self.state
+            .lock()
+            .expect("host process lock poisoned")
+            .children
+            .is_empty()
+    }
+
+    /// Whether every managed service is currently running.
+    ///
+    /// Callers must have just called `inspect_exits`, so the child map reflects
+    /// processes that have already died.
+    fn stack_is_fully_up(&self) -> bool {
+        self.state
             .lock()
             .expect("host process lock poisoned")
             .children
             .len()
             == self.ordered_ids.len()
-        {
+    }
+
+    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
+        self.inspect_exits();
+        if self.stack_is_fully_up() {
             self.desired_running.store(true, Ordering::Release);
             // Everything is already up, so this is a reconcile, not a start.
             // `verify_all_health_now` runs the same probes with the same retry
@@ -505,6 +625,18 @@ impl HostProcessManager {
         }
         self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
+        // Survivors of a partial stack are stopped before a new generation is
+        // minted. Otherwise `spawn_if_missing` leaves them alone -- they are
+        // already running -- while the health gate rewrites its expected body
+        // to the new generation, so the live service is rejected as "a
+        // different runtime instance" and retried for its whole timeout before
+        // the start fails. That is the ordinary recovery path after a backend
+        // crash loop: press Start, wait two minutes, get an error that reads
+        // like a security failure. Pressing Start again then works, because by
+        // then everything is down.
+        if !self.state_is_empty() {
+            self.stop_all()?;
+        }
         if !self.generation_prepared.swap(false, Ordering::AcqRel) {
             *self
                 .runtime_generation
@@ -514,6 +646,8 @@ impl HostProcessManager {
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.clear();
+            // A deliberate start is the one thing that forgives past trips.
+            state.circuit_trips.clear();
             state.restart_history.clear();
             state.restart_not_before.clear();
         }
@@ -549,22 +683,51 @@ impl HostProcessManager {
                 spawn_failure.get_or_insert((id.clone(), error));
             }
         }
-        for id in &self.ordered_ids {
-            // Nothing to wait for on a service that never started; waiting
-            // would just spend its whole health timeout to say so.
-            if spawn_failure
-                .as_ref()
-                .is_some_and(|(failed, _)| failed == id)
-            {
-                continue;
-            }
-            if let Some(health) = self.health_spec(id) {
-                if let Err(error) = self.wait_process_health(id, &health) {
-                    let _ = self.stop_all();
-                    return Err(io::Error::other(format!(
-                        "{id} failed health gate: {error}"
-                    )));
-                }
+        // Gate every service at once, not one after another.
+        //
+        // Each gate requires `stabilization_seconds` of *continuously observed*
+        // health, and `healthy_since` is local to the call -- so a serial loop
+        // charges that dwell once per service. The frontend is ready in about
+        // 0.3s and then sits there healthy while the backend's gate runs, and
+        // only afterwards does its own gate start watching and spend a fresh
+        // two seconds confirming what was already true. Two services, four
+        // seconds, for a guard that needs two.
+        //
+        // Watching them concurrently costs nothing and weakens nothing: every
+        // service still proves the same uninterrupted dwell against the same
+        // probe. It just stops the clock starting late on services that came up
+        // early. This is the same move as spawning before gating above, applied
+        // to the half that was still serial.
+        //
+        // Results are collected in `ordered_ids` order, so the service reported
+        // on a failure does not depend on which thread lost the race.
+        let gates: Vec<(String, io::Result<()>)> = thread::scope(|scope| {
+            let running: Vec<_> = self
+                .ordered_ids
+                .iter()
+                // Nothing to wait for on a service that never started; waiting
+                // would just spend its whole health timeout to say so.
+                .filter(|id| {
+                    !spawn_failure
+                        .as_ref()
+                        .is_some_and(|(failed, _)| failed == *id)
+                })
+                .filter_map(|id| self.health_spec(id).map(|health| (id, health)))
+                .map(|(id, health)| {
+                    scope.spawn(move || (id.clone(), self.wait_process_health(id, &health)))
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|handle| handle.join().expect("health gate thread panicked"))
+                .collect()
+        });
+        for (id, result) in gates {
+            if let Err(error) = result {
+                let _ = self.stop_all();
+                return Err(io::Error::other(format!(
+                    "{id} failed health gate: {error}"
+                )));
             }
         }
         if let Some((_, error)) = spawn_failure {
@@ -591,8 +754,95 @@ impl HostProcessManager {
         Ok(())
     }
 
+    /// Whether any component should be reported as having failed.
+    ///
+    /// `circuit_trips`, not just `circuit_open`. The circuit now closes on its own
+    /// after a quiet window, so reading only the live flag would let a service that
+    /// trips once per window report healthy in every gap -- oscillating the splash
+    /// between "error" and "starting" while nothing actually improved.
+    ///
+    /// A free function so this is testable without racing a real supervisor: the
+    /// interesting state (circuit closed again, trip remembered, service still
+    /// down) exists for a fraction of a second in a live manager.
+    fn components_report_failure(components: &[HostProcessStatus]) -> bool {
+        components
+            .iter()
+            .any(|component| component.circuit_open || component.circuit_trips > 0)
+    }
+
+    /// Whether a failed setup should stop the start, or only be recorded.
+    ///
+    /// Hoisted out of `run_setups` because `optional` used to be honoured at
+    /// exactly one of the three places a setup can fail. A setup that *exited*
+    /// non-zero was tolerated; the same setup *hanging*, or running out of
+    /// budget before its next retry, took the whole stack down -- the reverse of
+    /// what `optional` means. `connector-catalog` is declared optional with a
+    /// 600-second timeout precisely so an unreachable third-party catalog cannot
+    /// stop a workspace, and a blackholed route defeated that.
+    ///
+    /// Returns the error to raise, or `None` when the caller should carry on to
+    /// the next setup. A function rather than a closure because the caller has
+    /// to `continue 'setups`, which a closure cannot do.
+    fn optional_setup_outcome(setup: &HostSetupSpec, detail: String) -> Option<io::Error> {
+        if setup.optional {
+            // Logged rather than raised: the log line is the record, and the
+            // stack still comes up.
+            eprintln!("locald: {detail}");
+            return None;
+        }
+        Some(io::Error::other(detail))
+    }
+
+    /// Where completed setup stamps live, beside the process ledger.
+    ///
+    /// Under the locald root on purpose: a local-data reset removes that whole
+    /// directory, so a wiped database can never be left with a stamp claiming
+    /// its migrations have already run.
+    fn setup_stamp_path(&self) -> PathBuf {
+        self.log_dir
+            .parent()
+            .unwrap_or(&self.log_dir)
+            .join("setup-stamps.json")
+    }
+
+    /// Forget every completed setup, so the next start runs them all again.
+    ///
+    /// A local-data reset destroys the database the migrations stamp describes
+    /// but leaves the locald root standing -- so without this the next start
+    /// would skip migrations against an empty schema and the backend would come
+    /// up against tables that do not exist. The full reinstall removes the root
+    /// entirely and takes the stamps with it.
+    pub fn forget_setup_stamps(&self) -> io::Result<()> {
+        match fs::remove_file(self.setup_stamp_path()) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    fn recorded_setup_stamps(&self) -> HashMap<String, String> {
+        std::fs::read(self.setup_stamp_path())
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    /// Record a setup as done for this stamp. Written only after it succeeded.
+    fn record_setup_stamp(&self, id: &str, stamp: &str) {
+        let mut stamps = self.recorded_setup_stamps();
+        stamps.insert(id.to_owned(), stamp.to_owned());
+        // Best effort: a stamp that cannot be written costs the next start the
+        // work again, which is exactly the behaviour before stamps existed.
+        if let Ok(encoded) = serde_json::to_vec_pretty(&stamps) {
+            let _ = write_private_atomic(&self.setup_stamp_path(), &encoded);
+        }
+    }
+
     fn run_setups(&self) -> io::Result<()> {
+        let recorded = self.recorded_setup_stamps();
         'setups: for setup in &self.manifest.setup {
+            if setup_is_already_done(setup.stamp.as_deref(), recorded.get(&setup.id)) {
+                continue 'setups;
+            }
             let mut environment = setup.env.clone();
             environment.extend(
                 self.backend_environment
@@ -615,6 +865,13 @@ impl HostProcessManager {
                 loop {
                     if let Some(status) = child.try_wait()? {
                         if status.success() {
+                            // Only here. A stamp written anywhere else would
+                            // let a failed or half-finished setup be skipped on
+                            // the next start, which is worse than running it
+                            // again.
+                            if let Some(stamp) = setup.stamp.as_deref() {
+                                self.record_setup_stamp(&setup.id, stamp);
+                            }
                             continue 'setups;
                         }
                         if attempt == setup.max_attempts {
@@ -623,23 +880,24 @@ impl HostProcessManager {
                                 setup.id,
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
                             );
-                            if setup.optional {
-                                // Logged rather than raised: the log line is the
-                                // record, and the stack still comes up.
-                                eprintln!("locald: {detail}");
-                                continue 'setups;
+                            match Self::optional_setup_outcome(setup, detail) {
+                                None => continue 'setups,
+                                Some(error) => return Err(error),
                             }
-                            return Err(io::Error::other(detail));
                         }
                         let backoff = Duration::from_secs(
                             setup.retry_backoff_seconds.saturating_mul(attempt as u64),
                         );
                         if Instant::now() + backoff >= deadline {
-                            return Err(io::Error::other(format!(
+                            let detail = format!(
                                 "{} setup exited with {status}; see {}",
                                 setup.id,
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
-                            )));
+                            );
+                            match Self::optional_setup_outcome(setup, detail) {
+                                None => continue 'setups,
+                                Some(error) => return Err(error),
+                            }
                         }
                         writeln!(
                             process_log(&self.log_dir, &setup.id)?,
@@ -649,16 +907,23 @@ impl HostProcessManager {
                         break;
                     }
                     if Instant::now() >= deadline {
+                        // Terminate first, on both paths. An optional setup that
+                        // hangs and is then tolerated would otherwise be left
+                        // running as an orphan holding a copy of the backend
+                        // environment -- Postgres and Redis passwords included.
                         let _ = terminate_process_group(&mut child);
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!(
-                                "{} setup exceeded {} seconds; see {}",
-                                setup.id,
-                                setup.timeout_seconds,
-                                self.log_dir.join(format!("{}.log", setup.id)).display()
-                            ),
-                        ));
+                        let detail = format!(
+                            "{} setup exceeded {} seconds; see {}",
+                            setup.id,
+                            setup.timeout_seconds,
+                            self.log_dir.join(format!("{}.log", setup.id)).display()
+                        );
+                        match Self::optional_setup_outcome(setup, detail) {
+                            None => continue 'setups,
+                            Some(error) => {
+                                return Err(io::Error::new(io::ErrorKind::TimedOut, error))
+                            }
+                        }
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -700,6 +965,7 @@ impl HostProcessManager {
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.remove("backend");
+            state.circuit_trips.remove("backend");
             state.restart_history.remove("backend");
             state.restart_not_before.remove("backend");
         }
@@ -727,6 +993,7 @@ impl HostProcessManager {
                 running: state.children.contains_key(id),
                 pid: state.children.get(id).map(|child| child.child.id()),
                 circuit_open: state.circuit_open.contains(id),
+                circuit_trips: state.circuit_trips.get(id).copied().unwrap_or(0),
                 restart_count: state
                     .restart_history
                     .get(id)
@@ -751,8 +1018,8 @@ impl HostProcessManager {
             && !self.startup_in_progress.load(Ordering::Acquire)
             && dependency_ready;
         let desired = self.desired_running();
-        let failed = components.iter().any(|component| component.circuit_open)
-            || (desired && dependency_error.is_some());
+        let failed =
+            Self::components_report_failure(&components) || (desired && dependency_error.is_some());
         let mut event = json!({
             "v": 1,
             "event": "status",
@@ -1034,6 +1301,30 @@ impl HostProcessManager {
             let spec = &self.by_id[id];
             let ready_to_spawn = {
                 let mut state = self.state.lock().expect("host process lock poisoned");
+                let now = Instant::now();
+                let window = Duration::from_secs(spec.restart.window_seconds);
+                // Prune *before* consulting the circuit, not after. The old
+                // order tested `circuit_open` first, so once a service tripped,
+                // its history was never trimmed again and no amount of elapsed
+                // time could reopen it -- a single transient burst (a laptop
+                // waking with the VM's forwarders not yet up) condemned the
+                // service until the user restarted the whole app, and nothing on
+                // screen said that was the remedy.
+                //
+                // Closing needs a full quiet window, so this is a real cooldown
+                // rather than an unconditional reset.
+                {
+                    let history = state.restart_history.entry(id.clone()).or_default();
+                    while history
+                        .front()
+                        .is_some_and(|started| now.duration_since(*started) > window)
+                    {
+                        history.pop_front();
+                    }
+                    if history.len() < spec.restart.max_restarts {
+                        state.circuit_open.remove(id);
+                    }
+                }
                 if state.children.contains_key(id)
                     || state.circuit_open.contains(id)
                     || spec
@@ -1042,31 +1333,27 @@ impl HostProcessManager {
                         .any(|dependency| !state.children.contains_key(dependency))
                 {
                     false
+                } else if let Some(deadline) = state.restart_not_before.get(id) {
+                    *deadline <= now
                 } else {
-                    let now = Instant::now();
-                    if let Some(deadline) = state.restart_not_before.get(id) {
-                        *deadline <= now
+                    // Length first, so the borrow of `restart_history` is over
+                    // before `circuit_open` and `circuit_trips` are touched.
+                    let attempts = state.restart_history.entry(id.clone()).or_default().len();
+                    if attempts >= spec.restart.max_restarts {
+                        state.circuit_open.insert(id.clone());
+                        *state.circuit_trips.entry(id.clone()).or_insert(0) += 1;
                     } else {
-                        let history = state.restart_history.entry(id.clone()).or_default();
-                        let window = Duration::from_secs(spec.restart.window_seconds);
-                        while history
-                            .front()
-                            .is_some_and(|started| now.duration_since(*started) > window)
-                        {
-                            history.pop_front();
-                        }
-                        if history.len() >= spec.restart.max_restarts {
-                            state.circuit_open.insert(id.clone());
-                            false
-                        } else {
-                            history.push_back(now);
-                            state.restart_not_before.insert(
-                                id.clone(),
-                                now + Duration::from_secs(spec.restart.backoff_seconds),
-                            );
-                            false
-                        }
+                        state
+                            .restart_history
+                            .entry(id.clone())
+                            .or_default()
+                            .push_back(now);
+                        state.restart_not_before.insert(
+                            id.clone(),
+                            now + Duration::from_secs(spec.restart.backoff_seconds),
+                        );
                     }
+                    false
                 }
             };
             if ready_to_spawn {
@@ -1390,7 +1677,13 @@ const IDENTITY_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One `ps` query. `Ok(None)` means the process exists but has not yet reported
 /// a usable executable name, so the caller should look again.
-#[cfg(unix)]
+///
+/// macOS and the BSDs only. `ps -o comm=` prints an absolute path there, which
+/// is what makes this work; on Linux the same flag prints a bare command name
+/// truncated to fifteen characters, so every `canonicalize` below failed and
+/// every process this daemon spawned was reported as unidentifiable. Linux has
+/// its own implementation, and a better one -- see the `/proc` version below.
+#[cfg(all(unix, not(target_os = "linux")))]
 fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
     let executable = Command::new("/bin/ps")
         .args(["-p", pid, "-o", "comm="])
@@ -1435,6 +1728,66 @@ fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
         executable,
         start_identity,
     }))
+}
+
+/// The same question, asked of `/proc` rather than of `ps`.
+///
+/// Linux does not answer `ps -o comm=` with a path, so the BSD implementation
+/// above could never identify anything here: `Path::new("sleep").canonicalize()`
+/// fails, every sample looked like a process that had not settled, and the
+/// ownership ledger -- the thing that guarantees this daemon only ever signals
+/// processes it started -- recorded nothing at all.
+///
+/// `/proc/<pid>/exe` is a better source than `ps` in both directions. It is the
+/// kernel's own answer, already absolute and already resolved through symlinks,
+/// and it is readable only for a process of the same user, which is a check
+/// worth having for free. `starttime` from `/proc/<pid>/stat` is likewise a
+/// stronger identity than `ps lstart`, whose one-second granularity is exactly
+/// the window in which a recycled PID looks like the process it replaced.
+///
+/// One deliberate difference from macOS. `ps` reports `(sh)` for a process that
+/// has forked but not yet finished `exec`, which is the placeholder the settle
+/// loop exists to wait out. `/proc/<pid>/exe` has no such state -- during that
+/// window it simply names the binary the process is still running. So on Linux
+/// `Ok(None)` means only "gone or not ours", and a record written mid-exec
+/// names the pre-exec binary. That record then fails to match later, and a
+/// ledger entry that fails to match is one this daemon declines to signal --
+/// the safe direction, and the same one an unreadable link takes.
+#[cfg(target_os = "linux")]
+fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
+    let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(path) => path,
+        // ESRCH once the process is gone, EACCES for one we do not own, ENOENT
+        // for a kernel thread. None of the three is a process this daemon may
+        // claim, and none becomes one by looking again.
+        Err(error) => return Err(io::Error::new(io::ErrorKind::NotFound, error)),
+    };
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
+    let start_identity = process_start_time(&stat)
+        .ok_or_else(|| io::Error::other("process start identity was empty"))?;
+    Ok(Some(ProcessIdentity {
+        executable: executable.to_string_lossy().into_owned(),
+        start_identity,
+    }))
+}
+
+/// Field 22 of `/proc/<pid>/stat`: when the process started, in clock ticks.
+///
+/// Split from the read so it can be tested on any platform, and because the
+/// parse has one trap in it. Field 2 is the command name in parentheses and may
+/// itself contain spaces *and* parentheses -- a process is free to call itself
+/// `my (weird) name` -- so splitting the line on whitespace mis-numbers every
+/// field after it. Everything before the final `)` has to go first.
+#[cfg(any(target_os = "linux", test))]
+fn process_start_time(stat: &str) -> Option<String> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    // The first field after the comm is `state`, which is number 3.
+    after_comm
+        .split_whitespace()
+        .nth(22 - 3)
+        .filter(|ticks| !ticks.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(unix)]
@@ -1841,9 +2194,29 @@ fn assign_child_to_windows_job(job: usize, child: &mut Child) -> io::Result<()> 
     }
 }
 
-#[cfg(windows)]
+/// Never outlive the services this manager started.
+///
+/// Was `#[cfg(windows)]` and closed only the job handle, so on macOS and Linux
+/// nothing stopped the children at all -- and `stop_all()` on the success path
+/// was the only thing that ever did. A test that panicked past it left its
+/// services running forever: `spawn_command` sets `process_group(0)`, so
+/// closing the terminal sends them no `SIGHUP`, and the ownership ledger that
+/// could reclaim them lives in a `TempDir` that is already gone. Two immortal
+/// `sh` loops per failed run, each forking a `sleep` every second.
+///
+/// This could not have fired before regardless: the monitor thread held an
+/// `Arc` of this type, so the refcount never reached zero. See `Arc::downgrade`
+/// above.
 impl Drop for HostProcessManager {
     fn drop(&mut self) {
+        // Not `stop_all`: this is a backstop, it cannot report anything, and
+        // the ports and readiness state it also maintains are about to be
+        // dropped anyway. Terminating the process groups is the part that
+        // outlives us if it is skipped.
+        for id in self.ordered_ids.clone().iter().rev() {
+            let _ = self.stop_process(id);
+        }
+        #[cfg(windows)]
         if self.windows_job != 0 {
             unsafe {
                 windows_sys::Win32::Foundation::CloseHandle(self.windows_job as _);
@@ -2144,7 +2517,10 @@ mod tests {
 
     /// A manager whose installation state stays inside `root`.
     fn manager_in(root: &TempDir, value: HostPackManifest) -> Arc<HostProcessManager> {
-        HostProcessManager::new(value, log_dir_in(root)).unwrap()
+        // No supervisor thread. These tests step the state machine themselves,
+        // and a second driver of it once a second is what made the restart
+        // circuit tests fail on CI and never here.
+        HostProcessManager::without_supervisor(value, log_dir_in(root)).unwrap()
     }
 
     /// A running service's log is truncated under the writer that holds it.
@@ -2211,6 +2587,7 @@ mod tests {
             max_attempts: 3,
             retry_backoff_seconds: 0,
             optional: false,
+            stamp: None,
         }
     }
 
@@ -2355,7 +2732,7 @@ mod tests {
         for status in [401, 404, 503] {
             let (unhealthy, server) = one_response(status, "runtime-123");
             assert!(probe_http(&unhealthy).is_err());
-            server.join().unwrap();
+            crate::join_within(server, "the health endpoint");
         }
 
         let (stale, stale_server) = one_response(200, "runtime-old");
@@ -2364,11 +2741,11 @@ mod tests {
             error.to_string().contains("different runtime instance"),
             "{error}"
         );
-        stale_server.join().unwrap();
+        crate::join_within(stale_server, "the stale health endpoint");
 
         let (healthy, healthy_server) = one_response(200, "runtime-123");
         probe_http(&healthy).unwrap();
-        healthy_server.join().unwrap();
+        crate::join_within(healthy_server, "the healthy endpoint");
     }
 
     #[test]
@@ -2677,9 +3054,257 @@ mod tests {
         assert_eq!(manager.status_event(None)["ready"], false);
     }
 
+    /// `/proc/<pid>/stat` field 22, past a command name that fights back.
+    ///
+    /// This is the parse the Linux ownership ledger depends on, and it has one
+    /// trap: field 2 is the command name in parentheses and a process may name
+    /// itself anything at all, spaces and parentheses included. Splitting the
+    /// whole line on whitespace mis-numbers every field after it -- which would
+    /// mean recording a nonsense start identity, which would mean an ownership
+    /// record that never matches and a child this daemon can never reclaim.
+    ///
+    /// Run on every platform on purpose: the failure it guards is a string
+    /// parse, and the machine that most needs it is the one that cannot run
+    /// the code around it.
+    #[test]
+    fn a_process_start_time_survives_a_command_name_full_of_parentheses() {
+        let stat = |comm: &str| {
+            let mut fields = vec!["4242".to_string(), format!("({comm})")];
+            // Fields 3..21, then starttime at 22.
+            fields.push("S".into());
+            fields.extend((4..=21).map(|field| field.to_string()));
+            fields.push("987654".into());
+            // And the tail the kernel keeps writing after it.
+            fields.extend((23..=30).map(|field| field.to_string()));
+            fields.join(" ") + "\n"
+        };
+
+        assert_eq!(
+            process_start_time(&stat("sleep")).as_deref(),
+            Some("987654")
+        );
+        assert_eq!(
+            process_start_time(&stat("my (weird) name")).as_deref(),
+            Some("987654"),
+            "the split has to happen after the LAST close paren"
+        );
+        assert_eq!(
+            process_start_time(&stat("node --run start")).as_deref(),
+            Some("987654"),
+            "a name with spaces must not shift the field numbering"
+        );
+        // A truncated read is not a start identity, and must not be treated as
+        // one -- an empty identity matches nothing and would be recorded as if
+        // it did.
+        assert_eq!(process_start_time("4242 (sleep) S 4 5"), None);
+        assert_eq!(process_start_time("nonsense with no paren"), None);
+        assert_eq!(process_start_time(""), None);
+    }
+
+    /// A manager that goes out of scope takes its services with it.
+    ///
+    /// `stop_all()` on the success path used to be the only thing that stopped
+    /// them, so a test that panicked before reaching it -- and these tests
+    /// assert on live process state, which is exactly what flakes under load --
+    /// left two `sh` loops running forever, each forking a `sleep` every
+    /// second. `spawn_command` sets `process_group(0)`, so closing the terminal
+    /// sends them nothing, and the ownership ledger that could reclaim them is
+    /// in a `TempDir` that is already gone. This is how a laptop ends up warm
+    /// for a week.
+    ///
+    /// Two things had to change for this to be assertable at all: the `Drop`
+    /// existed only on Windows, and the monitor thread held an `Arc` of the
+    /// manager, so the refcount never reached zero and no `Drop` could fire.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_manager_stops_the_services_it_started() {
+        let root = tempdir().unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+
+        let pids: Vec<u32> = {
+            let manager = manager_in(&root, value);
+            manager.start_all().unwrap();
+            let pids = manager
+                .status()
+                .iter()
+                .filter_map(|process| process.pid)
+                .collect();
+            // No `stop_all`. This is the unwind path, written as a scope.
+            pids
+        };
+
+        assert_eq!(pids.len(), 2, "both services should have been running");
+        // Asserted on the process *group*, which is what `spawn_command`
+        // creates and what would still hold the `sleep` children.
+        for pid in pids {
+            let group = i32::try_from(pid).expect("a pid fits in i32");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while unsafe { libc::kill(-group, 0) } == 0 && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_ne!(
+                unsafe { libc::kill(-group, 0) },
+                0,
+                "process group {group} outlived the manager that started it",
+            );
+        }
+    }
+
+    /// The stamp decision itself, on every platform.
+    ///
+    /// The four tests that prove this end to end spawn `/bin/sh`, so they are
+    /// `#[cfg(unix)]` -- three failed on Windows for exactly that reason, and
+    /// the fourth passed there without proving anything. This is the half that
+    /// needs no process, and it is the half that decides whether a migration
+    /// runs.
+    #[test]
+    fn a_setup_reruns_unless_its_exact_stamp_was_recorded() {
+        let recorded = |value: &str| Some(value.to_owned());
+
+        // No stamp is how a setup opts out of this entirely.
+        assert!(!setup_is_already_done(None, None));
+        assert!(!setup_is_already_done(
+            None,
+            recorded("release-0.7.0").as_ref()
+        ));
+
+        // Never run before.
+        assert!(!setup_is_already_done(Some("release-0.7.0"), None));
+
+        // Run before, same work.
+        assert!(setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("release-0.7.0").as_ref()
+        ));
+
+        // Run before, different work: a new pack, or migrations that changed
+        // inside one. Skipping here is a backend starting against tables that
+        // were never created.
+        assert!(!setup_is_already_done(
+            Some("release-0.8.0"),
+            recorded("release-0.7.0").as_ref()
+        ));
+        // And no accidental prefix or case matching.
+        assert!(!setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("release-0.7.0-rc1").as_ref()
+        ));
+        assert!(!setup_is_already_done(
+            Some("release-0.7.0"),
+            recorded("RELEASE-0.7.0").as_ref()
+        ));
+    }
+
+    /// Every test that drives a real process is gated to the platforms that
+    /// can drive one.
+    ///
+    /// The helpers below -- `long_running_command`, `crash`, `wait_for_running`,
+    /// `wait_for_recorded_exit` -- are `#[cfg(unix)]`, because they signal
+    /// process groups and shell out to `sh`. A test that uses one without the
+    /// same gate does not fail on Windows, it fails to *compile*, and the only
+    /// place that shows up is the Windows CI job -- which is not in the desktop
+    /// filter, so the feedback arrives a push or two later. It has now cost
+    /// three round trips.
+    ///
+    /// A source lint rather than a convention, in the shape `lib.rs` already
+    /// uses for the console-window rule.
+    #[test]
+    fn a_test_that_drives_a_real_process_is_gated_to_unix() {
+        const HELPERS: [&str; 4] = [
+            "long_running_command(",
+            "crash(&",
+            "wait_for_running(&",
+            "wait_for_recorded_exit(&",
+        ];
+        // A POSIX binary is the other way a test needs a unix host, and it is
+        // the one that cost the third round: four stamp tests ran `/bin/sh` and
+        // `/usr/bin/false`. Three failed on Windows with "The system cannot
+        // find the path specified"; the fourth *passed*, because it asserts the
+        // setup fails and a missing binary fails too -- proving nothing, in
+        // green.
+        const POSIX_BINARIES: [&str; 3] = ["\"/bin/", "\"/usr/bin/", "\"/sbin/"];
+        // Every source file in this crate, not just this one. Both rounds of
+        // Windows failures were in here, but the next one need not be -- and a
+        // lint that only reads its own file is a lint that moves the problem.
+        let sources: [(&str, String); 6] = [
+            (
+                "host_process.rs",
+                include_str!("host_process.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "agent_host.rs",
+                include_str!("agent_host.rs").replace("\r\n", "\n"),
+            ),
+            ("daemon.rs", include_str!("daemon.rs").replace("\r\n", "\n")),
+            (
+                "sharing.rs",
+                include_str!("sharing.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "network.rs",
+                include_str!("network.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "managed_runtime.rs",
+                include_str!("managed_runtime.rs").replace("\r\n", "\n"),
+            ),
+        ];
+
+        let mut ungated = Vec::new();
+        for (file, source) in &sources {
+            let lines: Vec<&str> = source.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                let Some(name) = line.trim().strip_prefix("fn ") else {
+                    continue;
+                };
+                // A test function: `#[test]` on one of the few lines above it.
+                let preamble = &lines[index.saturating_sub(4)..index];
+                if !preamble.iter().any(|line| line.trim() == "#[test]") {
+                    continue;
+                }
+                let gated = preamble.iter().any(|line| line.trim() == "#[cfg(unix)]");
+                if gated {
+                    continue;
+                }
+                // The body, to its closing brace at the same indentation.
+                let body: String = lines[index..]
+                    .iter()
+                    .take_while(|line| !line.starts_with("    }"))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let name = name.split('(').next().unwrap_or(name);
+                // This test names the helpers in order to look for them.
+                if name == "a_test_that_drives_a_real_process_is_gated_to_unix" {
+                    continue;
+                }
+                let needs_unix = HELPERS.iter().any(|helper| body.contains(helper))
+                    || POSIX_BINARIES.iter().any(|path| body.contains(path));
+                if needs_unix {
+                    ungated.push(format!("{file}::{name}"));
+                }
+            }
+        }
+
+        assert!(
+            ungated.is_empty(),
+            "these tests need a unix host -- a helper that signals a process \
+             group, or a POSIX binary to run -- and are not #[cfg(unix)]. On \
+             Windows they either fail to compile or fail to find the binary: \
+             {ungated:?}",
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn process_ledger_reclaims_only_an_exact_owned_process() {
+        use std::os::unix::process::ExitStatusExt;
+
         let root = tempdir().unwrap();
         let ledger_path = root.path().join("processes.json");
         let installation_id = "0123456789abcdef0123456789abcdef";
@@ -2705,13 +3330,29 @@ mod tests {
         )
         .unwrap();
 
+        // Reaped in parallel, which is the whole trick.
+        //
+        // `terminate_verified_process` signals, then waits for the PID to stop
+        // existing before escalating. A dead child nobody has reaped is a
+        // zombie, and a zombie still answers `kill(pid, 0)` -- so this test's
+        // process could never be observed to exit, the wait ran its full five
+        // seconds every time, and the assertion that followed was left racing
+        // whatever the runner did next. Production never has this problem: a
+        // reclaimed process belonged to a previous locald and is reaped by
+        // init, so its PID really does go away.
+        //
+        // Reaping here restores that, and the exit status is then an exact
+        // answer rather than a deadline: signalled means reclaimed, and a
+        // process that was missed runs out its own 30 seconds and fails
+        // saying so.
+        let reaper = thread::spawn(move || child.wait().unwrap());
         reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(child.try_wait().unwrap().is_some());
+        let status = reaper.join().unwrap();
+        assert!(
+            status.signal().is_some(),
+            "the reclaimed process exited on its own rather than being killed: \
+             {status:?}",
+        );
         assert!(read_process_ledger(&ledger_path)
             .unwrap()
             .entries
@@ -2842,6 +3483,74 @@ mod tests {
         }
     }
 
+    /// A service that came up early must not restart the dwell clock late.
+    ///
+    /// Each gate requires `stabilization_seconds` of *continuously observed*
+    /// health, measured from the first probe that gate itself saw succeed. Run
+    /// one after another, that charges the dwell once per service: the frontend
+    /// is healthy within a fraction of a second and then waits, idle and
+    /// unwatched, for the backend's gate to finish -- and only then does its own
+    /// gate start counting, spending the full window again on a service that
+    /// had been healthy the whole time.
+    ///
+    /// Asserted on the *gap* between the two services' first probes, not on how
+    /// long startup took. An absolute bound is a claim about the machine: this
+    /// began life as "under 1800ms", passed locally at 1.28s, and failed a CI
+    /// runner at 4.31s while the gates were concurrent exactly as intended. The
+    /// gap is the thing the defect is actually about, and a slow machine slows
+    /// both services together, so it stays true wherever it runs.
+    #[cfg(unix)]
+    #[test]
+    fn one_slow_service_does_not_make_every_other_service_wait_its_dwell_again() {
+        let body = Arc::new(Mutex::new(String::new()));
+        let (mut backend_health, backend_probed, backend_server) =
+            slow_response(0, Arc::clone(&body));
+        let (mut frontend_health, frontend_probed, frontend_server) =
+            slow_response(0, Arc::clone(&body));
+        backend_health.stabilization_seconds = 1;
+        frontend_health.stabilization_seconds = 1;
+
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.health = Some(backend_health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        frontend.health = Some(frontend_health);
+
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
+
+        manager.start_all().unwrap();
+        manager.stop_all().unwrap();
+        drop(backend_server);
+        drop(frontend_server);
+
+        let backend_probed = backend_probed.lock().unwrap().expect("backend was probed");
+        let frontend_probed = frontend_probed
+            .lock()
+            .unwrap()
+            .expect("frontend was probed");
+
+        // Both gates start watching together, so both services see their first
+        // probe at about the same moment. Serially, the second is not probed
+        // until the first has finished its whole dwell -- a second later, by
+        // construction, whatever the machine.
+        let gap = if backend_probed > frontend_probed {
+            backend_probed - frontend_probed
+        } else {
+            frontend_probed - backend_probed
+        };
+        assert!(
+            gap < Duration::from_millis(500),
+            "the two services were first probed {gap:?} apart, which is about \
+             the 1s dwell -- the gates are being charged one after another \
+             rather than watched together",
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn backend_config_restart_keeps_the_frontend_process_running() {
@@ -2956,6 +3665,106 @@ mod tests {
         }
     }
 
+    /// Reconcile until the supervisor reaches `what`, or fail saying what it
+    /// actually reached.
+    ///
+    /// Drive to the state, do not count the steps. Two calls happen to be
+    /// what a restart costs today -- one to spend the budget, one to act on it
+    /// -- but that is an implementation detail of `reconcile_crashes`, and a
+    /// test that hard-codes it asserts against whichever state the count lands
+    /// on rather than the one it means. Waiting for the state also fails
+    /// legibly: it says what was actually reached instead of `assertion failed:
+    /// !backend.running`, which is all CI got.
+    ///
+    /// `manager_in` builds these without a supervisor (see
+    /// `without_supervisor`), so nothing else is stepping the machine while
+    /// this runs.
+    ///
+    /// Unix-gated because `process_status` is: it reaps, which needs waitpid.
+    #[cfg(unix)]
+    fn reconcile_until(
+        manager: &HostProcessManager,
+        id: &str,
+        what: &str,
+        reached: impl Fn(&HostProcessStatus) -> bool,
+    ) -> HostProcessStatus {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            manager.reconcile_crashes();
+            let status = process_status(manager, id);
+            if reached(&status) {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} never {what}. running={} circuit_open={} restart_count={} \
+                 last_exit={:?}",
+                status.running,
+                status.circuit_open,
+                status.restart_count,
+                status.last_exit,
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The supervisor restarts a crashed service on its own.
+    ///
+    /// The one thing about it that production depends on, and until this test
+    /// nothing asserted it: every other test drives `reconcile_crashes` by
+    /// hand, so the thread that calls it once a second could have failed to
+    /// spawn at all and the suite would have stayed green.
+    ///
+    /// Waits for the restart instead of timing it. That direction is safe --
+    /// a slow machine only makes the wait longer, never wrong -- which is the
+    /// distinction that made the circuit tests flaky: they counted the
+    /// supervisor's steps, and a loaded runner gave it more of them.
+    #[cfg(unix)]
+    #[test]
+    fn the_supervisor_restarts_a_crashed_service_with_nobody_driving_it() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.restart = RestartSpec {
+            max_restarts: 5,
+            window_seconds: 60,
+            backoff_seconds: 0,
+        };
+        // A frontend too: the manifest is required to have one.
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        // Supervised, unlike `manager_in` -- the thread is the subject here.
+        let manager = HostProcessManager::new(value, log_dir_in(&root)).unwrap();
+
+        manager.start_all().unwrap();
+        let first = wait_for_running(&manager, "backend");
+
+        crash(&manager, "backend");
+
+        // Nothing is called on `manager` from here: if it comes back, the
+        // supervisor is what brought it back. It ticks once a second, so this
+        // deadline is ~15 ticks of slack.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let status = process_status(&manager, "backend");
+            if status.running && status.pid != Some(first) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "supervisor never restarted the crashed backend \
+                 (running={} pid={:?} was={:?} restart_count={})",
+                status.running,
+                status.pid,
+                Some(first),
+                status.restart_count,
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn opens_restart_circuit_after_crash_budget_is_exhausted() {
@@ -2988,20 +3797,341 @@ mod tests {
         // a step behind.
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes(); // spends the budgeted restart
-        manager.reconcile_crashes(); // and performs it
-        assert!(process_status(&manager, "backend").running);
+        reconcile_until(&manager, "backend", "used its one budgeted restart", |s| {
+            s.running
+        });
 
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes();
-
-        let backend = process_status(&manager, "backend");
-        assert!(!backend.running);
-        assert!(backend.circuit_open);
+        let backend = reconcile_until(
+            &manager,
+            "backend",
+            "opened its circuit with the budget exhausted",
+            |s| s.circuit_open,
+        );
+        assert!(
+            !backend.running,
+            "an open circuit must not leave it running"
+        );
         assert_eq!(backend.restart_count, 1);
         assert!(backend.last_exit.is_some());
         assert!(process_status(&manager, "frontend").running);
         manager.stop_all().unwrap();
+    }
+
+    /// A tripped circuit reopens once the crash window has gone quiet.
+    ///
+    /// It never used to. `reconcile_crashes` tested `circuit_open` before it
+    /// pruned `restart_history`, so the history was frozen the moment the
+    /// circuit tripped and no amount of elapsed time could clear it. A single
+    /// transient burst — a laptop waking before the VM's port forwarders are
+    /// back — condemned the service until the user restarted the whole app,
+    /// and nothing on screen said so.
+    ///
+    /// The window has to outlast the two crashes that exhaust the budget --
+    /// otherwise the first restart ages out before the second crash and the
+    /// budget silently resets, which is a green test proving nothing. Four
+    /// seconds is comfortably longer than a spawn plus two observed exits, and
+    /// short enough that waiting it out does not dominate the suite.
+    // Unix-only for the same reason as its sibling above: `crash` signals a
+    // process group and `long_running_command` is a shell one-liner.
+    #[cfg(unix)]
+    #[test]
+    fn a_tripped_restart_circuit_reopens_after_a_quiet_window() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.restart = RestartSpec {
+            max_restarts: 1,
+            window_seconds: 4,
+            backoff_seconds: 0,
+        };
+        let mut frontend = service("frontend", &[]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
+        reconcile_until(&manager, "backend", "used its one budgeted restart", |s| {
+            s.running
+        });
+
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
+        reconcile_until(
+            &manager,
+            "backend",
+            "opened its circuit with the budget exhausted",
+            |s| s.circuit_open,
+        );
+
+        // Nothing deliberate happens here — only the window elapsing.
+        thread::sleep(Duration::from_millis(4500));
+        reconcile_until(&manager, "backend", "reopened its circuit", |s| {
+            !s.circuit_open
+        });
+
+        let backend = process_status(&manager, "backend");
+        assert!(
+            !backend.circuit_open,
+            "a quiet window reopens the circuit without an app restart"
+        );
+        // ...but the trip is remembered. This is the durable half: without it,
+        // a service that trips once per window would report healthy in every
+        // gap and oscillate the splash between "error" and "starting".
+        //
+        // Deliberately not asserted through `status_event` here. Once the
+        // service actually comes back, `ready` wins over `failed` and the
+        // status is legitimately "running" -- so an assertion on the status
+        // string would be racing the very recovery this test is proving works.
+        // The trip count is what the UI keys on while a component is still
+        // down, and it is what this pins.
+        assert_eq!(backend.circuit_trips, 1);
+
+        manager.stop_all().unwrap();
+    }
+
+    /// A remembered trip keeps a component reading as failed after its circuit
+    /// closes.
+    ///
+    /// Asserted on the predicate rather than through a live manager: the state
+    /// that matters -- circuit closed again, trip remembered, service still
+    /// down -- exists for a fraction of a second in a real supervisor, and a
+    /// test that raced it would be a flake pretending to be coverage.
+    #[test]
+    fn a_component_that_has_tripped_still_reads_as_failed_after_the_circuit_closes() {
+        let component = |circuit_open: bool, circuit_trips: u32| HostProcessStatus {
+            id: "backend".into(),
+            running: false,
+            pid: None,
+            circuit_open,
+            circuit_trips,
+            restart_count: 0,
+            last_exit: None,
+        };
+
+        assert!(
+            !HostProcessManager::components_report_failure(&[component(false, 0)]),
+            "a component that has never tripped is not a failure"
+        );
+        assert!(
+            HostProcessManager::components_report_failure(&[component(true, 1)]),
+            "an open circuit is a failure"
+        );
+        assert!(
+            HostProcessManager::components_report_failure(&[component(false, 1)]),
+            "a closed circuit with a remembered trip is still a failure, or a \
+             service that flaps once a window would read healthy in every gap"
+        );
+    }
+
+    /// The generation a start reports is the generation it runs.
+    ///
+    /// `prepare_runtime_generation` and `start_all_inner` used to disagree on a
+    /// partially-running stack -- one saw "some children" and kept the old
+    /// value, the other saw "not all children" and minted a new one. Every
+    /// phase, state and ready event then carried the old generation while the
+    /// services ran the new one.
+    ///
+    /// That value decides, on the next launch, whether the workspace recorded
+    /// last time is still the one serving. A mixture made that question
+    /// answerable by processes from two different runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_partially_running_stack_reports_the_generation_it_actually_runs() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &[]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+        wait_for_running(&manager, "frontend");
+
+        // Kill one service, leaving the stack partially up -- the state a user
+        // is in when they press Start after a crash loop.
+        crash(&manager, "frontend");
+        wait_for_recorded_exit(&manager, "frontend");
+
+        let announced = manager.prepare_runtime_generation().unwrap();
+        manager.start_all().unwrap();
+        wait_for_running(&manager, "backend");
+        wait_for_running(&manager, "frontend");
+
+        let running = manager.status_event(None)["runtime_generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            announced, running,
+            "the generation announced to the app must be the one the services were given"
+        );
+        manager.stop_all().unwrap();
+    }
+
+    /// A stamped setup runs once and is skipped while its stamp holds.
+    ///
+    /// Both setups ran on every start. The cost is not the SQL -- alembic's
+    /// no-op is one `SELECT` -- it is `env.py` importing the whole ORM graph
+    /// before it can decide there is nothing to do, on every launch.
+    #[cfg(unix)]
+    #[test]
+    fn a_stamped_setup_is_not_repeated_while_its_stamp_holds() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        let manager = manager_in(&root, value);
+
+        manager.run_setups().unwrap();
+        manager.run_setups().unwrap();
+        manager.run_setups().unwrap();
+
+        let runs = std::fs::read_to_string(&marker).unwrap().lines().count();
+        assert_eq!(runs, 1, "a stamped setup runs once, not once per start");
+    }
+
+    /// A changed stamp runs it again; so does an unstamped setup.
+    #[cfg(unix)]
+    #[test]
+    fn a_changed_stamp_runs_the_setup_again() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+
+        let mut first = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        first.setup[0].command = command.clone();
+        first.setup[0].stamp = Some("release-0.7.0".into());
+        manager_in(&root, first).run_setups().unwrap();
+
+        // A new release: the migrations it ships are not the ones already run.
+        let mut second = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        second.setup[0].command = command.clone();
+        second.setup[0].stamp = Some("release-0.8.0".into());
+        manager_in(&root, second).run_setups().unwrap();
+
+        // No stamp at all behaves exactly as before stamps existed.
+        let mut third = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        third.setup[0].command = command;
+        third.setup[0].stamp = None;
+        manager_in(&root, third).run_setups().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 3);
+    }
+
+    /// A failed setup is never stamped.
+    ///
+    /// Stamping anything but success would let a half-finished migration be
+    /// skipped on the next start, which is strictly worse than running it
+    /// again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_setup_is_not_stamped_as_done() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec!["/usr/bin/false".into()];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        value.setup[0].max_attempts = 1;
+        let manager = manager_in(&root, value);
+
+        assert!(manager.run_setups().is_err());
+        assert!(
+            manager.recorded_setup_stamps().is_empty(),
+            "a setup that failed must run again next time"
+        );
+    }
+
+    /// A data reset makes every setup run again.
+    ///
+    /// The database the migrations stamp describes is gone, but a Tier 1 reset
+    /// leaves the locald root standing -- so without forgetting the stamps the
+    /// next start would skip migrations against an empty schema and the backend
+    /// would come up against tables that were never created.
+    #[cfg(unix)]
+    #[test]
+    fn forgetting_stamps_makes_a_reset_installation_migrate_again() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("ran");
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo x >> {}", marker.display()),
+        ];
+        value.setup[0].stamp = Some("release-0.7.0".into());
+        let manager = manager_in(&root, value);
+
+        manager.run_setups().unwrap();
+        manager.forget_setup_stamps().unwrap();
+        manager.run_setups().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
+        // Clearing twice is what a retried reset does; it must not fail.
+        manager.forget_setup_stamps().unwrap();
+    }
+
+    /// An optional setup that *hangs* is tolerated, exactly like one that fails.
+    ///
+    /// `optional` was honoured at only one of the three places a setup can
+    /// fail. A non-zero exit was swallowed; running out of time was not — so
+    /// `connector-catalog`, which is declared optional with a 600-second budget
+    /// precisely so an unreachable third-party catalog cannot stop a workspace,
+    /// took the whole stack down whenever the network blackholed instead of
+    /// refusing.
+    #[cfg(unix)]
+    #[test]
+    fn an_optional_setup_that_hangs_does_not_stop_the_stack() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let mut catalog = setup("connector-catalog");
+        catalog.command = long_running_command();
+        catalog.optional = true;
+        catalog.timeout_seconds = 1;
+        catalog.max_attempts = 1;
+        value.setup.push(catalog);
+        let manager = manager_in(&root, value);
+
+        manager
+            .run_setups()
+            .expect("an optional setup that never finishes must not fail the start");
+    }
+
+    /// The same hang, not marked optional, still stops the start.
+    ///
+    /// Without this the test above would pass just as well against a
+    /// `run_setups` that had stopped enforcing timeouts at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_required_setup_that_hangs_still_stops_the_stack() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
+        value.setup[0].command = long_running_command();
+        value.setup[0].optional = false;
+        value.setup[0].timeout_seconds = 1;
+        value.setup[0].max_attempts = 1;
+        let manager = manager_in(&root, value);
+
+        let error = manager.run_setups().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("migrations"), "{error}");
     }
 }

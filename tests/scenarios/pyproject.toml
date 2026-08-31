@@ -18,6 +18,13 @@ dependencies = [
     # not speak one. Nothing else in the suite needs it; PS-DATA-060 is the
     # whole reason it is here.
     "websockets>=13.0",
+    # Being a *person* on Telegram, which the Bot API cannot do at all: a bot
+    # never receives a message nobody sent it, and cannot send as a human. That
+    # is why the surface scenarios stood Telegram in for on loopback for so
+    # long. MTProto is the only door, and this is the client for it. Used by
+    # `harness/telegram_person.py` and nothing else; scenarios that need it skip
+    # with instructions when no session is configured.
+    "telethon>=1.36",
 ]
 
 [tool.pytest.ini_options]
@@ -64,6 +71,7 @@ markers = [
     "covers: OpenAPI operation ids and analytics events exercised",
     "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
+    "stack_lane: needs a deployment configured to be broken in a particular way, so it can only run on one this suite booted",
 ]
 
 [tool.ruff]

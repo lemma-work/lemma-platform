@@ -10,7 +10,7 @@ import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { resolvePodDefaultRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
@@ -161,9 +161,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
 
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
-    const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
-    const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
+    // Only what *this* composer is doing. The assistant is one instance for the
+    // whole pod, so gating on its shared streaming state let a conversation
+    // running anywhere freeze the one control whose entire job is to start a
+    // different one.
+    const isBusy = isSending || isBlankingHome || assistant.isUploadingFiles;
+    const podDefaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const isLoadingHomeState =
         isLoadingHomeAgents ||
@@ -346,7 +349,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         startComposerLaunchAnimation(message);
         setIsSending(true);
         try {
-            assistant.clearMessages();
+            // Not `clearMessages()`: it resets the shared session, and the reset
+            // calls `stop()` — a real `stopRun` against whatever conversation was
+            // still open. So sending from home killed a turn that was still
+            // running, and cleared the files just attached to this one.
+            // `forceNewConversation` closes the open conversation first, which
+            // detaches from it without stopping it, and keeps the attachments.
             await assistant.sendMessage(message, {
                 forceNewConversation: true,
                 instructions: launchInstructionsRef.current || undefined,
@@ -497,6 +505,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                         onChange={handleCommandRuntimeChange}
                                         disabled={!canWriteConversations}
                                         compact
+                                        ariaLabel="Conversation model"
                                         triggerLabelClassName="hidden sm:block"
                                         scopeHint="Just for this chat"
                                         manageHref={podModelsHref(podId)}
@@ -1090,13 +1099,6 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                         {expanded ? 'Hide ideas' : 'Show ideas'}
                         {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </Button>
-                    <Link
-                        href={`/pod/${podId}/recipes`}
-                        className="custom-focus-ring inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                    >
-                        Browse all
-                        <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
                     <Button
                         type="button"
                         variant="quiet"

@@ -2,9 +2,12 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.domain.errors import BadRequestError, DomainError
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
 from app.modules.pod_bundle.infrastructure.applier import (
     BundleApplier,
@@ -302,6 +305,20 @@ def _patch_grant_layer(monkeypatch) -> dict:
     monkeypatch.setattr(
         "app.core.authorization.grants.replace_grantee_resource_grants", _replace
     )
+
+    # The `/memory` folder and grant the MEMORY toolset implies. A separate
+    # collaborator with its own datastore call, recorded here rather than run:
+    # the stubs above hand back sentinel strings, and the real one reads
+    # `.resource_id` off what `normalize` returns.
+    async def _sync_memory(uow, *, pod_id, agent_id, toolsets, ctx, created_by_user_id):
+        calls.setdefault("memory_sync", []).append(
+            {"agent_id": agent_id, "toolsets": list(toolsets or [])}
+        )
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.agent_memory_grant.sync_memory_folder_grant",
+        _sync_memory,
+    )
     return calls
 
 
@@ -359,6 +376,11 @@ def test_grants_from_payload_accepts_bare_grants_list():
 class FakeAgentService:
     class _Agent:
         id = _AGENT_ID
+        # Named, like the entity this stands in for. An email surface's address
+        # is built from the agent's *name*, so a nameless stub silently minted
+        # the pod-assistant form and any assertion about the address was really
+        # asserting the fake's own gap.
+        name = "Reporter"
 
     async def get_agent_by_name(self, *, pod_id, name, ctx=None):
         return self._Agent()
@@ -407,6 +429,160 @@ class FakeFunctionService:
         self, pod_id, name, user_id, *, include_code=True, ctx=None, **kwargs
     ):
         return self._Function()
+
+
+async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
+    tmp_path, monkeypatch
+):
+    """The applier hands the service the toolsets; the service derives from them.
+
+    The `/memory` derivation used to live only in the agent HTTP controller, so
+    an agent created straight through the service -- which is what this applier
+    does -- got MEMORY in its toolsets and no folder to write to. Dormant until
+    MEMORY became a default for new agents (#476), and then fatal: exporting a
+    pod and importing it back died on `Unknown resource name(s): folder:/memory`.
+
+    The floor now lives in `AgentService.create_agent` (see
+    `app.composition.agent_memory`), so what is left for the applier to get
+    right is passing the toolsets through at all -- without them the service has
+    nothing to derive from and the same bug returns by a different route.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "reporter" / "reporter.json",
+        {"name": "reporter", "instruction": "Report.", "toolsets": ["MEMORY"]},
+    )
+    seen: dict = {}
+
+    class _CreatingAgentService:
+        """A pod that does not have this agent yet -- an import's own case."""
+
+        async def get_agent_by_name(self, *, pod_id, name, ctx=None):
+            return None
+
+        async def create_agent(self, **kwargs):
+            seen.update(kwargs)
+            return FakeAgentService._Agent()
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources.get_agent_service",
+        lambda uow: _CreatingAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT, "reporter", action=StepAction.CREATE)
+    )
+
+    assert [str(toolset) for toolset in (seen.get("toolsets") or [])] == [
+        str(AgentToolset.MEMORY)
+    ]
+    # ...and a ctx, without which the service skips the derivation entirely.
+    assert seen.get("ctx") is not None
+
+
+async def test_the_grants_step_puts_the_derived_memory_grant_back(
+    tmp_path, monkeypatch
+):
+    """The bundle's grant list replaces every grant the agent holds.
+
+    So a derived grant applied at create time is the first thing the deferred
+    step wipes. The controller has the same ordering problem on its permissions
+    endpoint and solves it the same way -- re-derive afterwards, from the agent
+    as saved rather than from the request.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "function",
+                        "resource_name": "triage",
+                        "permission_ids": ["function.execute"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    assert calls["replace"]["grants"] == ["NORMALIZED"]
+    assert calls.get("memory_sync"), (
+        "the grants step replaced every grant without re-deriving memory's"
+    )
+
+
+async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
+    tmp_path, monkeypatch
+):
+    """The applier propagates a grant failure rather than swallowing it.
+
+    Scoped deliberately, and narrower than it first looks. The grant layer is
+    stubbed here, so this does **not** cover the type the raise site now uses --
+    that is asserted against the real functions in
+    `pod/tests/unit/test_core_authorization_permissions.py`, which fails if
+    `resolve_resource_ids_by_names` goes back to `fastapi.HTTPException`.
+
+    What this covers is the applier's own half: that whatever grant resolution
+    raises reaches the caller with its message intact. Both halves are needed.
+    The pod bundle handlers branch on `DomainError` to mark an import FAILED
+    with the real reason; anything else is called transient, re-raised, and
+    retried by streaq against inputs that cannot change -- which is how an
+    import naming a folder the target pod did not have came back as "Apply
+    failed due to a transient error", with `Unknown resource name(s):
+    folder:/memory` logged at DEBUG and never shown.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {
+            "name": "support",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": "/memory",
+                        "permission_ids": ["folder.write"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    _patch_grant_layer(monkeypatch)
+
+    async def _unresolvable(session, *, pod_id, grants):
+        raise BadRequestError(
+            "Unknown resource name(s): folder:/memory",
+            code="UNKNOWN_RESOURCE_NAME",
+        )
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.normalize_pod_resource_grants", _unresolvable
+    )
+
+    with pytest.raises(DomainError) as raised:
+        await _grant_applier(root).apply_step(
+            _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+        )
+
+    # The reason has to survive, or the import reports nothing usable.
+    assert "folder:/memory" in str(raised.value)
+    assert raised.value.status_code == 400
 
 
 async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
@@ -574,8 +750,9 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
 
 
 class FakeSurfaceService:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, existing_mailbox=None):
         self._existing = existing
+        self._existing_mailbox = existing_mailbox
         self.created: dict | None = None
         self.updated: dict | None = None
 
@@ -596,6 +773,7 @@ class FakeSurfaceService:
         config,
         credential_mode,
         account_id,
+        surface_identity_email=None,
         ctx=None,
     ):
         from types import SimpleNamespace
@@ -607,14 +785,55 @@ class FakeSurfaceService:
             "agent_id": agent_id,
             "account_id": account_id,
             "credential_mode": credential_mode,
+            "surface_identity_email": surface_identity_email,
         }
         return SimpleNamespace(id=_uuid4(), config=config)
+
+    async def create_surface_minting_address(self, *, agent, **kwargs):
+        """What the applier calls, routed through the real minting function.
+
+        Delegating straight to `create_surface` was simpler and tested nothing:
+        it skipped the whole email branch, so a bundle importing a Resend
+        surface exercised no more of the code than a Slack one did. The real
+        function decides the name and whether to adopt an existing mailbox,
+        which is exactly the part the applier depends on and the part that
+        broke.
+        """
+        from types import SimpleNamespace
+
+        from app.modules.agent_surfaces.services.email_surface_provisioning import (
+            create_surface_on_minted_address,
+        )
+
+        session = SimpleNamespace(begin_nested=_null_savepoint)
+        return await create_surface_on_minted_address(
+            self,
+            SimpleNamespace(session=session),
+            agent_id=getattr(agent, "id", None),
+            agent_name=getattr(agent, "name", None),
+            **kwargs,
+        )
+
+    async def resend_surface_for_agent(self, *, pod_id, agent_id):
+        """The mailbox this agent already holds — an agent has one from birth."""
+        return self._existing_mailbox
 
     async def update_surface(self, **kwargs):
         from types import SimpleNamespace
 
         self.updated = kwargs
         return SimpleNamespace(id=kwargs.get("surface_id"), config=None)
+
+
+def _null_savepoint():
+    """A savepoint that does nothing, for a fake with no real transaction."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _cm():
+        yield
+
+    return _cm()
 
 
 async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch):
@@ -646,6 +865,91 @@ async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch
     assert surface_fake.created["platform"] == "SLACK"
     assert surface_fake.created["account_id"] == account
     assert surface_fake.updated is None  # created, not updated
+
+
+def _patch_resend_minting(monkeypatch, surface_fake, *, pod_name="Acme"):
+    """Wire a bundle apply at a deployment that has an inbound mail domain."""
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning,
+        "pod_name_for",
+        AsyncMock(return_value=pod_name),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        lambda uow: surface_fake,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+
+
+async def test_a_bundle_s_email_surface_gets_a_readable_address(tmp_path, monkeypatch):
+    """The applier's own email path, which had no test at all.
+
+    Its fake used to answer `create_surface_minting_address` by calling
+    `create_surface` directly, so the entire minting branch — the name, the
+    address, the adoption check — was skipped and a Resend bundle proved
+    nothing a Slack one did not.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "inbox" / "inbox.json",
+        {
+            "name": "inbox",
+            "platform": "RESEND",
+            "default_agent_name": "Reporter",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    _patch_resend_minting(monkeypatch, surface_fake)
+
+    await _applier(root).apply_step(_step(StepKind.SURFACE, "inbox"))
+
+    assert surface_fake.created is not None
+    assert surface_fake.created["platform"] == "RESEND"
+    # Readable, and under the deployment's own domain — not `pod-<32 hex>@`.
+    assert (
+        surface_fake.created["surface_identity_email"] == "reporter.acme@ops.asur.work"
+    )
+
+
+async def test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone(
+    tmp_path, monkeypatch
+):
+    """A bundle names its surfaces, and a name means "a distinct thing".
+
+    Connecting email without a name adopts the mailbox the agent already holds
+    — that is what "connect email" means from the UI. A bundle is not that: its
+    upsert is keyed on the name it carries, so adopting here would quietly
+    rewrite the agent's existing mailbox with the bundle's config and leave the
+    surface the bundle actually declared uncreated.
+    """
+    from types import SimpleNamespace
+
+    existing = SimpleNamespace(
+        id=uuid4(), surface_identity_email="reporter.acme@x.test"
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "inbox" / "inbox.json",
+        {"name": "inbox", "platform": "RESEND", "default_agent_name": "Reporter"},
+    )
+    surface_fake = FakeSurfaceService(existing_mailbox=existing)
+    _patch_resend_minting(monkeypatch, surface_fake)
+
+    await _applier(root).apply_step(_step(StepKind.SURFACE, "inbox"))
+
+    assert surface_fake.created is not None, "the bundle's surface was never created"
+    assert surface_fake.created["name"] == "inbox"
+    assert surface_fake.updated is None, (
+        "the agent's existing mailbox was rewritten instead"
+    )
 
 
 async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):

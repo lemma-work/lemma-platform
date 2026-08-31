@@ -24,6 +24,22 @@ class SurfaceSettings(BaseSettings):
         extra="ignore",
     )
 
+    # Inbound email identity (see platforms/email_authentication.py)
+    surface_email_trusted_authserv_ids: str = Field(
+        default="amazonses.com",
+        description=(
+            "Comma-separated authserv-ids whose Authentication-Results headers are "
+            "believed. Anyone can put that header in a message they send; naming "
+            "the receiving service is what makes reading it a check rather than a "
+            "claim. Defaults to the one Lemma's own inbound actually uses -- "
+            "Resend receives through SES, which writes 'amazonses.com' -- so the "
+            "check is real out of the box. Change it only if inbound mail reaches "
+            "this deployment through a different receiver; emptying it falls back "
+            "to believing whichever header came first, which is what a forged one "
+            "arrives as when the receiver adds none of its own."
+        ),
+    )
+
     # Microsoft Teams bot (separate from login OAuth)
     microsoft_bot_app_id: Optional[str] = Field(
         default=None,

@@ -77,7 +77,19 @@ class UserRepository(UserRepositoryPort):
         return instance.to_entity() if instance else None
 
     async def get_id_by_email_insensitive(self, email: str) -> Optional[UUID]:
-        stmt = select(User.id).where(func.lower(User.email) == email.lower())
+        """The live user with this address, if there is one.
+
+        Deactivated and deleted rows are excluded, as they already are in
+        ``get_ids_by_mobile_numbers`` below. Its one caller resolves an inbound
+        surface sender into the identity an agent run then executes as, so a
+        match here is an authority grant -- and a departed colleague's address
+        used to still be one.
+        """
+        stmt = select(User.id).where(
+            func.lower(User.email) == email.lower(),
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+        )
         return await self.session.scalar(stmt)
 
     async def get_ids_by_mobile_numbers(

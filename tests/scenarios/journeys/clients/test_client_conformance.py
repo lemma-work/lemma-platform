@@ -44,7 +44,10 @@ async def test_the_cli_lists_pods(world, signed_in):
 
     listed = cli.json("pods", "list", org=str(organization["id"]))
 
-    names = {p.get("name") for p in (listed if isinstance(listed, list) else listed.get("items", []))}
+    names = {
+        p.get("name")
+        for p in (listed if isinstance(listed, list) else listed.get("items", []))
+    }
     assert pod["name"] in names, (
         f"the CLI could not see a pod the API returns. Saw: {sorted(n for n in names if n)}"
     )
@@ -63,13 +66,22 @@ async def test_the_cli_reads_tables_and_records(world, signed_in):
 
     tables = cli.json("tables", "list", org=str(organization["id"]), pod=str(pod["id"]))
     rows = cli.json(
-        "records", "list", table["name"],
-        org=str(organization["id"]), pod=str(pod["id"]),
+        "records",
+        "list",
+        table["name"],
+        org=str(organization["id"]),
+        pod=str(pod["id"]),
     )
 
-    listed = {t.get("name") for t in (tables if isinstance(tables, list) else tables.get("items", []))}
+    listed = {
+        t.get("name")
+        for t in (tables if isinstance(tables, list) else tables.get("items", []))
+    }
     assert table["name"] in listed, listed
-    titles = {r.get("title") for r in (rows if isinstance(rows, list) else rows.get("items", []))}
+    titles = {
+        r.get("title")
+        for r in (rows if isinstance(rows, list) else rows.get("items", []))
+    }
     assert "from the api" in titles, (
         f"the CLI could not read a record the API wrote. Saw: {titles}"
     )
@@ -114,10 +126,6 @@ async def test_the_python_sdk_writes_a_record(world, signed_in):
     )
 
 
-@pytest.mark.xfail(
-    reason="DEV-SDK-001: the built dist cannot be imported from Node",
-    strict=True,
-)
 @scenario("The TypeScript SDK reads the pods a person can see")
 @proves("PS-POD-030")
 @covers("pod.list")
@@ -125,12 +133,15 @@ async def test_the_typescript_sdk_lists_pods(world, signed_in):
     alice, organization, pod = signed_in
     sdk = TypescriptSdkDriver(base_url=world.base_url, token=alice.api.token)
     if not sdk.available():
-        pytest.skip(
-            "lemma-typescript is not built; run `npm ci && npm run build` there"
-        )
+        pytest.skip("lemma-typescript is not built; run `npm ci && npm run build` there")
 
     names = sdk.evaluate(
-        f"const pods = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        f"const page = await lemma.pods.list({{ organizationId: {str(organization['id'])!r} }});\n"
+        # A page, not an array: the SDK returns `{items, ...}` the way every
+        # listing endpoint does. `pods.map(...)` threw a TypeError here, which
+        # the old spelling never reached because the client failed to
+        # authenticate first.
+        "const pods = page.items ?? page;\n"
         "console.log('<<<RESULT>>>' + JSON.stringify(pods.map((p) => p.name)));"
     )
 

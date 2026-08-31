@@ -39,6 +39,13 @@ name: Backend E2E
 
 on:
   workflow_dispatch:
+  # Main builds the sandbox images and nothing else (every other job here is
+  # gated to pull_request/dispatch). A run can only restore caches from its own
+  # branch or from the default branch, and this workflow never ran on main --
+  # so no PR could ever inherit a warm sandbox-image cache, and every branch
+  # paid a cold build. Warming it here is what makes the cache actually cache.
+  push:
+    branches: [main]
   pull_request:
     # opened/synchronize/reopened: the direct trigger every normal PR push
     # takes. labeled: surface-live-smoke's own on-demand "surface-live" label.
@@ -62,6 +69,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       shards: ${{ steps.shards.outputs.matrix }}
+      needs_sandbox_images: ${{ steps.shards.outputs.needs_sandbox_images }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -85,13 +93,82 @@ jobs:
         id: shards
         run: |
           echo "matrix=$(jq -c '.shards' .github/e2e-shards.json)" >> "$GITHUB_OUTPUT"
+          echo "needs_sandbox_images=$(jq -r 'any(.shards[]; .needs_sandbox_images) | tostring' .github/e2e-shards.json)" >> "$GITHUB_OUTPUT"
+
+  # Built once per run, here, instead of once per shard. Three shards declare
+  # `needs_sandbox_images`, they run in parallel, and on a cold cache all three
+  # missed it together and built the identical image independently: measured at
+  # 79s + 81s + 77s in run 32855094744 and 75s + 77s + 114s in 32851884561,
+  # then three `docker save`s racing to write one cache key. Roughly four
+  # minutes of runner time per run to produce one artifact three times.
+  sandbox-images:
+    name: build sandbox images
+    needs: changes
+    if: >-
+      needs.changes.outputs.backend == 'true' &&
+      needs.changes.outputs.needs_sandbox_images == 'true' &&
+      (github.event_name != 'pull_request' ||
+       contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      key: ${{ steps.key.outputs.value }}
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - name: Resolve the cache key
+        id: key
+        run: echo "value=e2e-sandbox-images-${{ hashFiles(
+              'lemma-backend/sandbox-images/**',
+              'lemma-backend/sandbox_runtime/**',
+              'lemma-python/**',
+              'lemma-pod-bundle/**',
+              'lemma-cli/**',
+              'lemma-typescript/**',
+              'lemma-skills/**'
+            ) }}" >> "$GITHUB_OUTPUT"
+      # `lookup-only`, so a warm cache costs a HEAD request rather than pulling
+      # a multi-gigabyte tar down just to prove it exists. The shards download
+      # it; this job only decides whether it has to be created.
+      - name: Is the image already cached?
+        id: probe
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ steps.key.outputs.value }}
+          lookup-only: true
+      - name: Build sandbox images
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: make sandbox-images
+      - name: Save sandbox images to cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: |
+          docker save -o /tmp/e2e-sandbox-images.tar \
+            $(make print-sandbox-images | awk '{print $2}')
+      - name: Upload the image cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ steps.key.outputs.value }}
 
   backend-e2e:
     name: lemma-backend e2e (${{ matrix.shard.name }})
-    needs: changes
+    needs: [changes, sandbox-images]
     # Manual dispatch, or directly on every PR push that can affect the
     # backend. Independent of "CI"'s outcome and of any label.
+    #
+    # `!cancelled()` rather than the default, because `sandbox-images` is
+    # skipped when no shard in the matrix declares one, and a skipped
+    # dependency would otherwise skip every shard with it. A *failed* build is
+    # still fatal -- there would be no image to load.
     if: >-
+      !cancelled() &&
+      needs.sandbox-images.result != 'failure' &&
       needs.changes.outputs.backend == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
@@ -115,7 +192,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           # Scoped deliberately. The default glob is `**/uv.lock`, and this
@@ -127,14 +204,21 @@ jobs:
         # (test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel)
         # needs it installed, same as the unit-test CI job (ci.yml).
         run: uv sync --extra local
-      # Postgres/Redis/SuperTokens images are pinned in test_utils.py and never
-      # change between runs, but GH-hosted runners are fresh VMs with nothing
-      # pre-pulled, so every shard was cold-pulling ~1.3GB from Docker Hub on
-      # every single run. Cache the pulled layers keyed on the file that pins
-      # the versions, so a version bump there is the only thing that busts it.
+      # Every image `test_utils.py` pins, because GH-hosted runners are fresh
+      # VMs with nothing pre-pulled and each shard would otherwise cold-pull
+      # the lot on every run. Keyed on the file that pins the versions, so a
+      # version bump there is the only thing that busts it.
+      #
+      # Kreuzberg (594MB) and MinIO (228MB) were missing from this list while
+      # being started by the datastore, schedule and core e2e fixtures, so
+      # those shards paid an uncached pull every run -- `kreuzberg_url` alone
+      # measured 35s of session setup. They are cached here with the rest
+      # rather than per-shard: `e2e-shards.json` is generated, so gating on a
+      # shard name would either hand-edit a generated file or hard-code names
+      # the generator is free to change.
       - name: Cache e2e container images
         id: cache-e2e-images
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/e2e-docker-images.tar
           key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py') }}
@@ -147,13 +231,17 @@ jobs:
           docker pull docker.io/pgvector/pgvector:0.8.3-pg18
           docker pull redis:7.4-alpine
           docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
+          docker pull ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2
+          docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
       - name: Save e2e container images to cache
         if: steps.cache-e2e-images.outputs.cache-hit != 'true'
         run: |
           docker save -o /tmp/e2e-docker-images.tar \
             docker.io/pgvector/pgvector:0.8.3-pg18 \
             redis:7.4-alpine \
-            docker.io/supertokens/supertokens-postgresql:11.4.5
+            docker.io/supertokens/supertokens-postgresql:11.4.5 \
+            ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2 \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
       # e2e forces embedding_provider=local (e2e_base.py), which is FastEmbed
       # downloading BAAI/bge-base-en-v1.5 -- a few hundred megabytes -- into
       # ~/.cache/lemma/fastembed the first time anything embeds. On a fresh
@@ -162,53 +250,33 @@ jobs:
       # came to be the single slowest test in the suite at 130 seconds. The
       # model is pinned in config.py, so that is what the key follows.
       - name: Cache the local embedding model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/lemma/fastembed
           key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
           restore-keys: fastembed-
-      # Only the sandbox shard needs the real workspace + function-runner
-      # images. Content-addressed by the same inputs
-      # app/modules/test_support/e2e/runtime.py fingerprints
-      # (_SANDBOX_BUILD_INPUTS), so a PR that doesn't touch the sandbox images,
-      # sandbox_runtime, or the bundled SDKs gets a cache hit and skips the
-      # build entirely. `make sandbox-images` tags with SANDBOX_TAG=dev rather
-      # than that fingerprint, so the tags are resolved and handed to the
-      # fixtures explicitly via WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- same
-      # two-step approach sandbox-function-benchmark.yml already uses.
-      - name: Cache sandbox images
+      # Only the sandbox shards need the real workspace + function-runner
+      # images, and by here they always exist: `sandbox-images` built them once
+      # for the whole run, or found them already cached. Content-addressed by
+      # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
+      # (_SANDBOX_BUILD_INPUTS). `make sandbox-images` tags with
+      # SANDBOX_TAG=dev rather than that fingerprint, so the tags are resolved
+      # and handed to the fixtures explicitly via
+      # WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- the same two-step approach
+      # sandbox-function-benchmark.yml already uses.
+      - name: Restore sandbox images
         if: matrix.shard.needs_sandbox_images
-        id: cache-sandbox-images
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/e2e-sandbox-images.tar
-          key: >-
-            e2e-sandbox-images-${{ hashFiles(
-              'lemma-backend/sandbox-images/**',
-              'lemma-backend/sandbox_runtime/**',
-              'lemma-python/**',
-              'lemma-pod-bundle/**',
-              'lemma-cli/**',
-              'lemma-typescript/**',
-              'lemma-skills/**'
-            ) }}
-      - name: Load cached sandbox images
-        if: >-
-          matrix.shard.needs_sandbox_images &&
-          steps.cache-sandbox-images.outputs.cache-hit == 'true'
+          key: ${{ needs.sandbox-images.outputs.key }}
+          # The `sandbox-images` job either found this key or created it, so a
+          # miss here is a broken assumption rather than something to paper
+          # over by building -- which is the duplication this split removed.
+          fail-on-cache-miss: true
+      - name: Load sandbox images
+        if: matrix.shard.needs_sandbox_images
         run: docker load -i /tmp/e2e-sandbox-images.tar
-      - name: Build sandbox images
-        if: >-
-          matrix.shard.needs_sandbox_images &&
-          steps.cache-sandbox-images.outputs.cache-hit != 'true'
-        run: make sandbox-images
-      - name: Save sandbox images to cache
-        if: >-
-          matrix.shard.needs_sandbox_images &&
-          steps.cache-sandbox-images.outputs.cache-hit != 'true'
-        run: |
-          docker save -o /tmp/e2e-sandbox-images.tar \
-            $(make print-sandbox-images | awk '{print $2}')
       - name: Resolve sandbox image tags
         if: matrix.shard.needs_sandbox_images
         run: |
@@ -247,20 +315,31 @@ jobs:
         run: |
           python3 ../scripts/e2e_durations.py \
             coverage-backend/junit-e2e-${{ matrix.shard.name }}.xml --check
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
+      # `junit-*.phases.json` is the per-phase breakdown written beside each
+      # JUnit. Kept because the JUnit alone cannot answer the question the
+      # budget step above raises -- whether a test is slow, or merely went
+      # first and paid for the session fixtures -- and reconstructing that by
+      # hand is what investigating a budget failure costs otherwise.
       - name: Upload backend e2e coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-e2e-${{ matrix.shard.name }}-coverage
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/junit-*.xml
-            lemma-backend/coverage-backend/html
+            lemma-backend/coverage-backend/junit-*.phases.json
           if-no-files-found: ignore
 
   e2e-passed:
@@ -271,8 +350,25 @@ jobs:
     # once, where a job missing from `needs` kept the check green while it
     # failed.
     timeout-minutes: 10
-    if: always()
-    needs: [changes, backend-e2e]
+    # `!cancelled()`, not `always()`. `always()` runs this job even when the
+    # *run* was cancelled -- which `cancel-in-progress` above does to every
+    # superseded push -- and it then reported failure for a run that was
+    # simply replaced by a newer one. 13 of 84 observed Backend E2E runs were
+    # cancelled, and every one of them read as a failure. Nothing was ever
+    # blocked, because GitHub judges the newest run; what it cost was the
+    # ability to read the run list and tell whether CI is actually flaky.
+    #
+    # The step below still refuses a cancelled *shard*, which is a different
+    # thing: `fail-fast: false` means the matrix never cancels its own
+    # siblings, so a cancelled shard with a live run means somebody stopped one
+    # job, and a required check must not go green on a run that did not finish.
+    #
+    # Skipped entirely on a push to main: that event exists only to warm the
+    # sandbox-image cache, `backend-e2e` does not run there, and a required
+    # check reporting green for a run that tested nothing is worse than no
+    # check at all.
+    if: ${{ !cancelled() && github.event_name != 'push' }}
+    needs: [changes, sandbox-images, backend-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any shard failed
@@ -301,7 +397,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-backend/uv.lock

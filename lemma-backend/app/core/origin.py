@@ -47,7 +47,7 @@ class OriginKind(str, Enum):
     """A published pod app. Members only, per REACH_RULE."""
 
     SURFACE = "SURFACE"
-    """Slack, Teams, WhatsApp, Telegram, Gmail, Outlook. Members only, per
+    """Slack, Teams, WhatsApp, Telegram, email. Members only, per
     REACH_RULE. The platform rides in ``Origin.platform``."""
 
     # Programmatic.
@@ -96,9 +96,7 @@ class OriginKind(str, Enum):
 #: Default-deny: a platform not listed here is dropped rather than forwarded,
 #: so a new integration cannot widen the analytics dimension by accident.
 ORIGIN_PLATFORMS: dict[OriginKind, frozenset[str]] = {
-    OriginKind.SURFACE: frozenset(
-        {"slack", "teams", "whatsapp", "telegram", "gmail", "outlook", "resend"}
-    ),
+    OriginKind.SURFACE: frozenset({"slack", "teams", "whatsapp", "telegram", "resend"}),
     OriginKind.CONNECTOR: frozenset({"native", "composio", "mcp"}),
     OriginKind.AGENT_HOST: frozenset({"claude-code", "codex", "cursor", "opencode"}),
 }

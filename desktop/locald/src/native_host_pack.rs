@@ -17,20 +17,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::local_domain::LocalDomain;
 use crate::network::{load_or_allocate, NetworkPorts};
 use crate::paths::LocalPaths;
 
 const POSTGRES_PORT: u16 = 55432;
 const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
-const LOCAL_FRONTEND_HOST: &str = "app.lemma.localhost";
-// Safari/WKWebView blocks a response from a different hostname from setting
-// the SuperTokens session cookies used by the top-level frontend. Keep the
-// processes on separate ports, but expose both through one browser hostname.
-// The backend still binds only to loopback and sandboxes use the explicit
-// host.lemma.internal callback URLs below.
-const LOCAL_BACKEND_HOST: &str = LOCAL_FRONTEND_HOST;
-const LOCAL_CORS_ORIGIN_REGEX: &str = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$";
+// The workspace and the API share one browser hostname on two ports.
+//
+// Safari/WKWebView blocks a response from a different hostname from setting the
+// SuperTokens session cookies the top-level frontend uses, so both are exposed
+// through one name. The backend still binds only to loopback, and sandboxes use
+// the explicit host.lemma.internal callbacks below.
+//
+// Which name that is comes from `local_domain`, not from a constant here -- see
+// that module for why it is configurable and what it costs.
 
 #[derive(Clone, Debug)]
 pub(crate) struct ManagedManifestMaterial {
@@ -121,11 +123,20 @@ pub(crate) fn prepare(
     paths: &LocalPaths,
     pack_root: &Path,
     material: ManagedManifestMaterial,
+    healed: &mut Vec<String>,
 ) -> io::Result<PathBuf> {
     crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
     let source = source_layout()?;
-    let manifest = build(paths, pack_root, &material, ports, source.as_ref())?;
+    let manifest = build(
+        paths,
+        pack_root,
+        &material,
+        ports,
+        source.as_ref(),
+        healed,
+        &LocalDomain::from_env(),
+    )?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
@@ -230,6 +241,8 @@ fn build(
     material: &ManagedManifestMaterial,
     ports: NetworkPorts,
     source: Option<&SourceLayout>,
+    healed: &mut Vec<String>,
+    domain: &LocalDomain,
 ) -> io::Result<Value> {
     validate_hex_secret("postgres password", &material.postgres_password)?;
     validate_hex_secret("Redis password", &material.redis_password)?;
@@ -331,7 +344,7 @@ fn build(
         fs::create_dir_all(directory)?;
     }
 
-    let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"))?;
+    let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"), healed)?;
     // Derived from this installation's own secret rather than stored separately,
     // the same way the runtime credential key below is: stable across restarts
     // so encrypted rows stay readable, distinct from every other key by its
@@ -355,8 +368,9 @@ fn build(
     let frontend_port = ports.frontend_port;
     let backend_port = ports.backend_port;
     let runtime_instance_id = random_hex(16)?;
-    let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{frontend_port}");
-    let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{backend_port}");
+    let host = domain.frontend_host();
+    let frontend_origin = format!("http://{host}:{frontend_port}");
+    let backend_origin = format!("http://{host}:{backend_port}");
     let mut backend_env = BTreeMap::from([
         ("ENVIRONMENT", "local".to_owned()),
         ("DEBUG", "true".to_owned()),
@@ -436,6 +450,30 @@ fn build(
             "WORKSPACE_CALLBACK_API_URL",
             format!("http://host.lemma.internal:{backend_port}"),
         ),
+        // The same URL, for function sandboxes, which had none.
+        //
+        // `api_url` is `http://app.lemma.localhost:<port>`, and that name
+        // resolves only on the Mac: `*.localhost` is a host resolver
+        // convention, and a Linux container inside the VM has never heard of
+        // it. The function dispatcher falls back to `api_url` when this is
+        // unset, so every schema extraction and every function call reached
+        // `getaddrinfo` and stopped there --
+        //
+        // ```text
+        // ConnectError: [Errno -3] Temporary failure in name resolution
+        // ```
+        //
+        // -- which is reported as `FUNCTION_VALIDATION_ERROR: Function schema
+        // extraction failed`, and reads as a problem with the user's function
+        // rather than with the address we handed the sandbox.
+        //
+        // `host.lemma.internal` is what guestd `--add-host`es into every
+        // workload container, which is why the workspace line above works and
+        // is exactly what this needs.
+        (
+            "FUNCTION_RUNTIME_GATEWAY_URL",
+            format!("http://host.lemma.internal:{backend_port}"),
+        ),
         (
             "WORKSPACE_CALLBACK_AUTH_URL",
             format!("http://host.lemma.internal:{frontend_port}/auth"),
@@ -456,16 +494,80 @@ fn build(
         ("SUPERTOKENS_API_GATEWAY_PATH", "/st".to_owned()),
         ("SESSION_COOKIE_SECURE", "false".to_owned()),
         ("SESSION_COOKIE_SAME_SITE", "lax".to_owned()),
-        // Keep local auth cookies host-only on app.lemma.localhost. The
-        // frontend and API use this one hostname on separate ports so
-        // Safari/WKWebView accepts the HttpOnly cookies without widening them
-        // to user-authored app subdomains.
-        ("SESSION_COOKIE_DOMAIN", String::new()),
+        // Wide enough to cover the app subdomains, which is what makes a pod
+        // app a signed-in page instead of a 401.
+        //
+        // This used to be empty, keeping the cookie host-only on
+        // app.lemma.localhost, on the theory that Safari/WKWebView would then
+        // accept it without exposing it to user-authored app subdomains. The
+        // second half of that was true and the first half was not: `localhost`
+        // is not in the Public Suffix List, so WebKit cannot derive a
+        // registrable domain and treats `<slug>.apps.lemma.localhost` as a
+        // *different site* from `app.lemma.localhost`. Every request an app
+        // made to the API was third-party, ITP dropped the cookie, and every
+        // pod app loaded unauthenticated. Chromium sends it, and on lemma.work
+        // the two hosts really are same-site -- which is why this reproduced
+        // only in the shipping desktop app.
+        //
+        // Widening alone does not fix it: a cross-origin request from an app
+        // host is blocked whatever the cookie's Domain and SameSite say (all
+        // three combinations measured). It works because `build_runtime_config`
+        // points an app's SDK at its *own* origin, making those calls
+        // first-party, where this Domain is what puts the cookie in scope.
+        // Both halves are required; neither is sufficient.
+        //
+        // What that exposes: the cookie is HttpOnly, so app code cannot read
+        // it, and every *.lemma.localhost host is served by this install's own
+        // backend. An app acting as the signed-in user is the feature, and it
+        // is what already happens on the web build.
+        ("SESSION_COOKIE_DOMAIN", domain.cookie_domain()),
+        // Empty, and deliberately not absent: it names the scheme the line
+        // above replaced.
+        //
+        // Widening the cookie domain does not replace the cookies a browser
+        // already holds, it mints a second set beside them. An install that
+        // signed in on v0.7.0 -- which rendered `SESSION_COOKIE_DOMAIN` empty,
+        // so host-only on app.lemma.localhost -- then upgraded to this, sends
+        // both, and SuperTokens refuses the pair with `The request contains
+        // multiple session cookies`, a 500. The SDK treats a 500 as retryable
+        // and asks again per query, so the console fills and the workspace
+        // never settles. One install logged 30 of those refusals and 17 500s.
+        //
+        // SuperTokens reads the empty string as "the previous cookies were
+        // host-only" and clears them on the next refresh, which is precisely
+        // the migration being made here. `None` would mean "there was no
+        // previous scheme" and clear nothing, so the backend setting keeps a
+        // blank string rather than folding it to None like its neighbours.
+        //
+        // Removable once no install can still be carrying v0.7.0 cookies.
+        ("SESSION_COOKIE_OLDER_DOMAIN", String::new()),
+        // The other half, and only meaningful together with the domain above:
+        // apps call the API through their own origin so the request is
+        // first-party. Off by default in the backend, because on a real domain
+        // an app subdomain and the API host are already same-site and this
+        // would widen the refresh cookie for nothing.
+        // Only where the app host and the API host are *not* already same-site.
+        //
+        // On `*.localhost` a browser can derive no registrable domain, so those
+        // two are different sites and an app's call to the API is third-party --
+        // hence the same-origin `/_lemma` door, and the widened refresh cookie
+        // that makes it work. On a real registrable domain they are same-site
+        // already and the door buys nothing but a whole-API alias on the origin
+        // that renders user-authored HTML.
+        (
+            "APP_API_VIA_APP_ORIGIN",
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            }
+            .to_owned(),
+        ),
         (
             "APP_BASE_DOMAIN",
-            format!("apps.lemma.localhost:{backend_port}"),
+            format!("{}:{backend_port}", domain.apps_domain()),
         ),
-        ("CORS_ORIGIN_REGEX", LOCAL_CORS_ORIGIN_REGEX.to_owned()),
+        ("CORS_ORIGIN_REGEX", domain.cors_origin_regex()),
         ("STORAGE_BACKEND", "local".to_owned()),
         ("LOCAL_OBJECT_STORAGE_ROOT", path_text(&object_storage)?),
         ("LOCAL_FILE_STORAGE_ROOT", path_text(&files)?),
@@ -517,6 +619,18 @@ fn build(
         backend_env.insert("LEMMA_SKILLS_ROOT", path_text(skills)?);
     }
 
+    // What decides whether the one-time setups need to run again.
+    //
+    // Migrations ship inside the pack, so the release identifies them -- except
+    // in source mode, where one version spans many edits, so the revision files
+    // are fingerprinted too. Adding a Composio key must still pick up its apps
+    // on the next start, which is why that is part of the catalog's stamp
+    // rather than the release alone.
+    let migrations_fingerprint = migrations_fingerprint(&bindings.backend_dir);
+    let backend_env_has_composio_key = backend_env
+        .get("COMPOSIO_API_KEY")
+        .is_some_and(|value| !value.trim().is_empty());
+
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", bindings.node_env.to_owned()),
         ("PORT", frontend_port.to_string()),
@@ -531,6 +645,22 @@ fn build(
             "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI",
             format!("{frontend_origin}/"),
         ),
+        // Deliberately NOT widened to match SESSION_COOKIE_DOMAIN.
+        //
+        // This is the domain the *browser* SDK writes its own cookies to, and
+        // those are written with `document.cookie` -- so `sFrontToken`,
+        // `sAntiCsrf` and `st-last-access-token-update` are readable and
+        // writable by any script on any host in scope. Widening it put them on
+        // `.lemma.localhost`, where a pod app -- user-authored code on a
+        // sibling host -- could overwrite the workspace's copies at the same
+        // name, domain and path. Clearing `sFrontToken` signs the user out of
+        // Lemma itself; setting its expiry far ahead stops the workspace ever
+        // refreshing, so every screen 401s with no way back.
+        //
+        // Host-only is also simply correct: each origin's SDK keeps its own
+        // copy from its own responses, and the cookies that actually have to
+        // be shared -- the HttpOnly session pair -- are shared by
+        // SESSION_COOKIE_DOMAIN, which app code cannot read or write.
         ("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN", String::new()),
         (
             "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",
@@ -585,6 +715,16 @@ fn build(
                 "timeout_seconds": 300,
                 "max_attempts": 5,
                 "retry_backoff_seconds": 3,
+                // Migrations ship inside the pack, so the pack's identity is
+                // exactly what decides whether there is anything new to apply.
+                // Alembic would work this out for itself in one `SELECT` --
+                // the cost is `env.py` importing the whole ORM graph before it
+                // can, several seconds on every single start.
+                //
+                // The revisions are hashed in as well as the release, because
+                // a source-mode run keeps one version across many edits, and a
+                // developer adding a migration must not have it skipped.
+                "stamp": setup_stamp(&[&release_version, &migrations_fingerprint]),
             },
             // Seeds the connector catalog. Without it a packaged install has no
             // connectors at all: `make dev` seeds one and the shipped app never
@@ -614,6 +754,14 @@ fn build(
                 "max_attempts": 1,
                 "retry_backoff_seconds": 0,
                 "optional": true,
+                // The pack, plus whether a Composio key is present. The second
+                // half preserves the behaviour the comment above describes: a
+                // user who adds a key later gets the Composio apps on the very
+                // next start, because adding one changes this stamp.
+                "stamp": setup_stamp(&[
+                    &release_version,
+                    if backend_env_has_composio_key { "composio" } else { "native-only" },
+                ]),
             },
         ],
         "services": [
@@ -757,12 +905,54 @@ fn pull_ref(value: Option<&Value>, label: &str) -> io::Result<String> {
     Ok(reference)
 }
 
-fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
+/// Read the installation secret, replacing it only if unreadable.
+///
+/// `installation_secret` derives the Fernet key for encrypted columns and the
+/// workspace runtime credential key. Its invariant is that it is gone when the
+/// data directory is -- so reminting it while the data directory survives makes
+/// every encrypted row permanently undecryptable, quietly. Healing it therefore
+/// also records that the data must be reset.
+fn load_or_create_host_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<HostSecrets> {
     if path.is_file() {
-        ensure_private_file(path)?;
-        let secrets: HostSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_hex_secret("installation secret", &secrets.installation_secret)?;
-        return Ok(secrets);
+        match read_existing_host_secrets(path) {
+            Ok(secrets) => return Ok(secrets),
+            Err(reason) => {
+                let aside = crate::paths::quarantine_aside(path)?;
+                if let Some(root) = path.parent() {
+                    crate::paths::require_data_reset(
+                        root,
+                        "this installation's secret was replaced, and anything encrypted with \
+                         the previous one can no longer be read",
+                    )?;
+                }
+                healed.push(format!(
+                    "the installation secret was unreadable ({reason}); kept as {} and replaced. \
+                     Encrypted local data cannot be decrypted with the new one",
+                    aside.display()
+                ));
+            }
+        }
+    }
+    // Absent, not unreadable -- and that is not automatically a first run. A
+    // restore that skipped an owner-only file, or a half-finished manual
+    // cleanup, leaves the data behind and takes the key. Minting silently there
+    // is the same permanent loss the corrupt path is careful about, arrived at
+    // more quietly.
+    else if path
+        .parent()
+        .is_some_and(crate::paths::installation_has_data)
+    {
+        let root = path.parent().expect("checked just above");
+        crate::paths::require_data_reset(
+            root,
+            "this installation's secret is missing, and anything encrypted with it can no \
+             longer be read",
+        )?;
+        healed.push(
+            "the installation secret was missing while local data was still present; a new \
+             one was created and the existing encrypted data cannot be decrypted with it"
+                .to_owned(),
+        );
     }
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
@@ -772,6 +962,58 @@ fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
     Ok(secrets)
+}
+
+fn read_existing_host_secrets(path: &Path) -> Result<HostSecrets, String> {
+    ensure_private_file(path).map_err(|error| error.to_string())?;
+    let raw = fs::read(path).map_err(|error| error.to_string())?;
+    let secrets: HostSecrets =
+        serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+    validate_hex_secret("installation secret", &secrets.installation_secret)
+        .map_err(|error| error.to_string())?;
+    Ok(secrets)
+}
+
+/// One stamp value from the things a setup's result depends on.
+///
+/// Hashed rather than concatenated so the manifest never carries a path or a
+/// key's presence in readable form, and so the value stays a fixed width
+/// whatever goes into it.
+fn setup_stamp(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        // Length-delimited: without this, ("ab", "c") and ("a", "bc") hash the
+        // same, and two different states would share a stamp.
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// A fingerprint of the migration revisions a pack carries.
+///
+/// Names only, not contents: the file set changes when a revision is added or
+/// removed, which is the case that matters, and reading every file on each
+/// start would trade one cost for another. Empty when the directory cannot be
+/// read, which makes the stamp depend on the release alone -- the conservative
+/// direction, since a stamp that cannot be computed should not become a stamp
+/// that matches.
+fn migrations_fingerprint(backend_dir: &Path) -> String {
+    let Ok(entries) = fs::read_dir(backend_dir.join("migrations/versions")) else {
+        return String::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".py"))
+        .collect();
+    names.sort();
+    let mut hasher = Sha256::new();
+    for name in &names {
+        hasher.update(name.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn random_hex(byte_count: usize) -> io::Result<String> {
@@ -848,6 +1090,101 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// Every path this file probes for is one the contract names.
+    ///
+    /// The producer of a host pack is a Python script run by a release job; the
+    /// consumer is this file, and it hard-codes a dozen paths. Nothing checked
+    /// that the two agreed, and nothing could: a PR runs this file's tests
+    /// against a fixture the same PR wrote, while the pack is built somewhere
+    /// else on a different trigger. A rename lands green on both sides and is
+    /// found by whoever installs the release, as `NotFound` and the name of a
+    /// file they have never heard of.
+    ///
+    /// So both sides assert against one committed artifact -- the rule
+    /// docs/testing.md states for when a stub is allowed to exist at all. The
+    /// Python half of this pair is
+    /// `tests/test_build_local_host_pack.py::test_the_builder_writes_every_path_the_app_looks_for`.
+    ///
+    /// Asserted as a set equality rather than containment, in both directions.
+    /// A candidate here that the contract does not name is a path the producer
+    /// has never been told to write; a candidate there that this file does not
+    /// probe is a fallback nobody would ever reach.
+    #[test]
+    fn the_packaged_layout_matches_the_committed_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../contracts/host-pack-layout.json")).unwrap();
+
+        // What this file actually probes for, read out of its own source so the
+        // list cannot be maintained twice.
+        let source = include_str!("native_host_pack.rs").replace("\r\n", "\n");
+        let packaged = {
+            let start = source
+                .find("fn packaged_bindings(")
+                .expect("packaged_bindings exists");
+            let end = source[start..]
+                .find("\nfn source_bindings(")
+                .expect("source_bindings follows it");
+            &source[start..start + end]
+        };
+
+        for entry in contract["required"].as_array().unwrap() {
+            let what = entry["what"].as_str().unwrap();
+            for candidate in entry["candidates"].as_array().unwrap() {
+                let candidate = candidate.as_str().unwrap();
+                assert!(
+                    packaged.contains(&format!("\"{candidate}\"")),
+                    "the contract promises {what} at {candidate}, which this file never looks for",
+                );
+            }
+        }
+
+        // And nothing probed for is absent from the contract. `required_file`
+        // takes its candidates as string literals, so they are exactly the
+        // quoted paths in this function.
+        let promised: std::collections::BTreeSet<&str> = contract["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| entry["candidates"].as_array().unwrap())
+            .map(|candidate| candidate.as_str().unwrap())
+            .collect();
+        for line in packaged.lines() {
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix('"') else {
+                continue;
+            };
+            let Some(path) = rest.strip_suffix("\",") else {
+                continue;
+            };
+            if !path.contains('/') {
+                continue;
+            }
+            assert!(
+                promised.contains(path),
+                "this file probes for {path}, which the contract does not promise",
+            );
+        }
+
+        // The derived paths are joins rather than probes, so they are checked
+        // as substrings -- but of the shipping half of the file only. Searching
+        // the whole thing let a path be "found" in this module's own fixtures,
+        // which is a test satisfying itself.
+        let shipping = &source[..source
+            .find("#[cfg(test)]")
+            .expect("this file has a test module")];
+        for entry in contract["derived"].as_array().unwrap() {
+            if !entry["named_by_consumer"].as_bool().unwrap_or(true) {
+                continue;
+            }
+            let path = entry["path"].as_str().unwrap();
+            let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+            assert!(
+                shipping.contains(leaf),
+                "the contract names {path}, which nothing in this file joins ({parent})",
+            );
+        }
+    }
+
     fn fixture(root: &Path) {
         for relative in [
             "backend/python/bin/python3",
@@ -908,6 +1245,7 @@ mod tests {
                 redis_password: "b".repeat(64),
                 bridge_executable: PathBuf::from("/signed/lemma-runtime"),
             },
+            &mut Vec::new(),
         )
         .unwrap();
         let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
@@ -1015,18 +1353,32 @@ mod tests {
             manifest["services"][0]["env"]["DESKTOP_AUTH_CREATE_LIMIT"],
             "0"
         );
-        assert_eq!(manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"], "");
+        // Wide enough to cover the app subdomains. Host-only here is what made
+        // every pod app load unauthenticated; see the note beside the value.
+        assert_eq!(
+            manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"],
+            LocalDomain::from_env().cookie_domain()
+        );
         assert_eq!(
             manifest["services"][0]["env"]["API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
+        // And the browser-visible one is NOT widened with it. These cookies are
+        // written by `document.cookie`, so a shared domain lets a pod app
+        // overwrite the workspace's session state and sign the user out.
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
             ""
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
-            format!("http://app.lemma.localhost:{backend_port}")
+            format!(
+                "http://{}:{backend_port}",
+                LocalDomain::from_env().frontend_host()
+            )
         );
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_LOCAL_CALLBACK_URL"],
@@ -1066,6 +1418,328 @@ mod tests {
         assert!(paths.root.join("host.secrets.json").is_file());
     }
 
+    /// A configured domain moves every host together, and drops the workaround.
+    ///
+    /// The point of moving off `*.localhost` is that a browser can then derive
+    /// a registrable domain covering both the workspace and the app hosts, so a
+    /// framed pod app is same-site and can hold a session. That only holds if
+    /// the whole arrangement moves at once: a cookie still scoped to the old
+    /// domain, or an app host under a different one, and the frame is back to
+    /// being third-party with nothing to show for the change.
+    #[test]
+    fn a_configured_domain_moves_the_workspace_the_apps_and_the_cookie_together() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some("sslip")),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let cookie = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
+        let app_host = app_base.split(':').next().unwrap();
+        let api_host = env["API_URL"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        assert_eq!(cookie, ".127.0.0.1.sslip.io");
+        assert_eq!(app_host, "apps.127.0.0.1.sslip.io");
+        assert_eq!(api_host, "app.127.0.0.1.sslip.io");
+        // Both hosts inside the cookie's scope, or the app is signed out.
+        let scope = cookie.trim_start_matches('.');
+        assert!(app_host.ends_with(scope), "{app_host} is outside {cookie}");
+        assert!(api_host.ends_with(scope), "{api_host} is outside {cookie}");
+
+        // ...and the `*.localhost` workaround goes away with it. On a real
+        // registrable domain the app host and the API host are already
+        // same-site, so aliasing the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML -- and widening the refresh cookie to
+        // make that work -- buys nothing.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "false");
+    }
+
+    /// The arrangement a laptop with no network gets, asserted on its own.
+    ///
+    /// `from_env` falls back here when the public wildcard does not resolve, so
+    /// this is not an exotic path -- it is every offline launch. The sibling
+    /// test above pins the same-site arrangement; without this one the fallback
+    /// would only ever be rendered by tests that happen to run offline, which
+    /// is the same as not testing it.
+    #[test]
+    fn the_offline_fallback_renders_the_workaround_that_makes_it_work() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let manifest = build(
+            &paths,
+            &pack,
+            &ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            load_or_allocate(&paths).unwrap(),
+            None,
+            &mut Vec::new(),
+            &LocalDomain::parse(Some(crate::local_domain::LOCALHOST_BASE)),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::to_value(&manifest).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        assert_eq!(env["SESSION_COOKIE_DOMAIN"], ".lemma.localhost");
+        assert_eq!(
+            env["APP_BASE_DOMAIN"]
+                .as_str()
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap(),
+            "apps.lemma.localhost"
+        );
+        // Here the door is the only thing that works: a browser derives no
+        // registrable domain from `*.localhost`, so an app calling the API host
+        // directly is cross-site and carries no session. Turning this off
+        // without also moving the base domain is the bug that shipped twice.
+        assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "true");
+    }
+
+    /// Changing the cookie domain has to say what it replaced.
+    ///
+    /// A widened `SESSION_COOKIE_DOMAIN` does not replace the cookies a browser
+    /// already holds; it mints a second set beside them, and SuperTokens
+    /// refuses the pair on refresh with a 500 that the SDK retries for ever.
+    /// `SESSION_COOKIE_OLDER_DOMAIN` is what clears the old one, so the two
+    /// settings are only correct together -- asserted here rather than left to
+    /// whoever next edits the domain.
+    ///
+    /// Empty is the value, not a missing one: it is how SuperTokens spells
+    /// "the previous cookies were host-only", which is what v0.7.0 rendered.
+    #[test]
+    fn a_widened_cookie_domain_declares_the_scheme_it_replaced() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let domain = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        assert!(
+            !domain.is_empty(),
+            "a host-only cookie does not reach the app subdomains"
+        );
+        let older = env["SESSION_COOKIE_OLDER_DOMAIN"]
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!(
+                    "SESSION_COOKIE_DOMAIN is {domain}, so the scheme it replaced \
+                 has to be declared or an upgraded install carries both"
+                )
+            });
+        assert_eq!(
+            older, "",
+            "v0.7.0 rendered a host-only cookie, which SuperTokens spells as \
+             the empty string"
+        );
+    }
+
+    /// The session cookie has to be in scope on the hosts apps are served from.
+    ///
+    /// Derived from `APP_BASE_DOMAIN` rather than restating `.lemma.localhost`,
+    /// so moving apps to another host without moving the cookie fails here
+    /// instead of shipping. That pairing is the whole fix: WebKit will not send
+    /// a cookie to a host it is not scoped for, and it will not send one
+    /// cross-site on `.localhost` at all -- so an app that is out of scope is an
+    /// app that loads permanently signed out.
+    #[test]
+    fn the_session_cookie_reaches_the_hosts_apps_are_served_from() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let env = &manifest["services"][0]["env"];
+
+        let cookie_domain = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
+        let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
+        let app_host = app_base.split(':').next().unwrap();
+
+        assert!(
+            !cookie_domain.is_empty(),
+            "a host-only cookie never reaches {app_host}, which is what made \
+             every pod app load unauthenticated"
+        );
+        // A leading dot covers subdomains; the app is at <slug>.<app_base>.
+        let scope = cookie_domain.strip_prefix('.').unwrap_or(cookie_domain);
+        assert!(
+            app_host == scope || app_host.ends_with(&format!(".{scope}")),
+            "apps are served under {app_host} but the session cookie is scoped \
+             to {cookie_domain}, so it is never sent to them"
+        );
+        // The API has to be inside the same scope, or the app's own-origin
+        // calls are the only ones that work and the frontend signs out.
+        let api_host = env["API_URL"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap()
+            .to_owned();
+        assert!(
+            api_host == scope || api_host.ends_with(&format!(".{scope}")),
+            "the API at {api_host} is outside the cookie scope {cookie_domain}"
+        );
+
+        // The app-origin door exactly where it is needed, and nowhere else.
+        //
+        // On `*.localhost` a browser derives no registrable domain, so an app's
+        // call to the API is cross-site and carries no cookie whatever the
+        // Domain says -- measured. Both halves are required there: widening the
+        // cookie alone ships the bug plus a wider cookie.
+        //
+        // On a real registrable domain the two hosts are same-site already, and
+        // the door would only alias the whole API under `/_lemma` on the origin
+        // that renders user-authored HTML, widening the refresh cookie to do it.
+        let domain = LocalDomain::from_env();
+        assert_eq!(
+            env["APP_API_VIA_APP_ORIGIN"],
+            if domain.frames_carry_cookies() {
+                "false"
+            } else {
+                "true"
+            },
+            "the app-origin door has to follow whether {} is same-site with its \
+             app hosts",
+            domain.base()
+        );
+    }
+
+    /// Every URL a sandbox is given resolves inside a sandbox.
+    ///
+    /// `app.lemma.localhost` resolves on the Mac and nowhere else: `*.localhost`
+    /// is a host resolver convention, and a Linux container in the VM has never
+    /// heard of it. `host.lemma.internal` is what guestd `--add-host`es into
+    /// every workload container.
+    ///
+    /// Asserted over every callback variable at once rather than one by one,
+    /// because the bug was an *absent* entry: a test naming only the variables
+    /// that exist cannot fail for the one that does not.
+    #[test]
+    fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
+        let root = tempdir().unwrap();
+        let pack = root.path().join("pack");
+        fixture(&pack);
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+
+        let env = &manifest["services"][0]["env"];
+        let object = env.as_object().expect("services carry an env map");
+
+        // Anything a *sandbox* uses to call back. The workspace pair was
+        // right; the function one did not exist.
+        let sandbox_facing: Vec<&String> = object
+            .keys()
+            .filter(|name| {
+                name.ends_with("_URL")
+                    && (name.contains("CALLBACK") || name.contains("RUNTIME_GATEWAY"))
+            })
+            .collect();
+        assert!(
+            sandbox_facing
+                .iter()
+                .any(|name| name.as_str() == "FUNCTION_RUNTIME_GATEWAY_URL"),
+            "functions get no gateway URL, so the dispatcher falls back to \
+             api_url and every call dies in DNS: {sandbox_facing:?}",
+        );
+
+        let base = LocalDomain::from_env().base().to_owned();
+        for name in sandbox_facing {
+            let value = env[name].as_str().unwrap_or_default();
+            assert!(
+                !value.contains(".localhost"),
+                "{name} is {value}, and .localhost resolves only on the host",
+            );
+            // And not this install's own base domain either, whatever it is.
+            //
+            // The `.localhost` check above stopped being the whole story when
+            // the base domain became a runtime choice. A loopback wildcard is
+            // worse than an unresolvable name, not better: inside a container
+            // it resolves perfectly well, to 127.0.0.1 -- which is the
+            // container itself. The failure is then a connection refused, or
+            // worse a connection to whatever that container happens to be
+            // running, rather than a DNS error naming the problem.
+            assert!(
+                !value.contains(&base),
+                "{name} is {value}, and {base} answers this Mac's loopback --                  inside a container that address is the container",
+            );
+            assert!(
+                value.is_empty() || value.contains("host.lemma.internal"),
+                "{name} is {value}; a sandbox can only reach the host through \
+                 host.lemma.internal",
+            );
+        }
+    }
+
     #[test]
     fn managed_infrastructure_images_must_be_digest_pinned() {
         let root = tempdir().unwrap();
@@ -1091,9 +1765,59 @@ mod tests {
             },
             load_or_allocate(&paths).unwrap(),
             None,
+            &mut Vec::new(),
+            &LocalDomain::default(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));
+    }
+
+    /// A secret that vanished beside surviving data stops the install.
+    ///
+    /// `installation_secret` derives the Fernet key for every encrypted column.
+    /// Reminting it while the data directory is still there does not fail --
+    /// that is the problem. Rows decrypt to garbage, and the only sign is
+    /// whatever breaks first, weeks later.
+    #[test]
+    fn a_missing_installation_secret_beside_real_data_demands_a_reset() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        std::fs::write(root.join("data/files/uploaded"), b"a user's file").unwrap();
+        let path = root.join("host.secrets.json");
+
+        let mut healed = Vec::new();
+        let secrets = load_or_create_host_secrets(&path, &mut healed).unwrap();
+
+        assert_eq!(
+            secrets.installation_secret.len(),
+            64,
+            "a key is still minted"
+        );
+        assert!(
+            crate::paths::data_reset_reason(root).is_some(),
+            "the install must stop with a reset offered, not carry on quietly",
+        );
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].contains("missing"), "{}", healed[0]);
+    }
+
+    /// And a genuine first run says nothing at all.
+    #[test]
+    fn a_first_run_mints_its_secret_without_ceremony() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        let path = root.join("host.secrets.json");
+
+        let mut healed = Vec::new();
+        load_or_create_host_secrets(&path, &mut healed).unwrap();
+
+        assert!(healed.is_empty(), "nothing was lost: {healed:?}");
+        assert!(
+            crate::paths::data_reset_reason(root).is_none(),
+            "a first run must not be told to reset the data it does not have",
+        );
     }
 
     #[test]

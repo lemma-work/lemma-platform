@@ -1,18 +1,18 @@
 """Bounded retention for the schedule-run ledger.
 
 ``schedule_runs`` records every fire of every schedule and nothing ever removed
-one. Production held 81,334 rows growing by roughly a thousand a day, and the
-cost is not the 28 MB of heap — it is that every index on the table pays for it
-forever. It is what made the breaker's failure-streak query read 5,946 rows per
-run completion, and it is what the recovery sweep's own index would eventually
-have grown into.
+one, so the table only ever grew. The cost is not the heap it occupies — it is
+that every index on the table pays for that growth forever. It is what made the
+breaker's failure-streak query read the whole of a schedule's history per run
+completion, and it is what the recovery sweep's own index would eventually have
+grown into.
 
 Two things keep this safe to run against a live table.
 
 **Only finished runs.** The predicate requires a terminal state *and* a
 ``completed_at`` past the cutoff. A run still in flight has no ``completed_at``,
-so it cannot match however old it is — which matters, because production had
-1,634 runs legitimately in flight for over a month, parked on human form waits.
+so it cannot match however old it is — which matters, because runs sit
+legitimately in flight for months at a time, parked on human form waits.
 
 **A window longer than a streak.** ``consecutive_terminal_failures`` counts back
 from the newest completed run to decide whether a schedule's breaker should

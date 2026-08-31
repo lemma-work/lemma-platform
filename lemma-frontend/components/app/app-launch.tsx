@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
 import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
@@ -13,7 +13,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { appIndexQueryKey } from '@/lib/hooks/use-app';
 import { buildAppThemeMessage } from '@/lib/app/app-theme';
+import { APP_INSTALL_REQUEST_MESSAGE, appInstallUrl } from '@/lib/app/app-install';
 import { useProfile } from '@/lib/hooks/use-user';
+import { crossSiteFramesCarryCookies } from '@/lib/desktop/local-capabilities';
 import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
@@ -35,6 +37,11 @@ interface AppFrameProps {
     chrome?: 'bar' | 'none';
 }
 
+/** The embeddability answer is fixed for the life of the page. */
+function subscribeNothing(): () => void {
+    return () => {};
+}
+
 export function AppFrame({
     podId,
     appId,
@@ -48,6 +55,16 @@ export function AppFrame({
     const queryClient = useQueryClient();
     const { data: profile } = useProfile();
     const { resolvedTheme } = useTheme();
+    // Server-rendered as embeddable and corrected on hydration, rather than
+    // read straight from `window`: the answer depends on the platform and the
+    // hostname, neither of which exists during SSR, and a bare read would be a
+    // hydration mismatch. The value cannot change within a session, so there is
+    // nothing to subscribe to.
+    const embeddable = useSyncExternalStore(
+        subscribeNothing,
+        crossSiteFramesCarryCookies,
+        () => true,
+    );
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [frameKey, setFrameKey] = useState(0);
     const [frameLoaded, setFrameLoaded] = useState(false);
@@ -79,6 +96,27 @@ export function AppFrame({
         if (!frameLoaded) return;
         postAppTheme();
     }, [frameLoaded, postAppTheme]);
+
+    // The app's install offer, handed back out to a top-level tab. The frame
+    // is sandboxed without `allow-popups-to-escape-sandbox`, so a tab it opened
+    // for itself would still be sandboxed and still could not install -- the
+    // workspace has to be the one to open it. See `lib/app/app-install.ts`.
+    useEffect(() => {
+        let origin: string;
+        try {
+            origin = new URL(url, window.location.href).origin;
+        } catch {
+            return;
+        }
+        const onMessage = (event: MessageEvent) => {
+            if (event.origin !== origin) return;
+            if (event.source !== iframeRef.current?.contentWindow) return;
+            if (!event.data || event.data.type !== APP_INSTALL_REQUEST_MESSAGE) return;
+            window.open(appInstallUrl(url), '_blank', 'noopener');
+        };
+        window.addEventListener('message', onMessage);
+        return () => window.removeEventListener('message', onMessage);
+    }, [url]);
 
     const copyLink = async () => {
         try {
@@ -169,7 +207,7 @@ export function AppFrame({
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
-                                            <a href={url} target="_blank" rel="noreferrer">
+                                            <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
                                                 <ExternalLink className="h-4 w-4" />
                                             </a>
                                         </Button>
@@ -183,7 +221,7 @@ export function AppFrame({
             ) : null}
 
             <div className="embedded-canvas relative min-h-0 flex-1 overflow-hidden">
-                {!frameLoaded && !frameFailed ? (
+                {embeddable && !frameLoaded && !frameFailed ? (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-canvas)]">
                         <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
                             <RefreshCw className="h-4 w-4 lemma-spin" />
@@ -192,23 +230,42 @@ export function AppFrame({
                     </div>
                 ) : null}
 
-                {frameFailed ? (
+                {!embeddable || frameFailed ? (
+                    // One panel for the two ways an app cannot render here.
+                    //
+                    // `!embeddable` is the certain one: on macOS this frame is
+                    // cross-site (see `crossSiteFramesCarryCookies`) and WebKit
+                    // blocks its storage outright, so the app would load
+                    // permanently signed out while its SDK refreshed for ever
+                    // trying to fix it. `frameFailed` is the app refusing to be
+                    // embedded at all. Both end the same way, and the anchor is
+                    // what fixes them: the shell already routes an owned app URL
+                    // opened in a new window to `open_pod_app_window`, and
+                    // top-level is first-party, where the session works.
                     <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg-canvas)] p-4">
                         <section className="w-full max-w-md rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-5 shadow-[var(--shadow-sm)]">
-                            <p className="text-sm font-semibold text-[var(--text-primary)]">This app cannot be shown here yet.</p>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                The app may be blocking embedded views. Open it in a tab while we tune the framing policy.
+                            <p className="text-sm font-semibold text-[var(--text-primary)]">
+                                {embeddable ? 'This app cannot be shown here yet.' : 'This app opens in its own window.'}
                             </p>
-                            <Button variant="primary" asChild className="mt-4 gap-2">
-                                <a href={url} target="_blank" rel="noreferrer">
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                {embeddable
+                                    ? 'The app may be blocking embedded views. Open it in a tab while we tune the framing policy.'
+                                    : 'Apps run on their own address, and macOS will not give an embedded one your session. Its own window signs in normally.'}
+                            </p>
+                            <Button
+                                variant="primary"
+                                asChild
+                                className="mt-4 gap-2"
+                                onClick={() => trackAppOpened(profile?.created_at ?? null)}
+                            >
+                                <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
                                     <ExternalLink className="h-4 w-4" />
                                     Open app
                                 </a>
                             </Button>
                         </section>
                     </div>
-                ) : null}
-
+                ) : (
                 <iframe
                     ref={iframeRef}
                     key={`${url}-${frameKey}`}
@@ -233,6 +290,7 @@ export function AppFrame({
                         setFrameFailed(true);
                     }}
                 />
+                )}
             </div>
         </div>
     );

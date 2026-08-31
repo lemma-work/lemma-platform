@@ -60,9 +60,9 @@ async def _get_table_context(
     # Every caller of this helper goes on to work against the DATASTORE engine,
     # not this one — so the application connection is finished here. It used to
     # be held anyway, because the request-scoped unit of work lives until the
-    # response is written: measured at 2291ms held for 64ms of querying on a
-    # bulk record create, in an open transaction, once per request across nine
-    # endpoints.
+    # response is written: on a bulk record create that meant holding the
+    # connection, in an open transaction, for orders of magnitude longer than the
+    # querying it served -- once per request across nine endpoints.
     #
     # Nothing is lost by committing: the reads are done, and a caller that
     # writes to the application database afterwards simply opens its own

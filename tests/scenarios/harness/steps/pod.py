@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from harness.run import a_name_for, must_be_traceable
-from harness.drivers.api import items_of
+from harness.drivers.api import every_item, items_of
 
 JSON = dict[str, Any]
 
@@ -93,9 +93,30 @@ class PodSteps:
             f"/pods/{pod['id']}", what=f"{self.label} opening pod {pod.get('name')!r}"
         )
 
-    async def pods_in(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/pods/organization/{organization['id']}")
+    async def pods_in(self, organization: JSON, *, pages: int = 20) -> list[JSON]:
+        """Every pod in the organization, following the pages.
+
+        Asking once returns a hundred, oldest first — so a pod made seconds ago
+        is on the last page, not the first, and a scenario looking for what it
+        just created concluded the product had lost it. The organization crossed
+        a hundred pods on dev and `test_deleting_one_pod_spares_the_others` went
+        red for it, listing exactly a hundred names.
+
+        The reading half is the worse half. `does_not_see_pod` asked the same
+        question and failed *open*: a pod still visible on page two read as
+        correctly hidden, so every deletion and access-boundary scenario using it
+        could pass while proving nothing.
+
+        Same shape as `conversations_in`, which learned this first
+        (lemma-platform#507). `pages` is a bound rather than a limit anyone
+        should reach — twenty pages of a hundred is two thousand pods — so a bug
+        in the cursor cannot spin here forever.
+        """
+        return await every_item(
+            lambda params: self.api.get(
+                f"/pods/organization/{organization['id']}", params=params
+            ),
+            pages=pages,
         )
 
     async def sees_pod(self, pod: JSON) -> None:
@@ -216,6 +237,20 @@ class PodSteps:
 
     # --- pod membership --------------------------------------------------
 
+    async def _organization_membership(self, person: Any, pod: JSON) -> JSON | None:
+        """The organization membership row for this person, or None.
+
+        Pod membership is keyed by *organization* membership, so both callers
+        have to resolve it first. Shared because they were resolving it the same
+        way twice and both were reading only the first hundred members — which
+        on a standing tenant reports somebody as "not in the organization" when
+        they are, and turns a real failure into a confusing one.
+        """
+        members = await self.members_of({"id": pod["organization_id"]})
+        return next(
+            (m for m in members if str(m.get("user_id")) == str(person.user_id)), None
+        )
+
     async def adds(
         self, person: Any, *, to_pod: JSON, as_role: str = "POD_VIEWER"
     ) -> JSON:
@@ -226,13 +261,7 @@ class PodSteps:
         product rule that an organization is the outer boundary a pod cannot
         widen — worth keeping visible here rather than hiding it in a helper.
         """
-        organization_id = to_pod["organization_id"]
-        members = items_of(
-            await self.api.get(f"/organizations/{organization_id}/members")
-        )
-        match = next(
-            (m for m in members if str(m.get("user_id")) == str(person.user_id)), None
-        )
+        match = await self._organization_membership(person, to_pod)
         if match is None:
             raise AssertionError(
                 f"{person.label} is not a member of the organization owning pod "
@@ -248,13 +277,7 @@ class PodSteps:
     async def is_refused_adding(
         self, person: Any, *, to_pod: JSON, as_role: str = "POD_VIEWER"
     ) -> int:
-        organization_id = to_pod["organization_id"]
-        members = items_of(
-            await self.api.get(f"/organizations/{organization_id}/members")
-        )
-        match = next(
-            (m for m in members if str(m.get("user_id")) == str(person.user_id)), None
-        )
+        match = await self._organization_membership(person, to_pod)
         if match is None:
             raise AssertionError(
                 f"{person.label} is not in the organization, so this would be "
@@ -307,7 +330,11 @@ class PodSteps:
         return response.status_code
 
     async def members_of_pod(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/members"))
+        """Everyone in the pod, following the pages. The member list caps at
+        100, and a membership assertion against one page fails open."""
+        return await every_item(
+            lambda params: self.api.get(f"/pods/{pod['id']}/members", params=params)
+        )
 
     async def removes_member(self, member: JSON, *, from_pod: JSON) -> None:
         await self.api.delete(
@@ -365,9 +392,7 @@ class PodSteps:
             )
 
     async def opens_membership(self, member: JSON, *, in_pod: JSON) -> JSON:
-        return await self.api.get(
-            f"/pods/{in_pod['id']}/members/{_member_id(member)}"
-        )
+        return await self.api.get(f"/pods/{in_pod['id']}/members/{_member_id(member)}")
 
     async def finds_member_by_email(self, email: str, *, in_pod: JSON) -> JSON:
         return await self.api.get(

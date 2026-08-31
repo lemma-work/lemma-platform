@@ -60,6 +60,7 @@ def reraise_driver_failure(
     *,
     cancelled_by_us: bool,
     agent_run_id: UUID,
+    driver_task: "asyncio.Task[None] | None" = None,
 ) -> None:
     """Decide what a failure relayed out of the driver task means.
 
@@ -85,9 +86,22 @@ def reraise_driver_failure(
         raise pending_error
     if cancelled_by_us:
         return
+    # Who asked for this cancellation is the one thing the traceback cannot
+    # say: it shows where the task was suspended when the cancellation was
+    # delivered, not what delivered it. These two counters separate the cases.
+    # A consumer that is itself being cancelled means an outer cancellation --
+    # shutdown, a job timeout -- reached us and this bookkeeping mislabelled
+    # it. A consumer at zero means the cancellation was aimed at the driver
+    # alone, which only something inside the graph can do: an anyio cancel
+    # scope entered by the tool executor. Without this the two are
+    # indistinguishable in the logs, and an incident spent on it ended in
+    # inference rather than an answer.
+    consumer = asyncio.current_task()
     logger.error(
         "agent.pydantic_ai.driver_cancelled_mid_run.failed",
         agent_run_id=str(agent_run_id),
+        driver_cancelling=(driver_task.cancelling() if driver_task else -1),
+        consumer_cancelling=(consumer.cancelling() if consumer else -1),
         exc_info=pending_error,
     )
     raise HarnessDriverCancelled(
@@ -164,6 +178,7 @@ async def drive_with_retry(
                 attempt=attempt,
                 max_attempts=max_attempts,
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
             # Tell the client to drop the half-streamed bubble; the replacement
             # response streams from scratch.

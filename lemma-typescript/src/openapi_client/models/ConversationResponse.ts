@@ -12,6 +12,7 @@ export type ConversationResponse = {
     created_at: string;
     id: string;
     instructions?: (string | null);
+    is_archived?: boolean;
     last_run_error?: (string | null);
     last_run_finished_at?: (string | null);
     last_run_retryable?: boolean;
@@ -20,6 +21,10 @@ export type ConversationResponse = {
     organization_id?: (string | null);
     output?: null;
     parent_id?: (string | null);
+    /**
+     * The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.
+     */
+    readonly pod_cwd: string;
     pod_id: string;
     status?: (ConversationStatus | null);
     title?: (string | null);

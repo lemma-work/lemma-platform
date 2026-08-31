@@ -65,7 +65,7 @@ import { useTurnSettleFlip } from "./use-turn-settle-flip";
 import { stripMarkdownNode } from "./assistant-experience-helpers";
 import { ToolDetailsPanel } from "./assistant-tool-details";
 import { AskUserCard, UserApprovalCard } from "./assistant-approval-cards";
-import { SubagentActivityRollup } from "./assistant-subagent-activity";
+import { AssistantSubagentChipRow } from "./assistant-subagent-chips";
 import { DisplayResourceCards } from "./assistant-resource-cards";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 
@@ -114,7 +114,7 @@ const docComponents: Components = {
     <blockquote className={cn("my-2 border-l-2 border-[var(--border-strong)] pl-4 text-[var(--text-secondary)] first:mt-0 last:mb-0", className)} {...stripMarkdownNode(props)} />
   ),
   code: ({ className, ...props }) => (
-    <code className={cn("rounded bg-[var(--surface-2)] px-1 py-0.5 font-mono text-xs text-[var(--text-primary)]", className)} {...stripMarkdownNode(props)} />
+    <code className={cn("lchat-code", className)} {...stripMarkdownNode(props)} />
   ),
   // Same JSON-fence detection as the transcript map, so a payload inside a
   // document still gets the structured block instead of raw text.
@@ -327,7 +327,7 @@ export function TurnStatusPill({
   const label = turn.isLive
     ? (liveToolLabel || (liveRunStatus ? formatLiveRunStatus(liveRunStatus, nowMs).label : null) || "Working")
     : completedTurnStatusLabel(turn);
-  const canExpand = turn.trace.length > 0 || turn.subagentParts.length > 0;
+  const canExpand = turn.trace.length > 0;
 
   if (!label) return null;
 
@@ -374,15 +374,6 @@ export function TurnStatusPill({
               />
             )
           ))}
-          {turn.subagentParts.length > 0 ? (
-            <div className="lchat-tr-subagents">
-              <SubagentActivityRollup
-                parts={turn.subagentParts}
-                parentConversationId={activeConversationId}
-                isRunActive={turn.isLive}
-              />
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -675,6 +666,19 @@ export const AssistantTurnView = memo(function AssistantTurnView({
           </div>
         );
       })}
+
+      {/* The sub-agents this turn delegated to, once they have settled — the
+          record of the delegation, sitting where the delegation happened.
+          Live ones are absent by design: they are in the dock above the
+          composer, because a sub-agent outlives the turn that spawned it and
+          this turn will have scrolled away long before it finishes. */}
+      {turn.subagentParts.length > 0 ? (
+        <AssistantSubagentChipRow
+          parts={turn.subagentParts}
+          parentConversationId={activeConversationId}
+          isRunActive={turn.isLive}
+        />
+      ) : null}
 
       {turn.isLive ? statusPill : null}
 

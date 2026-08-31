@@ -69,8 +69,7 @@ def test_suite_is_black_box():
                         f"{path.relative_to(SUITE)}:{node.lineno} imports {root!r}"
                     )
     assert not offenders, (
-        "the scenario suite must reach Lemma only over HTTP:\n  "
-        + "\n  ".join(offenders)
+        "the scenario suite must reach Lemma only over HTTP:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -87,7 +86,9 @@ def test_scenarios_do_not_mock():
                             f"{path.relative_to(SUITE)}:{node.lineno} "
                             f"imports {alias.name!r}"
                         )
-            elif isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES:
+            elif (
+                isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES
+            ):
                 offenders.append(
                     f"{path.relative_to(SUITE)}:{node.lineno} imports from "
                     f"{node.module!r}"
@@ -100,12 +101,50 @@ def test_scenarios_do_not_mock():
                 # The `monkeypatch` fixture, taken as a test argument.
                 name = node.arg
             if name in FORBIDDEN_NAMES:
-                offenders.append(
-                    f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}"
-                )
+                offenders.append(f"{path.relative_to(SUITE)}:{node.lineno} uses {name!r}")
     assert not offenders, (
         "a scenario asserts against the real system, never a substituted one:\n  "
         + "\n  ".join(offenders)
+    )
+
+
+def test_a_scenario_waits_on_a_named_budget():
+    """No scenario invents its own deadline.
+
+    `eventually` says the bound "lives in one place. When CI is loaded and
+    everything is three times slower, one number moves." That was not true:
+    thirty-two call sites carried eight different literals, tuned one at a time
+    against whatever a shared deployment did that day, and a run failed on
+    whichever happened to be tightest. Naming them says what is being waited
+    for — a change becoming visible, a run settling, a model acting, background
+    work landing — and puts each number back in one place.
+
+    Only `eventually`'s own bound is policed. An HTTP client timeout is how long
+    one request may take, and a socket wait that proves nothing arrives is paid
+    on every green run rather than only on a failing one; neither is this kind
+    of bound, and both are still written as numbers on purpose.
+    """
+    offenders: list[str] = []
+    for path in _scenario_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
+            )
+            if name not in {"eventually", "waits_for_an_approval_in"}:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "timeout":
+                    continue
+                if isinstance(keyword.value, ast.Constant):
+                    offenders.append(f"{path.relative_to(SUITE)}:{keyword.value.lineno}")
+    assert not offenders, (
+        "wait on a named budget from `harness.waiting` rather than a literal, so "
+        "one number moves when the deployment is slow:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -148,8 +187,7 @@ def test_every_scenario_declares_what_it_proves(path: Path):
         decorators = {
             decorator.func.id
             for decorator in node.decorator_list
-            if isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Name)
+            if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
         }
         absent = {"scenario", "proves"} - decorators
         if absent:
@@ -183,12 +221,11 @@ def test_step_names_do_not_collide():
                     continue
                 if item.name in seen and seen[item.name] != path.name:
                     clashes.append(
-                        f"{item.name!r} defined in both {seen[item.name]} and "
-                        f"{path.name}"
+                        f"{item.name!r} defined in both {seen[item.name]} and {path.name}"
                     )
                 seen[item.name] = path.name
-    assert not clashes, (
-        "step verbs must be unique across mixins:\n  " + "\n  ".join(clashes)
+    assert not clashes, "step verbs must be unique across mixins:\n  " + "\n  ".join(
+        clashes
     )
 
 
@@ -221,7 +258,7 @@ def test_stack_never_inherits_real_infrastructure():
     # With inheritance on, which is when the danger exists at all.
     os.environ["SCENARIOS_USE_DEPLOYMENT_ENV"] = "1"
     try:
-            stack = _environment(
+        stack = _environment(
             port=12345,
             database_url="postgresql://scenarios/disposable",
             redis_url="redis://scenarios/9",
@@ -243,6 +280,52 @@ def test_stack_never_inherits_real_infrastructure():
 
     # And the settings the live lane exists for do come through.
     assert stack["ENVIRONMENT"] == "testing"
+
+
+def test_the_backend_binds_where_a_sandbox_can_reach_it():
+    """A sandbox is a container; loopback on the host is not an address it has.
+
+    The stack asks Docker to map `host.docker.internal` into every sandbox
+    (`WORKSPACE_ADD_HOST_GATEWAY`), and hands that name to functions and
+    workspaces as the way back to the API. On Linux that name resolves to the
+    bridge gateway, so a backend bound to 127.0.0.1 is simply not listening on
+    the address the container dials -- every function fails with `ConnectError:
+    All connection attempts failed` while its container sits up, healthy, with
+    its port published. On Docker Desktop the same name is proxied to the host's
+    loopback, which is why the bind was fine on every developer's machine and
+    the nightly sandbox lane was red for weeks.
+
+    Asserted by reading the launch arguments, because the alternative is booting
+    a stack -- and this file is the lane that costs seconds and runs on every
+    pull request.
+    """
+    # Read by path rather than imported. Every other test here reaches into
+    # `harness.stack` with `from ... import`, and importing the same module
+    # both ways in one file is the kind of drift that makes a reader wonder
+    # which one is authoritative. Nothing here needs the module anyway -- this
+    # is an AST guard, and its subject is the source.
+    launch = ast.parse((SUITE / "harness" / "stack.py").read_text())
+
+    bindings = []
+    for node in ast.walk(launch):
+        if not isinstance(node, ast.List):
+            continue
+        parts = [
+            element.value
+            for element in node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        ]
+        if "uvicorn" not in parts or "--host" not in parts:
+            continue
+        bindings.append(parts[parts.index("--host") + 1])
+
+    assert bindings, "no uvicorn launch with an explicit --host was found in the stack"
+    for address in bindings:
+        assert address == "0.0.0.0", (
+            f"the scenario backend binds {address}, which a sandbox container "
+            f"cannot reach through the host gateway. Bind 0.0.0.0; the suite "
+            f"itself still talks to 127.0.0.1."
+        )
 
 
 def test_the_fast_lane_ignores_a_developers_configuration():
@@ -327,12 +410,15 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     )
 
 
-def test_production_is_refused_unless_somebody_said_so():
+def test_production_is_refused_unless_somebody_said_so(monkeypatch):
     """A production target is a decision, never a default."""
-    import os
-
-    from harness.environment import ALLOW_PRODUCTION, Deployment, Unreachable
-    from harness.environment import confirm_writable
+    from harness.environment import (
+        ALLOW_PRODUCTION,
+        EXPECTED_INSTANCE,
+        Deployment,
+        Unreachable,
+        confirm_writable,
+    )
 
     production = Deployment(
         base_url="https://lemma.example",
@@ -342,7 +428,13 @@ def test_production_is_refused_unless_somebody_said_so():
         configuration={"environment": "production", "llm_mode": "real"},
     )
 
-    os.environ.pop(ALLOW_PRODUCTION, None)
+    # Both guards cleared, not just the one under test. The instance check runs
+    # first, so with SCENARIOS_TARGET_INSTANCE_ID set in the environment -- which
+    # any run against a named target does -- this got that refusal instead and
+    # failed a test about a different one. A self-test of a pure function should
+    # not be able to read the ambient environment at all.
+    monkeypatch.delenv(ALLOW_PRODUCTION, raising=False)
+    monkeypatch.delenv(EXPECTED_INSTANCE, raising=False)
     try:
         confirm_writable(production)
     except Unreachable as refusal:
@@ -354,12 +446,14 @@ def test_production_is_refused_unless_somebody_said_so():
         )
 
 
-def test_a_target_pointed_somewhere_else_is_refused():
+def test_a_target_pointed_somewhere_else_is_refused(monkeypatch):
     """Naming the instance is what turns a mistyped host into a stopped run."""
-    import os
-
-    from harness.environment import EXPECTED_INSTANCE, Deployment, Unreachable
-    from harness.environment import confirm_writable
+    from harness.environment import (
+        EXPECTED_INSTANCE,
+        Deployment,
+        Unreachable,
+        confirm_writable,
+    )
 
     somewhere_else = Deployment(
         base_url="https://staging.example",
@@ -369,15 +463,17 @@ def test_a_target_pointed_somewhere_else_is_refused():
         configuration={"llm_mode": "real"},
     )
 
-    os.environ[EXPECTED_INSTANCE] = "dev-scenarios-1"
+    # Set through monkeypatch, which restores what was there. The `finally` this
+    # replaces *popped* the variable instead -- so this test, run inside a suite
+    # that had been pointed at a named instance, took that run's guard away and
+    # left every scenario after it free to write anywhere.
+    monkeypatch.setenv(EXPECTED_INSTANCE, "dev-scenarios-1")
     try:
         confirm_writable(somewhere_else)
     except Unreachable as refusal:
         assert "staging-9" in str(refusal), refusal
     else:
         raise AssertionError("the suite wrote to an instance it was not pointed at")
-    finally:
-        os.environ.pop(EXPECTED_INSTANCE, None)
 
 
 def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
@@ -388,7 +484,7 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     the other way round, a missing fact would look like a satisfied one and the
     suite would try to sign people up against a deployment that never agreed.
     """
-    from harness.environment import LOOPBACK_REACHABLE, OPEN_SIGNUP, Deployment
+    from harness.environment import OPEN_SIGNUP, Deployment
 
     silent = Deployment(
         base_url="https://lemma.example",
@@ -401,10 +497,6 @@ def test_a_fact_a_deployment_withholds_is_never_read_as_permission():
     assert OPEN_SIGNUP.missing_on(silent), (
         "a deployment that said nothing about its signup gates was read as "
         "having them open"
-    )
-    assert LOOPBACK_REACHABLE.missing_on(silent), (
-        "a deployment that said nothing was read as able to call back to this "
-        "machine"
     )
 
 
@@ -532,6 +624,135 @@ def test_no_scenario_scripts_the_model():
     )
 
 
+def test_a_replay_run_cannot_reach_the_real_internet():
+    """The one setting the whole record/replay design rests on.
+
+    A replay lane exists to be deterministic and credential-free. If an
+    unrecorded request were *forwarded* instead of killed, a run would quietly
+    reach the real provider — passing, slowly, with real side effects, and
+    telling nobody. `server_replay_extra=kill` is what makes a gap in the
+    recording an error rather than a silent live call.
+
+    Asserted on the arguments the proxy is actually started with, because that
+    is the thing that would be edited away.
+    """
+    import inspect
+
+    from harness import egress
+
+    started = inspect.getsource(egress.start)
+    assert "server_replay_extra=kill" in started, (
+        "replay no longer kills unrecorded requests, so a run with a stale "
+        "cassette would reach the real internet instead of failing"
+    )
+    assert "stream_large_bodies" not in started, (
+        "streaming is back. mitmproxy streams a response through without "
+        "keeping it, so the recording replays as '200 OK (content missing)' — "
+        "a response that satisfies a status assertion and contains nothing"
+    )
+
+
+def test_no_real_address_is_hardcoded():
+    """A real mailbox is configured, never written down.
+
+    The cast needs deliverable addresses the moment an email surface answers
+    one of them — `example.com` is reserved and a reply there is a hard bounce.
+    The answer is `SCENARIOS_MAILBOX`, sub-addressed per colleague.
+
+    What must not happen is somebody committing the mailbox instead of setting
+    it. This is a public repository: a real address in it is somebody's inbox,
+    for as long as the history exists, and no later commit takes it back.
+    """
+    import re
+
+    from harness import tenant
+
+    reserved = re.compile(
+        r"@([A-Za-z0-9.-]*\.)?(example\.(com|net|org)|example|invalid|test|localhost)$"
+    )
+    address = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+    found: list[str] = []
+    for path in _python_files():
+        for literal in address.findall(path.read_text(encoding="utf-8")):
+            _, _, host = literal.partition("@")
+            if not reserved.search("@" + host):
+                found.append(f"{path.relative_to(SUITE)}: {literal}")
+
+    assert not found, (
+        f"these look like real email addresses, written into the suite: "
+        f"{sorted(found)}. Set {tenant.MAILBOX_SETTING} instead — every "
+        f"colleague is sub-addressed from it, so one mailbox covers the cast "
+        f"and nothing anybody owns ends up in a public repository."
+    )
+
+
+def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
+    """What only a booted stack has must be skipped for, never asserted on.
+
+    A deployment run owns no proxy and no stand-ins, so `stack.egress` is None
+    there by design. A fixture that asserts on it turns "skipped, and here is
+    why" into a stack trace — and because fixtures are shared, one line did it
+    to fifty-two scenarios at once. The rule is the same one `needs()` follows:
+    absent is skipped, never failed.
+
+    Matched on `assert` against the optional parts of `Stack`, because that is
+    the shape the mistake takes; a fixture is free to assert on anything a
+    stack it booted itself is guaranteed to have.
+    """
+    optional = ("stack.egress", "stack.redis_url", "stack.database_url")
+    offenders: list[str] = []
+    for path in _python_files():
+        if path.name == "test_harness_contract.py":
+            continue
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if not stripped.startswith("assert "):
+                continue
+            if any(name in stripped for name in optional) or (
+                "is not None" in stripped and "egress" in stripped
+            ):
+                offenders.append(f"{path.relative_to(SUITE)}:{number}")
+
+    assert not offenders, (
+        f"these assert on something only a booted stack has: {offenders}. A "
+        f"deployment run has no proxy and no stand-ins, so this has to skip "
+        f"with a reason rather than error. See the `egress` fixture in "
+        f"conftest.py for the shape."
+    )
+
+
+def test_nothing_stands_in_on_loopback_any_more():
+    """No scenario may reach for a server on this machine again.
+
+    `fake_platform.py` is gone. What replaced it is the egress proxy answering
+    for real hostnames, and the difference is not stylistic: a stand-in on
+    loopback could only be reached with the product's SSRF guard switched off,
+    so the whole suite ran a posture no deployment uses and 43 scenarios
+    skipped anywhere else.
+
+    A new one would bring that back, quietly, which is why this is a rule
+    rather than a note.
+    """
+    offenders = sorted(
+        str(path.relative_to(SUITE))
+        for path in _python_files()
+        # The addon is the one place that *should* start them: it is the proxy,
+        # and the proxy is what the product was pointed at.
+        if path.name
+        not in {"fake_upstreams.py", "egress_addon.py", "test_harness_contract.py"}
+        and "start_fake_" in path.read_text(encoding="utf-8")
+    )
+    assert not offenders, (
+        f"these start a stand-in server themselves: {offenders}. The stack owns "
+        f"the fakes now — they run inside the egress proxy, which answers for "
+        f"api.telegram.org and provider.scenarios.example. A scenario asks what "
+        f"Lemma sent; it does not run the far end. See harness/fake_upstreams.py."
+    )
+
+
 def test_every_journey_runs_in_ci():
     """A journey directory nobody added to the matrix runs nowhere.
 
@@ -544,17 +765,15 @@ def test_every_journey_runs_in_ci():
     import re
 
     workflow = (
-        Path(__file__).resolve().parents[3]
-        / ".github"
-        / "workflows"
-        / "scenarios.yml"
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "scenarios.yml"
     )
     named = set(re.findall(r"journeys/([a-z_]+)", workflow.read_text()))
 
     on_disk = {
         directory.name
         for directory in (Path(__file__).resolve().parent).iterdir()
-        if directory.is_dir() and not directory.name.startswith(("_", "."))
+        if directory.is_dir()
+        and not directory.name.startswith(("_", "."))
         # The live lane is deliberately elsewhere: it needs real providers and
         # runs nightly, never on a pull request.
         and directory.name != "live"
@@ -564,4 +783,123 @@ def test_every_journey_runs_in_ci():
     assert not missing, (
         f"these journeys exist and CI never runs them: {sorted(missing)}. "
         f"Add a matrix row in .github/workflows/scenarios.yml."
+    )
+
+
+#: List routes that page, written as they resolve: every ``{...}`` in the
+#: f-string becomes ``*``. Exact rather than a substring, because a substring
+#: cannot tell ``/conversations`` from ``/conversations/*/approvals`` — and the
+#: approvals endpoint takes no ``limit`` at all, so flagging it would teach
+#: people to silence this guard rather than to read it.
+#:
+#: Taken from the controllers: ``limit`` defaults to 100 on each of these and
+#: the response carries ``next_page_token``.
+PAGES_ARE_REAL = {
+    "/pods/organization/*",
+    "/pods/*/conversations",
+    "/pods/*/datastore/files",
+    "/pods/*/agents",
+    "/pods/*/surfaces",
+    "/pods/*/members",
+    "/organizations/*/members",
+}
+
+#: Steps that read a paginated route and deliberately stop at the first page,
+#: with the reason. This set may **shrink**. Anything added to it is a step that
+#: can report "not there" about something that is.
+ONE_PAGE_ON_PURPOSE = {
+    # Reads the *latest* 100 messages in chronological order, so both halves of
+    # "did the agent answer" are on the first page whatever the thread holds.
+    "messages_in",
+}
+
+
+def _url_shape(node) -> str | None:
+    """The route a call asks for, with every interpolation flattened to ``*``.
+
+    ``f"/pods/{pod['id']}/members"`` becomes ``/pods/*/members``, so a route can
+    be matched exactly instead of by substring.
+    """
+    import ast as _ast
+
+    if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not isinstance(node, _ast.JoinedStr):
+        return None
+    parts: list[str] = []
+    for piece in node.values:
+        if isinstance(piece, _ast.Constant) and isinstance(piece.value, str):
+            parts.append(piece.value)
+        else:
+            parts.append("*")
+    return "".join(parts)
+
+
+def _routes_read_by(function, source: str) -> list[str]:
+    """Every route this step GETs, as a shape."""
+    import ast as _ast
+
+    found: list[str] = []
+    for node in _ast.walk(function):
+        if not isinstance(node, _ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, _ast.Attribute) and func.attr == "get"):
+            continue
+        if not node.args:
+            continue
+        shape = _url_shape(node.args[0])
+        if shape:
+            found.append(shape)
+    return found
+
+
+def test_a_step_that_reads_a_paginated_list_follows_the_pages():
+    """A default page size read as "all of them" has broken this suite 3 times.
+
+    Conversations (lemma-platform#507), pods, and the files in a folder — each
+    one a scenario asking whether the thing it had just made was there, being
+    shown the first hundred rows of a tenant that stands between runs, and
+    reporting that the product had lost it.
+
+    The reading half is the one that matters more and is quieter. A step that
+    asks "is it *not* there" against a single page fails **open**: a pod still
+    visible on page two reads as correctly hidden, and every deletion and
+    access-boundary scenario built on it passes while proving nothing. That is
+    the failure this guard exists for — the red ones announced themselves.
+
+    Fixing a step means routing it through `every_item`; declaring one an
+    exception means adding it to `ONE_PAGE_ON_PURPOSE` with the reason it is
+    safe. The set may only shrink.
+    """
+    import ast as _ast
+
+    offenders: list[str] = []
+    for path in sorted((SUITE / "harness" / "steps").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        tree = _ast.parse(source, filename=str(path))
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ClassDef):
+                continue
+            for item in node.body:
+                if not isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    continue
+                if item.name.startswith("_") or item.name in ONE_PAGE_ON_PURPOSE:
+                    continue
+                body = _ast.get_source_segment(source, item) or ""
+                if "every_item" in body or "page_token" in body:
+                    continue
+                paged = sorted(set(_routes_read_by(item, source)) & PAGES_ARE_REAL)
+                if paged:
+                    offenders.append(
+                        f"{path.name}:{item.lineno} {item.name}() reads "
+                        f"{paged[0]} and stops at the first page"
+                    )
+    assert not offenders, (
+        "these steps read a paginated list as though it were the whole list:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nRoute them through `every_item` (harness/drivers/api.py), or add "
+        "them to ONE_PAGE_ON_PURPOSE with the reason one page is enough."
     )

@@ -848,7 +848,17 @@ class Settings(BaseSettings):
             "dev stack sets it. Env: ``API_DOCS_ENABLED``."
         ),
     )
-    debug: bool = Field(default=True, description="Debug mode")
+    debug: bool = Field(
+        default=False,
+        description=(
+            "Debug mode. Off by default, and refused outside local/testing by "
+            "``_refuse_debug_outside_local``. Starlette's ServerErrorMiddleware "
+            "checks this *before* the application's own exception handler, so a "
+            "true value replaces the ``{message, code, details}`` envelope with "
+            "a source-annotated HTML traceback on every unhandled error -- and "
+            "``handle_unexpected_exception`` becomes unreachable. Env: ``DEBUG``."
+        ),
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         description="Application log level",
@@ -992,6 +1002,14 @@ class Settings(BaseSettings):
         default=None,
         description="Optional cookie domain for sharing auth sessions across subdomains",
     )
+    session_cookie_older_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "The cookie domain this deployment is migrating away from. Set it "
+            "for one release after changing session_cookie_domain so the old "
+            "cookies are cleared instead of colliding with the new ones."
+        ),
+    )
     session_cookie_secure: Optional[bool] = Field(
         default=None,
         description="Override the secure flag for auth session cookies",
@@ -1001,6 +1019,12 @@ class Settings(BaseSettings):
         description="Override SameSite for auth session cookies",
     )
 
+    # Deliberately NOT including `session_cookie_older_domain`: an empty string
+    # is a meaningful value there. SuperTokens reads `older_cookie_domain=""`
+    # as "the previous cookies were host-only, clear those", which is exactly
+    # the migration desktop is making (v0.7.0 rendered SESSION_COOKIE_DOMAIN=""
+    # and main renders `.lemma.localhost`). Folding blank to None would turn the
+    # one setting that fixes that install into no setting at all.
     @field_validator(
         "session_cookie_domain",
         "cli_api_url",
@@ -1023,6 +1047,28 @@ class Settings(BaseSettings):
         if any(segment in {".", ".."} for segment in segments):
             raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
         return "/" + "/".join(segments) if segments else "/"
+
+    @model_validator(mode="after")
+    def _refuse_debug_outside_local(self) -> "Settings":
+        # `debug` is not a verbosity setting. Starlette installs the
+        # application's `Exception` handler as `ServerErrorMiddleware.handler`
+        # and checks `self.debug` first, so a true value here means every
+        # unhandled error answers with a source-annotated traceback -- file
+        # paths, framework versions, local variable names -- instead of the one
+        # envelope every client parses, and `handle_unexpected_exception` never
+        # runs at all.
+        #
+        # Refused at startup rather than merely defaulted off, because the
+        # failure mode this closes is a deployment that sets it deliberately and
+        # forgets. `docs/configuration.md` lists `DEBUG=false` in its production
+        # block; nothing enforced it.
+        if not self.is_local_mode() and self.debug:
+            raise ValueError(
+                "DEBUG must be false in development/production: it makes every "
+                "unhandled error answer with a stack trace instead of the "
+                "standard error envelope. It is permitted only in local/testing."
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":
@@ -1053,6 +1099,19 @@ class Settings(BaseSettings):
             "loopback apps domain (e.g. apps.lemma.localhost:8711); in cloud it is "
             "the real apps domain behind the ingress. Empty disables host-based "
             "app routing and is rejected at startup in development/production."
+        ),
+    )
+    app_api_via_app_origin: bool = Field(
+        default=False,
+        description=(
+            "Serve an app's API calls through the app's own origin (a reserved "
+            "/_lemma prefix) instead of the API host, and widen the refresh "
+            "cookie's path to match. Needed only where the app host and the API "
+            "host are different *sites* to a browser -- on desktop, where both "
+            "are under `.localhost` and no registrable domain can be derived, so "
+            "an app's cross-origin calls are third-party and carry no session. "
+            "Off elsewhere: on a real domain the two are same-site already, and "
+            "this would widen the refresh cookie for nothing."
         ),
     )
     app_branding_enabled: bool = Field(

@@ -5,6 +5,6 @@
  * markdown representation and one that reads the meta tags are told the same
  * thing.
  */
-export const SITE_TITLE = "The software you need doesn't exist yet.";
+export const SITE_TITLE = "Shared Apps and Agents.";
 export const SITE_DESCRIPTION =
-    'Your coding agent can write it. Lemma turns it into something your team can actually use — and run anywhere.';
+    'Your coding agent writes the whole system. Lemma runs it, and your team uses it at a URL or from the tools they already have open.';

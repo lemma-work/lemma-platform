@@ -24,7 +24,8 @@ class PodAppSummary:
     id: UUID
     name: str
     description: str | None
-    url: str
+    # None where the deployment serves no app host -- see `public_app_url`.
+    url: str | None
     status: str
 
 

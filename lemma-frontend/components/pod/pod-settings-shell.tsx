@@ -17,7 +17,7 @@ interface PodSettingsStat {
 interface PodSettingsShellProps {
     podId: string;
     /**
-     * This tab's own name — "General", "Access" — not the area's. The context
+     * This tab's own name — "General", "Members" — not the area's. The context
      * bar prints it, and a bar that says "Pod Settings" on every route
      * tells you nothing you did not already know. The workspace tab keeps
      * reading "Settings" (see `tabTitle` below) because every route shares

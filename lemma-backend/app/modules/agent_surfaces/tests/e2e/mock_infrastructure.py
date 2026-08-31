@@ -1013,12 +1013,39 @@ class FakeWhatsAppServer:
         )
 
 
+#: A 1x1 red PNG. Real bytes on purpose: the point of the photo test is that
+#: something downstream can tell what these are without being told, and a
+#: placeholder string would only prove the plumbing moved it.
+A_RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
+)
+
+#: What ``getFile`` answers for a given ``file_id``. Keyed the way Telegram keys
+#: it, because the *path* is where a photo's type comes from -- the update never
+#: says. A file id with no entry gets a generic document path, which is the
+#: untyped case and is meant to stay reachable.
+TELEGRAM_FILE_PATHS: dict[str, str] = {
+    "photo-large": "photos/file_42.jpg",
+    "voice-1": "voice/file_9.oga",
+}
+
+#: The bytes each path serves.
+TELEGRAM_FILE_BODIES: dict[str, bytes] = {
+    "photos/file_42.jpg": A_RED_PNG,
+    "voice/file_9.oga": b"OggS" + b"\x00" * 32,
+}
+
+
 class FakeTelegramServer:
     """Lightweight aiohttp server mimicking the Telegram Bot API.
 
     Captures outbound calls for assertion and remembers the registered webhook
     so getWebhookInfo confirms the URL (matching the real registration flow).
-    ``fail_next`` forces transient failures per method to exercise retries.
+    ``fail_next`` forces transient failures per method to exercise retries, and
+    ``unavailable`` makes a method answer 404 the way a bot API that does not
+    carry it would — which is the condition `send_chunk`'s fallback from
+    `sendRichMessage` to `sendMessage` exists for.
     """
 
     def __init__(self, store: MockPlatformMessageStore):
@@ -1028,11 +1055,13 @@ class FakeTelegramServer:
         self._port: int | None = None
         self._registered_webhook: dict | None = None
         self.fail_next: dict[str, int] = {}
+        self.unavailable: set[str] = set()
         self._updates: list[dict[str, Any]] = []
 
     async def start(self) -> None:
         app = web.Application()
         app.router.add_post("/bot{token}/sendMessage", self._send_message)
+        app.router.add_post("/bot{token}/sendRichMessage", self._send_rich_message)
         app.router.add_post("/bot{token}/editMessageText", self._edit_message_text)
         app.router.add_post("/bot{token}/sendVoice", self._send_voice)
         app.router.add_post("/bot{token}/sendDocument", self._send_document)
@@ -1052,6 +1081,11 @@ class FakeTelegramServer:
         app.router.add_post(
             "/bot{token}/getManagedBotToken", self._get_managed_bot_token
         )
+        # Inbound files. Their absence is why no test could drive a Telegram
+        # photo end to end, and why a photo reaching the agent as an untyped
+        # blob went unnoticed through every suite the repository has.
+        app.router.add_post("/bot{token}/getFile", self._get_file)
+        app.router.add_get("/file/bot{token}/{file_path:.+}", self._download_file)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -1102,6 +1136,11 @@ class FakeTelegramServer:
         return [entry["method"] for entry in self._store.get_all("TELEGRAM_WEBHOOK")]
 
     def _maybe_fail(self, method: str) -> web.Response | None:
+        if method in self.unavailable:
+            return web.json_response(
+                {"ok": False, "error_code": 404, "description": "Not Found"},
+                status=404,
+            )
         remaining = self.fail_next.get(method, 0)
         if remaining > 0:
             self.fail_next[method] = remaining - 1
@@ -1132,6 +1171,49 @@ class FakeTelegramServer:
                 status=400,
             )
         self._store.add("TELEGRAM", {**body, **_request_contract(request)})
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "message_id": len(self._store.get_all("TELEGRAM")),
+                    "chat": {"id": body.get("chat_id")},
+                    "text": text,
+                },
+            }
+        )
+
+    async def _send_rich_message(self, request: web.Request) -> web.Response:
+        """The method Telegram sends are *actually* made with.
+
+        `send_chunk` tries `sendRichMessage` first and falls back to
+        `sendMessage` only when the error looks like the method being
+        unavailable. This route was not registered, so every send 404'd, the
+        fallback swallowed it, and every assertion in every Telegram e2e landed
+        on the fallback — the production path had never once been exercised
+        here. An empty body posted as `rich_message: {"markdown": ""}` would
+        have passed the whole suite.
+
+        The text is recorded under `text` as well as `rich_message`, so
+        assertions written against the fallback keep reading the same key while
+        a test that cares about the rich shape can still see it.
+        """
+        failure = self._maybe_fail("sendRichMessage")
+        if failure is not None:
+            return failure
+        body = await request.json()
+        text = (body.get("rich_message") or {}).get("markdown") or ""
+        if len(text) > 4096:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: message is too long",
+                },
+                status=400,
+            )
+        self._store.add(
+            "TELEGRAM", {**body, "text": text, **_request_contract(request)}
+        )
         return web.json_response(
             {
                 "ok": True,
@@ -1364,39 +1446,40 @@ class FakeTelegramServer:
             {"ok": True, "result": f"{user_id}:FAKE-MANAGED-BOT-TOKEN-e2e"}
         )
 
+    async def _get_file(self, request: web.Request) -> web.Response:
+        """Where a file id becomes a path, and the only place its type appears.
 
-class FakeGmailServer:
-    """Lightweight aiohttp server mimicking the Gmail send API."""
-
-    def __init__(self, store: MockPlatformMessageStore):
-        self._store = store
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
-        self._port: int | None = None
-
-    async def start(self) -> None:
-        app = web.Application()
-        app.router.add_post("/gmail/v1/users/me/messages/send", self._send_message)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host="127.0.0.1", port=0)
-        await self._site.start()
-        sockets = self._site._server.sockets if self._site._server else []
-        self._port = sockets[0].getsockname()[1]
-
-    async def stop(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
-
-    @property
-    def api_base(self) -> str:
-        return f"http://127.0.0.1:{self._port}"
-
-    async def _send_message(self, request: web.Request) -> web.Response:
+        This is the half of Telegram that matters for an inbound photo: the
+        update carries a bare ``file_id`` with no filename and no ``mime_type``,
+        and ``file_path`` is the first and only thing that says the bytes are a
+        JPEG. A fake that skipped it made the untyped case untestable, which is
+        exactly the case that broke.
+        """
         body = await request.json()
-        self._store.add("GMAIL", {**body, **_request_contract(request)})
-        return web.json_response({"id": "gmail-message-1"})
+        file_id = str(body.get("file_id") or "")
+        self._store.add(
+            "TELEGRAM_GET_FILE", {"file_id": file_id, **_request_contract(request)}
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "file_id": file_id,
+                    "file_path": TELEGRAM_FILE_PATHS.get(
+                        file_id, f"documents/{file_id}"
+                    ),
+                },
+            }
+        )
+
+    async def _download_file(self, request: web.Request) -> web.Response:
+        file_path = request.match_info["file_path"]
+        self._store.add(
+            "TELEGRAM_FILE_DOWNLOAD",
+            {"file_path": file_path, **_request_contract(request)},
+        )
+        body = TELEGRAM_FILE_BODIES.get(file_path, b"fake telegram file")
+        return web.Response(body=body, content_type="application/octet-stream")
 
 
 class FakeResendServer:
@@ -1433,131 +1516,6 @@ class FakeResendServer:
         return web.json_response(
             {"id": f"resend-message-{len(self._store.get_all('RESEND'))}"}
         )
-
-
-class FakeOutlookServer:
-    """Lightweight aiohttp server mimicking Outlook Graph message APIs."""
-
-    def __init__(self, store: MockPlatformMessageStore):
-        self._store = store
-        self._messages_by_id: dict[str, dict[str, Any]] = {}
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
-        self._port: int | None = None
-
-    async def start(self) -> None:
-        app = web.Application()
-        app.router.add_get("/v1.0/me/messages/{message_id}", self._get_message)
-        app.router.add_post("/v1.0/me/messages/{message_id}/reply", self._reply)
-        app.router.add_post(
-            "/v1.0/me/messages/{message_id}/createReply",
-            self._create_reply,
-        )
-        app.router.add_patch("/v1.0/me/messages/{message_id}", self._update_message)
-        app.router.add_post(
-            "/v1.0/me/messages/{message_id}/attachments",
-            self._add_attachment,
-        )
-        app.router.add_post("/v1.0/me/messages/{message_id}/send", self._send_draft)
-        app.router.add_post("/v1.0/me/sendMail", self._send_mail)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host="127.0.0.1", port=0)
-        await self._site.start()
-        sockets = self._site._server.sockets if self._site._server else []
-        self._port = sockets[0].getsockname()[1]
-
-    async def stop(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
-
-    @property
-    def api_base(self) -> str:
-        return f"http://127.0.0.1:{self._port}"
-
-    def set_message(self, message_id: str, payload: dict[str, Any]) -> None:
-        self._messages_by_id[message_id] = payload
-
-    async def _get_message(self, request: web.Request) -> web.Response:
-        message_id = request.match_info["message_id"]
-        payload = self._messages_by_id.get(message_id)
-        if payload is None:
-            return web.json_response({"error": {"message": "Not found"}}, status=404)
-        self._store.add(
-            "OUTLOOK_FETCH",
-            {
-                "message_id": message_id,
-                "query": dict(request.query),
-                **_request_contract(request),
-            },
-        )
-        return web.json_response(payload)
-
-    async def _send_mail(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add("OUTLOOK", {**body, **_request_contract(request)})
-        return web.Response(status=202)
-
-    async def _reply(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_REPLY",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=202)
-
-    async def _create_reply(self, request: web.Request) -> web.Response:
-        draft_id = f"draft-{len(self._store.get_all('OUTLOOK_DRAFT_CREATE')) + 1}"
-        self._store.add(
-            "OUTLOOK_DRAFT_CREATE",
-            {
-                "source_message_id": request.match_info["message_id"],
-                "draft_id": draft_id,
-                **_request_contract(request),
-            },
-        )
-        return web.json_response({"id": draft_id})
-
-    async def _update_message(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_DRAFT_PATCH",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=200)
-
-    async def _add_attachment(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_DRAFT_ATTACHMENT",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.json_response(
-            {"id": f"attachment-{len(self._store.get_all('OUTLOOK_DRAFT_ATTACHMENT'))}"}
-        )
-
-    async def _send_draft(self, request: web.Request) -> web.Response:
-        self._store.add(
-            "OUTLOOK_DRAFT_SEND",
-            {
-                "message_id": request.match_info["message_id"],
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=202)
 
 
 def build_slack_signature_headers(

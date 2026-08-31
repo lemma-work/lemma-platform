@@ -60,7 +60,8 @@ async def test_a_bad_bundle_is_refused(pod):
     app = await alice.creates_an_app(in_pod=the_pod)
 
     response = await alice.api.call(
-        "POST", f"/pods/{the_pod['id']}/apps/{app['name']}/bundle",
+        "POST",
+        f"/pods/{the_pod['id']}/apps/{app['name']}/bundle",
         files={"source": ("not-a-zip.txt", b"plain text", "text/plain")},
     )
 
@@ -123,7 +124,8 @@ class TestPublishing:
         alice, the_pod = pod
 
         response = await alice.api.call(
-            "POST", f"/pods/{the_pod['id']}/bundle/publishes",
+            "POST",
+            f"/pods/{the_pod['id']}/bundle/publishes",
             json={"repo": "someone/somewhere", "owner": "someone"},
         )
 

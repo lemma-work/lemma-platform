@@ -12,9 +12,30 @@ import type { AssistantSurface } from '@/lib/types';
  * The name isn't worth asking about, so it's derived from the agent the surface
  * will answer as, which is both stable and the most useful thing to read in a
  * list. `undefined` means "let the backend apply its default".
+ *
+ * Except for the platforms the backend gives an identity of its own — see
+ * `BACKEND_NAMES_ITS_OWN`. Deriving a name here means reproducing a backend
+ * rule from a surfaces list this client may have fetched before the surface it
+ * needs to know about existed, and the two only agree while nobody changes
+ * either.
  */
 
 const MAX_SLUG_LENGTH = 32;
+
+/**
+ * Platforms whose surface names the backend derives itself.
+ *
+ * Resend is Lemma's own mailbox: a pod holds exactly one per agent, minted as
+ * the agent is created, and the backend names it after that agent and resolves
+ * it by agent binding rather than by name. Sending a name asks it to create a
+ * *distinct* surface instead of connecting the one that already exists, which
+ * is not what "connect email" means.
+ *
+ * Everything else stays client-derived. A pod really can hold several Telegram
+ * bots or Slack apps, the backend has no per-agent identity for them, and the
+ * second one genuinely does need a name to avoid colliding with the first.
+ */
+const BACKEND_NAMES_ITS_OWN = new Set(['RESEND']);
 
 function slugify(value: string): string {
     return value
@@ -30,6 +51,8 @@ export function deriveSurfaceName(
     agentName: string | null,
     existing: Pick<AssistantSurface, 'name'>[],
 ): string | undefined {
+    if (BACKEND_NAMES_ITS_OWN.has(platform.toUpperCase())) return undefined;
+
     const base = platform.toLowerCase();
     const taken = new Set(existing.map((surface) => surface.name.toLowerCase()));
 

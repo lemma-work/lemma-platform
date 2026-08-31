@@ -139,6 +139,18 @@ def _reject_fields_from_other_types(
     return None
 
 
+# Roots that belong to the machine or the sandbox rather than the pod. A path
+# under any of these resolves for the agent and for nobody else.
+#
+# ``/workspace`` is the one that actually gets sent. It is the agent's own cwd,
+# so it is the path it has in hand when it decides to show a file it just made,
+# and it used to pass this check — leaving the delivery to fail three layers
+# down, where the only thing left to do was render a card whose "Open file"
+# button pointed into a pod directory that does not exist. Caught here, the
+# agent is told the one thing that fixes it while it can still act on it.
+_NON_POD_FILE_ROOTS = ("/workspace", "/tmp", "/private", "/Users")
+
+
 def _check_file(request: "DisplayResourceRequest") -> str | None:
     """A FILE has to be somewhere the pod can actually see.
 
@@ -147,12 +159,19 @@ def _check_file(request: "DisplayResourceRequest") -> str | None:
     """
     if request.type != DisplayResourceType.FILE:
         return None
-    if request.path is not None and request.path.startswith(
-        ("/tmp/", "/private/", "/Users/")
+    path = request.path
+    if path is None:
+        return None
+    root = path.rstrip("/")
+    if any(
+        root == prefix or path.startswith(f"{prefix}/")
+        for prefix in _NON_POD_FILE_ROOTS
     ):
         return (
-            "FILE resources must reference pod-visible paths, not private "
-            "workspace paths."
+            f"'{path}' is a sandbox path, which only exists inside your "
+            "workspace. FILE takes a pod path, such as /me/reports/q3.pdf. "
+            "Upload it first with `lemma files upload` and display the pod "
+            "path it returns."
         )
     return None
 

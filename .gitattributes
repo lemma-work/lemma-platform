@@ -1,0 +1,47 @@
+# Line endings, decided here rather than by whoever cloned the repo.
+#
+# Git's default on Windows is `core.autocrlf=true`, which rewrites every text
+# file to CRLF on checkout. That is invisible until something reads a file as
+# *text it searches*, and this repo does that a lot: the desktop crates assert
+# on their own source and on the bundled UI through `include_str!`, and a needle
+# containing `\n` matches nothing in a file whose lines end `\r\n`.
+#
+# It cost three pushes to find, because the failures only appear on the Windows
+# job and only for needles where the newline is in the middle -- `find("\nfn ")`
+# still matches inside `"\r\nfn "`, so most of them survived and two did not.
+# The tests normalise on their way in as well; this is the half that means they
+# never see CRLF to begin with.
+#
+# `eol=lf` rather than `text=auto`: auto only normalises what git guesses is
+# text, and the guess is per-file.
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.lock      text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.json      text eol=lf
+*.py        text eol=lf
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.swift     text eol=lf
+Makefile    text eol=lf
+
+# Windows' own script hosts are the exception. `cmd.exe` is genuinely fussy
+# about line endings in batch files, and there is no reason to make PowerShell
+# differ from every other file a Windows developer opens.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binary, so git never tries to translate anything inside them.
+*.png       binary
+*.icns      binary
+*.ico       binary
+*.woff2     binary
+*.zip       binary
+*.dmg       binary

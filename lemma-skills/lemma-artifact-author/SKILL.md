@@ -101,7 +101,9 @@ selected format. Read only the relevant format sections.
 
 Build an outline, slide map, workbook model, or page structure before styling.
 Use real content and representative data; do not leave placeholder copy unless
-the user requested a template.
+the user requested a template. Keep that model the thing you edit: change
+generated output by regenerating it, not by patching the rendered file with
+`sed -i` or another regex-substitution tool.
 
 For revisions, make the smallest defensible change in the native source. Preserve
 styles, section and sheet structure, references, metadata, embedded assets, and

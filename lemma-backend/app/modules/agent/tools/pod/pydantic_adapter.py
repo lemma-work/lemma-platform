@@ -216,14 +216,31 @@ async def pod_query(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        rows, total = await services.record.execute_readonly_query(
+        rows, row_count, truncated = await services.record.execute_readonly_query(
             pod_id=services.ctx.pod_id,
             query=request.sql,
             user_id=services.ctx.user_id,
             table_service=services.table,
             ctx=services.ctx,
         )
-        return {"success": True, "rows": to_json_value(rows), "total": total}
+        result: JsonObject = {
+            "success": True,
+            "rows": to_json_value(rows),
+            # Not "total": this is how many rows came back, which is only the
+            # total when nothing was cut. Reporting the capped count as a total
+            # is how an agent tells someone they have 1000 orders when they have
+            # forty thousand.
+            "row_count": row_count,
+            "truncated": truncated,
+        }
+        if truncated:
+            result["note"] = (
+                f"Only the first {row_count} rows are shown; the result was cut "
+                "short by the row cap. Do not treat this count as a total -- "
+                "narrow the query or aggregate in SQL (for example COUNT(*)) if "
+                "you need one."
+            )
+        return result
 
     return await run_pod_tool(
         ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op

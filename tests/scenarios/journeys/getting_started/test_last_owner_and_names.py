@@ -84,9 +84,7 @@ async def test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied(worl
     pod = await alice.creates_a_pod()
 
     bob = await world.new_person("bob")
-    invitation = await alice.invites(
-        bob, to=organization, pod=pod, pod_role="POD_USER"
-    )
+    invitation = await alice.invites(bob, to=organization, pod=pod, pod_role="POD_USER")
     # The pod goes away between the invitation being sent and accepted, which
     # is an ordinary amount of time for a pod to be reorganised.
     await alice.deletes_pod(pod)

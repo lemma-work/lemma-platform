@@ -56,6 +56,23 @@ DECLARABLE_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.MEMORY,
 )
 
+# What a new agent starts with when its creator did not say. Both are cheap and
+# both are things people turn on immediately anyway: an agent that cannot look
+# anything up answers from a two-year-old training set, and one that cannot
+# remember re-learns the same fact every conversation. Turning either off is one
+# click in the agent's Tools; discovering months later that it was never on is
+# not.
+#
+# WORKSPACE_CLI, SUBAGENTS and SPEECH stay off: a sandbox, fan-out and a voice
+# bill are decisions, not conveniences.
+#
+# Applies only where the field is *absent* -- an explicit ``[]`` from a bundle
+# import or the agent editor still means exactly none.
+NEW_AGENT_DEFAULT_TOOLSETS: tuple[AgentToolset, ...] = (
+    AgentToolset.WEB_SEARCH,
+    AgentToolset.MEMORY,
+)
+
 # Given to every agent. None of these reaches pod data, the internet, or a
 # sandbox; each is either a way to involve a person or conversation-scoped
 # scratch.

@@ -3,24 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
-import httpx
 import pytest
 
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent_surfaces.domain.surface_event_metadata import (
-    GmailSurfaceEventMetadata,
-    OutlookSurfaceEventMetadata,
-)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.email_render import render_email_content
-from app.modules.agent_surfaces.platforms.gmail.tools import build_gmail_surface_toolset
-from app.modules.agent_surfaces.platforms.outlook.tools import (
-    build_outlook_surface_toolset,
-)
-from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
 class _FakeHttpResponse:
@@ -49,10 +38,17 @@ def _email_ctx(platform: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
-async def test_ask_user_fails_fast_on_email_surface(platform):
-    """ask_user must never pause (raise AgentInputRequired) on an email surface —
-    it returns a recoverable interaction_fallback instead so the run completes."""
+@pytest.mark.parametrize("platform", ["RESEND"])
+async def test_ask_user_pauses_on_an_email_surface_too(platform):
+    """Email can ask. It just cannot ask twice in one turn.
+
+    This used to fail fast, on the reasoning that email "cannot pause". But the
+    pause was never synchronous: the run ends, the question goes out inside the
+    one reply, the person replies, and maybe_resume_pending_interaction resolves
+    it exactly as a tapped Slack button does. The real constraint was only ever
+    delivery cardinality -- the question has to ride in the reply -- and an
+    agent facing a destructive action can now ask instead of guessing.
+    """
     from app.modules.agent.tools.tool_errors import AgentInputRequired
     from app.modules.agent.tools.user_interaction.models import AskUserRequest
     from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
@@ -68,34 +64,30 @@ async def test_ask_user_fails_fast_on_email_surface(platform):
             ]
         }
     )
-    try:
-        response = await ask_user(_email_ctx(platform), request)
-    except AgentInputRequired:  # pragma: no cover - the bug this guards against
-        pytest.fail("ask_user paused the run on an email surface")
-    assert response.success is False
-    assert response.interaction_fallback is True
+    with pytest.raises(AgentInputRequired):
+        await ask_user(_email_ctx(platform), request)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
-async def test_request_approval_fails_fast_on_email_surface(platform):
-    """request_approval must never pause on an email surface."""
+@pytest.mark.parametrize("platform", ["RESEND"])
+async def test_request_approval_pauses_on_an_email_surface_too(platform):
+    """The case that matters most: a destructive action on an email surface.
+
+    It previously either happened unapproved or silently did not happen, because
+    the agent was told to pick a default and proceed.
+    """
     from app.modules.agent.tools.tool_errors import AgentInputRequired
     from app.modules.agent.tools.user_interaction.pydantic_adapter import (
         request_approval,
     )
 
-    try:
-        response = await request_approval(
+    with pytest.raises(AgentInputRequired):
+        await request_approval(
             _email_ctx(platform),
-            tool_name="pod_write_record",
-            args={"table_id": "t", "data": {}},
-            title="Write a record",
+            tool_name="exec_command",
+            args={"cmd": "lemma records delete orders --id 42"},
+            title="Delete order 42",
         )
-    except AgentInputRequired:  # pragma: no cover - the bug this guards against
-        pytest.fail("request_approval paused the run on an email surface")
-    assert response.success is False
-    assert response.interaction_fallback is True
 
 
 @pytest.mark.asyncio
@@ -127,8 +119,8 @@ def test_render_email_content_adds_display_resource_html_card():
         display_resource_plans=[
             SurfaceDisplayRenderPlan(
                 resource_type="FILE",
-                title="File: /me/report.pdf",
-                summary="A file is ready to inspect.",
+                title="report.pdf",
+                summary="PDF · 2.3 MB",
                 actions=[
                     SurfaceDisplayAction(
                         label="Open file",
@@ -140,142 +132,23 @@ def test_render_email_content_adds_display_resource_html_card():
     )
 
     assert "I prepared the report." in plain
-    assert "File: /me/report.pdf" in plain
+    assert "report.pdf" in plain
+    assert "PDF · 2.3 MB" in plain
     assert html is not None
     assert "Open file" in html
     assert "https://app.example.test" in html
 
 
-@pytest.mark.asyncio
-async def test_gmail_reply_email_sends_html_and_attachment(monkeypatch):
-    toolset = build_gmail_surface_toolset(
-        credentials={
-            "access_token": "gmail-token",
-            "api_base_url": "https://gmail.example.test",
-        }
-    )
-    tool = toolset.tools["gmail_reply_email"]
-
-    async def fake_read_file(self, path: str):
-        assert path == "notes/report.txt"
-        return "hello world"
-
-    async def fake_post(self, url: str, **kwargs):
-        assert url.endswith("/gmail/v1/users/me/messages/send")
-        payload = kwargs["json"]
-        assert payload["threadId"] == "gmail-thread-1"
-        return _FakeHttpResponse(json_data={"id": "gmail-sent-1"})
-
-    monkeypatch.setattr(WorkspaceFileManager, "read_file", fake_read_file)
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-
-    ctx = SimpleNamespace(
-        deps=ConversationContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="GMAIL",
-            external_channel_id="assistant@gmail.test",
-            external_thread_id="gmail-thread-1",
-            surface_metadata=GmailSurfaceEventMetadata(
-                mailbox_email="assistant@gmail.test",
-                subject="Need review",
-                thread_id="gmail-thread-1",
-                message_id="gmail-message-1",
-                reply_to_email="rahul@example.com",
-                references=["<gmail-message-1@example.com>"],
-                in_reply_to="<gmail-message-1@example.com>",
-            ),
-        )
-    )
-    request = SimpleNamespace(
-        content="## Done\nPlease see the attached report.",
-        content_type="markdown",
-        attachment_paths=["notes/report.txt"],
-        subject=None,
+def _email_event(platform: str, **reply_target):
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
     )
 
-    response = await tool.function(ctx, request)
-
-    assert response.success is True
-    assert response.message_id == "gmail-sent-1"
-    assert response.attachment_count == 1
-
-
-@pytest.mark.asyncio
-async def test_outlook_reply_email_sends_graph_file_attachments(monkeypatch):
-    toolset = build_outlook_surface_toolset(
-        credentials={
-            "access_token": "outlook-token",
-            "api_base_url": "https://graph.example.test",
-        }
+    return ParsedInboundSurfaceEvent(
+        platform=platform,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id=str(reply_target.get("thread_id") or "thread-1"),
+        message_text="Need review",
+        reply_target=dict(reply_target),
     )
-    tool = toolset.tools["outlook_reply_email"]
-
-    async def fake_read_file(self, path: str):
-        assert path == "docs/brief.txt"
-        return "brief body"
-
-    calls: list[tuple[str, dict | None]] = []
-
-    async def fake_post(self, url: str, **kwargs):
-        calls.append((url, kwargs.get("json")))
-        if url.endswith("/v1.0/me/messages/graph-message-1/createReply"):
-            return _FakeHttpResponse(json_data={"id": "draft-1"})
-        if url.endswith("/v1.0/me/messages/draft-1/attachments"):
-            payload = kwargs["json"]
-            assert payload["@odata.type"] == "#microsoft.graph.fileAttachment"
-            assert payload["name"] == "brief.txt"
-            return _FakeHttpResponse(json_data={"id": "attachment-1"})
-        if url.endswith("/v1.0/me/messages/draft-1/send"):
-            return _FakeHttpResponse()
-        raise AssertionError(f"Unexpected POST url: {url}")
-
-    async def fake_patch(self, url: str, **kwargs):
-        assert url.endswith("/v1.0/me/messages/draft-1")
-        payload = kwargs["json"]
-        assert payload["subject"] == "Re: Need review"
-        assert payload["body"]["contentType"] == "HTML"
-        assert "Done. See attachment." in payload["body"]["content"]
-        return _FakeHttpResponse()
-
-    monkeypatch.setattr(WorkspaceFileManager, "read_file", fake_read_file)
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    monkeypatch.setattr(httpx.AsyncClient, "patch", fake_patch)
-
-    ctx = SimpleNamespace(
-        deps=ConversationContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="OUTLOOK",
-            external_channel_id="assistant@outlook.test",
-            external_thread_id="outlook-thread-1",
-            surface_metadata=OutlookSurfaceEventMetadata(
-                mailbox_email="assistant@outlook.test",
-                subject="Need review",
-                thread_id="outlook-thread-1",
-                message_id="graph-message-1",
-                internet_message_id="<outlook-message-1@example.com>",
-                reply_to_email="rahul@example.com",
-                references=["<outlook-message-1@example.com>"],
-                in_reply_to="<outlook-message-1@example.com>",
-            ),
-        )
-    )
-    request = SimpleNamespace(
-        content="<p>Done. See attachment.</p>",
-        content_type="html",
-        attachment_paths=["docs/brief.txt"],
-        subject=None,
-    )
-
-    response = await tool.function(ctx, request)
-
-    assert response.success is True
-    assert response.attachment_count == 1
-    assert [url for url, _ in calls] == [
-        "https://graph.example.test/v1.0/me/messages/graph-message-1/createReply",
-        "https://graph.example.test/v1.0/me/messages/draft-1/attachments",
-        "https://graph.example.test/v1.0/me/messages/draft-1/send",
-    ]

@@ -22,6 +22,7 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent
+from pydantic_ai.messages import UserContent
 from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
@@ -162,7 +163,7 @@ async def describe_images(
         organization_id=organization_id, user_id=user_id
     )
 
-    prompt: list[object] = [
+    prompt: list[UserContent] = [
         (instructions or _DEFAULT_INSTRUCTIONS).strip(),
         "",
         "Images, in order:",
@@ -184,8 +185,8 @@ async def describe_images(
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
         ) from exc
     except Exception as exc:
-        logger.debug(
-            "agent.vision_service.description_failed.diagnostic", exc_info=True
+        logger.warning(
+            "agent.vision_service.description_failed.degraded", exc_info=True
         )
         raise VisionDescriptionError(
             "The vision model could not describe the image."

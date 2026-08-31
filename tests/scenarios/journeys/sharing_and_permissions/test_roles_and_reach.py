@@ -13,7 +13,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_CHANGE_IS_VISIBLE
 
 pytestmark = [
     journey("Sharing and permissions"),
@@ -94,7 +94,7 @@ async def test_a_role_grant_follows_the_role(world, a_pod_and_a_table):
             lambda person=person: _can_read(person, table, pod),
             lambda allowed: allowed,
             describe=f"{person.label} to reach the table their role grants",
-            timeout=15.0,
+            timeout=UNTIL_A_CHANGE_IS_VISIBLE,
         )
         assert reached, person.label
 
@@ -124,7 +124,7 @@ async def test_losing_a_role_takes_back_its_grant(world, a_pod_and_a_table):
         lambda: _can_read(bob, table, pod),
         lambda allowed: allowed,
         describe="bob to reach the table his role grants",
-        timeout=15.0,
+        timeout=UNTIL_A_CHANGE_IS_VISIBLE,
     )
 
     # Moved to a role that grants nothing at all, rather than to POD_VIEWER —
@@ -137,7 +137,7 @@ async def test_losing_a_role_takes_back_its_grant(world, a_pod_and_a_table):
         lambda: _can_read(bob, table, pod),
         lambda allowed: not allowed,
         describe="bob to lose what the auditor role granted",
-        timeout=15.0,
+        timeout=UNTIL_A_CHANGE_IS_VISIBLE,
     )
 
 

@@ -176,7 +176,17 @@ async def get_pod_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="pod_id is required",
         )
-    pod_id = UUID(str(raw_pod_id))
+    try:
+        pod_id = UUID(str(raw_pod_id))
+    except ValueError:
+        # The case the `is None` check above does not cover. Every pod-scoped
+        # route reaches this, so an unparseable path segment used to leave an
+        # unhandled ValueError and answer 500 — a server error for what is
+        # entirely a malformed request, and in debug a traceback with it.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="pod_id must be a UUID",
+        ) from None
     existing = getattr(request.state, "ctx", None)
     if (
         existing is not None
@@ -188,10 +198,49 @@ async def get_pod_context(
     ctx = await resolve_pod_context(
         session=uow.session, request=request, user_id=user.id, pod_id=pod_id
     )
+    _refuse_a_deleted_pod(request, ctx)
     request.state.ctx = ctx
     set_current_context(ctx)
     await _release_after_authorization(uow)
     return ctx
+
+
+#: The operations a deleted pod still answers, and why each one has to.
+#:
+#: `pod.delete` is the whole list. PS-POD-050 promises a retried deletion
+#: reports success rather than failing on the second attempt, and it cannot do
+#: that if addressing the pod is itself refused. Everything else about a
+#: deleted pod -- its schedules, its agents, its records, its members -- is
+#: gone as far as the API is concerned.
+_OPERATIONS_A_DELETED_POD_STILL_ANSWERS = frozenset({"pod.delete"})
+
+
+def _refuse_a_deleted_pod(request: Request, ctx: Context) -> None:
+    """Stop a deleted pod answering for its contents, on every route.
+
+    Deleting a pod is a soft delete: the row is flagged, the name is freed and
+    the schedules are disarmed, but memberships survive -- so the caller's role
+    snapshot still authorizes them and every pod-scoped route went on
+    answering. Only the routes carrying `require_pod_membership(enumerates=
+    True)` refused, which made whether a deleted pod was visible depend on
+    which dependency a route happened to use: its schedule *list* 404'd while
+    one schedule, its run history, its agents and its records all answered 200.
+    That is `DEV-OPS-007`, and it is the trap version of a bug -- a new
+    pod-scoped route inherited the hole by default.
+
+    It lives here because this is the one place every pod-scoped route passes
+    through, so a route added tomorrow gets the rule without knowing it exists.
+    It costs no query: `pod_is_deleted` rides in the role snapshot, written
+    where the `Pod` row was already being read.
+    """
+    if not ctx.pod_is_deleted:
+        return
+    route = request.scope.get("route")
+    if getattr(route, "operation_id", None) in _OPERATIONS_A_DELETED_POD_STILL_ANSWERS:
+        return
+    from app.core.domain.errors import DomainError
+
+    raise DomainError("Pod not found", code="POD_NOT_FOUND", status_code=404)
 
 
 async def _release_after_authorization(uow) -> None:

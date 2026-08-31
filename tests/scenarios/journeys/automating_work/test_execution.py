@@ -11,6 +11,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.building import function_source
+from harness.steps.datastore import column
 
 pytestmark = [
     journey("Automating work"),
@@ -198,6 +199,128 @@ class TestRunningAWorkflow:
 
         assert run["status"] == "COMPLETED", run
         assert run.get("step_history"), "a run has to record the steps it took"
+
+    @scenario("A step that exceeds the run's authority fails, and says so")
+    @proves("PS-FLOW-014", "PS-FUNC-002")
+    @covers(
+        "workflow.graph.update",
+        "workflow.run.create",
+        "workflow.run.get",
+        "table.create",
+    )
+    async def test_a_step_beyond_the_runs_authority_is_refused_readably(self, pod, run):
+        """The unwanted clause of PS-FLOW-014, driven end to end.
+
+        A workflow step is code, and code asks for things. What it may have is
+        whatever the run's authority allows — not whatever the pod contains.
+        So this gives a function no grants at all and has it read a table that
+        really exists, inside a run started by somebody who can read that table
+        themselves. The person's own access is not the step's access.
+
+        Two failure modes are pinned, and they are different: the step must not
+        come back with the rows (authority leaking through the run), and it
+        must not be quietly skipped while the run reports success (a refusal
+        swallowed, which is worse than a loud one because nothing is left to
+        look at). It has to fail, and the failure has to be readable.
+        """
+        alice, the_pod = pod
+        table = await alice.creates_a_table(
+            in_pod=the_pod, columns=[column("secret")], named=run.name("ledger")
+        )
+        await alice.adds_record(
+            {"secret": "not for an ungranted step"},
+            to_table=table["name"],
+            in_pod=the_pod,
+        )
+
+        reader = await alice.creates_a_function(
+            in_pod=the_pod,
+            named=run.name("peek"),
+            code=(
+                "#input_type_name: Input\n"
+                "#output_type_name: Output\n"
+                "#function_name: peek\n"
+                "\n"
+                "from pydantic import BaseModel\n"
+                "\n"
+                "class Input(BaseModel):\n"
+                "    value: int\n"
+                "\n"
+                "class Output(BaseModel):\n"
+                "    value: int\n"
+                "\n"
+                "async def peek(ctx, data: Input) -> Output:\n"
+                # The read is the whole test: it either raises because the
+                # step lacks the grant, or it returns. Nothing here depends on
+                # the shape of what comes back, so a paging change cannot make
+                # this scenario look like an authority failure.
+                f"    ctx.pod.records.list({table['name']!r})\n"
+                "    return Output(value=1)\n"
+            ),
+        )
+        workflow = await alice.creates_a_workflow(in_pod=the_pod)
+        await alice.gives_workflow_a_graph(
+            workflow["name"],
+            nodes=[
+                {
+                    "id": "step",
+                    "type": "FUNCTION",
+                    "config": {
+                        "function_name": reader["name"],
+                        "input_mapping": {"value": {"type": "literal", "value": 0}},
+                    },
+                },
+                {"id": "done", "type": "END"},
+            ],
+            edges=[{"id": "e1", "source": "step", "target": "done"}],
+            start={"type": "MANUAL"},
+            in_pod=the_pod,
+        )
+
+        started = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
+
+        assert str(started.get("status")).upper() != "COMPLETED", (
+            f"a step read a table the function was never granted, and the run "
+            f"reported success: {str(started)[:600]}"
+        )
+        said = str(started.get("error") or started.get("step_history") or "")
+        assert "grant" in said.lower() or "permission" in said.lower(), (
+            f"the step was refused, but not in words that say why or what to "
+            f"do about it — which is the half of the promise that turns a "
+            f"failed run into something a person can fix: {said[:400]!r}"
+        )
+
+        # The control, and the reason the refusal above means anything. Without
+        # it this scenario would pass just as happily against a step that could
+        # never read any table for some unrelated reason -- a broken client, a
+        # bad table name, a runtime that cannot import the SDK. Granting the one
+        # missing permission and watching the same graph complete is what makes
+        # this a statement about authority.
+        await alice.replaces_function_grants(
+            reader["name"],
+            grants=[
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": table["name"],
+                    # Reading rows needs the record permission as well as the
+                    # table one -- the control caught that, which is the point
+                    # of having a control.
+                    "permission_ids": [
+                        "datastore.table.read",
+                        "datastore.record.read",
+                    ],
+                }
+            ],
+            in_pod=the_pod,
+        )
+
+        granted = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
+
+        assert str(granted.get("status")).upper() == "COMPLETED", (
+            f"the same step still failed once the function was granted the "
+            f"table, so the refusal above was not about authority: "
+            f"{str(granted)[:600]}"
+        )
 
     @scenario("A graph that cannot run is refused with the step at fault")
     @proves("PS-FLOW-001")
