@@ -27,6 +27,16 @@ struct Config: Decodable {
     let appUrl: String
     let email: String
     let password: String
+    /// "toplevel" (default) or "embedded".
+    ///
+    /// Both matter, and they fail independently. A pod app opened in its own
+    /// window is first-party and works; the same app in an iframe on the
+    /// workspace is third-party, and WebKit gives a third-party frame no
+    /// storage at all -- no cookie stored, no `document.cookie`, no storage
+    /// access. That is decided against the *top* frame, so nothing the app or
+    /// the API does can change it. Testing only the top-level case is how this
+    /// shipped broken twice.
+    let mode: String?
 }
 
 // Every failure mode gets a name, because "it did not work" against a stack
@@ -36,6 +46,7 @@ enum Stage: String {
     case signingIn = "signing in"
     case loadingApp = "loading the app"
     case callingApi = "calling the API from the app"
+    case embeddingApp = "embedding the app in the workspace"
 }
 
 let arguments = CommandLine.arguments
@@ -87,6 +98,34 @@ let signInScript = """
   } catch (error) {
     window.__signIn = { error: String(error) };
   }
+})();
+"""
+
+/// The embedded assertion: the workspace frames the app, exactly as
+/// `AppFrameHost` does.
+///
+/// The frame is cross-origin, so this side cannot reach into it -- which is the
+/// whole point, and why the app has to report for itself. The published test app
+/// posts its own `/users/me` result to `parent`, and this collects it.
+///
+/// A silent timeout is the expected shape of the failure: a frame with no
+/// storage cannot even fail loudly.
+let embedScript = """
+(async () => {
+  window.__embed = null;
+  const appUrl = \(jsonString(config.appUrl));
+  const expected = new URL(appUrl).origin;
+  window.addEventListener("message", (event) => {
+    if (event.origin !== expected) return;
+    if (event.data && event.data.kind === "lemma-e2e-session") {
+      window.__embed = event.data;
+    }
+  });
+  const frame = document.createElement("iframe");
+  frame.src = appUrl;
+  frame.style.width = "800px";
+  frame.style.height = "600px";
+  document.body.appendChild(frame);
 })();
 """
 
@@ -170,8 +209,30 @@ final class Probe: NSObject, WKNavigationDelegate {
                         self.fail("sign-in refused: \(status ?? "no status") "
                                   + "(HTTP \(result["httpStatus"] as? Int ?? 0))")
                     }
-                    self.stage = .loadingApp
-                    webView.load(URLRequest(url: URL(string: config.appUrl)!))
+                    guard (config.mode ?? "toplevel") == "embedded" else {
+                        self.stage = .loadingApp
+                        webView.load(URLRequest(url: URL(string: config.appUrl)!))
+                        return
+                    }
+                    // Stay on the workspace origin and frame the app from here,
+                    // which is what makes the frame third-party.
+                    self.stage = .embeddingApp
+                    webView.evaluateJavaScript(embedScript) { _, _ in
+                        self.pollFor("window.__embed") { result in
+                            guard let result = result as? [String: Any] else {
+                                self.fail("the embedded app never reported")
+                            }
+                            let status = result["status"] as? Int ?? 0
+                            let email = result["email"] as? String
+                            self.emit([
+                                "ok": status == 200 && email == config.email,
+                                "status": status,
+                                "email": email ?? NSNull(),
+                                "expectedEmail": config.email,
+                                "mode": "embedded",
+                            ])
+                        }
+                    }
                 }
             }
         case .loadingApp:

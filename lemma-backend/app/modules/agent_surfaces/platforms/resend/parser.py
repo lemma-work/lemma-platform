@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.platforms.common import text_or_none
 from app.modules.agent_surfaces.platforms.email_identity import (
+    email_sender_authentication,
     email_thread_root,
     normalize_email_address,
     parse_email_identity,
@@ -75,6 +76,9 @@ def merge_received_email(
             "external_thread_id": thread["thread_id"],
             "external_message_id": thread["message_id"],
             "sender_display_name": identity.display_name,
+            "sender_authentication": email_sender_authentication(
+                received.get("headers"), identity.email
+            ),
             "reply_target": reply_target,
             "metadata": metadata,
         }
@@ -140,6 +144,7 @@ class ResendInboundParser:
         if not sender or not destination:
             return None
 
+        raw_headers = payload.get("headers")
         message_id = text_or_none(payload.get("message_id"))
         in_reply_to = text_or_none(payload.get("in_reply_to"))
         references = [
@@ -172,6 +177,17 @@ class ResendInboundParser:
             sender_external_user_id=sender,
             sender_email=sender,
             sender_display_name=identity.display_name,
+            # Only when this payload actually carries headers. The `email.received`
+            # webhook carries none, so on that path this stays None and
+            # `merge_received_email` fills it in after the body fetch. Anything
+            # that *does* arrive with headers -- the polling receiver, a
+            # replayed payload -- gets its verdict here rather than never,
+            # which is what left those paths unauthenticated entirely.
+            sender_authentication=(
+                email_sender_authentication(raw_headers, sender)
+                if raw_headers
+                else None
+            ),
             message_text=message_text,
             is_dm=True,
             should_start_conversation=True,

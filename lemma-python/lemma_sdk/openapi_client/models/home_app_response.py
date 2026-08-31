@@ -19,15 +19,15 @@ class HomeAppResponse:
         id (UUID):
         name (str):
         status (str):
-        url (str):
         description (None | str | Unset):
+        url (None | str | Unset):
     """
 
     id: UUID
     name: str
     status: str
-    url: str
     description: None | str | Unset = UNSET
+    url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,13 +37,17 @@ class HomeAppResponse:
 
         status = self.status
 
-        url = self.url
-
         description: None | str | Unset
         if isinstance(self.description, Unset):
             description = UNSET
         else:
             description = self.description
+
+        url: None | str | Unset
+        if isinstance(self.url, Unset):
+            url = UNSET
+        else:
+            url = self.url
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -52,11 +56,12 @@ class HomeAppResponse:
                 "id": id,
                 "name": name,
                 "status": status,
-                "url": url,
             }
         )
         if description is not UNSET:
             field_dict["description"] = description
+        if url is not UNSET:
+            field_dict["url"] = url
 
         return field_dict
 
@@ -69,8 +74,6 @@ class HomeAppResponse:
 
         status = d.pop("status")
 
-        url = d.pop("url")
-
         def _parse_description(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -80,12 +83,21 @@ class HomeAppResponse:
 
         description = _parse_description(d.pop("description", UNSET))
 
+        def _parse_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        url = _parse_url(d.pop("url", UNSET))
+
         home_app_response = cls(
             id=id,
             name=name,
             status=status,
-            url=url,
             description=description,
+            url=url,
         )
 
         home_app_response.additional_properties = d

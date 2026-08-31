@@ -1,14 +1,18 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+
+import { AddPeopleDialog } from '@/components/members/add-people-dialog';
+import { Plus } from '@/components/ui/icons';
 
 import { useAgents } from '@/lib/hooks/use-agents';
 import { usePodMembers } from '@/lib/hooks/use-pod-members';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { useSchedules } from '@/lib/hooks/use-schedules';
+import { useProfile } from '@/lib/hooks/use-user';
 import { TONE_COUNT as IDENTITY_TONE_COUNT } from '@/lib/identity/seeded-identity';
 import { getSurfaceDefinition } from '@/lib/surfaces/registry';
 import { getSurfacePlatformKey } from '@/lib/utils/surfaces';
@@ -76,6 +80,9 @@ export function PodHomePresence({
     conversations: Conversation[];
 }) {
     const podAccess = usePodAccess(podId);
+    const canAddPeople = podAccess.can('pod.member.manage');
+    const [addPeopleOpen, setAddPeopleOpen] = useState(false);
+    const { data: profile } = useProfile();
     const canReadAgents = podAccess.can('agent.read');
     const canReadSchedules = podAccess.can('schedule.read');
     const canReadSurfaces = podAccess.canAccessRoute('surfaces');
@@ -139,22 +146,29 @@ export function PodHomePresence({
         return [...seen.values()];
     }, [surfaces]);
 
-    const peopleLabel = members.length === 1 ? '1 person' : `${members.length} people`;
+    // A pod of one is the state this row most needs to name, because it is the
+    // one with something to do about it. "1 person" reads as a tally of other
+    // people; "Just you" reads as an empty room, which is what it is.
+    const isAloneHere = members.length === 1 && members[0].user_id === profile?.id;
+    const peopleLabel = isAloneHere
+        ? 'Just you'
+        : members.length === 1 ? '1 person' : `${members.length} people`;
     const hasPeople = members.length > 0;
     const hasDuty = onDuty.length > 0;
     const hasSurfaces = surfacePlatforms.length > 0;
 
-    if (!hasPeople && !hasDuty && !hasSurfaces) return null;
+    if (!hasPeople && !hasDuty && !hasSurfaces && !canAddPeople) return null;
 
     return (
         <div className="pod-home-presence">
             {faces.length > 0 ? (
-                <span className="pod-home-presence-faces" aria-hidden="true">
+                <span className="pod-home-presence-faces">
                     {faces.map((face) => (
                         <span
                             key={face.key}
                             className={`pod-home-presence-avatar pod-home-presence-avatar-${face.kind} ${avatarToneClass(face.label)}`}
                             title={face.label}
+                            aria-hidden="true"
                         >
                             {face.iconUrl ? (
                                 <Image src={face.iconUrl} alt="" width={16} height={16} className="object-contain" />
@@ -163,14 +177,35 @@ export function PodHomePresence({
                             )}
                         </span>
                     ))}
+                    {canAddPeople ? (
+                        <button
+                            type="button"
+                            onClick={() => setAddPeopleOpen(true)}
+                            className="pod-home-presence-add custom-focus-ring"
+                            aria-label="Add people to this pod"
+                            title="Add people"
+                        >
+                            <Plus className="h-3 w-3" />
+                        </button>
+                    ) : null}
                 </span>
             ) : null}
 
             <span className="pod-home-presence-copy">
                 {hasPeople ? (
-                    <Link href={`/pod/${podId}/settings/members`} className="pod-home-presence-link custom-focus-ring">
-                        {peopleLabel}
-                    </Link>
+                    isAloneHere && canAddPeople ? (
+                        <button
+                            type="button"
+                            onClick={() => setAddPeopleOpen(true)}
+                            className="pod-home-presence-link custom-focus-ring"
+                        >
+                            Just you — add people
+                        </button>
+                    ) : (
+                        <Link href={`/pod/${podId}/settings/members`} className="pod-home-presence-link custom-focus-ring">
+                            {peopleLabel}
+                        </Link>
+                    )
                 ) : null}
 
                 {hasPeople && hasDuty ? <span className="pod-home-presence-sep" aria-hidden="true" /> : null}
@@ -211,6 +246,10 @@ export function PodHomePresence({
                     </Link>
                 ) : null}
             </span>
+
+            {canAddPeople ? (
+                <AddPeopleDialog podId={podId} open={addPeopleOpen} onOpenChange={setAddPeopleOpen} />
+            ) : null}
         </div>
     );
 }

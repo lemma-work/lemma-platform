@@ -69,9 +69,42 @@ pub struct AgentHostSupervisor {
     executable: Option<PathBuf>,
     data_dir: PathBuf,
     log_path: PathBuf,
+    /// Where the running sidecar's identity is written down, so the next
+    /// daemon can recognise one this daemon did not live to stop.
+    record_path: PathBuf,
+    /// This installation, so a record written by another one is never acted on.
+    installation_id: Option<String>,
     state: Mutex<SupervisorState>,
     details: Mutex<Option<(Instant, Value)>>,
 }
+
+/// What was running, written down while it runs.
+///
+/// The sidecar takes an exclusive lock on its data directory and refuses to
+/// start when something else holds it -- correctly, since two of them fight
+/// over one pairing. The lock is released when its holder dies, and the code
+/// that takes it says there is "nothing stale to clean up after a crash",
+/// which is true of a crash and not of the case that actually happened: the
+/// sidecar *outlived* the daemon that started it, was reparented to init, and
+/// went on holding the lock. Every launch after that logged
+/// `another Agent Host is already serving` and retried, forever -- 3,295 lines
+/// of it in one installation -- while chat answered "Fetch is aborted" and
+/// nothing anywhere named the cause.
+///
+/// `Drop` on the supervisor covers the ordinary exits. It cannot cover the
+/// ones that matter here: the daemon killed outright, or the machine losing
+/// power. So the running process is recorded, and the next daemon reclaims
+/// what it finds before starting its own.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AgentHostRecord {
+    schema_version: u32,
+    installation_id: String,
+    pid: u32,
+    executable: String,
+    start_identity: String,
+}
+
+const AGENT_HOST_RECORD_SCHEMA_VERSION: u32 = 1;
 
 impl AgentHostSupervisor {
     pub fn discover(locald_root: &Path) -> Self {
@@ -96,6 +129,11 @@ impl AgentHostSupervisor {
             executable,
             data_dir: shared_root.clone(),
             log_path: shared_root.join("agent-host.log"),
+            record_path: shared_root.join("serve-process.json"),
+            // Best effort: without it nothing is reclaimed, which is the
+            // behaviour that existed before this record did. It is never a
+            // reason to fail to start.
+            installation_id: crate::host_process::installation_identity(locald_root).ok(),
             state: Mutex::new(SupervisorState {
                 child: None,
                 desired_running,
@@ -163,6 +201,10 @@ impl AgentHostSupervisor {
         if let Some(mut child) = state.child.take() {
             state.last_exit_code = terminate_process_tree(&mut child)?;
         }
+        // Stopped on purpose is not a leftover: clear the record whether or
+        // not there was a child, so a stale one cannot outlive the thing it
+        // describes and get some later daemon to kill an innocent pid.
+        self.forget_running();
         state.started_at = None;
         state.started_at_ms = None;
         self.invalidate_details();
@@ -396,11 +438,86 @@ impl AgentHostSupervisor {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
+    /// Stop a sidecar this installation started and never got to stop.
+    ///
+    /// Runs before every spawn rather than once at startup, so it covers the
+    /// restart and reconcile paths too, and costs one small file read when
+    /// there is nothing to do.
+    ///
+    /// The identity check is against the *record*, not against today's
+    /// discovered executable: what has to be proved is that this pid is the
+    /// very process we wrote down -- the guard is against a pid the kernel has
+    /// since handed to something else, which `start_identity` (the process
+    /// start time) settles. Comparing against today's sidecar path instead
+    /// would refuse to reclaim across an update that moved the binary, which is
+    /// exactly a case where the leftover has to go.
+    fn reclaim_leftover(&self) {
+        let Some(installation_id) = self.installation_id.as_deref() else {
+            return;
+        };
+        let Ok(raw) = std::fs::read(&self.record_path) else {
+            return;
+        };
+        let Ok(record) = serde_json::from_slice::<AgentHostRecord>(&raw) else {
+            // Unreadable means unusable, and a record naming nothing is worse
+            // than none at all: clear it rather than reading it every spawn.
+            let _ = std::fs::remove_file(&self.record_path);
+            return;
+        };
+        if record.schema_version != AGENT_HOST_RECORD_SCHEMA_VERSION
+            || record.installation_id != installation_id
+        {
+            return;
+        }
+        if let Ok(identity) = crate::host_process::process_identity(record.pid) {
+            if identity.executable == record.executable
+                && identity.start_identity == record.start_identity
+            {
+                let _ = crate::host_process::terminate_verified_process(record.pid);
+            }
+        }
+        let _ = std::fs::remove_file(&self.record_path);
+    }
+
+    /// Write down what is running, so the next daemon can find it.
+    ///
+    /// Failing to record is not failing to start. The sidecar is up either
+    /// way; all that is lost is the next daemon's ability to reclaim it, which
+    /// is where this started.
+    fn record_running(&self, child: &mut Child) {
+        let Some(installation_id) = self.installation_id.clone() else {
+            return;
+        };
+        let Ok(identity) = crate::host_process::process_identity(child.id()) else {
+            return;
+        };
+        let record = AgentHostRecord {
+            schema_version: AGENT_HOST_RECORD_SCHEMA_VERSION,
+            installation_id,
+            pid: child.id(),
+            executable: identity.executable,
+            start_identity: identity.start_identity,
+        };
+        if let Ok(encoded) = serde_json::to_vec(&record) {
+            let _ = std::fs::write(&self.record_path, encoded);
+        }
+    }
+
+    fn forget_running(&self) {
+        let _ = std::fs::remove_file(&self.record_path);
+    }
+
     fn spawn_locked(&self, state: &mut SupervisorState) -> io::Result<()> {
+        // Before taking the lock for ourselves, give up any we already hold.
+        // A sidecar left over from a daemon that did not live to stop it holds
+        // that lock against every future launch, and the new one can do
+        // nothing but log and retry.
+        self.reclaim_leftover();
         // Every failure arms the backoff, not just a failed `spawn`: an
         // unwritable data directory would otherwise be retried every tick.
         match self.spawn_process() {
-            Ok(child) => {
+            Ok(mut child) => {
+                self.record_running(&mut child);
                 state.child = Some(child);
                 state.restart_count = state.restart_count.saturating_add(1);
                 state.started_at = Some(Instant::now());
@@ -523,6 +640,16 @@ fn summarize_target(target: &Value) -> Value {
 /// Loopback HTTP is the one plain-HTTP case the host accepts, and only when
 /// asked. A development backend is served that way.
 fn is_loopback_http(url: &str) -> bool {
+    is_loopback_http_for(url, &crate::local_domain::LocalDomain::from_env())
+}
+
+/// The check with the install's domain handed in.
+///
+/// Split so the tests can state which domain they mean. `from_env` probes DNS
+/// and caches the answer for the process, so a test that leaned on it would
+/// assert one thing on a machine with a network and the opposite on one
+/// without -- and a gate that flips with the weather gets switched off.
+fn is_loopback_http_for(url: &str, domain: &crate::local_domain::LocalDomain) -> bool {
     let Some(rest) = url.strip_prefix("http://") else {
         return false;
     };
@@ -531,12 +658,26 @@ fn is_loopback_http(url: &str) -> bool {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    // `.localhost` is reserved to loopback by RFC 6761, and Lemma Desktop serves
-    // its own workspace and API on `app.lemma.localhost`. Matching only the
-    // three literal spellings meant this flag was never passed for a desktop
-    // install's own URL, so the host refused to pair with the very workspace
-    // that asked it to.
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]") || host.ends_with(".localhost")
+    // Twice now. `.localhost` is reserved to loopback by RFC 6761, and matching
+    // only the three literal spellings meant this flag was never passed for a
+    // desktop install's own URL, so the host refused to pair with the very
+    // workspace that asked it to. Adding `.localhost` fixed that -- and then the
+    // base domain stopped being `.localhost`.
+    //
+    // An install now serves itself under whatever `LocalDomain` resolved,
+    // because a browser derives no registrable domain from `*.localhost` and a
+    // pod app framed by the workspace needs one. On such an install the URL is
+    // `app.127.0.0.1.sslip.io:<port>`: loopback in every way that matters --
+    // the name resolves to 127.0.0.1 and the backend binds there -- and matched
+    // by none of the spellings above. Pairing failed silently, and the
+    // onboarding step sat on "Connecting this computer" for ever.
+    //
+    // So the question this asks is the one it always meant: is this address
+    // this installation's own? Asking `LocalDomain` means the next time the
+    // domain moves, this moves with it.
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+        || host.ends_with(".localhost")
+        || domain.owns_host(host)
 }
 
 /// Strip anything from a subprocess message that we passed in as a secret.
@@ -693,6 +834,7 @@ impl Drop for AgentHostSupervisor {
         if let Some(mut child) = state.child.take() {
             let _ = terminate_process_tree(&mut child);
         }
+        self.forget_running();
     }
 }
 
@@ -707,6 +849,143 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A sidecar the last daemon did not live to stop is stopped by this one.
+    ///
+    /// This is the bug in full: the Agent Host outlived its daemon, was
+    /// reparented to init, and kept the exclusive lock on its data directory.
+    /// Every launch afterwards could only log `another Agent Host is already
+    /// serving` and retry -- one installation had 3,295 lines of it -- while
+    /// the app said "Fetch is aborted" and no local agent ever answered again.
+    ///
+    /// A real process, because the whole mechanism is about a real pid: the
+    /// record is written the way a spawn writes it, and reclaiming has to leave
+    /// the process dead and the record gone.
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_that_outlived_its_daemon_is_reclaimed_before_the_next_spawn() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+
+        let mut leftover = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        supervisor.record_running(&mut leftover);
+        assert!(
+            supervisor.record_path.is_file(),
+            "a running sidecar has to be written down, or nothing can reclaim it",
+        );
+
+        // Reaped in parallel: `terminate_verified_process` waits for the pid to
+        // stop existing, and a child nobody reaps is a zombie that still
+        // answers `kill(pid, 0)`. A real leftover is init's to reap.
+        let reaper = std::thread::spawn(move || leftover.wait().unwrap());
+        supervisor.reclaim_leftover();
+        let status = reaper.join().unwrap();
+
+        assert!(
+            status.signal().is_some(),
+            "the leftover exited on its own rather than being reclaimed: {status:?}",
+        );
+        assert!(
+            !supervisor.record_path.exists(),
+            "a reclaimed sidecar must not be left in the record to be killed twice",
+        );
+    }
+
+    /// Reclaiming must never kill something that merely inherited the pid.
+    ///
+    /// Pids are reused, and a record can outlive its process by days. The only
+    /// thing that makes killing by pid safe is proving the process there now is
+    /// the one that was written down, which is what `start_identity` is for.
+    #[cfg(unix)]
+    #[test]
+    fn a_pid_that_belongs_to_something_else_now_is_left_alone() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+
+        let mut bystander = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        supervisor.record_running(&mut bystander);
+
+        // The same pid, described as a process that started at a different
+        // time -- which is what a recycled pid looks like from the record's
+        // side.
+        let raw = std::fs::read(&supervisor.record_path).unwrap();
+        let mut record: AgentHostRecord = serde_json::from_slice(&raw).unwrap();
+        record.start_identity = format!("{}-not-the-same-process", record.start_identity);
+        std::fs::write(
+            &supervisor.record_path,
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        supervisor.reclaim_leftover();
+
+        assert!(
+            bystander.try_wait().unwrap().is_none(),
+            "reclaiming killed a process that only happened to hold the pid",
+        );
+        assert!(
+            !supervisor.record_path.exists(),
+            "a record that cannot be acted on is cleared, not read again every spawn",
+        );
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    /// Another installation's record is not this installation's business.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_from_another_installation_is_never_acted_on() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+
+        let mut other = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        supervisor.record_running(&mut other);
+        let raw = std::fs::read(&supervisor.record_path).unwrap();
+        let mut record: AgentHostRecord = serde_json::from_slice(&raw).unwrap();
+        record.installation_id = "ffffffffffffffffffffffffffffffff".into();
+        std::fs::write(
+            &supervisor.record_path,
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        supervisor.reclaim_leftover();
+
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "reclaiming crossed an installation boundary",
+        );
+        assert!(
+            supervisor.record_path.is_file(),
+            "another installation's record is left for its owner to clear",
+        );
+        let _ = other.kill();
+        let _ = other.wait();
+    }
+
+    /// Stopping on purpose clears the record.
+    ///
+    /// Otherwise a record outlives the process it describes, and the next
+    /// daemon reads it and aims `kill` at whatever holds that pid by then.
+    #[test]
+    fn stopping_clears_the_record_so_no_later_daemon_acts_on_it() {
+        let home = tempdir().unwrap();
+        let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+        std::fs::write(&supervisor.record_path, b"{}").unwrap();
+
+        supervisor.stop().unwrap();
+
+        assert!(
+            !supervisor.record_path.exists(),
+            "a deliberate stop left the sidecar written down as still running",
+        );
+    }
 
     /// A sidecar that will not stay up stops being restarted, and says so.
     ///
@@ -1097,6 +1376,10 @@ mod tests {
 
     #[test]
     fn plain_http_is_opted_into_only_on_loopback() {
+        use crate::local_domain::LocalDomain;
+        let sslip = LocalDomain::parse(Some("sslip"));
+        let is_loopback_http = |url: &str| is_loopback_http_for(url, &sslip);
+
         assert!(is_loopback_http("http://localhost:8710"));
         assert!(is_loopback_http("http://127.0.0.1:8710/api"));
         assert!(is_loopback_http("http://[::1]:8710"));
@@ -1108,7 +1391,21 @@ mod tests {
         assert!(is_loopback_http(
             "http://apps.lemma.localhost:52502/internal"
         ));
+        // And the hostname it serves itself on now. A shipped install resolves
+        // to the loopback wildcard, because a browser derives no registrable
+        // domain from `*.localhost` and a framed pod app needs one. This is the
+        // same failure as the line above, one domain later: pairing died
+        // silently and onboarding sat on "Connecting this computer" for ever.
+        assert!(is_loopback_http("http://app.127.0.0.1.sslip.io:61624"));
+        assert!(is_loopback_http(
+            "http://apps.127.0.0.1.sslip.io:61624/internal"
+        ));
         // A LAN or public address over plain HTTP stays refused.
+        // Somebody else's sslip host is somebody else's machine, not ours.
+        assert!(!is_loopback_http("http://app.10.0.0.7.sslip.io:61624"));
+        assert!(!is_loopback_http(
+            "http://app.127.0.0.1.sslip.io.evil:61624"
+        ));
         assert!(!is_loopback_http("http://192.168.1.10:8710"));
         assert!(!is_loopback_http("http://localhost.evil.example:8710"));
         // ".localhost" must be the suffix, not a substring someone else owns.

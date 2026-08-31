@@ -33,7 +33,6 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
@@ -52,7 +51,6 @@ from app.modules.agent_surfaces.services.ingress_service import (
 )
 from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
-from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 
 router = RedisRouter()
@@ -153,81 +151,31 @@ async def _process_surface_webhook(
         if await handler.try_handle_interaction(ingress_request):
             return
 
-        context = await handler.prepare_ingress(ingress_request)
-
-    if not context:
-        return
-
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-            mode="json"
-        ),
-        _job_id=f"surface-event:{event.event_id}",
-    )
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    ScheduleEvents.STREAM,
-    group="surface-schedule-events",
-    consumer="surface-schedule-events-consumer",
-)
-async def handle_surface_schedule_event(
-    event: dict,
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-) -> None:
-    # ``schedule_events`` carries the lifecycle events too (created, updated,
-    # deleted, deactivated). Only fires reach a surface, so the parameter stays
-    # untyped and the fire is parsed after the tag check — declaring
-    # ``ScheduleFired`` here instead makes every lifecycle event a validation
-    # error that is redelivered forever, because a poison message is never
-    # acked and XAUTOCLAIM keeps reclaiming it.
-    if event.get("event_type") != ScheduleFired.get_event_type():
-        return
-
-    fired = ScheduleFired.model_validate(event)
-
-    async def process() -> None:
-        await _process_surface_schedule_event(
-            fired, fs_logger, uow_factory=uow_factory, job_queue=job_queue
-        )
-
-    await inbox.process("agent-surfaces.schedule", fired, process)
-
-
-async def _process_surface_schedule_event(
-    event: ScheduleFired,
-    fs_logger: Logger,
-    *,
-    uow_factory: UnitOfWorkFactory,
-    job_queue: SharedStreaqJobQueue,
-) -> None:
-    async with uow_factory() as uow:
-        handler = build_surface_event_handler(uow)
-        context = await handler.prepare_ingress(
-            SurfaceScheduleIngress(
-                schedule_id=event.schedule_id,
-                payload=event.payload,
-                account_id=event.account_id,
-                pod_id=event.pod_id,
-                user_id=event.user_id,
+        # One delivery can carry more than one message on a platform that
+        # batches; every other platform hands back the request unchanged.
+        contexts = [
+            (index, await handler.prepare_ingress(part))
+            for index, part in enumerate(
+                handler.split_webhook_deliveries(ingress_request)
             )
+        ]
+
+    for index, context in contexts:
+        if not context:
+            continue
+        await job_queue.enqueue(
+            "process_surface_message",
+            payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+                mode="json"
+            ),
+            # The first part keeps the bare id, so the dedup key for an ordinary
+            # single-message delivery is byte-identical to what it was.
+            _job_id=(
+                f"surface-event:{event.event_id}"
+                if index == 0
+                else f"surface-event:{event.event_id}:{index}"
+            ),
         )
-
-    if not context:
-        return
-
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-            mode="json"
-        ),
-        _job_id=f"surface-schedule-event:{event.event_id}",
-    )
 
 
 @reliable_redis_stream_subscriber(

@@ -85,6 +85,9 @@ describe("declared events are emitted or named as gaps", () => {
         // everything below it.
         const emitted = [
             "share_link.viewed",
+            // Both raised by app/s/[kind]/[...path]/contact-landing.tsx.
+            "share_link.contact_opened",
+            "share_link.contact_saved",
             "import.started",
             "client.error",
             // lib/analytics/onboarding.ts is the only emitter of these five.

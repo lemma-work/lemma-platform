@@ -146,11 +146,57 @@ fn updates_enabled() -> bool {
 
 /// Whether a build with these three properties may update itself.
 ///
-/// A conjunction, and each term is load-bearing: a nightly has no durable feed
-/// and is never given the signing key, a debug build is not a release, and a
-/// build with no public key cannot verify what it downloads.
+/// A debug build is not a release, and a build with no public key cannot verify
+/// what it downloads. Both remain disqualifying.
+///
+/// Nightly used to be, on two grounds stated here: it had no durable feed and
+/// was never given the signing key. Both are now false. Nightly builds are
+/// signed with the same key as a release -- so the committed public key
+/// verifies them, and `key_configured` is a real check for them too -- and they
+/// publish to a tag that does not move, which is what makes a feed durable.
+///
+/// The point is not convenience. An update path nobody walks until release day
+/// is an update path nobody has tested; letting nightly update to nightly means
+/// the mechanism is exercised continuously, by people who can report what broke
+/// rather than discovering it in a stable rollout.
 fn updates_allowed(channel: &str, debug: bool, key_configured: bool) -> bool {
-    channel == "stable" && !debug && key_configured
+    matches!(channel, "stable" | "nightly") && !debug && key_configured
+}
+
+/// `updater_endpoints` for this build, parsed, for the plugin's builder.
+///
+/// A malformed constant here would be a build-time mistake, not a runtime
+/// condition, so an unparseable entry is dropped rather than failing the check
+/// -- leaving the plugin with whatever `tauri.conf.json` configured, which is
+/// the stable feed.
+fn parsed_updater_endpoints() -> Vec<tauri::Url> {
+    updater_endpoints(release_channel())
+        .into_iter()
+        .filter_map(|endpoint| tauri::Url::parse(&endpoint).ok())
+        .collect()
+}
+
+/// Where this build looks for its update feed.
+///
+/// Stable reads the `latest` release, which GitHub resolves to the newest
+/// non-prerelease. Nightlies are prereleases and never appear there, so a
+/// nightly pointed at it would either see nothing or be offered a *stable*
+/// build -- neither of which tests anything. They read a tag that is rewritten
+/// in place instead, so the address stays constant while its contents move.
+///
+/// Returned rather than baked into `tauri.conf.json` because the config is one
+/// file shared by every build, and the channel is a compile-time stamp. One
+/// place decides, and the tests below can ask it.
+fn updater_endpoints(channel: &str) -> Vec<String> {
+    const OWNER_REPO: &str = "lemma-work/lemma-platform";
+    match channel {
+        "nightly" => vec![format!(
+            "https://github.com/{OWNER_REPO}/releases/download/desktop-nightly/latest.json"
+        )],
+        _ => vec![format!(
+            "https://github.com/{OWNER_REPO}/releases/latest/download/latest.json"
+        )],
+    }
 }
 
 /// Whether this build carries a public key that can verify an update.
@@ -227,6 +273,15 @@ struct Shell {
     /// -- including Local settings' heartbeat -- for the whole install.
     runtime_install: Mutex<()>,
     quit_after_stop: AtomicBool,
+    /// Whether the shutdown work has already been done, off the main thread.
+    ///
+    /// `RunEvent::Exit` is delivered on the main thread with the window already
+    /// gone, so anything slow there is a beachball and then a process macOS
+    /// reports as "not responding". Every path now does that work on a worker
+    /// first and sets this; the handler on the main thread is a safety net for
+    /// the paths that never get one -- a system logout or restart -- not the
+    /// normal route.
+    teardown_done: AtomicBool,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
     /// The tray's Agent Host line. A label, never a control: the toggle beside
@@ -280,6 +335,7 @@ impl Shell {
             locald_connect: Mutex::new(()),
             runtime_install: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
+            teardown_done: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
             agent_host_status: Mutex::new(None),
@@ -784,7 +840,46 @@ fn hosted_url() -> String {
 }
 
 /// The workspace origins `capabilities/workspace.json` already covers.
-const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
+/// The origins the shipped capability already covers, read from the file.
+///
+/// Restated beside it, this list was a second copy of a rule that had already
+/// drifted once in this very function -- and it silently gained a third failure
+/// mode: the shipped entries carry a `:*` port pattern, while the origins
+/// checked against them are concrete, so `contains` never matched a local
+/// workspace and an override capability was minted for an origin that did not
+/// need one.
+fn shipped_workspace_origins() -> Vec<String> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["remote"]["urls"]
+        .as_array()
+        .expect("capabilities/workspace.json lists remote urls")
+        .iter()
+        .map(|url| {
+            url.as_str()
+                .expect("a shipped remote url is a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Whether a shipped pattern already covers this concrete origin.
+///
+/// Only the port may be a wildcard, and only as the whole port: a local
+/// workspace is served on whatever port was free, so `http://host:*` has to
+/// cover `http://host:52413`. Nothing else is treated as a pattern, because a
+/// looser match here hands shell commands to a lookalike host.
+fn shipped_workspace_origin_covers(pattern: &str, origin: &str) -> bool {
+    if pattern == origin {
+        return true;
+    }
+    let Some(prefix) = pattern.strip_suffix(":*") else {
+        return false;
+    };
+    origin
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+}
 
 /// The shipped workspace capability, read at compile time so the override below
 /// cannot drift from it.
@@ -825,6 +920,7 @@ fn overridden_workspace_capability() -> Option<String> {
 }
 
 fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
+    let shipped = shipped_workspace_origins();
     let mut urls: Vec<String> = Vec::new();
     for value in configured {
         let Ok(url) = tauri::Url::parse(value.trim()) else {
@@ -837,7 +933,10 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
             Some(port) => format!("{}://{host}:{port}", url.scheme()),
             None => format!("{}://{host}", url.scheme()),
         };
-        if SHIPPED_WORKSPACE_ORIGINS.contains(&origin.as_str()) {
+        if shipped
+            .iter()
+            .any(|pattern| shipped_workspace_origin_covers(pattern, &origin))
+        {
             continue;
         }
         if !urls.contains(&origin) {
@@ -2481,7 +2580,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or_else(|| local_auth_url(&url, "signup"));
+                .unwrap_or_else(|| local_auth_url_returning_to(&url, "signup", "/"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -2553,14 +2652,31 @@ fn should_preserve_inflight_phase(
         && !matches!(phase_key, "" | "boot" | "stopped" | "ready" | "error")
 }
 
-/// Drop out of the Dock, keeping the tray. macOS's "close means gone" contract.
+/// Match the Dock icon to whether anything is actually on screen.
 ///
-/// `Accessory` also removes the app menu bar, which is correct: with no window
-/// on screen there is nothing for those menus to act on, and every verb they
-/// carry is in the tray menu too.
+/// `Accessory` removes the Dock tile and the app menu bar, which is right when
+/// the last window has gone: there is nothing for those menus to act on, and
+/// every verb they carry is in the tray menu too.
+///
+/// Conditional on *every* window, not just the main one. A pod app opens in a
+/// window of its own, so closing the workspace while an app is still up used to
+/// drop the Dock tile out from under a window that was still visible -- leaving
+/// it unreachable by ⌘-tab and belonging to an app the Dock said was not there.
 #[cfg(target_os = "macos")]
-fn hide_from_dock(app: &AppHandle) {
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+fn settle_dock_presence(app: &AppHandle) {
+    // Minimised counts. `is_visible()` is `[NSWindow isVisible]`, which is NO
+    // for a miniaturised window -- so minimising a pod app and then closing the
+    // workspace dropped the Dock tile while that app was still there, sitting
+    // in the Dock as a window belonging to an application the Dock no longer
+    // showed, with no way to ⌘-tab back to it.
+    let anything_on_screen = app.webview_windows().values().any(|window| {
+        window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false)
+    });
+    let _ = app.set_activation_policy(if anything_on_screen {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    });
 }
 
 /// Come back to the Dock. Called on every path that puts the window back on
@@ -2671,31 +2787,63 @@ const POD_APP_WINDOW: &str = "pod-app";
 /// scoped by webview label: this window runs user-authored code, so it gets no
 /// Tauri command surface at all. Adding a capability for this label would hand
 /// every pod app the IPC bridge.
-fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
-    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
-    if let Some(existing) = app.get_webview_window(POD_APP_WINDOW) {
-        existing
-            .navigate(target)
-            .map_err(|error| format!("could not open {url}: {error}"))?;
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-
-    // Named from the host rather than the path: the slug is the app's identity
-    // and the path is wherever the user happens to be inside it.
-    let title = target
+/// What to call an app's window: its public slug, made readable.
+///
+/// From the host, not the path -- the slug identifies the app and the path is
+/// wherever the user happens to be inside it, so a window would otherwise be
+/// renamed by navigation.
+fn pod_app_window_title(target: &tauri::Url) -> String {
+    target
         .host_str()
         .and_then(|host| host.split('.').next())
         .filter(|label| !label.is_empty())
         .map(|label| label.replace('-', " "))
-        .unwrap_or_else(|| "Lemma app".to_owned());
+        .unwrap_or_else(|| "Lemma app".to_owned())
+}
 
-    WebviewWindowBuilder::new(app, POD_APP_WINDOW, WebviewUrl::External(target))
+fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
+
+    // Named from the host rather than the path: the slug is the app's identity
+    // and the path is wherever the user happens to be inside it.
+    let title = pod_app_window_title(&target);
+
+    if let Some(existing) = app.get_webview_window(POD_APP_WINDOW) {
+        existing
+            .navigate(target)
+            .map_err(|error| format!("could not open {url}: {error}"))?;
+        // Retitled, because the window is reused. Opening a second app left the
+        // first one's name on the title bar, the Window menu and ⌘-tab, so the
+        // window said "study lab" while rendering payroll.
+        let _ = existing.set_title(&title);
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        restore_dock_presence(app);
+        return Ok(());
+    }
+
+    let mode = current_mode(app);
+    let builder = WebviewWindowBuilder::new(app, POD_APP_WINDOW, WebviewUrl::External(target))
         .title(title)
         .inner_size(1180.0, 800.0)
         .min_inner_size(420.0, 400.0)
-        .background_color(CANVAS_LIGHT)
+        .background_color(CANVAS_LIGHT);
+
+    // The same cookie jar the workspace uses, or the app has no session.
+    //
+    // A webview with no explicit store gets WebKit's default one, and the main
+    // window is deliberately *not* on that -- it is partitioned per server so
+    // signing into Local and Cloud are separate sessions. So an app window
+    // without this line opens on an empty jar: the page renders, because assets
+    // are served unauthenticated, and then every SDK call 401s. That is exactly
+    // the bug this whole window exists downstream of, reintroduced one window
+    // over, and it is invisible to a test that drives its own WKWebView.
+    #[cfg(target_os = "macos")]
+    let builder = builder.data_store_identifier(session_partition_id(&mode));
+    #[cfg(target_os = "windows")]
+    let builder = builder.data_directory(session_partition_dir(&mode));
+
+    builder
         .on_navigation({
             let handle = app.clone();
             move |url| {
@@ -2715,15 +2863,45 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
         .on_new_window({
             let handle = app.clone();
             move |url, _features| {
-                // A popup from inside an app leaves the app: send it to the
-                // browser rather than growing a tree of chromeless windows.
+                // The same decision the workspace makes, not a looser one.
+                //
+                // This used to ask `navigation_disposition`, which answers a
+                // different question: it admits `about:blank` and our own
+                // bundled `tauri://` pages because subframes need them. Routed
+                // through here that meant `window.open('about:blank')` from app
+                // code reached `open_external` and launched the user's browser,
+                // and a plain link back to the workspace opened Lemma in Safari
+                // -- where there is no session at all.
                 let (mode, app_base, api_base) = navigation_context(&handle);
-                if navigation_disposition(&url, &mode, &app_base, &api_base)
-                    != NavigationDisposition::Deny
-                {
-                    open_external(url.as_str());
+                match new_window_disposition(&url, &mode, &app_base, &api_base) {
+                    // A link to another app belongs in this window, which is
+                    // the one the user is already looking at an app in.
+                    NewWindowDisposition::OpenAppWindow | NewWindowDisposition::NavigateInApp => {
+                        if let Err(error) = open_pod_app_window(&handle, url.as_str()) {
+                            append_install_log(&format!(
+                                "could not follow a link out of a pod app: {error}"
+                            ));
+                        }
+                    }
+                    NewWindowDisposition::OpenExternal => open_external(url.as_str()),
+                    NewWindowDisposition::Deny => {}
                 }
                 NewWindowResponse::Deny
+            }
+        })
+        .on_download({
+            let handle = app.clone();
+            move |_webview, event| match event {
+                // Registering a policy at all is what makes downloads work:
+                // with no handler the webview cancels the navigation outright
+                // and says nothing, which is how Download buttons came to do
+                // nothing on macOS. An app that exports a CSV is an ordinary
+                // app, so this window needs the same policy the workspace has.
+                DownloadEvent::Requested { url, .. } => {
+                    let (mode, app_base, api_base) = navigation_context(&handle);
+                    download_disposition(&url, &mode, &app_base, &api_base)
+                }
+                _ => true,
             }
         })
         .build()
@@ -3467,7 +3645,10 @@ async fn check_for_app_update(window: Webview, app: AppHandle) -> Result<AppUpda
         return Ok(status);
     }
     let update = app
-        .updater()
+        .updater_builder()
+        .endpoints(parsed_updater_endpoints())
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .build()
         .map_err(|error| format!("could not check for updates: {error}"))?
         .check()
         .await
@@ -3539,7 +3720,10 @@ async fn install_app_update(
         );
     }
     let update = app
-        .updater()
+        .updater_builder()
+        .endpoints(parsed_updater_endpoints())
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .build()
         .map_err(|error| format!("could not check for updates: {error}"))?
         .check()
         .await
@@ -4752,6 +4936,57 @@ fn saved_placement(config: &Value) -> Option<WindowPlacement> {
     })
 }
 
+/// A saved placement in the units the window builder actually reads.
+///
+/// Everything else about placement is in physical pixels and consistently so:
+/// `outer_position` and `inner_size` return physical, and
+/// `placement_is_reachable` compares them against monitor geometry that is also
+/// physical. The window *builder* is the one place that is not --
+/// `WebviewWindowBuilder::position` and `inner_size` are documented as logical
+/// pixels -- and handing it physical values was silently wrong on every display
+/// that is not 1:1.
+///
+/// On a 2x screen it doubled both: a window saved at 3024x1898 came back asking
+/// for 3024x1898 *logical*, which is 6048x3796 physical, so macOS clamped the
+/// size to the visible frame, and a saved y of 66 became 132 -- the window
+/// opened lower than it was left and short of the top of the screen. Restoring
+/// looked broken in a way that reads as "the app won't remember my window".
+///
+/// Returns None when the window would come back smaller than the app's own
+/// minimum. That check belongs here rather than beside the parse, because
+/// `MIN_RESTORED` is a logical size and until this point the numbers are not.
+fn placement_in_logical(
+    placement: &WindowPlacement,
+    scale: f64,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = placement.position.to_logical::<f64>(scale);
+    let size = placement.size.to_logical::<f64>(scale);
+    if size.width < f64::from(MIN_RESTORED.0) || size.height < f64::from(MIN_RESTORED.1) {
+        return None;
+    }
+    Some((position, size))
+}
+
+/// The scale of the display a placement lands on, or the primary one.
+///
+/// Asked per placement rather than taken from the primary monitor, because a
+/// second display with a different scale is exactly the case that makes the
+/// conversion wrong in a way the user sees.
+fn placement_scale_factor(handle: &AppHandle, placement: &WindowPlacement) -> f64 {
+    handle
+        .monitor_from_point(
+            f64::from(placement.position.x),
+            f64::from(placement.position.y),
+        )
+        .ok()
+        .flatten()
+        .or_else(|| handle.primary_monitor().ok().flatten())
+        .map_or(1.0, |monitor| monitor.scale_factor())
+}
+
 /// Whether a saved placement still lands on a display that exists.
 ///
 /// The failure this prevents is the classic one: quit with the window on a
@@ -4882,7 +5117,15 @@ fn build_main_window_at(
                         let _ = navigate_app_window(&handle, url.as_str());
                     }
                     NewWindowDisposition::OpenAppWindow => {
-                        let _ = open_pod_app_window(&handle, url.as_str());
+                        // Logged rather than discarded: every failure here ends
+                        // with the user clicking "open in new window" and
+                        // nothing happening at all, which is indistinguishable
+                        // from a dead button.
+                        if let Err(error) = open_pod_app_window(&handle, url.as_str()) {
+                            append_install_log(&format!(
+                                "could not open a pod app window: {error}"
+                            ));
+                        }
                     }
                     NewWindowDisposition::OpenExternal => {
                         open_external(url.as_str());
@@ -4955,16 +5198,12 @@ fn build_main_window_at(
     // guess: an unplaced window lands where the OS puts it, which is right for
     // a first-ever launch and safe for everything else.
     let placement = placement.or_else(|| remembered_placement(handle));
-    let main_builder = match placement {
-        Some(placement) => main_builder
-            .position(
-                f64::from(placement.position.x),
-                f64::from(placement.position.y),
-            )
-            .inner_size(
-                f64::from(placement.size.width),
-                f64::from(placement.size.height),
-            ),
+    let main_builder = match placement
+        .and_then(|saved| placement_in_logical(&saved, placement_scale_factor(handle, &saved)))
+    {
+        Some((position, size)) => main_builder
+            .position(position.x, position.y)
+            .inner_size(size.width, size.height),
         None => main_builder,
     };
 
@@ -5190,6 +5429,20 @@ fn wait_until_label_released(
 /// previous store shows the right server with the wrong cookie jar, which is
 /// the behaviour that shipped before this existed. Refusing to switch servers
 /// at all would be worse.
+/// Close any pod app window, because what it is showing no longer exists.
+///
+/// An app window holds an absolute URL on the local backend's port. Switching
+/// servers, or locald reallocating ports, leaves it pointed at something that
+/// is gone -- and its navigation gate re-reads the mode live, so a window
+/// opened under the local policy would start answering to the hosted one, where
+/// every http(s) destination is allowed. Closing it is the honest option: it is
+/// a view of a pod on a server this app is no longer connected to.
+fn close_pod_app_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POD_APP_WINDOW) {
+        let _ = window.destroy();
+    }
+}
+
 fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     let Some(existing) = app.get_webview_window("main") else {
         // Nothing built yet -- `setup` will create it against the right store.
@@ -5199,6 +5452,9 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     // deliberate rather than `close`: the app hides to tray on CloseRequested,
     // so `close` would leave the old window alive on the old store and no new
     // one would ever be built.
+    // Before the swap flag, so a pod app window cannot be mistaken for the
+    // "no windows left" state the flag exists to cover.
+    close_pod_app_window(app);
     let shell: State<Shell> = app.state();
     shell.swapping_window.store(true, Ordering::Release);
     let _reset = ExitGuard(app.clone());
@@ -5293,6 +5549,26 @@ fn same_origin(url: &tauri::Url, target: &str) -> bool {
         && url.port_or_known_default() == target.port_or_known_default()
 }
 
+/// The local domains this build will serve a workspace under.
+///
+/// Compiled in on purpose. `trusted_workspace_urls` exists to stop a `ready`
+/// event pointing the workspace somewhere else, so deriving the acceptable
+/// hostname from that same event would answer the question with the thing being
+/// questioned. A short list the shell ships knowing keeps the gate meaning
+/// something while letting the domain move.
+///
+/// Kept in step with `lemma_locald::local_domain`, which is what actually picks
+/// one -- the shell launches locald rather than linking it, so there is no
+/// shared constant to reach for.
+const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost", "127.0.0.1.sslip.io"];
+
+/// Whether `host` is the workspace host of a domain this build knows.
+fn trusted_local_workspace_host(host: &str) -> bool {
+    TRUSTED_LOCAL_BASES
+        .iter()
+        .any(|base| host == format!("app.{base}"))
+}
+
 fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
         return false;
@@ -5310,13 +5586,17 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
         return false;
     }
 
-    if app.host_str() == Some("app.lemma.localhost") {
+    if app.host_str().is_some_and(trusted_local_workspace_host) {
         let (Some(app_port), Some(api_port)) = (app.port(), api.port()) else {
             return false;
         };
         return app.scheme() == "http"
             && api.scheme() == "http"
-            && api.host_str() == Some("app.lemma.localhost")
+            // The same host as the workspace, which the allowlist above has
+            // already vetted. Checking the literal twice let the two drift;
+            // what this arrangement actually requires is one hostname on two
+            // ports.
+            && api.host_str() == app.host_str()
             && api.path() == "/"
             && app_port >= 49_152
             && api_port >= 49_152
@@ -5326,7 +5606,7 @@ fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
     same_origin(&api, app_base)
         && api.path() == "/_lemma/api"
         && matches!(app.scheme(), "http" | "https")
-        && (app.scheme() == "https" || local_destination(&app))
+        && (app.scheme() == "https" || local_destination(&app, api_base))
 }
 
 fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
@@ -5343,13 +5623,45 @@ fn navigation_context(app: &AppHandle) -> (String, String, String) {
     (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 
-fn local_destination(url: &tauri::Url) -> bool {
+/// The domain this installation is served under, from the API base it was given.
+///
+/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// than compiled in, because the shell does not link locald -- it launches it --
+/// so the hostname arrives at runtime in the `ready` event and this is the only
+/// honest source for it.
+fn local_base_domain(api_base: &str) -> Option<String> {
+    let host = tauri::Url::parse(api_base)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    let (_first, rest) = host.split_once('.')?;
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
+    }
+    // The domain this installation serves itself under is a local destination
+    // whatever it resolves through.
+    //
+    // This is the security-relevant half of moving off `*.localhost`. In local
+    // mode the gate below *allows* anything that is not a local destination, on
+    // the reasoning that an ordinary internet site is not a way to reach this
+    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
+    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
+    // could be navigated to an attacker-chosen name and reach any port on the
+    // user's machine -- a hole that does not exist today, because
+    // `*.lemma.localhost` matches the check above and is denied unless it is
+    // ours.
+    if let Some(base) = local_base_domain(api_base) {
+        if host == base || host.ends_with(&format!(".{base}")) {
+            return true;
+        }
     }
     let Ok(address) = host.parse::<IpAddr>() else {
         return false;
@@ -5377,9 +5689,11 @@ fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
     url.scheme() == "http"
         && api.scheme() == "http"
         && url.port() == api.port()
-        && url
-            .host_str()
-            .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
+        && url.host_str().is_some_and(|host| {
+            TRUSTED_LOCAL_BASES
+                .iter()
+                .any(|base| host.ends_with(&format!(".apps.{base}")))
+        })
 }
 
 /// The documents a frame renders without fetching anything: the content document
@@ -5426,7 +5740,7 @@ fn navigation_disposition(
         || same_origin(url, app_base)
         || same_origin(url, api_base)
         || owned_published_app(url, api_base)
-        || !local_destination(url)
+        || !local_destination(url, api_base)
     {
         NavigationDisposition::Allow
     } else {
@@ -5489,6 +5803,12 @@ fn download_disposition(url: &tauri::Url, mode: &str, app_base: &str, api_base: 
         && navigation_disposition(&source, mode, app_base, api_base) == NavigationDisposition::Allow
 }
 
+/// Hand a URL to the user's browser.
+///
+/// The failure is logged rather than dropped. Every path that decides a link
+/// belongs outside the app ends here, and a discarded error made a launch that
+/// never happened look exactly like a link that was never clicked -- nothing
+/// moves, nothing is said, and the only thing left to suspect is the link.
 fn open_external(url: &str) {
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/open");
@@ -5496,7 +5816,9 @@ fn open_external(url: &str) {
     let mut command = Command::new("explorer.exe");
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
-    let _ = command.arg(url).spawn();
+    if let Err(error) = command.arg(url).spawn() {
+        append_install_log(&format!("could not open {url} in the browser: {error}"));
+    }
 }
 
 fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
@@ -5785,6 +6107,44 @@ fn desktop_auth_url(base: &str, auth_mode: &str) -> String {
 
 fn local_auth_url(base: &str, auth_mode: &str) -> String {
     format!("{}/auth?show={auth_mode}", base.trim_end_matches('/'),)
+}
+
+/// The auth portal, told where to go once it is done.
+///
+/// Without a return address the portal has nowhere to send someone who is
+/// already signed in, so it stops and offers a "Continue" button. That is the
+/// right screen when a person navigated to sign-in themselves and might mean to
+/// switch accounts. It is the wrong one on launch: the app asked for the
+/// workspace, the session is already there, and the only thing between the two
+/// was a click.
+///
+/// This is reached on every cold start, not just a first run. A launch mints a
+/// new runtime generation, so the recorded resume target never matches and the
+/// app falls back to the portal each time -- which is why the button was on
+/// screen every single launch rather than occasionally.
+///
+/// The return address stays relative on purpose. It is resolved against the
+/// portal's own origin, so it cannot point off it, and it survives locald
+/// handing out a different port than the one this launch happens to use.
+fn local_auth_url_returning_to(base: &str, auth_mode: &str, route: &str) -> String {
+    let route = if route.starts_with('/') { route } else { "/" };
+    let mut url = format!("{}/auth", base.trim_end_matches('/'));
+    match tauri::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed
+                .query_pairs_mut()
+                .append_pair("show", auth_mode)
+                .append_pair("redirect_uri", route);
+            parsed.to_string()
+        }
+        // A base this malformed will fail at navigation anyway; falling back to
+        // the plain portal keeps that the failure rather than a panic here.
+        Err(_) => {
+            url.push_str("?show=");
+            url.push_str(auth_mode);
+            url
+        }
+    }
 }
 
 #[tauri::command]
@@ -6408,7 +6768,7 @@ fn finish_quit(app: &AppHandle) {
     // including the one showing "Winding down." -- for as long as the wait.
     let worker = app.clone();
     std::thread::spawn(move || {
-        leave_nothing_running(&worker);
+        shut_down_gracefully(&worker);
         worker.exit(0);
     });
     let backstop = app.clone();
@@ -6446,6 +6806,28 @@ const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
 /// path an app update uses -- the forced arm re-authenticates and matches the
 /// packaged executable before it signals anything, so it can never reach a
 /// daemon this app does not own.
+/// Everything a quit owes the machine, done once and off the main thread.
+///
+/// Ordered: close any LAN/public exposure first, because that is the part the
+/// daemon cannot infer from its own shutdown, then stop the daemon itself.
+///
+/// Idempotent by flag, not by luck. The confirmed path runs this on a worker
+/// and then calls `app.exit(0)`, which lands on `RunEvent::Exit` -- and doing
+/// it again there would put the whole wait back on the main thread, which is
+/// the thing that made quitting hang.
+fn shut_down_gracefully(app: &AppHandle) {
+    let shell: State<Shell> = app.state();
+    if shell.teardown_done.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if current_mode(app) == "local" {
+        if let Err(error) = release_before_exit() {
+            append_install_log(&format!("[quit] sharing could not be closed: {error}"));
+        }
+    }
+    leave_nothing_running(app);
+}
+
 fn leave_nothing_running(app: &AppHandle) {
     // Drop this client first. The daemon broadcasts to connected clients while
     // it shuts down, and a writer belonging to a window that is going away is
@@ -6880,7 +7262,14 @@ fn main() {
                     // Desktop drops to the menu bar here and so do we; the tray
                     // keeps an "Open Lemma" item, so there is still a way back.
                     #[cfg(target_os = "macos")]
-                    hide_from_dock(window.app_handle());
+                    settle_dock_presence(window.app_handle());
+                }
+                // A pod app window going away can be the last thing on screen,
+                // and closing it is an ordinary close -- so the Dock is settled
+                // here too rather than only when the workspace hides.
+                #[cfg(target_os = "macos")]
+                tauri::WindowEvent::Destroyed => {
+                    settle_dock_presence(window.app_handle());
                 }
                 // Belt and braces for the Dock icon. Every deliberate way back
                 // calls `restore_dock_presence`, but a window that has focus
@@ -6931,7 +7320,15 @@ fn main() {
                     return;
                 }
                 if quit_impact(app).is_empty() {
-                    shell.quit_confirmed.store(true, Ordering::Release);
+                    // Nothing to warn about, but still something to do: the
+                    // daemon outlives the app deliberately, so quitting has to
+                    // stop it. Letting the exit through here ran that on the
+                    // main thread from `RunEvent::Exit` -- which is why Dock ->
+                    // Quit sat "not responding" for several seconds before the
+                    // window went away. `finish_quit` does the same work on a
+                    // worker and exits when it is done.
+                    api.prevent_exit();
+                    finish_quit(app);
                     return;
                 }
                 api.prevent_exit();
@@ -6943,11 +7340,11 @@ fn main() {
                 // Off screen first: everything below blocks this thread, and a
                 // visible window with no live webview behind it renders black.
                 hide_windows_for_exit(app);
-                if current_mode(app) == "local" {
-                    if let Err(error) = release_before_exit() {
-                        eprintln!("[desktop-release-exit] {error}");
-                    }
-                }
+                // Normally already done, on a worker, by `finish_quit` --
+                // in which case `shut_down_gracefully` returns immediately and
+                // this thread is not held at all. What remains here is the
+                // paths that never reach `ExitRequested` with a chance to
+                // prevent it: a system logout or restart.
                 // Not just `disconnect_locald`. This is the exit every path
                 // ends at, including the ones that never touch `request_quit`:
                 // Dock -> Quit, `osascript quit`, and a system logout or
@@ -6957,10 +7354,7 @@ fn main() {
                 // here having stopped nothing, and left a supervisor with no
                 // interface behind. See `leave_nothing_running`.
                 //
-                // Safe to reach twice: the confirmed path calls it and then
-                // `app.exit(0)`, which arrives here. The second call finds no
-                // daemon to connect to and says so in the log.
-                leave_nothing_running(app);
+                shut_down_gracefully(app);
             }
             _ => {}
         });
@@ -7406,10 +7800,48 @@ mod tests {
     /// The channel stamp fails closed, and only stable self-updates.
     ///
     /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
+    /// Each channel must read the feed that actually carries its builds.
+    ///
+    /// GitHub resolves `releases/latest` to the newest *non-prerelease*.
+    /// Nightlies are prereleases, so a nightly pointed there sees either
+    /// nothing or a stable build -- and an update path that only ever runs on
+    /// release day is one nobody has tested. The nightly tag is rewritten in
+    /// place so the address stays put while its contents move; that fixed
+    /// address is the whole reason a nightly feed can be called durable.
+    #[test]
+    fn each_channel_reads_its_own_feed() {
+        let nightly = updater_endpoints("nightly");
+        let stable = updater_endpoints("stable");
+
+        assert_eq!(nightly.len(), 1);
+        assert!(
+            nightly[0].ends_with("/releases/download/desktop-nightly/latest.json"),
+            "a nightly must read a tag that does not move: {nightly:?}",
+        );
+        assert!(
+            !nightly[0].contains("/releases/latest/"),
+            "`releases/latest` skips prereleases, so it never lists a nightly",
+        );
+
+        assert_eq!(stable, updater_endpoints("dev"), "dev falls back to stable");
+        assert!(stable[0].ends_with("/releases/latest/download/latest.json"));
+
+        // Whatever they are, the plugin has to be able to parse them, and a
+        // typo here would otherwise be a silently empty endpoint list.
+        for channel in ["stable", "nightly", "dev"] {
+            for endpoint in updater_endpoints(channel) {
+                assert!(
+                    tauri::Url::parse(&endpoint).is_ok(),
+                    "{channel} endpoint is not a URL: {endpoint}",
+                );
+            }
+        }
+    }
+
     /// developer's `cargo tauri dev` -- must never follow an update feed, and
     /// must say so rather than appearing configured.
     #[test]
-    fn only_a_stable_build_updates_itself() {
+    fn a_released_build_updates_itself_and_an_unstamped_one_does_not() {
         // Both halves of this used to be true by construction: tests are a
         // debug build so `updates_enabled()` is false whatever the channel is,
         // and `matches!` against the same closed set the `match` produces
@@ -7430,7 +7862,7 @@ mod tests {
 
         // And the gate is a conjunction, so nightly cannot update itself even
         // in a release build.
-        assert!(!updates_allowed("nightly", false, true));
+        assert!(updates_allowed("nightly", false, true));
         assert!(!updates_allowed("dev", false, true));
         assert!(
             !updates_allowed("stable", true, true),
@@ -8321,6 +8753,32 @@ mod tests {
         assert!(capability_for(&["https://lemma.work"]).is_none());
         assert!(capability_for(&["not a url"]).is_none());
 
+        // ...including a local workspace, whose port is not known until it is
+        // allocated. The shipped entry is `http://app.<base>:*`, and the origin
+        // checked against it is concrete, so a plain string comparison never
+        // matched one and quietly minted an override for every local launch.
+        for base in ["lemma.localhost", "127.0.0.1.sslip.io"] {
+            assert!(
+                capability_for(&[&format!("http://app.{base}:52413")]).is_none(),
+                "the shipped capability already covers app.{base} on any port",
+            );
+        }
+        // And the wildcard is the port alone. A host that merely starts the
+        // same way is a different machine, and must still be treated as an
+        // override rather than silently accepted as shipped.
+        assert!(
+            capability_for(&["http://app.lemma.localhost.evil:52413"]).is_some(),
+            "a lookalike host must not read as a shipped origin",
+        );
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost:52413/admin"
+        ));
+        assert!(!shipped_workspace_origin_covers(
+            "http://app.lemma.localhost:*",
+            "http://app.lemma.localhost"
+        ));
+
         let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
             .expect("an overridden origin produces a capability");
         let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
@@ -8347,6 +8805,30 @@ mod tests {
             "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
+    }
+
+    /// Every local base this build serves has to be an origin the workspace
+    /// capability covers.
+    ///
+    /// The failure this catches is silent and total. A workspace served on a
+    /// base the capability does not list matches no capability at all, so
+    /// opening Local settings, connecting the Agent Host and configuring a
+    /// provider each answer `not allowed by ACL` -- the whole of onboarding,
+    /// with nothing on screen to say why. Nothing else ties the two files
+    /// together: the base domain is chosen in locald and the origins are
+    /// declared in a Tauri capability, and neither imports the other.
+    #[test]
+    fn every_local_base_this_build_serves_is_a_shipped_workspace_origin() {
+        let shipped = shipped_workspace_origins();
+        for base in TRUSTED_LOCAL_BASES {
+            let origin = format!("http://app.{base}:52413");
+            assert!(
+                shipped
+                    .iter()
+                    .any(|pattern| shipped_workspace_origin_covers(pattern, &origin)),
+                "capabilities/workspace.json does not cover {origin}, so a                  workspace served there reaches no shell command at all",
+            );
+        }
     }
 
     #[test]
@@ -8617,14 +9099,40 @@ mod tests {
         // icon is what sends people to Force Quit: the icon says the app is
         // running, and clicking it looks like it does nothing.
         assert!(
-            close.contains("hide_from_dock"),
+            close.contains("settle_dock_presence"),
             "closing leaves the Dock, keeping only the tray",
         );
 
         // Every exit does the opposite.
         assert!(
-            body_of("fn finish_quit(").contains("leave_nothing_running(&worker)"),
+            body_of("fn finish_quit(").contains("shut_down_gracefully(&worker)"),
             "the plain quit path has to stop the daemon",
+        );
+
+        // ...and the OS-driven one is given a worker rather than being allowed
+        // through to the main-thread handler. Letting that branch return is
+        // what made Dock -> Quit sit "not responding" for several seconds: the
+        // whole teardown ran on the thread macOS was waiting on.
+        let requested = {
+            let start = source
+                .find("tauri::RunEvent::ExitRequested { api, .. } => {")
+                .expect("the exit-requested handler exists");
+            let end = source[start..]
+                .find("\n            tauri::RunEvent::Exit => {")
+                .expect("the exit handler follows it");
+            &source[start..start + end]
+        };
+        let empty_impact = {
+            let start = requested
+                .find("if quit_impact(app).is_empty() {")
+                .expect("the no-impact branch exists");
+            &requested[start..]
+        };
+        assert!(
+            empty_impact.contains("api.prevent_exit();")
+                && empty_impact.contains("finish_quit(app);"),
+            "a quit with nothing to warn about still has a daemon to stop, and \
+             it must not be stopped on the main thread",
         );
 
         // Including the ones that never reach `request_quit` at all. Dock ->
@@ -8644,13 +9152,29 @@ mod tests {
             &source[start..start + end]
         };
         assert!(
-            exit.contains("leave_nothing_running(app)"),
+            exit.contains("shut_down_gracefully(app)"),
             "an OS-issued exit has to stop the daemon too",
         );
         let after_stop = body_of("fn handle_locald_event(");
         assert!(
             after_stop.contains("leave_nothing_running(app);\n        app.exit(0);"),
             "the stop-then-quit path reaches the same exit",
+        );
+
+        // Done once. The confirmed path runs it on a worker and then calls
+        // `app.exit(0)`, which lands on the main-thread handler -- and without
+        // the guard that handler would do the whole wait again, on the thread
+        // the beachball is measuring.
+        let graceful = body_of("fn shut_down_gracefully(");
+        assert!(
+            graceful.contains("teardown_done.swap(true"),
+            "the teardown has to be once-only, or the exit repeats it on the \
+             main thread",
+        );
+        assert!(
+            graceful.contains("release_before_exit()")
+                && graceful.contains("leave_nothing_running(app)"),
+            "a graceful shutdown closes sharing and stops the daemon",
         );
 
         // And it uses the identity-verified path, not a signal at a PID.
@@ -8775,6 +9299,80 @@ mod tests {
         // monitors at all. Neither is evidence the saved value is wrong, and
         // refusing to restore there would look like the bug this fixes.
         assert!(placement_is_reachable(&at(100, 100), &[]));
+    }
+
+    #[test]
+    fn a_launch_tells_the_auth_portal_where_to_come_back_to() {
+        // The portal auto-continues an existing session only when it is given
+        // somewhere to go; without one it stops on a Continue button. Every
+        // cold start reached it without one, because a new runtime generation
+        // means the recorded resume target never matches.
+        let url = local_auth_url_returning_to("http://app.lemma.localhost:3711/", "signup", "/");
+        assert!(
+            url.starts_with("http://app.lemma.localhost:3711/auth?"),
+            "{url}"
+        );
+        assert!(url.contains("show=signup"), "{url}");
+        assert!(
+            url.contains("redirect_uri=%2F"),
+            "the portal needs a return address to continue without asking: {url}"
+        );
+
+        // Relative, so it resolves against the portal's own origin and cannot
+        // be aimed off it -- and so it survives locald allocating a different
+        // port than the one this launch used.
+        let sneaky = local_auth_url_returning_to(
+            "http://app.lemma.localhost:3711",
+            "signin",
+            "https://evil.example",
+        );
+        assert!(sneaky.contains("redirect_uri=%2F"), "{sneaky}");
+        assert!(!sneaky.contains("evil.example"), "{sneaky}");
+    }
+
+    #[test]
+    fn a_restored_window_comes_back_the_size_it_was_left() {
+        // The numbers are a real record from a 3024x1964 Retina display: the
+        // window filled the screen below the menu bar. Handed to the builder as
+        // written they mean 3024x1898 *logical* -- twice the screen -- so macOS
+        // clamped the size and put the window 66 points too low, which is what
+        // "it doesn't open full and the top is cut off" actually was.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 66),
+            size: tauri::PhysicalSize::new(3024, 1898),
+        };
+
+        let (position, size) = placement_in_logical(&saved, 2.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 33.0));
+        assert_eq!((size.width, size.height), (1512.0, 949.0));
+
+        // A 1:1 display is the case that always worked, and must keep working.
+        let (position, size) = placement_in_logical(&saved, 1.0).expect("restorable");
+        assert_eq!((position.x, position.y), (0.0, 66.0));
+        assert_eq!((size.width, size.height), (3024.0, 1898.0));
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_app_allows_is_not_restored() {
+        // 1200x800 physical is a legitimate record on a 1:1 screen and half the
+        // app's minimum on a 2x one. The floor is a logical size, so it can
+        // only be applied after the conversion -- applying it to the physical
+        // numbers is how a window half the allowed size gets restored and then
+        // clamped by the OS into a shape nobody chose.
+        let saved = WindowPlacement {
+            position: tauri::PhysicalPosition::new(0, 0),
+            size: tauri::PhysicalSize::new(1200, 800),
+        };
+        assert!(placement_in_logical(&saved, 1.0).is_some());
+        assert!(
+            placement_in_logical(&saved, 2.0).is_none(),
+            "600x400 logical is below the {}x{} minimum",
+            MIN_RESTORED.0,
+            MIN_RESTORED.1
+        );
+        // A monitor that reports nonsense must not produce an infinite window.
+        assert!(placement_in_logical(&saved, 0.0).is_none());
+        assert!(placement_in_logical(&saved, f64::NAN).is_none());
     }
 
     #[test]
@@ -9560,6 +10158,60 @@ mod tests {
         assert_ne!(
             new_window_disposition(&impostor, "local", app_base, api_base),
             NewWindowDisposition::OpenAppWindow
+        );
+    }
+
+    /// A pod app window is a window, not a viewer: it can download.
+    ///
+    /// Tauri cancels a download outright when a webview registers no policy,
+    /// silently -- the failure this repo already hit once, where every Download
+    /// button on macOS did nothing and said nothing. An app that exports a CSV
+    /// is an ordinary app, and it opens in this window now.
+    #[test]
+    fn the_pod_app_window_can_download_what_an_app_offers() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn open_pod_app_window(")
+            .expect("the app window builder exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        let builder = &source[start..end];
+        assert!(
+            builder.contains(".on_download("),
+            "the app window registers no download policy, so downloads from an \
+             app are cancelled with no error",
+        );
+        assert!(
+            builder.contains("download_disposition"),
+            "the app window must be held to the same download policy as the \
+             workspace, not a looser one of its own",
+        );
+    }
+
+    /// Closing the workspace must not strand a pod app window.
+    ///
+    /// Dropping to `Accessory` removes the Dock tile for the whole application,
+    /// so doing it while an app window is still on screen leaves that window
+    /// visible, un-⌘-tabbable, and owned by an app the Dock says is not running.
+    #[test]
+    fn the_dock_follows_what_is_actually_on_screen() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn settle_dock_presence(")
+            .expect("the dock helper exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        let helper = &source[start..end];
+        assert!(
+            helper.contains("webview_windows()") && helper.contains("is_visible"),
+            "dock presence must be decided by what is visible, not by the \
+             workspace window alone",
+        );
+        assert!(
+            helper.contains("ActivationPolicy::Regular"),
+            "something on screen has to put the Dock icon back",
         );
     }
 

@@ -103,8 +103,14 @@ impl Daemon {
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
                 // LAN/Public desired state is deliberately not persisted.
                 // Every daemon launch starts from the private canonical origin.
-                state.url = format!("http://app.lemma.localhost:{frontend_port}");
-                state.api_url = format!("http://app.lemma.localhost:{backend_port}");
+                state.url = format!(
+                    "http://{}:{frontend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
+                state.api_url = format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
                 state.persist(&paths.state)?;
             }
         }
@@ -1168,7 +1174,12 @@ impl Daemon {
             .host_processes
             .as_ref()
             .and_then(|manager| manager.application_ports())
-            .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
+            .map(|(_, backend_port)| {
+                format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                )
+            })
             .unwrap_or_else(|| state.api_url.clone());
         state.persist(&self.paths.state)
     }
@@ -1756,19 +1767,35 @@ impl Daemon {
     /// and re-downloading several hundred megabytes.
     fn discard_local_data(&self) -> io::Result<Value> {
         let Some(runtime) = self.managed_runtime.as_ref() else {
-            // No app-owned runtime: there is no guest and no data disk, so
-            // there is nothing of the user's for this daemon to remove.
-            return Ok(json!({"strategy": "none"}));
+            // No guest and no data disk -- but files and object storage are on
+            // the host either way, so they still have to go.
+            let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
+            return Ok(json!({"strategy": "none", "host_bytes": host_side}));
         };
+        // The user's files live on the Mac, not in the guest, so neither
+        // strategy below touches them. `LOCAL_FILE_STORAGE_ROOT` and
+        // `LOCAL_OBJECT_STORAGE_ROOT` point at `<root>/data/...`, and clearing
+        // only the guest erased the rows while leaving every uploaded byte on
+        // disk -- under a button whose own text says it "erases your pods,
+        // files and accounts". Someone resetting before handing the machine on
+        // would have kept all of it.
+        let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
         if runtime.probe().is_ok() {
             let removed = runtime.reset_guest_data()?;
             runtime.stop_infrastructure()?;
-            return Ok(json!({"strategy": "guest", "removed": removed}));
+            return Ok(json!({
+                "strategy": "guest",
+                "removed": removed,
+                "host_bytes": host_side,
+            }));
         }
         #[cfg(target_os = "macos")]
         {
             let reclaimed = runtime.discard_data_disk()?;
-            Ok(json!({"strategy": "disk", "reclaimed_bytes": reclaimed}))
+            Ok(json!({
+                "strategy": "disk",
+                "reclaimed_bytes": reclaimed + host_side,
+            }))
         }
         // Elsewhere the guest is the only way in: a WSL distribution is
         // unregistered rather than having a disk file to unlink, and that path
@@ -1838,6 +1865,23 @@ impl Daemon {
                 "log_source": log_source,
             }));
         })?;
+        // The auth service was started before the backend and is only now
+        // waited for, so it came up alongside it rather than in front of it.
+        // Nothing may report ready until it answers: a workspace whose first
+        // act is signing in would otherwise meet an auth service that is not
+        // there yet, which is worse than the wait this removes.
+        //
+        // Its failure has to take the host processes with it. They are running
+        // by this point -- that is the whole point -- and a stack with no auth
+        // is not a stack anybody can use.
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            if let Err(error) = runtime.await_private_services() {
+                if let Some(manager) = self.host_processes.as_ref() {
+                    let _ = manager.stop_all();
+                }
+                return Err(error);
+            }
+        }
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",
@@ -2281,6 +2325,22 @@ fn sharing_environment(
         ),
         ("SESSION_COOKIE_SAME_SITE".into(), "lax".into()),
         ("SESSION_COOKIE_DOMAIN".into(), String::new()),
+        // No app host is served through a tunnel, so stop claiming one.
+        //
+        // The gateway routes by *path* -- `/_lemma/api` to the backend, the rest
+        // to the frontend -- so there is no host-based route for
+        // `<slug>.apps.<domain>` and there cannot be one without wildcard DNS on
+        // the tunnel. Left set, `public_app_url` kept handing visitors
+        // `<slug>.apps.lemma.localhost`, which their browser resolves against
+        // *their own* machine: not a dead link but one pointing somewhere else
+        // entirely. Blank makes `public_app_url` return None and
+        // `app_slug_from_host` decline to route, which is the truth.
+        ("APP_BASE_DOMAIN".into(), String::new()),
+        // ...and with no app origin, the app-origin API door is meaningless.
+        // It aliases the whole API under `/_lemma` on whatever origin serves
+        // user-authored HTML, and widens the refresh cookie to `Path=/` to make
+        // that work. Neither is wanted on a public origin.
+        ("APP_API_VIA_APP_ORIGIN".into(), "false".into()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED".into(), "false".into()),
         ("CORS_ORIGIN_REGEX".into(), exact_origin),
         // Raised, not merely rewritten.
@@ -2743,6 +2803,12 @@ mod tests {
         let (backend, frontend) =
             sharing_environment("https://lemma.example.com/", SharingMode::Public);
         assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
+        // A tunnel serves one origin and no app host, so the deployment must
+        // stop advertising one. Left set, every app's URL pointed at
+        // `<slug>.apps.lemma.localhost` -- which a visitor's browser resolves
+        // against their own machine.
+        assert_eq!(backend["APP_BASE_DOMAIN"], "");
+        assert_eq!(backend["APP_API_VIA_APP_ORIGIN"], "false");
         assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
         assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
         assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");

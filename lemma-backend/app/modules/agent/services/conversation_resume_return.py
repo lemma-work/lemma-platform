@@ -26,6 +26,9 @@ from functools import partial
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
+from app.modules.agent.domain.vision import resolve_vision_mode
+from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
@@ -253,7 +256,16 @@ class ResumeToolReturnBuilder:
             uow_factory
         ).resolve_configured_accounts(agent=agent, user_id=user_id)
         workspace_location = resolve_workspace_location(conversation)
+        # Resolved exactly as a normal run resolves it. Left unset this defaults
+        # to UNAVAILABLE, so an *approved* `view_image` took the delegate branch
+        # and told the user "this agent's model cannot read images directly" --
+        # on a model that can. Same for `pod_view_document_pages`.
+        supports_vision = RuntimeModelCapability.VISION in resolved.capabilities
         return ConversationContext(
+            vision_mode=resolve_vision_mode(
+                model_supports_vision=supports_vision,
+                delegate_model_configured=vision_delegate_available(),
+            ),
             user_id=user_id,
             org_id=conversation.organization_id,
             pod_id=conversation.pod_id,

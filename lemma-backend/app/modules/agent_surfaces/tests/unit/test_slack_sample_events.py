@@ -12,6 +12,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from app.core.authorization.context import ActorType, Context
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -195,7 +196,15 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     )
     conversation_service = AsyncMock()
     conversation_service.create_conversation.return_value = conversation
-    conversation_service.add_user_message_and_start_run = AsyncMock()
+    # A real result, not a bare mock: whether the surface acknowledges depends
+    # on these flags, and a MagicMock is truthy for every one of them.
+    conversation_service.add_user_message_and_start_run = AsyncMock(
+        return_value=AgentRunStartResult(
+            conversation_id=conversation.id,
+            agent_run_id=uuid4(),
+            started_new_run=True,
+        )
+    )
     service = _build_service(
         surface=surface,
         conversation_service=conversation_service,
@@ -292,7 +301,15 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     )
     conversation_service = AsyncMock()
     conversation_service.create_conversation.return_value = conversation
-    conversation_service.add_user_message_and_start_run = AsyncMock()
+    # A real result, not a bare mock: whether the surface acknowledges depends
+    # on these flags, and a MagicMock is truthy for every one of them.
+    conversation_service.add_user_message_and_start_run = AsyncMock(
+        return_value=AgentRunStartResult(
+            conversation_id=conversation.id,
+            agent_run_id=uuid4(),
+            started_new_run=True,
+        )
+    )
     service = _build_service(
         surface=surface,
         conversation_service=conversation_service,

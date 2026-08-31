@@ -7,9 +7,10 @@ from uuid import UUID
 
 import aiohttp
 
+# Set before the SDK is imported anywhere: it reads this at import time. The
+# import itself is deferred into `connect_with_credentials` below, so this has
+# to stay at module scope to keep winning that race.
 os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
-
-from composio.types import auth_scheme as composio_auth_scheme
 
 from app.modules.connectors.infrastructure.composio_client import get_composio_client
 
@@ -68,8 +69,13 @@ class ComposioAuthProvider(AuthProviderInterface):
                     )
                     return None
         except Exception:
-            logger.debug(
-                "connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic"
+            # "Expiry unknown" degrades refresh scheduling; the connection still
+            # works, so this is not an error. The sibling debug above is a
+            # non-200 from tokeninfo, which means the token is invalid — an
+            # expected answer, not a swallowed failure.
+            logger.warning(
+                "connectors.composio_auth_provider.google_token_expiration_lookup.degraded",
+                exc_info=True,
             )
             return None
 
@@ -217,6 +223,16 @@ class ComposioAuthProvider(AuthProviderInterface):
             raise ConnectorValidationError(
                 "Credentials are required to connect this Composio app."
             )
+
+        # Imported here rather than at module scope, which is where it was.
+        #
+        # `composio.types` pulls the whole SDK, and the SDK imports its default
+        # OpenAI provider, so this one line cost 0.96s and 840 modules on every
+        # backend start -- to serve a health check. This module is reached from
+        # `app.app` through the connector router, so nothing about that was
+        # opt-in. It is the only composio import on that path, and these two
+        # call sites are the only uses in the module.
+        from composio.types import auth_scheme as composio_auth_scheme
 
         scheme = self._composio_auth_scheme(connector)
         if scheme == AuthScheme.OAUTH2:

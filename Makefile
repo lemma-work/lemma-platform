@@ -21,23 +21,24 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-check-windows \
+        desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
-        version-check \
+        version-check local-domain-check script-portability-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-desktop scenarios-desktop-provision \
         scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint quality check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -322,6 +323,7 @@ help:
 	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation (CI-safe, no dashboards)"
 	@echo ""
 	@echo "  Desktop (one cargo workspace: app, locald, Agent Host, runtime helpers)"
+	@echo "    make desktop-check      every desktop gate that runs locally — before pushing"
 	@echo "    make desktop-dev        run Desktop from this checkout (macOS; CONTROL=1 opens Local settings)"
 	@echo "    make desktop-test       Rust tests across the whole desktop workspace"
 	@echo "    make desktop-test-app   desktop crate tests only (fast loop)"
@@ -374,9 +376,10 @@ help:
 	@echo "    make pre-push           the fast subset — run this on every push"
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
-	@echo "    make check              quality + CodeQL on this branch's changes"
+	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
+	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -1017,6 +1020,28 @@ desktop-host-pack-check:
 #
 # The runtime half -- a POSIX binary that is simply not there -- is not a
 # compile error, and is caught by the source lint in `host_process.rs` instead.
+# The desktop gates that can run on a developer machine, cheapest first.
+#
+# Not all of CI: bundling and codesigning need release certificates, and the app
+# crate cannot cross-compile to msvc from macOS (libsqlite3-sys wants a C
+# toolchain), so `desktop-check-windows` covers locald and the runtime manager
+# only. desktop/README.md has the gnu-target recipe for the rest.
+#
+# The pieces already existed; nothing ran them together, so "I ran the desktop
+# checks" meant whichever two someone remembered. Both halves of that bit this
+# repo in one afternoon: `desktop-lint` does not run rustfmt, so a formatting
+# diff reached CI green-locally, and `desktop-check-windows` is the only thing
+# that compiles the Windows cfg paths, so a `#[cfg(unix)]` helper called from an
+# ungated one failed a 90-minute Windows job that a 15-second local check would
+# have caught.
+#
+# Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
+# They need release certificates, so they cannot run on a contributor's machine
+# -- `make desktop-dmg` is the local approximation.
+desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+	@echo ""
+	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \
@@ -1307,6 +1332,23 @@ version-check:
 	@echo "→ Component versions…"
 	@python3 scripts/check_version_consistency.py
 
+# The base domain an install serves under is decided at runtime and spelled out
+# in four places, in three languages. Nothing tied them together, and the cost
+# was a shipped build where this computer could not pair with its own workspace:
+# two loopback checks still said `.localhost` after the base had moved, so the
+# refusal was silent and onboarding waited for ever.
+local-domain-check:
+	@echo "→ Local domain lists…"
+	@python3 scripts/check_local_domain_consistency.py
+
+# CI runs scripts/ with a bare `python`, which on the Windows and macOS runners
+# is not the 3.14 the backend pins. Syntax they cannot parse is not a failing
+# step, it is a SyntaxError before the first line -- which is how one
+# unparenthesised `except` stopped every Windows host pack from building.
+script-portability-check:
+	@echo "→ Script portability…"
+	@python3 scripts/check_script_portability.py
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
@@ -1438,6 +1480,10 @@ scenarios-replay:
 # accounts and create organizations, and an organization cannot be deleted.
 TARGET ?= $(SCENARIOS_BASE_URL)
 
+# Extra pytest arguments for the desktop lane, so a `-k` filter or `-x` does
+# not mean copying the target's body out of here to run one journey.
+SCENARIOS_ARGS ?=
+
 # Run once per environment, by a person who can see what it did. Never part of
 # a run: this is the only thing that registers anybody, and a deployment counts
 # every call to its auth routes. Idempotent — run it twice and the second run
@@ -1459,6 +1505,51 @@ scenarios-deployment:
 	@echo "→ Product scenarios against $(TARGET)…"
 	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
 	@cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" --timeout=900
+
+# The suite against the Lemma Desktop install running on this machine.
+#
+# This is the widest coverage the desktop build has by a distance: the journey
+# scenarios exercise orgs, pods, tables, files, agents, functions, workflows,
+# schedules, bundles and app publishing, and against a desktop install they do
+# it through the real host pack, the real guest VM and the real services rather
+# than a stack booted for the occasion. No new test code -- `--base-url` was
+# already plumbed; what was missing was the address, which locald allocates at
+# first launch and so cannot be written down here.
+#
+# Provisioning is separate and deliberate: a deployment run refuses to register
+# anybody (see `sessions` in tests/scenarios/conftest.py), so the standing cast
+# has to exist first. Run `make scenarios-desktop-provision` once per install.
+#
+# SCENARIOS_TARGET_INSTANCE_ID is set from the install's own id, so if the app
+# is restarted onto a different install mid-session the run stops instead of
+# writing into it -- the suite creates organizations and the product cannot
+# delete one.
+scenarios-desktop:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Product scenarios against the desktop install at $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	uv run pytest -q --base-url "$$LEMMA_DESKTOP_API_URL" --timeout=900 $(SCENARIOS_ARGS)
+
+# The standing cast, on the desktop install. Once per install, not per run.
+#
+# A never-provisioned install trips the harness's own guard, which stops before
+# making anything and asks for SCENARIOS_ALLOW_NEW_CAST=1. That is deliberate
+# and is not passed for you: on a shared deployment the same symptom means the
+# cast already exists under different addresses, and answering it blindly would
+# build a second parallel one out of organizations nothing can delete. On a
+# fresh install it just means "yes, this is the first time":
+#
+#   make scenarios-desktop-provision SCENARIOS_ALLOW_NEW_CAST=1
+scenarios-desktop-provision:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Provisioning the standing tenant on $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	SCENARIOS_ALLOW_NEW_CAST="$(SCENARIOS_ALLOW_NEW_CAST)" \
+	uv run python -m harness.provision --base-url "$$LEMMA_DESKTOP_API_URL"
 
 # The guards on the suite itself: no imports of the app under test, no mocking,
 # no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —
@@ -1675,6 +1766,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@echo "→ Swallowed errors…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"
@@ -1692,6 +1785,10 @@ quality:
 	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
 	@echo "→ E2E wait patterns…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
+	@echo "→ Local domain lists…"
+	@$(MAKE) --no-print-directory local-domain-check
+	@echo "→ Script portability…"
+	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
 	@echo "→ Test census (no suite has quietly stopped running)…"
@@ -1736,8 +1833,28 @@ codeql-javascript:
 codeql-all:
 	@./scripts/run_codeql.sh --all
 
+# The frontend half of the pre-PR pass.
+#
+# `quality` above is entirely Python: `format-check` covers the backend, the
+# CLI, both SDKs and the scenarios, and stops at the language boundary. So a
+# frontend-only change could pass every gate this repository offers locally and
+# still meet eslint, tsc, the design-system audit and the education-anchor
+# check for the first time in CI, ten minutes after pushing -- which is the
+# shape of gate `rust-toolchain.toml`'s own comment argues against.
+#
+# Skipped rather than failed when the dependencies are not installed. A backend
+# contributor who has never run `npm ci` should not have `make check` break on
+# them; CI is the gate, this is the shortcut.
+quality-frontend:
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
+		echo "→ Frontend gates skipped — run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR) to include them"; \
+	else \
+		echo "→ Frontend lint, types, design audit, education anchors…"; \
+		cd $(FRONTEND_DIR) && npm run --silent check; \
+	fi
+
 # Everything a PR is judged on, short of the test suites themselves.
-check: quality codeql
+check: quality quality-frontend codeql
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 

@@ -27,56 +27,68 @@ const sizeClasses = {
     xl: 'w-12 h-12',
 };
 
-const iconColors = {
-    document: 'text-[var(--state-info)]',
-    spreadsheet: 'text-[var(--state-success)]',
-    presentation: 'text-[var(--state-warning)]',
-    pdf: 'text-[var(--state-error)]',
-    image: 'text-[var(--state-info)]',
-    video: 'text-[var(--state-error)]',
-    audio: 'text-[var(--state-info)]',
-    code: 'text-[var(--state-success)]',
-    json: 'text-[var(--state-warning)]',
-    archive: 'text-[var(--state-warning)]',
-    text: 'text-[var(--text-tertiary)]',
-    default: 'text-[var(--text-tertiary)]',
-};
+/**
+ * What kind of file this is — the shape, and nothing else.
+ *
+ * There used to be a colour per kind here, and every one of them was a *state*
+ * token: `--state-error` for PDFs, `--state-success` for spreadsheets and
+ * source files, `--state-warning` for slides, JSON and archives. A PDF is not
+ * an error and a `.py` is not a success. It is the same mistake the presence
+ * avatars were built out of, and the note there puts it best: a hue cannot mean
+ * two things at once, so a hue that means "failed" somewhere else cannot also
+ * mean "this is a PDF".
+ *
+ * The glyph already carries the type, legibly, at 16px. So the icon inherits
+ * `currentColor` and sits at `--text-tertiary` by default; a caller that wants
+ * it tinted passes a class.
+ */
+export type FileKind =
+    | 'document'
+    | 'spreadsheet'
+    | 'presentation'
+    | 'pdf'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | 'code'
+    | 'json'
+    | 'archive'
+    | 'text'
+    | 'default';
 
-export function getFileType(filename: string): keyof typeof iconColors {
+export function getFileType(filename: string): FileKind {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
 
     // Documents
-    if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'document';
-    if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'spreadsheet';
-    if (['ppt', 'pptx', 'odp'].includes(ext)) return 'presentation';
+    if (['doc', 'docx', 'odt', 'rtf', 'pages'].includes(ext)) return 'document';
+    if (['xls', 'xlsx', 'csv', 'tsv', 'ods', 'numbers', 'parquet'].includes(ext)) return 'spreadsheet';
+    if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return 'presentation';
     if (ext === 'pdf') return 'pdf';
 
     // Media
-    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) return 'image';
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp', 'ico', 'avif', 'heic'].includes(ext)) return 'image';
     if (['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv'].includes(ext)) return 'video';
     if (['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'].includes(ext)) return 'audio';
 
     // Code
-    if (['js', 'ts', 'jsx', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'php', 'swift', 'kt'].includes(ext)) return 'code';
-    if (['json', 'yaml', 'yml', 'toml'].includes(ext)) return 'json';
-    if (['html', 'css', 'scss', 'sass', 'less'].includes(ext)) return 'code';
+    if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'php', 'swift', 'kt', 'sh', 'bash', 'zsh', 'sql', 'r', 'lua'].includes(ext)) return 'code';
+    if (['json', 'jsonl', 'yaml', 'yml', 'toml', 'xml', 'ini', 'env'].includes(ext)) return 'json';
+    if (['html', 'htm', 'css', 'scss', 'sass', 'less'].includes(ext)) return 'code';
 
     // Archives
-    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) return 'archive';
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'archive';
 
     // Text
-    if (['txt', 'md', 'markdown', 'log'].includes(ext)) return 'text';
+    if (['txt', 'md', 'mdx', 'markdown', 'log', 'rst'].includes(ext)) return 'text';
 
     return 'default';
 }
 
 export function FileTypeIcon({ filename, className, size = 'md' }: FileTypeIconProps) {
     const fileType = getFileType(filename);
-    const sizeClass = sizeClasses[size];
-    const colorClass = iconColors[fileType];
 
     const iconProps = {
-        className: cn(sizeClass, colorClass, className),
+        className: cn(sizeClasses[size], 'text-[var(--text-tertiary)]', className),
     };
 
     switch (fileType) {

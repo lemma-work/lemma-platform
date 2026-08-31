@@ -489,6 +489,12 @@ export function SurfaceModal({
                   }
                 : {}),
             send_policy: { allow_send: draft.allowSend },
+            // Slack's alone: it governs the App Home picker, which no other
+            // platform has. Sending it everywhere would put a Slack-shaped
+            // field on a Telegram surface's config for nothing to read.
+            ...(definition.platform === 'SLACK'
+                ? { slack: { dedicated_to_agent: draft.dedicatedToAgent } }
+                : {}),
         };
 
         try {
@@ -637,6 +643,7 @@ export function SurfaceModal({
                             accounts={platformAccounts}
                             accountId={accountId}
                             onAccountChange={setAccountId}
+                            agentName={agentName}
                             credentials={credentials}
                             onCredentialsChange={setCredentials}
                             podId={podId}
@@ -908,6 +915,7 @@ function emptyDraft(): ConfigureDraft {
         allowedDomains: '',
         allowedEmails: '',
         allowSend: false,
+        dedicatedToAgent: false,
     };
 }
 
@@ -927,6 +935,7 @@ function draftFromSurface(surface: AssistantSurface): ConfigureDraft {
         allowSend: Boolean(
             (config as { send_policy?: { allow_send?: boolean } }).send_policy?.allow_send,
         ),
+        dedicatedToAgent: Boolean(config.slack?.dedicated_to_agent),
     };
 }
 

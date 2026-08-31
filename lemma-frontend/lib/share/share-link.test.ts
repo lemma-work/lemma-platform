@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    buildContactLink,
     buildShareLink,
     isShareKind,
+    humanizeResourceName,
     prettifySlug,
     resolveShareDestination,
     resolveShareName,
+    resolveSharePodId,
     resolveShareTarget,
     shareKindForResourceType,
 } from './share-link';
@@ -78,6 +81,17 @@ describe('share links', () => {
         expect(resolveShareName({ segments: ['pod', 'p1', 'tables'], query })).toBe('Open Orders');
     });
 
+    it('names the pod behind a link that points at no resource', () => {
+        // A pod link has no target — there is nothing inside it to preview — but
+        // the landing page still needs the pod so it can offer a way in rather
+        // than redirecting a non-member into an access wall.
+        expect(resolveShareTarget('pod', ['pod', 'p1'])).toBeNull();
+        expect(resolveSharePodId(['pod', 'p1'])).toBe('p1');
+        expect(resolveSharePodId(['pod', 'p1', 'agents', 'triage'])).toBe('p1');
+        expect(resolveSharePodId(['pod'])).toBeNull();
+        expect(resolveSharePodId(undefined)).toBeNull();
+    });
+
     it('prettifies slugs without dragging extensions along', () => {
         expect(prettifySlug('quarterly-report.md')).toBe('Quarterly Report');
         expect(prettifySlug('notes/meeting_minutes')).toBe('Meeting Minutes');
@@ -148,5 +162,101 @@ describe('resolveShareTarget', () => {
         expect(resolveShareTarget('document', [...podPath, 'files'], {})).toBeNull();
         expect(resolveShareTarget('agent', ['not-pod', 'p1', 'agents', 'a'], {})).toBeNull();
         expect(resolveShareTarget('agent', [], {})).toBeNull();
+    });
+});
+
+describe('humanizeResourceName', () => {
+    it('reads a filesystem name as a title', () => {
+        expect(humanizeResourceName('annamacharya-report.html')).toBe('Annamacharya report.html');
+        expect(humanizeResourceName('meeting_minutes.md')).toBe('Meeting minutes.md');
+    });
+
+    it('takes the file, not the folders above it', () => {
+        expect(humanizeResourceName('/library/q3/quarterly-review.pdf'))
+            .toBe('Quarterly review.pdf');
+    });
+
+    it('raises only the first letter', () => {
+        // Title Case On Every Word reads as a headline someone wrote. This is a
+        // name someone typed, and the rest of it is theirs.
+        expect(humanizeResourceName('notes-on-the-BOM-encoding.txt'))
+            .toBe('Notes on the BOM encoding.txt');
+    });
+
+    it('leaves a name that is already a name alone', () => {
+        expect(humanizeResourceName('README.md')).toBe('README.md');
+        expect(humanizeResourceName('Orders')).toBe('Orders');
+    });
+
+    it('collapses runs of separators rather than leaving a gap', () => {
+        expect(humanizeResourceName('draft__v2--final.docx')).toBe('Draft v2 final.docx');
+    });
+
+    it('keeps a name it cannot improve', () => {
+        expect(humanizeResourceName('')).toBe('');
+        expect(humanizeResourceName('/')).toBe('/');
+    });
+});
+
+describe('contact links', () => {
+    const card = {
+        name: 'Support Triage',
+        seed: 'a1b2c3d4',
+        telegram: '@support_triage_bot',
+        whatsapp: '+15551234567',
+        email: 'triage@pod.lemma.work',
+    };
+
+    it('is a share link with the card riding along', () => {
+        const link = buildContactLink({
+            canonicalUrl: 'https://lemma.work/pod/p1/agents/support_triage',
+            card,
+        });
+        const url = new URL(link!);
+
+        expect(url.pathname).toBe('/s/contact/pod/p1/agents/support_triage');
+        expect(url.searchParams.get('n')).toBe('Support Triage');
+        expect(url.searchParams.get('tg')).toBe('@support_triage_bot');
+        expect(url.searchParams.get('sd')).toBe('a1b2c3d4');
+    });
+
+    it('refuses a URL that is not a workspace one', () => {
+        expect(buildContactLink({ canonicalUrl: 'https://evil.example/pod/p1', card })).not.toBeNull();
+        expect(buildContactLink({ canonicalUrl: 'https://lemma.work/blog/x', card })).toBeNull();
+        expect(buildContactLink({ canonicalUrl: 'not a url', card })).toBeNull();
+    });
+
+    it('points at an agent, so a reader can ask whether they may see it', () => {
+        expect(resolveShareTarget('contact', ['pod', 'p1', 'agents', 'support_triage'])).toEqual({
+            podId: 'p1',
+            resourceType: 'agent',
+            resourceName: 'support_triage',
+        });
+    });
+
+    it('is a kind the router will accept', () => {
+        expect(isShareKind('contact')).toBe(true);
+    });
+
+    /*
+     * The card's params describe the picture on the share page and mean nothing
+     * to the workspace. Left in, an "Open it in Lemma" click would carry the
+     * agent's phone number into a member's address bar on the way to a page with
+     * no use for it.
+     */
+    it('leaves the card behind when it hands over to the workspace', () => {
+        const destination = resolveShareDestination(['pod', 'p1', 'agents', 'support_triage'], {
+            n: 'Support Triage',
+            tg: '@support_triage_bot',
+            wa: '+15551234567',
+            em: 'triage@pod.lemma.work',
+            sd: 'a1b2c3d4',
+            ic: 'lemma-identity:3',
+            o: 'Acme',
+            d: 'Answers mail.',
+            tab: 'orders',
+        });
+
+        expect(destination).toBe('/pod/p1/agents/support_triage?tab=orders');
     });
 });

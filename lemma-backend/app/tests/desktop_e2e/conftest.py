@@ -44,9 +44,25 @@ class Install:
     # A throwaway stack borrows the guest but runs no locald, so nothing
     # dispatches functions into a sandbox. A packaged install does.
     provisions_sandboxes: bool = True
+    # Whether apps are told to call the API back on their own origin, through
+    # the `/_lemma` door, instead of at its real address.
+    #
+    # Not a preference -- it is how this install works around a base domain a
+    # browser cannot derive a registrable domain from. Under such a domain the
+    # API is a different *site* to the app, so an absolute URL carries no
+    # session and the door is the only way through. Under a real registrable
+    # domain the two are same-site, the absolute URL works, and the door is
+    # switched off. Tests have to know which arrangement they are looking at.
+    api_via_app_origin: bool = True
 
     def app_url(self, slug: str) -> str:
         return f"http://{slug}.{self.app_base_domain}/"
+
+    @property
+    def base_domain(self) -> str:
+        """The domain every host of this install sits under, without a port."""
+        host = self.app_base_domain.split(":", 1)[0]
+        return host[len("apps.") :] if host.startswith("apps.") else host
 
 
 def _read_throwaway_stack() -> Install | None:
@@ -67,6 +83,7 @@ def _read_throwaway_stack() -> Install | None:
             frontend_url=stack["frontend_url"],
             app_base_domain=stack["app_base_domain"],
             provisions_sandboxes=bool(stack.get("provisions_sandboxes", True)),
+            api_via_app_origin=bool(stack.get("api_via_app_origin", True)),
         )
     except OSError, json.JSONDecodeError, KeyError:
         return None
@@ -91,23 +108,33 @@ def _read_install() -> Install | None:
     except OSError, json.JSONDecodeError:
         return None
 
-    app_base = None
+    # Every address comes out of the pack locald rendered, and none is rebuilt
+    # from a hostname spelled here. This used to compose the URLs out of
+    # `app.lemma.localhost` plus a port from `network.json`, which quietly
+    # became wrong the moment an install could be served under a different base
+    # domain: the suite signed in against one host while the install served
+    # apps under another, and every test failed as though the product were
+    # broken. `network.json` is still read, because a pack that renders no
+    # ports is a pack this suite cannot use.
+    rendered: dict[str, str] = {}
     for service in pack.get("services", []):
         env = service.get("env") or {}
         if "APP_BASE_DOMAIN" in env:
-            app_base = env["APP_BASE_DOMAIN"]
+            rendered = env
             break
-    if not app_base:
-        return None
 
-    backend = ports.get("backend_port")
-    frontend = ports.get("frontend_port")
-    if not backend or not frontend:
+    app_base = rendered.get("APP_BASE_DOMAIN")
+    api_url = rendered.get("API_URL")
+    frontend_url = rendered.get("FRONTEND_URL")
+    if not app_base or not api_url or not frontend_url:
+        return None
+    if not ports.get("backend_port") or not ports.get("frontend_port"):
         return None
     return Install(
-        api_url=f"http://app.lemma.localhost:{backend}",
-        frontend_url=f"http://app.lemma.localhost:{frontend}",
+        api_url=api_url.rstrip("/"),
+        frontend_url=frontend_url.rstrip("/"),
         app_base_domain=app_base,
+        api_via_app_origin=rendered.get("APP_API_VIA_APP_ORIGIN", "true") == "true",
     )
 
 
@@ -183,7 +210,11 @@ def account(install: Install) -> Account:
     # example.com, not a .test/.local address: the install validates the
     # domain on sign-up and rejects reserved TLDs outright.
     email = f"lemma-desktop-e2e-{secrets.token_hex(6)}@example.com"
-    password = f"Pw-{secrets.token_urlsafe(18)}"
+    # Built to satisfy the password policy rather than hoping a random string
+    # does. `token_urlsafe` produces one with no digit often enough that this
+    # suite failed intermittently on "Password must contain at least one
+    # number" -- a flake in the harness reads as a flake in the product.
+    password = f"Pw1-{secrets.token_urlsafe(18)}-{secrets.randbelow(10)}"
     response = httpx.post(
         f"{install.api_url}/st/auth/signup",
         headers={"st-auth-mode": "header", "rid": "emailpassword"},

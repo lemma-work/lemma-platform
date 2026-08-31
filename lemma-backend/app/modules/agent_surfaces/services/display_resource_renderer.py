@@ -151,27 +151,12 @@ def merge_other_answers(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_questions_as_text(plan: SurfaceQuestionRenderPlan) -> str:
-    """Render an ask_user plan as a well-formatted chat message.
+    """Deprecated alias for ``SurfaceQuestionRenderPlan.to_plain_text``.
 
-    Used as the fallback on platforms without native tappable choices (and on
-    any platform where the native render is unavailable). The user replies with
-    a number/label or free text, which the ingress routes back as the answer.
+    The degradation moved onto the plan so a delivery can ask any part for its
+    text without knowing which part it is holding.
     """
-    blocks: list[str] = []
-    multiple = len(plan.questions) > 1
-    for index, question in enumerate(plan.questions, start=1):
-        header = f"{index}. {question.question}" if multiple else question.question
-        lines = [header]
-        for opt_index, option in enumerate(question.options, start=1):
-            suffix = " (recommended)" if option.recommended else ""
-            detail = f" — {option.description}" if option.description else ""
-            lines.append(f"  {opt_index}. {option.label}{detail}{suffix}")
-        blocks.append("\n".join(lines))
-    prompt = "Reply with your choice"
-    if any(q.multi_select for q in plan.questions):
-        prompt += " (you can pick more than one)"
-    prompt += ", or type your own answer."
-    return "\n\n".join(blocks + [prompt])
+    return plan.to_plain_text()
 
 
 def build_display_resource_render_plan(
@@ -273,6 +258,13 @@ def build_display_resource_url(
             conversation_id,
         )
     if request.type is DisplayResourceType.APP:
+        # `page` carries the app's resource name, not a slug, on purpose. The
+        # workspace addresses an app page by the slug of its name and
+        # canonicalizes whatever the link carries on arrival, so the name
+        # resolves. Slugifying here instead would need this module to reproduce
+        # the frontend's slug rule exactly -- `normalize_public_slug` does not
+        # (`Ledger 2.0` -> `ledger-2-0` there, `ledger20` in the index) -- and a
+        # slug built by the wrong rule is one the workspace cannot resolve back.
         return _append_conversation(
             f"{pod_base}/app/view?{urlencode({'page': request.name})}"
             if request.name

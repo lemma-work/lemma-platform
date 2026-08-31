@@ -28,6 +28,10 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
+from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.services.runtime_history import (
+    apply_surface_history_window,
+)
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
 
@@ -93,11 +97,20 @@ def _as_bounded(runs: list[AgentRun], conversation=None) -> list[AgentRun]:
     bounded: list[AgentRun] = []
     for run, digest in zip(runs, digests):
         ordered = run.ordered_messages()
-        keep = (
-            ordered
-            if run.id in full_ids or len(ordered) <= 2
-            else [ordered[0], ordered[-1]]
-        )
+        if run.id in full_ids or len(ordered) <= 2:
+            keep = list(ordered)
+        else:
+            # Three reads in production: the run's first, its last, and every
+            # user message in it. Anything less here and the double certifies a
+            # shape the database never returns.
+            by_id = {
+                message.id: message
+                for message in (
+                    [ordered[0], ordered[-1]]
+                    + [m for m in ordered if m.role is MessageRole.USER]
+                )
+            }
+            keep = sorted(by_id.values(), key=lambda message: message.sequence)
         bounded.append(digest.model_copy(update={"messages": list(keep)}))
     return bounded
 
@@ -349,3 +362,315 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
 
         from_old = [m for m in selected if m.agent_run_id == old.id]
         assert len(from_old) == 3, from_old
+
+
+class TestTheUsersOwnMessagesAreNeverElided:
+    """The request is the one thing a later turn cannot reconstruct.
+
+    An agent that has lost it does not stop and ask -- it invents a plausible
+    substitute from whatever context is left and reports that as the thing it
+    was asked for. In the incident this suite grew from, a request for a
+    3Blue1Brown explainer became an hour spent building an unrelated promo reel,
+    and the agent then told the user that reel was what they had asked for.
+    """
+
+    def _conversation_with_a_mid_run_question(self) -> tuple[UUID, list[AgentRun]]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        # A follow-up the person typed while the run was still working. It is
+        # not the run's first message and not its last, so first-and-last
+        # elision dropped it entirely.
+        oldest = runs[0]
+        # The enum member, not its value: `model_copy` skips validation, and
+        # `MessageRole` is a str enum, so a raw "user" would compare unequal to
+        # the member every `is` check in production uses.
+        oldest.messages[4] = oldest.messages[4].model_copy(
+            update={
+                "role": MessageRole.USER,
+                "text": "actually make it about the Qwen architecture",
+            }
+        )
+        return conversation_id, runs
+
+    def test_a_mid_run_user_message_survives_elision(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert any(
+            message.role is MessageRole.USER
+            and "Qwen architecture" in (message.text or "")
+            for message in selected
+        )
+
+    def test_every_user_message_of_an_elided_run_is_kept_verbatim(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        # Real user turns only: the elision notice is user-role too, so that
+        # Anthropic does not hoist it out of the history, but it is ours.
+        kept = [
+            message.text
+            for message in selected
+            if message.agent_run_id == oldest_id
+            and message.role is MessageRole.USER
+            and message.kind is MessageKind.TEXT
+        ]
+        assert kept == [
+            "run 0 message 0",
+            "actually make it about the Qwen architecture",
+        ]
+
+    def test_the_step_count_does_not_count_what_was_kept(self) -> None:
+        """The notice stands in for work that was dropped, so counting the
+        messages still present would overstate what the model cannot see."""
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notice = next(
+            message
+            for message in selected
+            if message.agent_run_id == oldest_id
+            and (message.metadata or {}).get("summary_kind")
+            == "agent_run_middle_elision"
+        )
+        # 9 messages: two the user wrote, one final answer, six elided.
+        assert notice.metadata["elided_message_count"] == 6
+
+    def test_the_final_answer_still_closes_the_run(self) -> None:
+        _, runs = self._conversation_with_a_mid_run_question()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert for_run[-1].text == "run 0 message 8"
+
+
+class TestAPausingRunsAnswerSurvivesElision:
+    """What the person typed in answer to `ask_user` lives only in a tool return.
+
+    No user message is written for it. Its matching call sits in the middle of
+    the run, which is what elision drops -- and a tool return whose call is
+    missing is discarded by the history builder as an orphan. So the answer
+    disappeared once the run was six turns back, replaced by "worked through N
+    intermediate messages".
+    """
+
+    def _conversation_ending_on_an_answer(self) -> list[AgentRun]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        oldest = runs[0]
+        oldest.messages[-1] = oldest.messages[-1].model_copy(
+            update={
+                "role": MessageRole.TOOL,
+                "kind": MessageKind.TOOL_RETURN,
+                "tool_name": "ask_user",
+                "tool_call_id": "q1",
+                "tool_result": {"answer": "ship it on the 14th"},
+                "text": None,
+            }
+        )
+        return runs
+
+    def test_the_answer_is_still_there(self) -> None:
+        runs = self._conversation_ending_on_an_answer()
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert any("ship it on the 14th" in (m.text or "") for m in selected)
+
+    def test_it_is_not_left_as_an_orphan_tool_return(self) -> None:
+        """An orphan is dropped by the builder, so carrying it as one loses it
+        just as surely as eliding it did."""
+        runs = self._conversation_ending_on_an_answer()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert all(m.kind is not MessageKind.TOOL_RETURN for m in for_run)
+
+    def test_a_run_ending_on_ordinary_text_is_untouched(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == runs[0].id]
+        assert for_run[-1].text == "run 0 message 8"
+
+
+class TestHistoryIsBoundedForEveryConversation:
+    """Surface conversations always had an age and count window. Nothing else
+    did — so the web UI, tasks and sub-agents loaded every run a conversation
+    had ever had. Elision bounds how big a run is; nothing bounded how many.
+    """
+
+    def _long_conversation(self, run_count: int) -> list[AgentRun]:
+        conversation_id = uuid4()
+        return [
+            _run(conversation_id, index, message_count=4) for index in range(run_count)
+        ]
+
+    def test_a_very_long_conversation_stops_growing(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 3)
+
+        assert len(apply_surface_history_window(runs, None)) == MAX_HISTORY_AGENT_RUNS
+
+    def test_it_is_the_oldest_runs_that_go(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 5)
+
+        kept = apply_surface_history_window(runs, None)
+
+        assert kept[-1] is runs[-1]
+        assert runs[0] not in kept
+
+    def test_an_ordinary_conversation_is_untouched(self) -> None:
+        runs = self._long_conversation(3)
+
+        assert apply_surface_history_window(runs, None) == runs
+
+    def test_the_cap_applies_before_the_surface_window(self) -> None:
+        """A surface conversation is bounded by both, not by whichever it
+        happens to hit first."""
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 2)
+
+        kept = select_runtime_history(_as_bounded(runs))
+
+        run_ids = {message.agent_run_id for message in kept}
+        assert len(run_ids) <= MAX_HISTORY_AGENT_RUNS
+
+
+class TestDroppedRunsAreAnnounced:
+    """`_collapsed_run` announced the work it elided; the caps above it sliced
+    in silence. So a conversation could lose three hundred whole runs without a
+    word, while losing the middle of one said so.
+    """
+
+    def test_a_capped_conversation_says_what_it_dropped(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=4)
+            for index in range(MAX_HISTORY_AGENT_RUNS + 12)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notices = [
+            message
+            for message in selected
+            if (message.metadata or {}).get("summary_kind")
+            == "conversation_runs_dropped"
+        ]
+        assert len(notices) == 1
+        assert notices[0].metadata["dropped_run_count"] == 12
+
+    def test_it_comes_before_the_history_it_explains(self) -> None:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=4)
+            for index in range(MAX_HISTORY_AGENT_RUNS + 3)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert (selected[0].metadata or {}).get("summary_kind") == (
+            "conversation_runs_dropped"
+        )
+
+    def test_a_conversation_that_lost_nothing_says_nothing(self) -> None:
+        conversation_id = uuid4()
+        runs = [_run(conversation_id, index, message_count=4) for index in range(3)]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        assert not any(
+            (message.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
+            for message in selected
+        )
+
+
+class TestTheUnpairedCallGuardActuallyRuns:
+    """`_is_unpaired_tool_call` could be replaced with `return False` and the
+    whole suite still passed: every fixture put the call at index 0, where the
+    user-only filter drops it anyway. The guard fires only when the run's *last*
+    message is the unpaired call, which nothing built.
+    """
+
+    def _run_ending_on_an_unpaired_call(self) -> list[AgentRun]:
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=6)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+        oldest = runs[0]
+        oldest.messages[-1] = oldest.messages[-1].model_copy(
+            update={
+                "role": MessageRole.ASSISTANT,
+                "kind": MessageKind.TOOL_CALL,
+                "tool_name": "send_email",
+                "tool_call_id": "e1",
+                "text": None,
+            }
+        )
+        return runs
+
+    def test_the_unpaired_call_is_not_carried_forward(self) -> None:
+        """Kept, the history builder synthesizes 'this was interrupted... run it
+        again' — so a send that succeeded is reported as never having happened,
+        and the model is told to repeat it."""
+        runs = self._run_ending_on_an_unpaired_call()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert all(m.kind is not MessageKind.TOOL_CALL for m in for_run)
+
+    def test_the_run_still_reports_that_it_did_work(self) -> None:
+        runs = self._run_ending_on_an_unpaired_call()
+        oldest_id = runs[0].id
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        for_run = [m for m in selected if m.agent_run_id == oldest_id]
+        assert any(
+            (m.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
+            for m in for_run
+        )
+
+
+class TestElisionNoticesStayOutOfTheSystemChannel:
+    def test_a_notice_is_user_role_not_system(self) -> None:
+        """A `SystemPromptPart` is hoisted by Anthropic to the front of the
+        system prompt, ahead of the whole cacheable prefix — and this text
+        changes as runs age out."""
+        conversation_id = uuid4()
+        runs = [
+            _run(conversation_id, index, message_count=9)
+            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+        ]
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        notices = [
+            m
+            for m in selected
+            if (m.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
+        ]
+        assert notices
+        assert all(m.role is MessageRole.USER for m in notices)

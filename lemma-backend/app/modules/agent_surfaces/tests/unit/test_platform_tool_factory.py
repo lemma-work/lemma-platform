@@ -135,112 +135,6 @@ async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agen
     assert "whatsapp_send_file" not in toolsets[0].tools
 
 
-@pytest.mark.asyncio
-async def test_platform_tool_factory_adds_native_telegram_tools_for_default_agent_conversation(
-    monkeypatch,
-):
-    conversation = Conversation(
-        id=uuid4(),
-        pod_id=uuid4(),
-        agent_id=None,
-        user_id=uuid4(),
-        title="default agent telegram chat",
-        metadata={"source": "agent_surfaces", "surface_platform": "TELEGRAM"},
-    )
-    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram-token")
-
-    toolsets = await factory.build_toolsets(conversation=conversation)
-
-    assert len(toolsets) == 1
-    assert "telegram_get_current_chat" in toolsets[0].tools
-    assert "telegram_send_file" not in toolsets[0].tools
-
-
-@pytest.mark.asyncio
-async def test_platform_tool_factory_adds_gmail_tools_for_surface_conversation(
-    monkeypatch,
-):
-    account_id = uuid4()
-    surface = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.GMAIL,
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-        account_id=account_id,
-        config=SurfaceConfig(),
-    )
-    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-
-    async def fake_get(self, surface_id):
-        assert surface_id == surface.id
-        return surface
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
-        fake_get,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.get_connector_service",
-        lambda uow: AsyncMock(),
-    )
-    monkeypatch.setattr(
-        SurfaceCredentialResolver,
-        "for_surface",
-        AsyncMock(return_value={"access_token": "gmail-token"}),
-    )
-
-    toolsets = await factory.build_toolsets(
-        conversation=_conversation_for_surface(surface)
-    )
-
-    assert len(toolsets) == 1
-    assert "gmail_reply_email" in toolsets[0].tools
-    assert "gmail_download_attachment" not in toolsets[0].tools
-
-
-@pytest.mark.asyncio
-async def test_platform_tool_factory_adds_outlook_tools_for_surface_conversation(
-    monkeypatch,
-):
-    account_id = uuid4()
-    surface = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.OUTLOOK,
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-        account_id=account_id,
-        config=SurfaceConfig(),
-    )
-    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-
-    async def fake_get(self, surface_id):
-        assert surface_id == surface.id
-        return surface
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
-        fake_get,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.get_connector_service",
-        lambda uow: AsyncMock(),
-    )
-    monkeypatch.setattr(
-        SurfaceCredentialResolver,
-        "for_surface",
-        AsyncMock(return_value={"access_token": "outlook-token"}),
-    )
-
-    toolsets = await factory.build_toolsets(
-        conversation=_conversation_for_surface(surface)
-    )
-
-    assert len(toolsets) == 1
-    assert "outlook_reply_email" in toolsets[0].tools
-    assert "outlook_download_attachment" not in toolsets[0].tools
-
-
-@pytest.mark.asyncio
 async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypatch):
     """`from_address` belongs to the surface row, not to the platform.
 
@@ -257,9 +151,6 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
         AgentSurfaceEntity,
         SurfaceConfig,
         SurfacePlatform,
-    )
-    from app.modules.agent_surfaces.services.credential_resolver import (
-        SurfaceCredentialResolver,
     )
 
     surface = AgentSurfaceEntity(
@@ -279,3 +170,17 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
 
     assert credentials["api_key"] == "re_test"
     assert credentials["from_address"] == "ops.acme@ops.asur.work"
+
+
+@pytest.mark.parametrize("platform", ["RESEND"])
+async def test_an_email_surface_builds_no_platform_toolset(platform):
+    """Their only tool was the reply, and the observer sends that now.
+
+    Not an oversight to be filled in later: an email surface has nothing left
+    for a platform toolset to carry.
+    """
+    from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
+        _TOOLSET_BUILDERS,
+    )
+
+    assert platform not in _TOOLSET_BUILDERS

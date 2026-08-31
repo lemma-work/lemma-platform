@@ -67,7 +67,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
 
     async def get(self, id: UUID) -> AgentSurfaceEntity | None:
         model = await self.session.get(AgentSurface, id)
-        return model.to_entity() if model else None
+        return model.to_entity_or_none() if model else None
 
     async def get_by_pod_and_name(
         self,
@@ -82,7 +82,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         )
         result = await self.session.execute(stmt)
         model = result.scalars().first()
-        return model.to_entity() if model else None
+        return model.to_entity_or_none() if model else None
 
     async def list_by_pod(
         self,
@@ -110,7 +110,16 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             next_cursor = models[limit - 1].id
             models = models[:limit]
 
-        return [model.to_entity() for model in models], next_cursor
+        # A row naming a retired platform drops out rather than taking the
+        # whole page with it; see `AgentSurface.to_entity_or_none`.
+        # A row naming a retired platform drops out rather than taking the
+        # whole page with it; see `AgentSurface.to_entity_or_none`.
+        entities = [
+            entity
+            for entity in (model.to_entity_or_none() for model in models)
+            if entity is not None
+        ]
+        return entities, next_cursor
 
     async def get_active_by_address(
         self,
@@ -168,14 +177,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         )
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
-
-    async def get_by_email_schedule_id(
-        self, schedule_id: UUID
-    ) -> AgentSurfaceEntity | None:
-        stmt = select(AgentSurface).where(AgentSurface.schedule_id == schedule_id)
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
 
     async def get_by_platform_and_account_id(
         self,
@@ -245,7 +246,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             stmt = stmt.where(AgentSurface.id != exclude_surface_id)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
+        # Org-wide and platform-blind, so a retired row sharing this account
+        # would otherwise 500 the creation of an unrelated surface.
+        return model.to_entity_or_none() if model else None
 
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
         model = AgentSurface(
@@ -277,7 +280,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_id=entity.surface_identity_id,
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
-            schedule_id=entity.schedule_id,
             surface_identity_email=entity.surface_identity_email,
             webhook_secret=get_secret_cipher().encrypt_str(entity.webhook_secret),
         )
@@ -314,7 +316,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_id = entity.surface_identity_id
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
-        model.schedule_id = entity.schedule_id
         model.surface_identity_email = entity.surface_identity_email
         model.webhook_secret = get_secret_cipher().encrypt_str(entity.webhook_secret)
         await self.session.flush()

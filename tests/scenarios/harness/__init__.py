@@ -5,7 +5,14 @@ Import everything a journey needs from here::
     from harness import journey, capability, scenario, proves, covers
 """
 
-from harness.markers import capability, covers, journey, proves, scenario
+from harness.markers import (
+    capability,
+    covers,
+    journey,
+    proves,
+    scenario,
+    stack_lane,
+)
 from harness.world import Person, World
 
 __all__ = [
@@ -16,4 +23,5 @@ __all__ = [
     "journey",
     "proves",
     "scenario",
+    "stack_lane",
 ]

@@ -1,6 +1,6 @@
 [project]
 name = "lemma-connectors"
-version = "0.7.0"
+version = "0.7.1"
 description = "OpenAPI-native native connector packages for Lemma"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"

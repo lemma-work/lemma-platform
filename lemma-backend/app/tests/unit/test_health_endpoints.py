@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from unittest.mock import AsyncMock
 
 import pytest
@@ -68,6 +70,71 @@ def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
     body = r.json()
     assert body["status"] == "ready"
     assert body["components"] == {"db": "ok", "redis": "ok"}
+
+
+def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
+    client, monkeypatch, tmp_path
+):
+    """A dead worker must not read as a healthy backend.
+
+    This is the failure it was found in. On a desktop install the worker
+    stopped during a lifespan teardown and never came back, while the database
+    and Redis stayed perfectly fine -- so readiness answered 200, locald's
+    health gate saw nothing wrong and never restarted the process, and every
+    agent run queued behind a worker that was not there. The person watching
+    got a spinner for two hours and no log said why.
+
+    The heartbeat file already existed for exactly this: it is what a
+    Kubernetes liveness probe reads to restart a wedged worker. Nothing on
+    desktop read it.
+    """
+    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+
+    heartbeat = tmp_path / "worker_heartbeat"
+    heartbeat.write_text(str(time.time() - 3600), encoding="utf-8")
+    monkeypatch.setattr(appmod.settings, "worker_heartbeat_path", str(heartbeat))
+    monkeypatch.setattr(appmod.app.state, "embedded_worker", True, raising=False)
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["components"]["worker"] == "stalled"
+    # The dependencies it does not own are still reported honestly.
+    assert body["components"]["db"] == "ok"
+
+    # A fresh heartbeat is ready again, so a restart clears it.
+    heartbeat.write_text(str(time.time()), encoding="utf-8")
+    assert client.get("/health/ready").status_code == 200
+
+
+def test_ready_ignores_the_worker_where_this_process_runs_none(
+    client, monkeypatch, tmp_path
+):
+    """The cloud topology runs the worker as its own deployment.
+
+    An API process there has no heartbeat to read, and must not call itself
+    unready for the absence. Nor may a process that has simply not written its
+    first heartbeat yet -- which is every start before the first tick.
+    """
+    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+
+    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    monkeypatch.setattr(
+        appmod.settings, "worker_heartbeat_path", str(tmp_path / "never-written")
+    )
+    r = client.get("/health/ready")
+    assert r.status_code == 200
+    assert "worker" not in r.json()["components"]
+
+    # Embedded, but the file is not there yet: still starting, not stalled.
+    monkeypatch.setattr(appmod.app.state, "embedded_worker", True, raising=False)
+    r = client.get("/health/ready")
+    assert r.status_code == 200
+    assert "worker" not in r.json()["components"]
 
 
 def test_ready_echoes_runtime_instance_id(client, monkeypatch):

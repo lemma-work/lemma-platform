@@ -14,6 +14,9 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(autouse=True)
 def _base_domain(monkeypatch):
     monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.localhost:8711")
+    # The app-origin API door is gated; these tests are about what it does when
+    # a deployment has opted in.
+    monkeypatch.setattr(settings, "app_api_via_app_origin", True)
 
 
 @pytest.mark.parametrize(
@@ -56,7 +59,9 @@ async def _drive(path, *, host=b"my-app.apps.lemma.localhost:8711", proxied=Fals
     scope = {
         "type": "http",
         "path": path,
-        "raw_path": path.encode("latin-1"),
+        # utf-8, as uvicorn builds it -- `scope["path"]` is a decoded str and
+        # `raw_path` its bytes.
+        "raw_path": path.encode("utf-8"),
         "headers": headers,
     }
 
@@ -129,16 +134,51 @@ async def test_the_prefix_does_not_swallow_an_apps_own_paths():
 
 
 @pytest.mark.asyncio
-async def test_the_prefix_means_the_same_thing_behind_the_cloud_ingress():
-    # nginx resolves the slug upstream, and everything else on that path is
-    # deliberately left untouched. The prefix still has to be understood, or
-    # the same app build works on desktop and 404s in cloud.
-    scope = await _drive("/_lemma/users/me", proxied=True)
-    assert scope["path"] == "/users/me"
+async def test_the_prefix_means_the_same_thing_behind_the_ingress():
+    # The path an ingress actually delivers, not the one it would be convenient
+    # to assert. `nginx.conf` proxies app hosts with
+    # `proxy_pass .../public/apps$request_uri`, and a proxy_pass whose URI
+    # contains a variable is sent verbatim -- so the backend sees the prefix
+    # already nested under the asset endpoint.
+    #
+    # The first version of this test hand-built `/_lemma/users/me` for the
+    # proxied case, which nginx never produces. It passed while every API call
+    # behind that ingress fell through to the asset controller and came back
+    # 200 with the app's own index.html.
+    nested = await _drive("/public/apps/_lemma/users/me", proxied=True)
+    assert nested["path"] == "/users/me"
+
+    # An ingress that rewrites nothing and only sets the header works too.
+    bare = await _drive("/_lemma/users/me", proxied=True)
+    assert bare["path"] == "/users/me"
 
     # ...while ordinary proxied asset requests stay exactly as they were.
     asset = await _drive("/assets/app.js", proxied=True)
     assert asset["path"] == "/assets/app.js"
+    nested_asset = await _drive("/public/apps/assets/app.js", proxied=True)
+    assert nested_asset["path"] == "/public/apps/assets/app.js"
+
+
+@pytest.mark.asyncio
+async def test_the_door_is_shut_unless_the_deployment_opened_it(monkeypatch):
+    # The prefix is only handed to apps where the setting is on; the strip has
+    # to be gated on the same thing. Ungated, any deployment whose app domain
+    # resolves straight to the backend gained a same-origin alias of the entire
+    # API on the origin that serves user-authored HTML, without opting in.
+    monkeypatch.setattr(settings, "app_api_via_app_origin", False)
+    scope = await _drive("/_lemma/users/me")
+    assert scope["path"] == "/public/apps/_lemma/users/me"
+    assert (b"x-app-public-slug", b"my-app") in scope["headers"]
+
+
+@pytest.mark.asyncio
+async def test_an_asset_name_outside_latin_1_does_not_explode():
+    # `raw_path` is bytes and uvicorn hands the middleware a decoded str, so
+    # encoding it as latin-1 raised UnicodeEncodeError -- a bare 500 with a
+    # traceback for any app shipping an emoji- or CJK-named file.
+    scope = await _drive("/assets/\u56fe\u6807.png")
+    assert scope["path"] == "/public/apps/assets/\u56fe\u6807.png"
+    assert scope["raw_path"] == scope["path"].encode("utf-8")
 
 
 @pytest.mark.asyncio

@@ -1104,7 +1104,12 @@ def test_lemma_harness_builds_dynamic_openai_compatible_model():
     )
 
     assert model is not None
-    assert type(model).__name__ == "OpenAIChatModel"
+    # isinstance, not a name match: the factory builds a subclass that keeps
+    # `stream_options` to the OpenAI schema, and what this test cares about is
+    # that the OpenAI-compatible protocol picked an OpenAI chat model at all.
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    assert isinstance(model, OpenAIChatModel)
 
 
 def test_lemma_harness_builds_dynamic_anthropic_compatible_model():

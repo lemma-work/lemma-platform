@@ -342,3 +342,82 @@ async def test_an_unrelated_write_invalidates_nothing(recording_cache):
     )
 
     assert recording_cache.deleted == []
+
+
+class TestAllFourIndexesActuallyArrive:
+    """The header promises four indexes. It has to be telling the truth.
+
+    Four indexes at the 2000-char per-index cap could not fit a 6000-char
+    section, and the budget was spent narrowest-scope-first, so the scope that
+    fell off the end was always the same one: `/memory/AGENTS.md`, the
+    pod-shared index every agent writes to and therefore the one most likely to
+    have grown. It disappeared with no heading and no marker, directly beneath a
+    header telling the agent that all four had been read in together and there
+    was "nothing to pick between".
+    """
+
+    def _four_realistic_indexes(self, agents_md, agent_name: str) -> None:
+        for path in (
+            f"/me/agents/{agent_name}/AGENTS.md",
+            "/me/AGENTS.md",
+            f"/memory/agents/{agent_name}/AGENTS.md",
+            "/memory/AGENTS.md",
+        ):
+            # Over the per-index cap, which is the case that used to lose one:
+            # four indexes each spending their full 2000 characters could not
+            # fit a 6000-character section.
+            body = "\n".join(f"- {path} entry {n}" for n in range(120))
+            agents_md[path] = body
+
+    async def test_the_pod_shared_index_is_not_the_one_that_disappears(
+        self, agents_md
+    ) -> None:
+        agent = _agent()
+        self._four_realistic_indexes(agents_md, agent.name)
+
+        section = await _build(agent=agent)
+
+        assert "/memory/AGENTS.md entry 0" in section
+
+    async def test_every_scope_reaches_the_prompt(self, agents_md) -> None:
+        agent = _agent()
+        self._four_realistic_indexes(agents_md, agent.name)
+
+        section = await _build(agent=agent)
+
+        for path in (
+            f"/me/agents/{agent.name}/AGENTS.md",
+            "/me/AGENTS.md",
+            f"/memory/agents/{agent.name}/AGENTS.md",
+            "/memory/AGENTS.md",
+        ):
+            # The rendered block heading, not a bare mention: the header above
+            # names all four paths whether or not their contents arrived.
+            assert f"— `{path}`\n" in section, f"{path} never reached the prompt"
+
+    async def test_a_scope_that_cannot_fit_says_so(self, agents_md, monkeypatch):
+        """Silence reads as 'this scope holds nothing', so the agent stops
+        looking instead of opening the file."""
+        agent = _agent()
+        self._four_realistic_indexes(agents_md, agent.name)
+        monkeypatch.setattr(
+            memory_mod.agent_settings, "agent_memory_index_max_chars", 400
+        )
+        monkeypatch.setattr(
+            memory_mod.agent_settings, "agent_memory_section_max_chars", 700
+        )
+
+        section = await _build(agent=agent)
+
+        assert "Not shown this turn" in section
+        assert "/memory/AGENTS.md" in section
+
+    async def test_the_section_still_respects_its_budget(self, agents_md) -> None:
+        agent = _agent()
+        self._four_realistic_indexes(agents_md, agent.name)
+
+        section = await _build(agent=agent)
+
+        budget = memory_mod.agent_settings.agent_memory_section_max_chars
+        indexes_start = section.index("### ")
+        assert len(section[indexes_start:]) <= budget

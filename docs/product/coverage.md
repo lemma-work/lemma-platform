@@ -12,13 +12,13 @@ only a promise marked `covered` with no test is.
 | Status | Scenarios |
 | --- | ---: |
 | `covered` | 156 |
-| `gap` | 1 |
+| `gap` | 2 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **161** |
+| **total** | **162** |
 
-Scenario tests declaring a promise: 370.
+Scenario tests declaring a promise: 373.
 
 ## Contract coverage
 
@@ -28,8 +28,31 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 235 | 235 |
+| OpenAPI operations | 236 | 236 |
 | Product events | 28 | 28 |
+
+## Covered, but only in a lane that is not routinely run
+
+Every test proving these carries a mark that takes it out of the
+default selection — `sandbox` and `live` are excluded by the suite's
+own `-m` expression, and `stack_lane` is dropped whenever the run
+targets a deployment the suite does not own. That is legitimate: a
+promise about an unconfigured deployment cannot be proved against a
+working one. It is listed because `covered` otherwise reads as
+`demonstrated recently`, and for these it does not.
+
+| Scenario | Lane |
+| --- | --- |
+| `PS-FUNC-002` A function runs isolated from everything else | `sandbox` |
+| `PS-FUNC-010` A quick function answers immediately | `sandbox` |
+| `PS-FUNC-011` A long function is queued and reports progress | `sandbox` |
+| `PS-FUNC-012` A run that cannot finish does not hang forever | `sandbox` |
+| `PS-FLOW-014` A workflow run carries the authority of whoever started it | `sandbox` |
+| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `stack_lane` |
+| `PS-OPS-030` The platform reports its own health honestly | `stack_lane` |
+| `PS-PACK-010` A person sees the plan before anything changes | `sandbox` |
+| `PS-PACK-012` Applying an import either finishes or can be safely retried | `sandbox` |
+| `PS-PACK-014` An imported pod works without further wiring | `sandbox` |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -41,9 +64,10 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
-| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_a_conversation_can_be_watched` |
+| `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_reasoning_is_never_shown_as_the_answer`, `test_a_conversation_can_be_watched` |
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
+| `PS-AGENT-015` A person can add to what the agent is already doing | `covered` | `test_a_message_sent_mid_run_is_answered` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
@@ -205,8 +229,8 @@ the module suites may cover it — but it is untested *as product*.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
-| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
+| `PS-SURF-001` A person connects a pod's agent to a platform | `gap` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |

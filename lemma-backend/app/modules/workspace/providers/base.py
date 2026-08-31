@@ -136,6 +136,13 @@ class ProcessDescriptor:
     state: object
     exit_code: int | None = None
     started_at: datetime | None = None
+    # What the process is and where it runs. A sandbox belongs to a user, not
+    # to a conversation, so a listing without these is a column of opaque uuids
+    # spanning every session that user has open -- and the tool docstring sends
+    # agents to that listing to recover a process they have lost the id for.
+    cwd: str = ""
+    command: str = ""
+    tty: bool = False
 
 
 @dataclass(frozen=True, slots=True)

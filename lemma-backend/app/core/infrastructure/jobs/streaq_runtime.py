@@ -265,13 +265,21 @@ _SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
 # advertises a deadline to something outside this process (an Agent Host on a
-# user's machine) and hands it a credential that expires. If the task dies
-# first, Lemma reports the run failed while the remote agent keeps executing
-# tools for it. This must therefore stay strictly above the Agent Host run
-# window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, 50 min) with enough margin
-# for the harness to cancel the host run and finalize, and strictly below the
-# one-hour validity of the MCP credential minted at dispatch.
-AGENT_RUN_JOB_TIMEOUT_SECONDS = 3300
+# user's machine). If the task dies first, Lemma reports the run failed while
+# the remote agent keeps executing tools for it. This must therefore stay above
+# the Agent Host run window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS) with
+# enough margin for the harness to cancel the host run and finalize.
+#
+# It used to also have to stay under the one-hour validity of the MCP
+# credential minted at dispatch. That stopped being true when the harness
+# started refreshing that credential mid-run, and the note saying otherwise
+# outlived the constraint it described -- long enough to hold every run to
+# fifty minutes for a reason that no longer applied.
+#
+# A task this long occupies an interactive-lane slot for its whole life. That
+# is affordable at the default concurrency of 50 and is the real thing to watch
+# if these runs ever become common.
+AGENT_RUN_JOB_TIMEOUT_SECONDS = 14700
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
@@ -488,6 +496,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.net.impersonating_client import close_impersonating_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
+        stop_connection_scope_monitor,
     )
 
     configure_thread_pool()
@@ -651,8 +660,23 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 background_task.cancel()
                 try:
                     await background_task
-                except BaseException:
+                except asyncio.CancelledError:
+                    # The expected path: we cancelled it on the line above.
                     pass
+                except Exception:
+                    # Anything else is that task failing on its own way out.
+                    # Still swallowed — the loop must reach every remaining
+                    # task, which is the whole point of the ordering above —
+                    # but a bare `pass` is how a background task that has been
+                    # dying at every shutdown for months goes unnoticed.
+                    # `Exception`, not `BaseException`: KeyboardInterrupt and
+                    # SystemExit are the process being told to stop, and a
+                    # shutdown loop is the last place that should be ignored.
+                    logger.warning(
+                        "infrastructure.streaq_runtime.background_task_shutdown.degraded",
+                        task=background_task.get_name(),
+                        exc_info=True,
+                    )
         await _safe_shutdown_step("broker.stop", broker.stop)
         # After the broker, because the analytics consumer is what produces
         # these events -- draining a buffer that has stopped growing is the only
@@ -668,6 +692,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
+        # Symmetric with `start_connection_scope_monitor_from_settings` above.
+        # Nothing stopped it, which does not matter to a process that is about
+        # to exit -- and matters a great deal to a test that runs this lifespan
+        # in-process, because the monitor is a module singleton that then
+        # outlives the test and attaches to the next suite's engines.
+        stop_connection_scope_monitor()
         await _safe_shutdown_step("close_redis_clients", close_redis_clients)
         await _safe_shutdown_step("close_engine", close_engine)
         await _safe_shutdown_step(

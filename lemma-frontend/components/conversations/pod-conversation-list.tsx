@@ -3,8 +3,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowRight, Plus, Sparkles } from '@/components/ui/icons';
+import { Archive, ArrowRight, Plus, Sparkles } from '@/components/ui/icons';
+import { toast } from 'sonner';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
+import { useScopedConversations, useUpdateConversation } from '@/lib/hooks/use-assistants';
 import { ResourceList, ResourceMetric, ResourceMetricStrip, ResourceRow } from '@/components/pod/resource-layout';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Skeleton } from '@/components/shared/loading';
@@ -25,6 +27,13 @@ interface PodConversationListProps {
     scopeType?: 'pod' | 'assistant';
     scopeName?: string;
     showHeader?: boolean;
+    /**
+     * Show what has been put away instead of the history. A separate read
+     * rather than a filter over the same one: the assistant context holds the
+     * live conversations for this pod and archived ones are, by definition,
+     * not among them.
+     */
+    archived?: boolean;
 }
 
 export function PodConversationList({
@@ -35,6 +44,7 @@ export function PodConversationList({
     scopeType = 'pod',
     scopeName,
     showHeader = variant === 'page',
+    archived = false,
 }: PodConversationListProps) {
     const {
         conversations,
@@ -42,14 +52,31 @@ export function PodConversationList({
         isLoadingConversations,
     } = useAIAssistant();
     const router = useRouter();
+    const updateConversation = useUpdateConversation();
+
+    const archive = useScopedConversations(
+        { podId },
+        { archived: true, limit, enabled: archived },
+    );
+
+    const restore = (conversationId: string) => {
+        updateConversation.mutate(
+            { podId, conversationId, data: { is_archived: false } },
+            {
+                onSuccess: () => toast.success('Conversation restored'),
+                onError: (error) => toast.error(`Could not restore: ${error.message}`),
+            },
+        );
+    };
 
     const isCompact = variant === 'compact';
-    const items = conversations.slice(0, limit);
-    const conversationCount = conversations.length;
+    const source = archived ? archive.data?.items ?? [] : conversations;
+    const items = source.slice(0, limit);
+    const conversationCount = source.length;
     const entityName = scopeName || podName;
     const isAssistantScope = scopeType === 'assistant';
-    const runningCount = conversations.filter((conversation) => isConversationRunningStatus(conversation.status)).length;
-    const recentCount = conversations.filter((conversation) => {
+    const runningCount = source.filter((conversation) => isConversationRunningStatus(conversation.status)).length;
+    const recentCount = source.filter((conversation) => {
         const updatedAt = new Date(conversation.updated_at || conversation.created_at).getTime();
         return Number.isFinite(updatedAt) && Date.now() - updatedAt < 1000 * 60 * 60 * 24 * 7;
     }).length;
@@ -68,7 +95,7 @@ export function PodConversationList({
                 spinner-and-caption was a third box of a third size between the
                 empty state and the list, so this sidebar changed shape twice on
                 every load. */}
-            {isLoadingConversations && items.length === 0 && (
+            {(archived ? archive.isLoading : isLoadingConversations) && items.length === 0 && (
                 <div role="status" aria-label="Loading conversations">
                     {CONVERSATION_SKELETON_WIDTHS.map((width, index) => (
                         <div key={index} className="px-1 py-1">
@@ -81,7 +108,16 @@ export function PodConversationList({
                 </div>
             )}
 
-            {!isLoadingConversations && items.length === 0 && (
+            {archived && !archive.isLoading && items.length === 0 && (
+                <EmptyState variant="inline"
+                    icon={<Archive className="h-4 w-4" />}
+                    title="Nothing archived"
+                    description="Conversations you archive are kept here, and come back the moment one gets a new message."
+                    className="px-2 py-5"
+                />
+            )}
+
+            {!archived && !isLoadingConversations && items.length === 0 && (
                 <EmptyState variant="inline"
                     icon={<Sparkles className="h-4 w-4" />}
                     title="No conversations yet"
@@ -139,6 +175,17 @@ export function PodConversationList({
                                 Open
                             </span>
                         </button>
+                        {archived ? (
+                            <Button
+                                variant="quiet"
+                                size="sm"
+                                className="mr-1 shrink-0"
+                                disabled={updateConversation.isPending}
+                                onClick={() => restore(conversation.id)}
+                            >
+                                Restore
+                            </Button>
+                        ) : null}
                     </ResourceRow>
                 );
             })}

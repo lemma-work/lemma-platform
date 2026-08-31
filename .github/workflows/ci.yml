@@ -69,6 +69,12 @@ jobs:
               - 'lemma-typescript/scripts/generate_openapi_client.sh'
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              # The published copy of the spec is generated from it too. It
+              # belongs to this filter and not `frontend`, because the change
+              # that staled it is a spec regeneration -- a lemma-python edit,
+              # which never starts the frontend job.
+              - 'lemma-frontend/public/openapi.json'
+              - 'lemma-frontend/scripts/sync-openapi-spec.mjs'
               - '.github/workflows/ci.yml'
             desktop:
               # desktop/** is now every Rust crate the app ships: the shell,
@@ -170,10 +176,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
+    # Inherits the workflow's `contents: read` / `pull-requests: read`. This
+    # job asked for `pull-requests: write` and `issues: write` back when it
+    # posted the coverage table as a PR comment; that moved to the job summary
+    # and then to backend-coverage.yml, and the grant stayed behind. Nothing
+    # here writes anything to GitHub but an artifact.
     defaults:
       run:
         working-directory: lemma-backend
@@ -212,7 +219,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -245,7 +252,7 @@ jobs:
           echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-unit-coverage
           include-hidden-files: true
@@ -276,7 +283,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -310,6 +317,12 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # Production runs at INFO, so a broad `except` that logs at debug without
+      # exc_info reports nothing anywhere — and if it also stops the exception
+      # propagating, the job reports success. That pair is why 2,146 title jobs
+      # all said `succeeded` while the LLM path was failing.
+      - name: Swallowed errors (broad catches that leave no trace)
+        run: make lint-swallowed-errors
       # Also only ever ran in `make quality`. Main had drifted 35 modules above
       # its baseline before anybody looked, which is precisely what this gate
       # exists to prevent -- growth nobody decided on.
@@ -369,7 +382,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync
@@ -391,13 +404,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
       # what a release verifies cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-python-sdk
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-stack/uv.lock
@@ -438,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Build sdist + wheel the way the release does
@@ -460,7 +473,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -477,15 +490,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: lemma-typescript/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Regenerate Python client from committed spec
@@ -500,7 +513,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
@@ -509,6 +522,13 @@ jobs:
         run: |
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
+      # lemma-frontend/public/openapi.json is what lemma.work/openapi.json
+      # serves, generated from the same committed spec. `npm run check` in the
+      # frontend job verifies it too, but that job does not run on a
+      # lemma-python-only change -- so this is the gate that sees a spec
+      # regeneration. No `npm ci`: the script is dependency-free Node.
+      - name: Fail on published OpenAPI spec drift
+        run: node lemma-frontend/scripts/sync-openapi-spec.mjs --check
 
   # Was two jobs. They were byte-identical for their first four steps -- two
   # checkouts, two `npm ci` pairs, and the lemma-typescript build that every
@@ -526,7 +546,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -537,7 +557,7 @@ jobs:
       # is cold. Keyed on the lockfile plus the source, restoring from any
       # earlier build of the same dependency set.
       - name: Cache the Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: lemma-frontend/.next/cache
           key: >-
@@ -580,7 +600,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Run dev workflow tests
@@ -615,10 +635,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install lemma-cli from local checkout
@@ -732,7 +752,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -740,13 +760,13 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       # The Agent Host's ACP integration tests spawn a scripted Python agent
       # over stdio, and panic outright when there is no interpreter to spawn.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -866,9 +886,25 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build and codesign online DMG
+      # The .app always; the .dmg only where a broken one would be caught.
+      #
+      # The same trade the Windows job already makes for NSIS, for the same
+      # reason: wrapping the .app in a disk image is the one step here whose
+      # output is discarded, and nothing outside `desktop_packaging` can change
+      # its result. It is also the flakiest thing in this job -- `bundle_dmg.sh`
+      # fails on a busy `hdiutil` often enough to have shown up twice in the
+      # last twenty runs -- so on an ordinary Rust pull request it is pure
+      # noise. Everything this job actually asserts (it compiles, it codesigns,
+      # the sidecars are embedded, the refusal marker survives) is asserted on
+      # the .app, which is built either way.
+      - name: Build and codesign the online app
         working-directory: desktop
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+        env:
+          BUNDLES: >-
+            ${{ (github.event_name == 'push'
+            || needs.changes.outputs.desktop_packaging == 'true')
+            && 'app,dmg' || 'app' }}
+        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
 
       - name: Verify application signature
         shell: bash
@@ -928,8 +964,12 @@ jobs:
               )
           ' "${manifest}"
 
+      # Only exists when the step above was asked for it.
       - name: Upload macOS build-check DMG
-        uses: actions/upload-artifact@v4
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
@@ -972,12 +1012,21 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-node@v4
+      # `.nvmrc`, like every other Node job here and — the reason this matters
+      # — like release-local-images.yml, which builds the pack that actually
+      # ships. This said `node-version: 22`, the one literal pin left in the
+      # repository, and the two facts it hid took three days of red main to
+      # surface: both package.json files declare `engines: node >=24 <25`, so
+      # the frontend was built by an interpreter it does not support, and the
+      # runner's tool-cache build of 22.23.1 links `@rpath/libnode.127.dylib`
+      # while 24.x is a single static executable. `copy_node_runtime` copies
+      # the executable alone, so the packed Node could not start at all.
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # Digests nobody resolves. The pack embeds a release manifest, and this
       # job is about the pack's own layout and interpreters -- not about which
@@ -1085,7 +1134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -1220,7 +1269,7 @@ jobs:
       # that was correctly unaffected. This compares each job's result against
       # the filter it actually gates on, read back out of this file.
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: No gated job skipped while its filter was live

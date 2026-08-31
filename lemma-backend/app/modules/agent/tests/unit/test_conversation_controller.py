@@ -14,6 +14,7 @@ from starlette.datastructures import QueryParams
 from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
+    append_message,
     retry_failed_run,
     send_message,
     stream_conversation,
@@ -310,6 +311,71 @@ async def test_retry_failed_run_returns_typed_start_response(
     assert response.agent_run_id == result.agent_run_id
     assert response.started_new_run is True
     assert service.called is True
+
+
+@pytest.mark.asyncio
+async def test_append_message_returns_typed_response_without_streaming(
+    monkeypatch,
+) -> None:
+    result = AgentRunStartResult(
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        started_new_run=True,
+    )
+    service = _ConversationService(result)
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    response = await append_message(
+        pod_id=uuid4(),
+        conversation_id=result.conversation_id,
+        data=SimpleNamespace(content="say ok", metadata=None),
+        user=SimpleNamespace(id=uuid4()),
+        request=SimpleNamespace(),
+        uow_factory=uow_factory,
+    )
+
+    assert response.conversation_id == result.conversation_id
+    assert response.agent_run_id == result.agent_run_id
+    assert response.started_new_run is True
+    assert service.called is True
+
+
+@pytest.mark.asyncio
+async def test_append_message_reports_joining_an_active_run(monkeypatch) -> None:
+    active_run_id = uuid4()
+    result = AgentRunStartResult(
+        conversation_id=uuid4(),
+        agent_run_id=active_run_id,
+        started_new_run=False,
+    )
+    service = _ConversationService(result)
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    response = await append_message(
+        pod_id=uuid4(),
+        conversation_id=result.conversation_id,
+        data=SimpleNamespace(content="steer this run", metadata=None),
+        user=SimpleNamespace(id=uuid4()),
+        request=SimpleNamespace(),
+        uow_factory=uow_factory,
+    )
+
+    assert response.agent_run_id == active_run_id
+    assert response.started_new_run is False
 
 
 def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:

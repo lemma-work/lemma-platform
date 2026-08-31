@@ -331,8 +331,8 @@ class FileAuthorizer:
                 # /docs/eng/runbooks authorized the file and then lost to /docs,
                 # which nobody granted because nobody meant to. The two paths
                 # disagreed, so an agent could open a file by name and not see it
-                # in a listing: 241 of 241 files withheld from an agent that held
-                # a real grant on the folder holding 200 of them.
+                # in a listing: every file withheld from an agent that held a real
+                # grant on the folder holding most of them.
                 if item.id in allowed_context_ids:
                     visible_ids.add(item.id)
                 continue

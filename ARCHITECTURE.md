@@ -35,7 +35,7 @@ flowchart TB
     subgraph clients["People and agents"]
         WEB["lemma-frontend<br/>Next.js workspace + pod apps"]
         CLI["lemma-cli<br/>lemma terminal"]
-        SURF["Surfaces<br/>Slack · Teams · Gmail · Outlook · Telegram · WhatsApp"]
+        SURF["Surfaces<br/>Slack · Teams · Telegram · WhatsApp · Email"]
         SDK["lemma-python · lemma-typescript"]
     end
 

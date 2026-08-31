@@ -128,6 +128,49 @@ export function userApprovalDecisionLabel(decision?: string): string {
   return "Resolved";
 }
 
+/**
+ * The three states a decision passes through, kept apart because they are three
+ * different things to say.
+ *
+ * `pending` is the POST, and it is short. `submitted` is everything after it:
+ * the decision is recorded and durable, and what remains is the server doing
+ * the work it authorises — an approved tool that may legitimately run for
+ * minutes before its return reaches the transcript. Only that return resolves
+ * the card (`isResolved`), so collapsing the two left the button reading
+ * "Approving..." for the whole of that window, which said the click had not
+ * landed yet when in truth it had landed and the command was running.
+ */
+function useApprovalSubmission(
+  invocation: AssistantToolInvocation,
+  onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>,
+) {
+  const [pendingDecision, setPendingDecision] = useState<UserApprovalDecision | null>(null);
+  const [submittedDecision, setSubmittedDecision] = useState<UserApprovalDecision | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const resolve = useCallback(async (decision: UserApprovalDecision) => {
+    if (!onResolveUserApproval || pendingDecision) return;
+    setPendingDecision(decision);
+    setError(null);
+    try {
+      await onResolveUserApproval(invocation.toolCallId, decision, {});
+      setSubmittedDecision(decision);
+    } catch (resolveError) {
+      setError(stringifyAssistantError(resolveError) || "Could not resolve approval.");
+      setSubmittedDecision(null);
+    } finally {
+      setPendingDecision(null);
+    }
+  }, [invocation.toolCallId, onResolveUserApproval, pendingDecision]);
+
+  return { pendingDecision, submittedDecision, error, resolve };
+}
+
+/** What the server is doing on our behalf once the decision is recorded. */
+function approvalSubmittedNote(decision: UserApprovalDecision): string {
+  return decision === "DENY" ? "Telling the agent..." : "Running...";
+}
+
 export function UserApprovalCard({
   invocation,
   onResolveUserApproval,
@@ -137,24 +180,11 @@ export function UserApprovalCard({
 }) {
   const resultData = (invocation.result || {}) as ToolCardResult;
   const details = userApprovalDetails(invocation.args);
-  const [pendingDecision, setPendingDecision] = useState<UserApprovalDecision | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { pendingDecision, submittedDecision, error, resolve } = useApprovalSubmission(invocation, onResolveUserApproval);
   const resolvedDecision = userApprovalResolvedDecision(resultData);
   const isResolved = invocation.state === "result" || !!resolvedDecision;
   const isDenied = resolvedDecision === "DENY";
-  const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision;
-
-  const resolve = useCallback(async (decision: UserApprovalDecision) => {
-    if (!onResolveUserApproval || pendingDecision) return;
-    setPendingDecision(decision);
-    setError(null);
-    try {
-      await onResolveUserApproval(invocation.toolCallId, decision, {});
-    } catch (resolveError) {
-      setError(stringifyAssistantError(resolveError) || "Could not resolve approval.");
-      setPendingDecision(null);
-    }
-  }, [invocation.toolCallId, onResolveUserApproval, pendingDecision]);
+  const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision && !submittedDecision;
 
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
@@ -168,8 +198,12 @@ export function UserApprovalCard({
           {isResolved ? (isDenied ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4" />) : <ShieldAlert className="size-4" />}
         </span>
         <div className="text-sm font-medium text-[var(--text-primary)]">{details.title}</div>
-        <Badge variant={isResolved ? "outline" : "warning"} className="lemma-assistant-approval-status-badge h-5 px-1.5 text-xs">
-          {isResolved ? userApprovalDecisionLabel(resolvedDecision) : "Needs approval"}
+        <Badge variant={isResolved || submittedDecision ? "outline" : "warning"} className="lemma-assistant-approval-status-badge h-5 px-1.5 text-xs">
+          {isResolved
+            ? userApprovalDecisionLabel(resolvedDecision)
+            : submittedDecision
+              ? userApprovalDecisionLabel(submittedDecision)
+              : "Needs approval"}
         </Badge>
       </div>
       <div className="min-w-0">
@@ -190,7 +224,13 @@ export function UserApprovalCard({
           <p className="mt-2 text-xs text-[var(--state-error)]">{error}</p>
         ) : null}
 
-        {!isResolved ? (
+        {!isResolved && submittedDecision ? (
+          <p className="mt-4 text-right text-xs text-[var(--text-secondary)]">
+            {approvalSubmittedNote(submittedDecision)}
+          </p>
+        ) : null}
+
+        {!isResolved && !submittedDecision ? (
           <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
@@ -246,24 +286,11 @@ export function ComposerApprovalPanel({
 }) {
   const resultData = (invocation.result || {}) as ToolCardResult;
   const details = userApprovalDetails(invocation.args);
-  const [pendingDecision, setPendingDecision] = useState<UserApprovalDecision | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { pendingDecision, submittedDecision, error, resolve } = useApprovalSubmission(invocation, onResolveUserApproval);
   const resolvedDecision = userApprovalResolvedDecision(resultData);
   const isResolved = invocation.state === "result" || !!resolvedDecision;
-  const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision;
+  const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision && !submittedDecision;
   const primaryParam = details.params[0];
-
-  const resolve = useCallback(async (decision: UserApprovalDecision) => {
-    if (!onResolveUserApproval || pendingDecision) return;
-    setPendingDecision(decision);
-    setError(null);
-    try {
-      await onResolveUserApproval(invocation.toolCallId, decision, {});
-    } catch (resolveError) {
-      setError(stringifyAssistantError(resolveError) || "Could not resolve approval.");
-      setPendingDecision(null);
-    }
-  }, [invocation.toolCallId, onResolveUserApproval, pendingDecision]);
 
   return (
     <div className="lemma-assistant-user-approval-card border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[color:color-mix(in_srgb,var(--surface-1)_96%,transparent)] p-4 shadow-[var(--shadow-sm)]">
@@ -276,40 +303,46 @@ export function ComposerApprovalPanel({
       {error ? (
         <p className="mt-2 text-xs text-[var(--state-error)]">{error}</p>
       ) : null}
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-        <Button
-          type="button"
-          variant="quiet"
-          size="sm"
-          onClick={() => { void resolve("DENY"); }}
-          disabled={!canResolve}
-          className="h-9 px-3 text-sm text-[var(--state-error)] hover:text-[var(--state-error)]"
-        >
-          {pendingDecision === "DENY" ? "Denying..." : "Deny"}
-        </Button>
-        {details.canApproveForSession ? (
+      {submittedDecision ? (
+        <p className="mt-4 text-right text-sm text-[var(--text-secondary)]">
+          {userApprovalDecisionLabel(submittedDecision)} &middot; {approvalSubmittedNote(submittedDecision)}
+        </p>
+      ) : (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <Button
             type="button"
-            variant="secondary"
+            variant="quiet"
             size="sm"
-            onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
+            onClick={() => { void resolve("DENY"); }}
+            disabled={!canResolve}
+            className="h-9 px-3 text-sm text-[var(--state-error)] hover:text-[var(--state-error)]"
+          >
+            {pendingDecision === "DENY" ? "Denying..." : "Deny"}
+          </Button>
+          {details.canApproveForSession ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
+              disabled={!canResolve}
+              className="h-9 px-4 text-sm"
+            >
+              {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => { void resolve("APPROVE_ONCE"); }}
             disabled={!canResolve}
             className="h-9 px-4 text-sm"
           >
-            {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
+            {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
           </Button>
-        ) : null}
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          onClick={() => { void resolve("APPROVE_ONCE"); }}
-          disabled={!canResolve}
-          className="h-9 px-4 text-sm"
-        >
-          {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
-        </Button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

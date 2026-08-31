@@ -245,13 +245,12 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
+    #: An already-terminal run whose conversation this call put back in step.
+    conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
-    {
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.STOP_REQUESTED,
-    }
+    {AgentRunStatus.RUNNING, AgentRunStatus.STOP_REQUESTED}
 )
 
 TERMINAL_AGENT_RUN_STATUSES = frozenset(
@@ -262,18 +261,16 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
     }
 )
 
-# Compaction trigger. Lowered from 100k when the token count became real: the
-# old figure was measured with a chars/4 estimate that under-counts code, logs
-# and JSON by 25-65%, so "100k" was routinely 140k+ of actual prompt and the
-# provider rejected the request before compaction ever ran.
-DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 70_000
+# Fallbacks only, for a caller building `HarnessOptions` by hand: a run resolves
+# both from its own model's window (`services/context_budget`). These match the
+# default 128k window at 80% and 92%.
+DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 102_400
 # Raised from 20: at ~6-10 tool rounds, 20 messages threw away the working
 # context of a coding session immediately after summarizing it.
 DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES = 40
-# Absolute ceiling. If compaction is skipped or fails, the history is trimmed
-# deterministically to fit rather than sent oversized — a failed summary must
-# never turn into a provider rejection.
-DEFAULT_HISTORY_HARD_TOKEN_CEILING = 110_000
+# Absolute ceiling: if compaction is skipped or fails, the history is trimmed to
+# fit rather than sent oversized.
+DEFAULT_HISTORY_HARD_TOKEN_CEILING = 117_760
 
 
 class MessageRole(str, Enum):

@@ -145,6 +145,7 @@ class Conversation(Entity):
     status: ConversationStatus | None = None
     output: JsonValue | None = None
     metadata: JsonObject | None = None
+    is_archived: bool = False
     # Diagnostics from the most recent agent run, so a single `conversations get`
     # can explain a failure without separately fetching runs.
     last_run_status: AgentRunStatus | None = None

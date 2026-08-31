@@ -1,6 +1,7 @@
 import type { Conversation } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
 import { buildConversationStandaloneResourceHref } from '@/lib/assistant/conversation-presentation';
+import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
 
 const WORKSPACE_TABS_VERSION = 3;
 const MAX_PERSISTED_TABS = 50;
@@ -100,6 +101,17 @@ export function conversationWorkspaceTab(
         title: cleanLabel(conversation?.title, 'Untitled conversation'),
         status: conversation?.status ?? null,
     };
+}
+
+/**
+ * Where a conversation the pod's list cannot account for is cached.
+ *
+ * Shared, so a caller that has already listed a conversation's children can
+ * prime it and spare the tab the "Untitled conversation" flash between the
+ * navigation and the fetch that names it.
+ */
+export function workspaceTabConversationQueryKey(podId: string, conversationId: string) {
+    return ['workspace-tab-conversation', podId, conversationId] as const;
 }
 
 function safeWorkspaceHref(value: string) {
@@ -403,10 +415,13 @@ export function getActiveWorkspaceTabId(
 }
 
 export function getAppSlugFromWorkspaceTab(tab: PodWorkspaceTab): string | null {
-    if (tab.kind === 'app') return tab.resourceId;
+    // Canonical, because a tab outlives the link that opened it: one stored
+    // before app links were slugged still carries the app's name, and a name is
+    // not a slug the app index answers to.
+    if (tab.kind === 'app') return appPageSlugFromRouteParam(tab.resourceId);
     if (tab.kind !== 'route' || tab.resourceId !== 'apps') return null;
     try {
-        return new URL(tab.href, 'https://lemma.local').searchParams.get('page');
+        return appPageSlugFromRouteParam(new URL(tab.href, 'https://lemma.local').searchParams.get('page'));
     } catch {
         return null;
     }

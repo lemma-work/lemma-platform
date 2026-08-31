@@ -146,6 +146,7 @@ async def resolve_slack_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     app_name: str | None,
+    dedicated_to_agent: bool = False,
     existing: SurfaceSlackConfig | None = None,
     ctx,
 ) -> SurfaceSlackConfig:
@@ -153,12 +154,17 @@ async def resolve_slack_config(
 
     ``dm_agent_by_user`` is carried from ``existing`` rather than taken from
     the request: it is written from inside Slack, one person at a time, and a
-    settings save from the web UI has no business replacing it.
+    settings save from the web UI has no business replacing it. That holds even
+    while ``dedicated_to_agent`` is on and nothing reads the map — turning a
+    dedicated bot back into a shared one has to give people their choices back,
+    and a save in between must not be what quietly drops them.
     """
     chosen = dict(existing.dm_agent_by_user) if existing else {}
     resolved_name = str(app_name or "").strip()
     if not resolved_name:
-        return SurfaceSlackConfig(dm_agent_by_user=chosen)
+        return SurfaceSlackConfig(
+            dm_agent_by_user=chosen, dedicated_to_agent=dedicated_to_agent
+        )
     if platform is not SurfacePlatform.SLACK:
         raise AgentSurfaceValidationError(
             "A Slack app can only be featured on a Slack surface"
@@ -173,7 +179,11 @@ async def resolve_slack_config(
         raise AgentSurfaceValidationError(
             "The selected app must belong to this pod and be deployed"
         )
-    return SurfaceSlackConfig(app_name=app.name, dm_agent_by_user=chosen)
+    return SurfaceSlackConfig(
+        app_name=app.name,
+        dm_agent_by_user=chosen,
+        dedicated_to_agent=dedicated_to_agent,
+    )
 
 
 async def resolve_surface_config(
@@ -204,6 +214,7 @@ async def resolve_surface_config(
         pod_id=pod_id,
         platform=platform,
         app_name=config_input.slack.app_name,
+        dedicated_to_agent=config_input.slack.dedicated_to_agent,
         ctx=ctx,
     )
     return config
@@ -254,6 +265,7 @@ async def merge_surface_config(
             pod_id=pod_id,
             platform=platform,
             app_name=config_input.slack.app_name,
+            dedicated_to_agent=config_input.slack.dedicated_to_agent,
             existing=existing.slack,
             ctx=ctx,
         )

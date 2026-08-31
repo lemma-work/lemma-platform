@@ -173,3 +173,58 @@ class FileInfo:
     @property
     def is_text_file(self) -> bool:
         return is_text_file(self.path)
+
+
+#: What every layer falls back to when nothing worked out what the bytes are.
+#: Both spellings occur in the wild; neither names a type.
+_UNTYPED_MIME_TYPES = {"application/octet-stream", "binary/octet-stream"}
+
+
+def is_untyped_mime(mime_type: str | None) -> bool:
+    """True when a mime type is the *absence* of a type rather than a type.
+
+    Reading ``application/octet-stream`` as an answer is how a PNG ends up
+    refused for not being an image: the datastore types a file by its name alone,
+    a chat surface is free to send one with no name, and every reader downstream
+    then believes the fallback. A caller holding the bytes should sniff instead
+    of trusting this -- which it can only do if it can tell the difference.
+    """
+    normalized = str(mime_type or "").split(";")[0].strip().lower()
+    return not normalized or normalized in _UNTYPED_MIME_TYPES
+
+
+def sniff_media_mime(content: bytes) -> str | None:
+    """The type of these bytes from their magic number, or None.
+
+    A superset of :func:`sniff_image_mime`, and the difference matters on a chat
+    surface: Telegram sends a voice note with no filename and a photo with
+    neither a filename nor a declared type, so an image-only sniffer still leaves
+    the audio stored as a blob -- saved, listed, and unplayable.
+
+    Only formats a surface actually delivers. A sniffer that guesses widely is a
+    sniffer that guesses wrong, and a wrong type is worse than none: it looks
+    decided.
+    """
+    image = sniff_image_mime(content)
+    if image:
+        return image
+    if content.startswith(b"OggS"):
+        return "audio/ogg"
+    if content.startswith(b"ID3") or content[:2] in (
+        b"\xff\xfb",
+        b"\xff\xf3",
+        b"\xff\xf2",
+    ):
+        return "audio/mpeg"
+    if content.startswith(b"fLaC"):
+        return "audio/flac"
+    # ISO base media: the brand at offset 8 separates audio-only M4A from video.
+    if content[4:8] == b"ftyp":
+        return "audio/mp4" if content[8:11] == b"M4A" else "video/mp4"
+    if content.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if content.startswith(b"RIFF") and content[8:12] == b"AVI ":
+        return "video/x-msvideo"
+    if content.startswith(b"%PDF-"):
+        return "application/pdf"
+    return None

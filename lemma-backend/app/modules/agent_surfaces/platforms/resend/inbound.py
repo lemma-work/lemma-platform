@@ -150,6 +150,16 @@ def normalize_resend_inbound(payload: dict) -> dict:
     recipients = all_addresses(data.get("to")) + all_addresses(data.get("received_for"))
 
     return {
+        # Passed through, not merely read for the threading fields above. The
+        # parser authenticates the `From:` from these when they are present,
+        # and dropping them here made that branch dead on this path: a payload
+        # that *did* carry `Authentication-Results` still reached identity
+        # resolution with no verdict, which reads as "nobody vouched for this
+        # sender" and turns them into a stranger. `email.received` normally
+        # carries none — the verdict then comes from `merge_received_email`
+        # after the body fetch, as before — but a replayed or already-enriched
+        # payload does, and that is the case this silently discarded.
+        "headers": data.get("headers"),
         "email_id": str(data.get("email_id") or "").strip() or None,
         "from": sender.email,
         "from_name": sender.display_name,

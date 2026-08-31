@@ -253,106 +253,6 @@ async def test_progress_observer_sends_only_final_answer_not_thinking_or_tools()
     assert service.finished == []
 
 
-async def test_progress_observer_ignores_chat_display_resource_now_sent_by_tool():
-    # Chat-surface display_resource delivery happens inside the display_resource
-    # tool now. The observer must NOT also deliver it (that would double-send).
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(),
-        metadata={"surface_platform": "SLACK"},
-    )
-    tool_call = AgentEvent(
-        type=AgentEventType.MESSAGE,
-        data=MessageDraft.of_tool_call(
-            tool_name="display_resource",
-            tool_call_id="tool-display-1",
-            tool_args={"type": "TABLE", "name": "deals"},
-        ),
-    )
-    tool_return = AgentEvent(
-        type=AgentEventType.MESSAGE,
-        data=MessageDraft.of_tool_return(
-            tool_name="display_resource",
-            tool_call_id="tool-display-1",
-            tool_result={"success": True},
-        ),
-    )
-
-    await observer.on_event(tool_call, conversation, SimpleNamespace())
-    await observer.on_event(tool_return, conversation, SimpleNamespace())
-
-    # No display delivery from the observer for a chat surface.
-    assert all("display_resource" not in m for m in service.messages)
-
-
-async def test_progress_observer_email_suppresses_final_text_when_reply_tool_called():
-    # Email surfaces reply via gmail_reply_email / outlook_reply_email. When the
-    # agent used the reply tool, the observer must NOT also send the buffered
-    # text as a separate message.
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "GMAIL"})
-
-    await observer.on_event(
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_call(
-                tool_name="gmail_reply_email",
-                tool_call_id="reply-1",
-                tool_args={
-                    "content": "Here is the report.",
-                    "attachment_paths": ["/me/report.pdf"],
-                },
-            ),
-        ),
-        conversation,
-        SimpleNamespace(),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("I emailed the report.")),
-        conversation,
-        SimpleNamespace(),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace())
-
-    # Reply tool handled delivery — observer sends nothing.
-    assert service.messages == []
-
-
-async def test_progress_observer_resend_suppresses_final_text_when_reply_tool_called():
-    # Regression: RESEND was previously missing from _EMAIL_PLATFORMS /
-    # _EMAIL_REPLY_TOOL_NAMES, so this fallback never suppressed and every real
-    # Resend reply also triggered a second, duplicate send attempt.
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "RESEND"})
-
-    await observer.on_event(
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_call(
-                tool_name="resend_reply_email",
-                tool_call_id="reply-1",
-                tool_args={"content": "Here is the report."},
-            ),
-        ),
-        conversation,
-        SimpleNamespace(),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("I emailed the report.")),
-        conversation,
-        SimpleNamespace(),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace())
-
-    # Reply tool handled delivery — observer sends nothing.
-    assert service.messages == []
-
-
 async def test_progress_observer_email_sends_buffered_text_when_no_reply_tool():
     # Fallback: if the agent never called the reply tool, the observer emails the
     # buffered final text so the user still gets a response.
@@ -642,6 +542,8 @@ async def test_progress_observer_renders_waiting_tool_call_once():
             "questions": {
                 "conversation_id": conversation.id,
                 "tool_call_id": "ask-1",
+                # The lead-in travels with the question, not ahead of it.
+                "narration": None,
             }
         }
     ]
@@ -684,6 +586,7 @@ class TestAgentHostPermissionPrompt:
                 "approval": {
                     "conversation_id": conversation.id,
                     "tool_call_id": "agent-host-permission:call-9",
+                    "narration": None,
                 }
             }
         ]

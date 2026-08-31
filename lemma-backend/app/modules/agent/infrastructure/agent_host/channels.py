@@ -32,8 +32,8 @@ async def poke_host(host_id: UUID) -> None:
         service = await get_channel_service()
         await service.publish(host_poke_channel(host_id), {"type": "poke"})
     except RedisError, RuntimeError, OSError:
-        logger.debug(
-            "agent.infrastructure.agent_host_channels.poke_skipped",
+        logger.warning(
+            "agent.infrastructure.agent_host_channels.poke_skipped.degraded",
             host_id=str(host_id),
             exc_info=True,
         )

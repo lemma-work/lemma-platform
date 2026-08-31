@@ -8,12 +8,12 @@ to the failure production actually hits.
 pydantic-ai raises its own `UsageLimitExceeded` when a run exceeds
 `input_tokens_limit`. Different class, different module, nearly the same name.
 It matched nothing, escaped unhandled, and left no ledger row — so nothing
-counted, nothing deactivated, nobody was told. 21 a day, one pod, for as long
-as anyone had been looking.
+counted, nothing deactivated, nobody was told. It recurred daily for as long as
+anyone had been looking.
 
 The cause is that the filter prompt embedded the entire trigger payload, and a
-webhook body is whatever the provider chose to send. Observed inputs ran 32,653
-to 100,883 tokens against a 32,000 limit.
+webhook body is whatever the provider chose to send. Real payloads overran the
+32,000-token limit several times over.
 """
 
 from __future__ import annotations

@@ -12,12 +12,11 @@ computed no net change, no UPDATE was emitted, and the ``onupdate`` on
 ``updated_at`` never fired. So the same hundred rows sorted to the front on the
 next tick, and the one after that.
 
-In production this had been stuck since 2026-08-12 11:50:01 — the oldest hundred
-eligible rows all carried that timestamp three days later — while the sweep
-reported ``reconciled=100`` on four hundred consecutive samples. Not a full
-batch: the same batch. 1,486 rows were eligible and 1,386 of them had never been
-examined at all, including 33 runs failing a workflow validation daily and five
-already dead-lettered.
+In production this had been stuck for days — the oldest eligible rows all
+carried the same timestamp — while the sweep reported a full batch reconciled on
+every consecutive sample. Not a full batch: the same batch. The great majority of
+eligible rows had never been examined at all, including runs failing a workflow
+validation daily and some already dead-lettered.
 
 ``last_inspected_at`` separates the two. The sweep stamps it on every row it
 reaches, whatever it decides, so a row that legitimately needs no change still
@@ -28,12 +27,13 @@ ago is not news, while a *lost* outcome event still wants catching quickly.
 The partial index moves with the query it serves, and loses a predicate on the
 way. It was ``target_outcome IS NULL AND status IN ('PROCESSING','FAILED',
 'DISPATCHED')``; it is now just ``target_outcome IS NULL``. Measured against
-production, that status clause excluded **five rows out of 81,334** — the whole
-selectivity was already in ``target_outcome IS NULL`` at 1,672 rows, 2% of the
-table. What the clause did carry was the exact failure mode of 0003: an index
-predicate that has to stay in step with a query's status list, and silently
-stops being used when it does not. A 0.006% size saving is not worth a
-predicate that can disable the index without saying so.
+production, that status clause excluded a negligible handful of rows — the whole
+selectivity was already in ``target_outcome IS NULL``, which by itself keeps the
+index to a small fraction of the table. What the clause did carry was the exact
+failure mode of 0003: an index predicate that has to stay in step with a query's
+status list, and silently stops being used when it does not. A rounding error of
+a size saving is not worth a predicate that can disable the index without saying
+so.
 
 Null placement is spelled out on both sides. Postgres sorts nulls *last* under
 ASC, and an index answers an ORDER BY only when its null placement matches — so
@@ -69,9 +69,9 @@ def upgrade() -> None:
     )
     # The breaker's failure-streak count orders by completed_at, and the only
     # (schedule_id, ...) index led with created_at -- so it could not answer the
-    # ordering and Postgres bitmap-scanned 5,946 rows and sorted them, on every
-    # run completion. See the repository's `_BREAKER_SCAN_LIMIT` for the other
-    # half of that fix.
+    # ordering and Postgres bitmap-scanned the schedule's whole completed
+    # history and sorted it, on every run completion. See the repository's
+    # `_BREAKER_SCAN_LIMIT` for the other half of that fix.
     op.create_index(
         "ix_schedule_runs_schedule_completed",
         "schedule_runs",

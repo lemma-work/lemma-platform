@@ -4,7 +4,7 @@ from contextlib import ExitStack
 from io import BytesIO
 import mimetypes
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from ..errors import LemmaNotFoundError
 from ..openapi_client.api.files import (
@@ -41,8 +41,40 @@ from .base import BoundResource
 
 
 class PodFiles(BoundResource):
-    def list(self, path: str = "/", *, limit: int = 100) -> FileListResponse:
-        return self._call(file_list, self._pod_uuid(), directory_path=path, limit=limit)
+    def list(
+        self,
+        path: str = "/",
+        *,
+        limit: int = 100,
+        page_token: str | None = None,
+    ) -> FileListResponse:
+        """One page of a directory's entries.
+
+        A directory with more entries than ``limit`` is truncated, and the
+        response's ``next_page_token`` is the only way to see the rest --
+        without passing it back, a caller that must be complete (an export, a
+        sync) silently sees a prefix. See :meth:`list_all`.
+        """
+        kwargs: dict[str, object] = {"directory_path": path, "limit": limit}
+        if page_token is not None:
+            kwargs["page_token"] = page_token
+        return self._call(file_list, self._pod_uuid(), **kwargs)
+
+    def list_all(self, path: str = "/", *, page_size: int = 500) -> list[Any]:
+        """Every entry in a directory, paged to exhaustion.
+
+        The API caps a page and the directory-tree endpoint caps files per
+        directory, so "list a directory" and "list all of a directory" are
+        different operations. Anything that has to be complete wants this one.
+        """
+        entries: list[Any] = []
+        token: str | None = None
+        while True:
+            page = self.list(path, limit=page_size, page_token=token)
+            entries.extend(getattr(page, "items", None) or [])
+            token = getattr(page, "next_page_token", None)
+            if not isinstance(token, str) or not token:
+                return entries
 
     def get(self, path: str) -> FileDetailResponse:
         return self._call(file_get, self._pod_uuid(), path=path)

@@ -164,13 +164,20 @@ async def test_finalize_safely_swallows_cancelled_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_does_not_re_raise_cancelled_error(monkeypatch) -> None:
-    """execute() must swallow CancelledError, not re-raise it.
+async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
+    """execute() must let CancelledError out, not swallow it.
 
-    Re-raising CancelledError into streaq's `with scope:` block triggers
-    "Attempted to exit a cancel scope that isn't the current task's current
-    cancel scope" — a RuntimeError that crashes the entire worker. The fix
-    is to finalize the run and return normally.
+    This is the whole resume mechanism. streaq XACKs a task that returned and
+    "relinquishes" a cancelled one -- leaving it in the pending list for the
+    next worker to reclaim. Swallowing it made every run interrupted by a
+    deploy look like a success, so nothing redelivered it and each person had
+    to ask again.
+
+    This test previously asserted the opposite, on the grounds that re-raising
+    crashes the worker with "Attempted to exit a cancel scope that isn't the
+    current task's current cancel scope". Reproduced against a real worker
+    under SIGTERM, with and without a shielded cleanup, that did not happen:
+    the task was relinquished and a fresh worker reclaimed it.
     """
     service = AgentRunnerService(
         uow_factory=_FailingUowFactory(),
@@ -204,14 +211,15 @@ async def test_execute_does_not_re_raise_cancelled_error(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "_resolve_agent_runtime", fake_resolve)
 
-    # The critical assertion: execute must NOT re-raise CancelledError.
-    # If it does, streaq's scope handling crashes the worker.
-    await service.execute(
-        agent_run_id=UUID("00000000-0000-0000-0000-000000000020"),
-        user_id=UUID("00000000-0000-0000-0000-000000000021"),
-        pod_id=UUID("00000000-0000-0000-0000-000000000022"),
-        agent_name="test-agent",
-    )
+    # The critical assertion: it must reach streaq, or the job is acked and
+    # the run is lost.
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            agent_run_id=UUID("00000000-0000-0000-0000-000000000020"),
+            user_id=UUID("00000000-0000-0000-0000-000000000021"),
+            pod_id=UUID("00000000-0000-0000-0000-000000000022"),
+            agent_name="test-agent",
+        )
 
 
 def _message(role: str, kind: MessageKind, text: str | None) -> Message:

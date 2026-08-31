@@ -21,7 +21,6 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
@@ -226,33 +225,6 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
 
         async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
-        if parsed is None:
-            return None
-
-        return await self._prepare_surface_context(
-            surface=surface,
-            parsed=parsed,
-            adapter=adapter,
-        )
-
-    async def _prepare_schedule_ingress(
-        self,
-        request: SurfaceScheduleIngress,
-    ) -> AgentSurfaceContext | None:
-        surface = await self.surface_repository.get_by_email_schedule_id(
-            request.schedule_id
-        )
-        if surface is None:
-            return None
-        if not surface.is_active or not surface.status.accepts_inbound_events():
-            return None
-
-        adapter = self.adapter_registry.get(surface.surface_type)
-        if adapter is None:
-            return None
-
-        async with connection_released(self.uow.session):
-            parsed = await adapter.parse_inbound_event(request.payload, {})
         if parsed is None:
             return None
 

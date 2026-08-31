@@ -118,17 +118,24 @@ async def _maybe_deliver_to_surface(
     request: DisplayResourceRequest,
     response: DisplayResourceResponse,
 ) -> None:
-    """Deliver the resource to the chat surface when running on one.
+    """Put the resource in front of the person, however this surface delivers.
 
-    Branching:
-      * not a surface run (web/app/subagent) → do nothing; the frontend renders
-        the persisted tool result.
-      * email surface (Gmail/Outlook) → do nothing; the run observer accumulates
-        display resources into the single composed email reply.
-      * chat surface (Slack/Teams/Telegram/WhatsApp) → deliver now (native file
-        / link decided by the surface).
+    Branching, by the platform's delivery cardinality rather than by whether it
+    happens to be email:
+      * not a surface run (web/app/subagent) → nothing to do; the frontend
+        renders the persisted tool result.
+      * MANY (Slack/Teams/Telegram/WhatsApp) → deliver now, native file or link
+        as the surface decides.
+      * ONE (email) → hold the file for the single reply, which the reply tool
+        drains when it sends.
 
-    Best-effort: a delivery failure never fails the tool or the run.
+    That last branch used to `return` here, silently, *after* the tool had
+    already told the model "FILE resource ready for display." The model believed
+    it had shown the file and the recipient never saw one. ``response`` is
+    corrected in place when the resource cannot be held, because a tool that
+    reports success it did not have is worse than one that reports failure.
+
+    Best-effort otherwise: a delivery failure never fails the run.
     """
     deps = getattr(ctx, "deps", None)
     if deps is None or not response.success:
@@ -138,8 +145,14 @@ async def _maybe_deliver_to_surface(
         return
 
     # Lazy import to avoid an agent -> agent_surfaces module-load cycle.
-    from app.composition.agent_surface_runtime import platform_supports_chat_delivery
+    from app.composition.agent_surface_runtime import (
+        platform_delivers_one_reply,
+        platform_supports_chat_delivery,
+    )
 
+    if platform_delivers_one_reply(platform):
+        _hold_for_the_one_reply(deps, request, response)
+        return
     if not platform_supports_chat_delivery(platform):
         return
 
@@ -153,21 +166,40 @@ async def _maybe_deliver_to_surface(
     )
 
 
-def surface_can_pause_for_a_person(deps: BaseAgentContext) -> bool:
-    """Whether this conversation can hold a run open while somebody answers.
+def _hold_for_the_one_reply(
+    deps: BaseAgentContext,
+    request: DisplayResourceRequest,
+    response: DisplayResourceResponse,
+) -> None:
+    """Queue a displayed file onto the single reply, or say why it cannot be.
 
-    Email cannot. There is no card to tap and no thread to wait on, so pausing
-    strands the run in WAITING with nothing delivered — the person never learns
-    they were asked. Every pausing tool has to fail fast instead and say what to
-    do in the reply, which is why this is a shared predicate rather than a check
-    each tool remembers to copy. It was copied twice already.
-
-    The *message* stays with each tool: what to do instead of pausing depends on
-    what was being asked.
+    Only a FILE has anything to carry into an email. Everything else is a link
+    into Lemma, which the agent should be writing into the reply body itself --
+    so it is told that rather than being left to think a card went out.
     """
-    from app.composition.agent_surface_runtime import platform_is_email
+    from app.composition.agent_surface_runtime import hold_display_for_one_reply
 
-    return not platform_is_email(getattr(deps, "surface_platform", None))
+    if request.type is not DisplayResourceType.FILE or not request.path:
+        response.success = False
+        response.message = None
+        response.error = (
+            "This is an email conversation, so there is nothing to display in. "
+            "Put what this resource would have shown into your email reply, and "
+            "use display_resource only for files you want attached."
+        )
+        return
+    if not hold_display_for_one_reply(deps.conversation_id, request.path):
+        response.success = False
+        response.message = None
+        response.error = (
+            "Too many files are already queued for this email reply. Send the "
+            "reply, then show anything further in a new one."
+        )
+        return
+    response.message = (
+        f"{request.path} will be attached to your email reply. Send the reply "
+        "when you are ready; there is nothing else to do for this file."
+    )
 
 
 async def request_approval(
@@ -234,18 +266,6 @@ async def request_approval(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
             message=f"Waiting for the user's decision on {tool_name}.",
-        )
-    if not surface_can_pause_for_a_person(deps):
-        return RequestApprovalResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This is an email conversation — it can't pause for an approval. "
-                f"Explain in your reply what you want to do ({tool_name}) and why "
-                "it needs their authority, ask them to confirm by replying, and "
-                "deliver everything through the email reply tool. Do not call "
-                "request_approval here."
-            ),
         )
     if not ctx.tool_call_id:
         return RequestApprovalResponse(
@@ -419,17 +439,6 @@ async def ask_user(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
             message="Waiting for the user's answer.",
-        )
-    if not surface_can_pause_for_a_person(deps):
-        return AskUserResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This is an email conversation — it can't pause for a "
-                "multiple-choice answer. Ask your question(s) directly in your "
-                "reply (or pick the most sensible default and proceed), then "
-                "deliver everything through the email reply tool."
-            ),
         )
     if not ctx.tool_call_id:
         return AskUserResponse(

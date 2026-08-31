@@ -215,6 +215,16 @@ var LemmaUI = (() => {
     }
     return normalizeStatus(payload);
   }
+  function extractTitle(payload) {
+    const title = typeof payload === "string" ? payload : isRecord2(payload) && typeof payload.title === "string" ? payload.title : void 0;
+    return title && title.trim().length > 0 ? title.trim() : void 0;
+  }
+  function extractConversationId(payload) {
+    var _a;
+    if (!isRecord2(payload)) return void 0;
+    const conversationId = (_a = payload.conversation_id) != null ? _a : payload.conversationId;
+    return typeof conversationId === "string" && conversationId.trim().length > 0 ? conversationId : void 0;
+  }
   function extractErrorMessage(payload) {
     if (typeof payload === "string") {
       const message = payload.trim();
@@ -264,6 +274,10 @@ var LemmaUI = (() => {
     }
     if (eventType === "stopped") {
       return { status: "STOPPED" };
+    }
+    if (eventType === "title") {
+      const title = extractTitle(payload);
+      return title ? { title, conversationId: extractConversationId(payload) } : {};
     }
     if (eventType === "stream_error") {
       return {
@@ -637,7 +651,7 @@ var LemmaUI = (() => {
         streamConversationId,
         syncAfterStream
       }) => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
         this.patch({ isStreaming: true, error: null });
         this.clearStreamingText();
         this.clearStreamingThinking();
@@ -696,6 +710,12 @@ var LemmaUI = (() => {
                 this.clearStreamingTool();
               }
             }
+            if (parsed.title) {
+              this.setConversationTitle(
+                parsed.title,
+                (_i = (_h = parsed.conversationId) != null ? _h : streamConversationId) != null ? _i : this.state.conversationId
+              );
+            }
             if (parsed.status) {
               this.setConversationStatus(parsed.status);
               if (!isConversationRunningStatus(parsed.status)) {
@@ -720,7 +740,7 @@ var LemmaUI = (() => {
                 const latestConversation = await this.refreshConversation(syncConversationId);
                 await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
                 if (controller.signal.aborted) break;
-                const latestStatus = (_h = latestConversation == null ? void 0 : latestConversation.status) != null ? _h : this.state.status;
+                const latestStatus = (_j = latestConversation == null ? void 0 : latestConversation.status) != null ? _j : this.state.status;
                 if (!isConversationRunningStatus(latestStatus)) {
                   this.streamReconnectCount = 0;
                   streamFailure = null;
@@ -736,7 +756,7 @@ var LemmaUI = (() => {
                   const scope = normalizeScope(this.client, this.scopeDefaults);
                   const scopedClient = applyPodScope(this.client, scope.podId);
                   const newStream = await scopedClient.conversations.resumeStream(syncConversationId, {
-                    pod_id: (_i = scope.podId) != null ? _i : void 0,
+                    pod_id: (_k = scope.podId) != null ? _k : void 0,
                     signal: controller.signal
                   });
                   this.streamReconnectCount = 0;
@@ -763,7 +783,7 @@ var LemmaUI = (() => {
             if (!controller.signal.aborted && streamFailure) {
               const normalized = normalizeError(streamFailure, "Failed to stream conversation.");
               this.patch({ error: normalized });
-              (_k = (_j = this.options).onError) == null ? void 0 : _k.call(_j, streamFailure);
+              (_m = (_l = this.options).onError) == null ? void 0 : _m.call(_l, streamFailure);
             }
           }
         } finally {
@@ -805,6 +825,38 @@ var LemmaUI = (() => {
           const normalized = normalizeError(sendError, "Failed to send agent message.");
           this.patch({ error: normalized });
           (_d = (_c = this.options).onError) == null ? void 0 : _d.call(_c, sendError);
+          throw normalized;
+        }
+      });
+      /**
+       * Send a follow-up into a run that is already working.
+       *
+       * `sendMessage` is the wrong call for this. It cancels the stream in flight
+       * and opens a second subscription for the same run, so the events between the
+       * two are simply lost — the person sees their turn stop mid-answer. This
+       * persists the message instead (joining the active run where the harness can
+       * steer, queued for the next one where it cannot) and reattaches whatever
+       * stream should be watching, which is what makes the answer arrive.
+       */
+      __publicField(this, "appendMessage", async (content, input = {}) => {
+        var _a, _b, _c, _d, _e;
+        this.patch({ error: null });
+        try {
+          const id = requireConversationId((_a = input.conversationId) != null ? _a : this.state.conversationId);
+          const scope = normalizeScope(this.client, this.scopeDefaults);
+          const scopedClient = applyPodScope(this.client, scope.podId);
+          await scopedClient.conversations.appendMessage(
+            id,
+            { content, metadata: (_b = input.metadata) != null ? _b : void 0 },
+            { pod_id: (_c = scope.podId) != null ? _c : void 0 }
+          );
+          this.autoResumedKey = null;
+          void this.resumeIfRunning(id).catch(() => {
+          });
+        } catch (appendError) {
+          const normalized = normalizeError(appendError, "Failed to send agent message.");
+          this.patch({ error: normalized });
+          (_e = (_d = this.options).onError) == null ? void 0 : _e.call(_d, appendError);
           throw normalized;
         }
       });
@@ -921,6 +973,15 @@ var LemmaUI = (() => {
       if (normalized) {
         (_b = (_a = this.options).onStatus) == null ? void 0 : _b.call(_a, normalized);
       }
+    }
+    /** Apply a rename that arrived on the stream to the record we already hold. */
+    setConversationTitle(title, conversationId) {
+      var _a, _b;
+      const conversation = this.state.conversation;
+      if (conversation && (!conversationId || conversation.id === conversationId)) {
+        this.patch({ conversation: { ...conversation, title } });
+      }
+      (_b = (_a = this.options).onTitle) == null ? void 0 : _b.call(_a, title, conversationId);
     }
     // -- streaming text buffering ----------------------------------------------
     appendStreamingToken(token) {
@@ -1492,6 +1553,10 @@ ${BASE_STYLES}
       const controller = this.ensureController();
       if (!controller.getState().conversationId) {
         await controller.createConversation({ setActive: true });
+      }
+      if (controller.getState().isStreaming) {
+        await controller.appendMessage(content);
+        return;
       }
       await controller.sendMessage(content);
     }

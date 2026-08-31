@@ -101,6 +101,42 @@ must never use personal or production credentials.
 `architecture-baseline.json`: existing violations are tolerated, new ones are
 not.
 
+## Code and comments
+
+This repository is public. Comments, docstrings, test names and migration prose
+all ship to anyone who clones it, and they are read far more often than they are
+rewritten.
+
+**Say why, not what.** A comment that restates the line under it goes stale the
+first time that line changes, and was never worth reading. Name the constraint,
+the failure it prevents, or the alternative that was rejected and why. If what
+you want to say is *what this does*, the fix is the code, not a comment: a named
+intermediate, a smaller function, a type that makes the invalid state
+unrepresentable. Prefer deleting a comment by making the code say it.
+
+**Never commit production or operational data.** The reasoning behind a fix is
+worth keeping; the telemetry that led you to it is not. Out of comments,
+docstrings and test names:
+
+- percentages of production traffic, and run, request, user, org or pod counts;
+- p50/p95/p99 latencies, error rates, incident timestamps, log-line-per-day
+  counts, and query-plan row counts measured against the live database;
+- money — spend, cost per call, invoice figures;
+- customer, org or pod names, real user identifiers, and internal hostnames,
+  dashboards or ticket URLs.
+
+State the shape instead. *"Most runs are the first of their conversation, so a
+conversation-keyed cache was a near-guaranteed miss"* carries the whole argument
+without publishing the traffic that proved it. Numbers that are **contract**
+stay: configured limits, byte caps, character budgets, TTLs, retry counts,
+timeouts, and third-party API ceilings. The test is whether the number tells a
+reader how to change the code, or tells them how much traffic we serve.
+
+**Keep the investigation out of the source.** Audit findings, review transcripts,
+incident write-ups and "what I tried" narratives belong in the pull request that
+does the work, not in the file it touches. What survives into the comment is the
+conclusion and the reason it holds.
+
 ## Configuration
 
 Every setting is an environment variable declared on a `pydantic-settings`
@@ -122,11 +158,18 @@ Documentation is part of the change, not a follow-up.
 
 - Docs describe **what exists today**. Plans, review findings, and migration
   narratives belong in the pull request that does the work — not in `docs/`.
+  `docs/internal/` and `*.internal.md` are gitignored if you want one on disk
+  while you write it.
 - New reader-facing docs go in [`docs/`](docs/README.md) and get a row in its
   index. Component-specific detail stays next to the code.
 - Relative links are checked; make sure yours resolve.
 - Don't paste coverage percentages or benchmark numbers into prose. They go
   stale silently. Name the command that produces them instead.
+- [Code and comments](#code-and-comments) applies here in full. `docs/` is the
+  most-read part of a public repository: no production traffic figures, entity
+  counts, latencies, error rates, costs, customer names or internal URLs, and no
+  security finding that has not been fixed and released. Reproducible benchmark
+  budgets and results are fine — name the command that reproduces them.
 
 ### The product specification is the exception
 

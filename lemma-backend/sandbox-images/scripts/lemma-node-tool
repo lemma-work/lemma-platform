@@ -11,9 +11,51 @@ fi
 NODE_PROJECT="${LEMMA_NODE_PROJECT:-/opt/lemma-node}"
 tool="$(basename "$0")"
 
+# Bring the browser up before a command that needs it.
+#
+# `start-browser` is what writes the config and starts Xvfb, and the skill says
+# to call it first. An agent that goes straight for `agent-browser` instead --
+# the obvious thing to type, and what a model does when it has used this CLI
+# anywhere else -- got one of two errors, neither of which names the remedy:
+#
+#     ⚠ config file not found: /tmp/lemma-browser/config.json
+#     Missing X server or $DISPLAY
+#
+# Both mean "start-browser has not run". Neither says so, so the reasonable
+# conclusion from inside the sandbox is that the browser tooling is broken, and
+# the fallback an agent reaches for is downloading Playwright and its own
+# Chromium -- into a 2 GB sandbox, to do what the installed browser already
+# does. Observed in a real transcript; this is the fix.
+#
+# Ordering stops being something the caller has to know. Info-only flags are
+# left alone so `--version` never starts an X server, and the guard variable
+# keeps `start-browser`'s own nested calls from coming back through here.
+ensure_browser_started() {
+  if [ -n "${LEMMA_BROWSER_BOOTSTRAP:-}" ]; then
+    return 0
+  fi
+  case "${1:-}" in
+    ""|--version|-v|--help|-h|help)
+      return 0
+      ;;
+  esac
+  config="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
+  display="${DISPLAY:-:99}"
+  display_number="${display#:}"
+  display_number="${display_number%%.*}"
+  if [ -f "$config" ] && [ -S "/tmp/.X11-unix/X${display_number}" ]; then
+    return 0
+  fi
+  command -v start-browser >/dev/null 2>&1 || return 0
+  # Its output is the bootstrap's, not the caller's: the caller asked for a
+  # snapshot, not for the blank page that had to be opened to take one.
+  LEMMA_BROWSER_BOOTSTRAP=1 start-browser >/tmp/agent-browser-bootstrap.log 2>&1 || true
+}
+
 case "$tool" in
   agent-browser)
     pattern='*/node_modules/agent-browser/bin/agent-browser.js'
+    ensure_browser_started "${1:-}"
     ;;
   lit|liteparse)
     pattern='*/node_modules/@llamaindex/liteparse/dist/cli.js'

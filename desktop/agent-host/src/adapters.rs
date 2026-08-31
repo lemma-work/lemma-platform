@@ -1098,28 +1098,41 @@ mod tests {
         // `return None` dropped the `Child`, and dropping neither reaps nor
         // kills -- so every timeout left an agent running against a question
         // nobody was waiting for an answer to.
-        // Three spans, each with room the others cannot eat into: the budget is
-        // long enough that forking a shell on a loaded machine cannot use it up,
-        // the script sleeps longer than the budget so the timeout is what ends
-        // it, and the wait afterwards outlasts the sleep the script had left --
-        // which is the window a kill that did not land shows up in.
-        let directory = tempfile::tempdir().unwrap();
-        let executable = slow_agent(directory.path(), 3);
+        // Three spans, sized off one budget so they cannot eat into each other:
+        // the script sleeps twice the budget, so the timeout is always what ends
+        // it, and the wait afterwards is a second longer than the sleep the
+        // script had left -- which is the window a kill that did not land shows
+        // up in.
+        //
+        // Retried, because one span is not ours to size: the budget also has to
+        // cover forking a shell, and under enough load it does not. That is a
+        // trial with nothing in it -- the stand-in was killed before its first
+        // line, so neither outcome is evidence -- and it used to be an outright
+        // failure on `the stand-in agent never ran`. Measured at roughly one run
+        // in forty on a saturated machine, which is exactly the rate this was
+        // costing CI. The budget grows per attempt, so a slow machine converges
+        // on one it can meet instead of retrying at a number it cannot.
+        for attempt in 1u32..=4 {
+            let directory = tempfile::tempdir().unwrap();
+            let budget = Duration::from_millis(1500 * u64::from(attempt));
+            let executable = slow_agent(directory.path(), 3 * attempt);
 
-        let outcome = probe_version_within(&executable, &[], Duration::from_millis(1500));
-        assert_eq!(outcome, Err(VersionUnknown::TimedOut));
+            let outcome = probe_version_within(&executable, &[], budget);
+            assert_eq!(outcome, Err(VersionUnknown::TimedOut));
 
-        // Checked, not assumed: "nothing finished" proves nothing about a kill
-        // if the script never ran in the first place.
-        assert!(
-            directory.path().join("started").exists(),
-            "the stand-in agent never ran"
-        );
-        std::thread::sleep(Duration::from_secs(3));
-        assert!(
-            !directory.path().join("finished").exists(),
-            "the agent outlived the probe that gave up on it"
-        );
+            // Checked, not assumed: "nothing finished" proves nothing about a
+            // kill if the script never ran in the first place.
+            if !directory.path().join("started").exists() {
+                continue;
+            }
+            std::thread::sleep(budget + Duration::from_secs(1));
+            assert!(
+                !directory.path().join("finished").exists(),
+                "the agent outlived the probe that gave up on it"
+            );
+            return;
+        }
+        panic!("the stand-in agent never ran, even given four times the budget");
     }
 
     #[test]

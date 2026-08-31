@@ -87,9 +87,14 @@ export function Providers({ children }: { children: ReactNode }) {
                 <AnalyticsProvider />
                 <ConsentBanner />
                 {appTree}
+                {/* No close button: a toast dismisses itself, and a dismiss
+                    control on a thing that leaves on its own is chrome for
+                    nothing -- it also reserved a gutter across every toast in
+                    the product to hold it. What can appear instead is one
+                    action (Undo), which is the only reason to reach for a
+                    toast rather than say nothing at all. */}
                 <Toaster
                     position="bottom-right"
-                    closeButton
                     offset={18}
                     toastOptions={{
                         duration: 4200,
@@ -98,7 +103,7 @@ export function Providers({ children }: { children: ReactNode }) {
                             title: 'lemma-toast-title',
                             description: 'lemma-toast-description',
                             icon: 'lemma-toast-icon',
-                            closeButton: 'lemma-toast-close',
+                            actionButton: 'lemma-toast-action',
                             success: 'lemma-toast-success',
                             error: 'lemma-toast-error',
                             warning: 'lemma-toast-warning',

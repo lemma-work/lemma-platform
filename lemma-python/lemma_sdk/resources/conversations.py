@@ -6,6 +6,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_create,
     agent_conversation_get,
     agent_conversation_list,
+    agent_conversation_message_append,
     agent_conversation_message_list,
     agent_conversation_message_send,
     agent_conversation_retry,
@@ -137,6 +138,27 @@ class PodConversations(BoundResource):
     ) -> None:
         return self._call(
             agent_conversation_message_send,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+            body=compact({"content": content, "metadata": metadata}),
+            body_model=SendMessageRequest,
+        )
+
+    def append(
+        self,
+        conversation_id: str,
+        content: str,
+        *,
+        metadata: Metadata | None = None,
+    ) -> AgentRunStartResponse:
+        # Unlike send()/send_stream(), this never opens an SSE stream: it
+        # persists the message and returns immediately. When a run is
+        # already active it joins that run (steered into the harness's next
+        # step) rather than starting a second one; use it for a follow-up
+        # message sent while a run is in flight instead of calling send()
+        # again, which would open a duplicate stream for the same run.
+        return self._call(
+            agent_conversation_message_append,
             self._pod_uuid(),
             as_uuid(conversation_id),
             body=compact({"content": content, "metadata": metadata}),

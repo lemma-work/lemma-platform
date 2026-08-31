@@ -5,6 +5,9 @@ state: given the message rows, it produces the ``ModelMessage`` history and the
 user prompt for the next turn. Its one subtle rule is tool pairing — a tool call
 without its matching return is dropped rather than sent, because a model
 rejects a call it never saw answered.
+
+Reasoning has a rule of its own, and it lives in `pydantic_ai_thinking`
+beside the credential check it depends on.
 """
 
 from __future__ import annotations
@@ -19,13 +22,15 @@ from pydantic_ai.messages import (
     ModelResponse,
     SystemPromptPart,
     TextPart,
-    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
 
 from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+    PendingThoughts,
+)
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
@@ -40,7 +45,16 @@ logger = get_logger(__name__)
 
 def history_and_prompt(
     messages: Sequence[Message],
+    *,
+    protocol: str | None = None,
 ) -> tuple[list[ModelMessage], str | None]:
+    """``protocol`` names where the history is going, and gates thought replay.
+
+    Optional, and defaulting to None on purpose: a caller that does not say
+    replays no reasoning at all. That is the safe direction — the cost is a
+    model that cannot see its own earlier thinking, and the alternative is
+    reasoning written into an answer.
+    """
     ordered = sorted(messages, key=lambda message: message.sequence)
     user_prompt: str | None = None
     history_messages = list(ordered)
@@ -49,18 +63,30 @@ def history_and_prompt(
         and ordered[-1].role is MessageRole.USER
         and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
     ):
-        user_prompt = _user_prompt_text(ordered[-1])
+        user_prompt = user_prompt_text(ordered[-1])
         history_messages = ordered[:-1]
 
-    return _to_pydantic_ai_messages(history_messages), user_prompt
+    # The trailing user turn is carried as the prompt rather than in history,
+    # so the builder cannot see it -- and it is exactly what tells an unanswered
+    # question apart from one still being asked.
+    return (
+        _to_pydantic_ai_messages(
+            history_messages, protocol, user_turn_follows=user_prompt is not None
+        ),
+        user_prompt,
+    )
 
 
 def _to_pydantic_ai_messages(
     messages: Iterable[object],
+    protocol: str | None = None,
+    *,
+    user_turn_follows: bool = False,
 ) -> list[ModelMessage]:
     items = list(messages)
     converted: list[ModelMessage] = []
     consumed_tool_return_indexes: set[int] = set()
+    pending = PendingThoughts(protocol)
     index = 0
 
     while index < len(items):
@@ -73,13 +99,15 @@ def _to_pydantic_ai_messages(
         kind = getattr(msg, "kind", None)
 
         if role == MessageRole.USER:
+            pending.drop()
             converted.append(
-                ModelRequest(parts=[UserPromptPart(content=_user_prompt_text(msg))])
+                ModelRequest(parts=[UserPromptPart(content=user_prompt_text(msg))])
             )
             index += 1
             continue
 
         if role == MessageRole.SYSTEM:
+            pending.drop()
             converted.append(
                 ModelRequest(parts=[SystemPromptPart(content=_message_text(msg))])
             )
@@ -90,7 +118,10 @@ def _to_pydantic_ai_messages(
             if kind in (MessageKind.TEXT, MessageKind.NOTIFICATION):
                 converted.append(
                     ModelResponse(
-                        parts=[TextPart(content=_message_text(msg))],
+                        parts=[
+                            *pending.take(),
+                            TextPart(content=_message_text(msg)),
+                        ],
                         timestamp=getattr(msg, "created_at", None),
                     )
                 )
@@ -98,12 +129,7 @@ def _to_pydantic_ai_messages(
                 continue
 
             if kind == MessageKind.THINKING:
-                converted.append(
-                    ModelResponse(
-                        parts=[ThinkingPart(content=_message_text(msg))],
-                        timestamp=getattr(msg, "created_at", None),
-                    )
-                )
+                pending.offer(msg)
                 index += 1
                 continue
 
@@ -113,9 +139,20 @@ def _to_pydantic_ai_messages(
                     request_message,
                     next_index,
                     consumed_indexes,
-                ) = _build_tool_batch(items, index, consumed_tool_return_indexes)
+                ) = _build_tool_batch(
+                    items,
+                    index,
+                    consumed_tool_return_indexes,
+                    user_turn_follows=user_turn_follows,
+                )
                 if response_message is not None:
+                    response_message.parts = [
+                        *pending.take(),
+                        *response_message.parts,
+                    ]
                     converted.append(response_message)
+                else:
+                    pending.drop()
                 if request_message is not None:
                     converted.append(request_message)
                 consumed_tool_return_indexes.update(consumed_indexes)
@@ -129,6 +166,8 @@ def _to_pydantic_ai_messages(
         logger.debug("agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic")
         index += 1
 
+    # A thought the run never followed with anything has nothing to ride on.
+    pending.drop()
     return converted
 
 
@@ -185,10 +224,27 @@ def _match_tool_returns(
     return matched
 
 
+def _user_moved_on(messages: list[object], after_index: int) -> bool:
+    """Whether the person sent something new instead of answering.
+
+    An unmatched `ask_user` normally means the conversation is still waiting on
+    a human, and telling the model its question failed while the person is
+    still being asked it would be a lie. But a user message *after* the
+    question means they did not answer it -- they said something else, and that
+    is the turn being responded to.
+    """
+    return any(
+        getattr(message, "role", None) is MessageRole.USER
+        for message in messages[after_index:]
+    )
+
+
 def _build_tool_batch(
     messages: list[object],
     start_index: int,
     consumed_tool_return_indexes: set[int],
+    *,
+    user_turn_follows: bool = False,
 ) -> tuple[ModelResponse | None, ModelRequest | None, int, set[int]]:
     call_entries, index = _collect_tool_calls(messages, start_index)
     matched_returns = _match_tool_returns(messages, index, consumed_tool_return_indexes)
@@ -219,16 +275,33 @@ def _build_tool_batch(
         synthetic_error: str | None = None
         if matched is None:
             if getattr(msg, "tool_name", None) in PAUSING_TOOL_NAMES:
-                logger.debug(
-                    "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
-                    tool_call_id=msg.tool_call_id,
+                if not (user_turn_follows or _user_moved_on(messages, index)):
+                    logger.debug(
+                        "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
+                        tool_call_id=msg.tool_call_id,
+                    )
+                    continue
+                # They were asked and said something else. Dropping the call
+                # here leaves no record of having asked, so the model asks the
+                # same question again instead of reading what they actually
+                # sent.
+                synthetic_error = (
+                    "The user did not answer this. They sent a new message "
+                    "instead, which is the turn you are responding to now. "
+                    "Read it and carry on; ask again only if you still cannot "
+                    "proceed without an answer."
                 )
-                continue
-            synthetic_error = (
-                "This tool call was interrupted before a result was recorded, "
-                "so it returned nothing. Run it again if you still need the "
-                "result."
-            )
+            else:
+                # Deliberately not "run it again". The tool may well have
+                # succeeded -- what is known is only that no result was
+                # recorded, and a run interrupted mid-send that is told to
+                # retry sends twice.
+                synthetic_error = (
+                    "This tool call was interrupted before a result was "
+                    "recorded, so its outcome is unknown: it may have completed. "
+                    "Check the current state before repeating it, and only "
+                    "repeat it if it clearly did not take effect."
+                )
         elif parsed_args is None:
             synthetic_error = (
                 "The arguments recorded for this call could not be parsed, so "
@@ -286,7 +359,7 @@ def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
 
 
-def _user_prompt_text(msg: object) -> str:
+def user_prompt_text(msg: object) -> str:
     """What the model actually reads for one user message.
 
     The stored text plus everything the surface knows about it: who sent it,
@@ -306,6 +379,10 @@ def _user_prompt_text(msg: object) -> str:
         _quoted_message_block(metadata),
         _channel_context_block(metadata),
         *_shared_files_blocks(metadata, platform),
+        # Its own piece rather than part of the block above, because the two are
+        # not alternatives: a message can carry three photos of which one
+        # arrived, and the saved-paths block returns early once it has any.
+        _failed_files_block(metadata),
         _email_reply_block(platform),
     ]
     if "state" in metadata:
@@ -401,6 +478,33 @@ def _transcribed_voice_paths(metadata: dict) -> set[str]:
     }
 
 
+def _failed_files_block(metadata: dict) -> str | None:
+    """What the person attached that never reached us, and why.
+
+    Without this the run cannot tell an unattached message from one whose photo
+    failed to download, so it answers the text alone and reads as though it
+    ignored the file. Stated as fact, not as an instruction: whether to ask for
+    a resend depends on whether the file mattered, which the agent can see and
+    this layer cannot.
+    """
+    failed = metadata.get("failed_files")
+    if not isinstance(failed, list) or not failed:
+        return None
+    lines = []
+    for item in failed:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "a file").strip()
+        reason = str(item.get("reason") or "it could not be received").strip()
+        lines.append(f"- {name} — {reason}")
+    if not lines:
+        return None
+    return (
+        "The person attached the following, and it did NOT reach you. You "
+        "cannot open or read it:\n" + "\n".join(lines)
+    )
+
+
 def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
     """What the user attached, either already ingested or still raw.
 
@@ -424,9 +528,11 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
         if transcribed:
             spoken = "\n".join(f"- {path}" for path in sorted(transcribed))
             blocks.append(
-                "Their message above includes what they said in a voice note. "
-                "It is already transcribed — treat those words as theirs and do "
-                "NOT call `listen`. The audio itself is saved at:\n" + spoken
+                "The message above IS the transcript of the voice note they "
+                "sent — their spoken words, already transcribed on arrival. "
+                "Treat it as what they said and answer it directly. Calling "
+                "`listen` on the file returns this same text and tells you "
+                "nothing new. The audio itself is saved at:\n" + spoken
             )
         if blocks:
             return blocks

@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import ResourceType
+from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import PERMISSION_BY_ID
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
@@ -102,9 +102,9 @@ def validate_pod_resource_grant_permissions(
         if permission_id not in PERMISSION_BY_ID
     }
     if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown permission id(s): {', '.join(sorted(unknown))}",
+        raise BadRequestError(
+            f"Unknown permission id(s): {', '.join(sorted(unknown))}",
+            code="UNKNOWN_PERMISSION_ID",
         )
     non_pod = {
         permission_id
@@ -113,12 +113,10 @@ def validate_pod_resource_grant_permissions(
         if PERMISSION_BY_ID[permission_id].scope.value != "POD"
     }
     if non_pod:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only pod-scoped permissions can be granted to pod resources: "
-                f"{', '.join(sorted(non_pod))}"
-            ),
+        raise BadRequestError(
+            "Only pod-scoped permissions can be granted to pod resources: "
+            f"{', '.join(sorted(non_pod))}",
+            code="NON_POD_SCOPED_PERMISSION",
         )
     mismatched = sorted(
         {
@@ -129,12 +127,10 @@ def validate_pod_resource_grant_permissions(
         }
     )
     if mismatched:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Permission id(s) do not apply to the resource type: "
-                f"{', '.join(mismatched)}"
-            ),
+        raise BadRequestError(
+            "Permission id(s) do not apply to the resource type: "
+            f"{', '.join(mismatched)}",
+            code="PERMISSION_RESOURCE_TYPE_MISMATCH",
         )
 
 

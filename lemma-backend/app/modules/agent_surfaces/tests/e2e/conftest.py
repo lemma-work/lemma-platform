@@ -10,8 +10,6 @@ from fastapi import status
 
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     fake_composio_email,
-    fake_gmail,
-    fake_outlook,
     fake_resend,
     fake_slack,
     fake_speech_provider,
@@ -246,8 +244,6 @@ __all__ = [
     "e2e_settings",
     "fake_composio_email",
     "fake_composio_server",
-    "fake_gmail",
-    "fake_outlook",
     "fake_resend",
     "fake_slack",
     "fake_speech_provider",

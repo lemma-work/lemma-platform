@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
-import anyio
 
+from app.modules.agent.infrastructure.harnesses.tool_returns import (
+    OutstandingToolCalls,
+)
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     build_mock_model,
     is_mock_llm_enabled,
@@ -24,7 +26,6 @@ from pydantic_ai.messages import (
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
-    HarnessDriverCancelled,
     drive_with_retry,
     reraise_driver_failure,
 )
@@ -51,10 +52,8 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+    user_facing_error_message,
     log_model_http_error,
-)
-from app.modules.agent.infrastructure.transport_errors import (
-    is_retryable_stream_error,
 )
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.runtime_model_factory import (
@@ -70,81 +69,17 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
+
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
+    STOP_WHILE_BUSY,
+    next_event_or_stop,
+    teardown_driver,
+)
+
 StopChecker = Callable[[], Awaitable[bool]]
 
 
-def _user_facing_error_message(exc: Exception) -> str:
-    """Return a sanitized, actionable message for the UI.
-
-    Never forward raw provider exception text (which may contain API keys,
-    request headers, or model-internal details) into user-visible payloads.
-    """
-    if isinstance(exc, ModelHTTPError):
-        # These three are all "the provider said no", but they need different
-        # things from the reader: wait, top up, or fix the config. A single
-        # generic message sends people to the wrong place.
-        if exc.status_code == 429:
-            return (
-                "The model provider is rate limiting this workspace (HTTP 429). "
-                "The request was retried a few times without success — try "
-                "again shortly."
-            )
-        if exc.status_code == 402:
-            return (
-                "The model provider rejected the request for billing reasons "
-                "(HTTP 402). Please check the provider account's credit or quota."
-            )
-        if exc.status_code >= 500:
-            return (
-                f"The model provider is having trouble (HTTP {exc.status_code}) "
-                "and the request was retried without success. Nothing you sent "
-                "was lost — try again shortly."
-            )
-        return (
-            f"The model provider returned an error (HTTP {exc.status_code}). "
-            "Please check the agent runtime configuration."
-        )
-    if is_retryable_stream_error(exc):
-        # A transport-level drop that survived every retry. Nothing was lost —
-        # each completed message was persisted — so say so, because "check the
-        # configuration" sends people hunting a bug that isn't theirs.
-        return (
-            "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message, or press Retry to pick up "
-            "where it stopped."
-        )
-    if isinstance(exc, UnexpectedModelBehavior):
-        return (
-            "A tool failed repeatedly after several attempts and the run was "
-            "stopped. Please check the agent configuration."
-        )
-    if isinstance(exc, UsageLimitExceeded):
-        return (
-            "The agent run hit a usage limit. "
-            "Please check the agent runtime configuration."
-        )
-    if isinstance(exc, HarnessDriverCancelled):
-        # Whatever the agent was doing stopped part-way, so "try again" is the
-        # honest advice. Everything it finished before that point is persisted.
-        return (
-            "The agent stopped part-way through a step and could not finish. "
-            "Nothing you sent was lost — send another message, or press Retry "
-            "to pick up where it stopped."
-        )
-    return (
-        "The model provider returned an error. "
-        "Please check the agent runtime configuration."
-    )
-
-
-# Per-tool retry budget for the in-process agent. pydantic-ai defaults to 1, which
-# turns a single bad/invalid tool call (e.g. arguments that fail schema validation)
-# into a fatal run. 5 gives the model several chances to self-correct from the
-# validation feedback before the run gives up. Execution errors are handled
-# separately by GracefulToolset and never consume this budget.
 DEFAULT_TOOL_RETRIES = 5
-
-# Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
 
 
 def _instructions(
@@ -188,9 +123,13 @@ class PydanticAIHarness:
         options: HarnessOptions,
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
-        malformed_tool_call_ids: set[str] = set()
-        emitted_tool_response_ids: set[str] = set()
-        terminal_event_seen = False
+        # Every tool this run announces, until its result is recorded. A run
+        # that dies in between leaves an orphaned call, and the next run is told
+        # the tool never ran and invited to repeat it -- a duplicate email, a
+        # duplicate record write.
+        outstanding = OutstandingToolCalls()
+        terminal: AgentEvent | None = None
+        pause_tool_call_id: str | None = None
 
         try:
             async for event in self._execute(
@@ -200,49 +139,54 @@ class PydanticAIHarness:
                 ctx=ctx,
                 options=options,
                 agent_run_id=agent_run_id,
-                malformed_tool_call_ids=malformed_tool_call_ids,
-                emitted_tool_response_ids=emitted_tool_response_ids,
                 should_stop=options.should_stop,
             ):
-                yield event
+                outstanding.observe(event)
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
-                    terminal_event_seen = True
+                    # Held back, not yielded here. The closing returns for tool
+                    # calls still open are emitted below, and the pump drops
+                    # every event after the terminal one -- so emitting the
+                    # terminal first meant a stopped run kept a tool call that
+                    # nothing ever answered. The next run then saw an
+                    # unanswered call and could reasonably repeat a tool that
+                    # had already run: the duplicate-send hazard the closing
+                    # events exist to prevent.
+                    terminal = event
+                    continue
+                yield event
         except ModelHTTPError as exc:
             log_model_http_error(
                 exc,
                 agent_run_id=agent_run_id,
                 model_name=getattr(options, "model_name", None),
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UnexpectedModelBehavior as exc:
             # Reached only when a tool genuinely failed every retry (default 5) —
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
-            logger.debug(
-                "agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic",
+            logger.warning(
+                "agent.pydantic_ai.agent_run_ended_after_repeated.degraded",
                 exc_info=True,
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UsageLimitExceeded as exc:
             logger.warning(
                 "agent.pydantic_ai.agent_run_hit_usage_limit.degraded", exc_info=True
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except AgentInputRequired as exc:
             # The agent called ask_user / request_approval: pause the run cleanly
             # rather than failing. The tool call is already persisted; the runner
@@ -252,7 +196,8 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_input_required_kind_call.observed",
                 tool_call_id=exc.tool_call_id,
             )
-            yield AgentEvent(
+            pause_tool_call_id = exc.tool_call_id
+            terminal = AgentEvent(
                 type=AgentEventType.WAITING,
                 data={
                     "tool_call_id": exc.tool_call_id,
@@ -261,26 +206,33 @@ class PydanticAIHarness:
                 },
                 agent_run_id=agent_run_id,
             )
-            return
         except Exception as exc:
             logger.error(
                 "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
             )
-            yield AgentEvent(
+            terminal = AgentEvent(
                 type=AgentEventType.ERROR,
-                data=_user_facing_error_message(exc),
+                data=user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
 
-        if terminal_event_seen:
-            return
-
-        yield AgentEvent(
-            type=AgentEventType.COMPLETED,
-            data={"conversation_id": str(conversation.id)},
-            agent_run_id=agent_run_id,
-        )
+        if terminal is None:
+            terminal = AgentEvent(
+                type=AgentEventType.COMPLETED,
+                data={"conversation_id": str(conversation.id)},
+                agent_run_id=agent_run_id,
+            )
+        # Close whatever is still open before the run ends, whichever way it
+        # ended. The pausing call is excluded: its real return is appended when
+        # the user answers, so a synthetic one would duplicate it.
+        for closing in outstanding.closing_events(
+            terminal, skip_tool_call_id=pause_tool_call_id
+        ):
+            yield closing
+        # Always last. Every path now holds its terminal back to here, so the
+        # run ends with its history closed rather than with the terminal racing
+        # the events that close it.
+        yield terminal
 
     async def _execute(
         self,
@@ -291,12 +243,12 @@ class PydanticAIHarness:
         ctx: AgentContext,
         options: HarnessOptions,
         agent_run_id: UUID,
-        malformed_tool_call_ids: set[str],
-        emitted_tool_response_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
         with run_phase("history_convert") as history_span:
-            history, user_prompt = self._history_and_prompt(messages)
+            history, user_prompt = self._history_and_prompt(
+                messages, protocol=_runtime_profile_protocol(options)
+            )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
@@ -456,7 +408,15 @@ class PydanticAIHarness:
         cancelled_by_us = False
         try:
             while True:
-                kind, payload = await queue.get()
+                item = await next_event_or_stop(queue, streamer.stop_requested)
+                if item is STOP_WHILE_BUSY:
+                    # The driver is somewhere that never checks for a stop --
+                    # in practice, inside a tool call. Ending the loop here
+                    # cancels it below, and the closing returns for whatever it
+                    # left open are emitted by `run`.
+                    yield streamer.stopped_event()
+                    break
+                kind, payload = item  # type: ignore[misc]
                 if kind == "done":
                     break
                 if kind == "error":
@@ -464,21 +424,13 @@ class PydanticAIHarness:
                     continue
                 yield payload  # type: ignore[misc]
         finally:
-            if not task.done():
-                cancelled_by_us = True
-                task.cancel()
-            # Let the child finish unwinding pydantic's scopes (in its own task),
-            # shielded so our own cancellation doesn't abandon that cleanup.
-            with anyio.CancelScope(shield=True):
-                try:
-                    await task
-                except BaseException:
-                    pass
+            cancelled_by_us = await teardown_driver(task, agent_run_id=agent_run_id)
 
         reraise_driver_failure(
             pending_error,
             cancelled_by_us=cancelled_by_us,
             agent_run_id=agent_run_id,
+            driver_task=task,
         )
 
     def _stream_reset_event(self, agent_run_id: UUID) -> AgentEvent:
@@ -499,8 +451,10 @@ class PydanticAIHarness:
     def _history_and_prompt(
         self,
         messages: Sequence[Message],
+        *,
+        protocol: str | None = None,
     ) -> tuple[list[ModelMessage], str | None]:
-        return history_and_prompt(messages)
+        return history_and_prompt(messages, protocol=protocol)
 
     def _final_output_message(
         self,
@@ -552,6 +506,21 @@ class PydanticAIHarness:
         # Shared with the Agent Host normalizer so identical structured output
         # reads identically on a surface, whichever harness produced it.
         return final_answer_text(data, fallback=fallback)
+
+
+def _runtime_profile_protocol(options: HarnessOptions) -> str | None:
+    """Which provider family this run's model belongs to, if it says.
+
+    Read for one reason: whether a stored thought can be replayed to it. See
+    `pydantic_ai_thinking.thinking_part_from_message` -- Anthropic and the
+    OpenAI-compatible providers want different credentials, so "can this be
+    replayed" has no answer until the target is known.
+    """
+    runtime_profile = options.extra.get("runtime_profile")
+    if not isinstance(runtime_profile, Mapping):
+        return None
+    protocol = runtime_profile.get("protocol")
+    return protocol if isinstance(protocol, str) and protocol else None
 
 
 def _runtime_profile_model(options: HarnessOptions):

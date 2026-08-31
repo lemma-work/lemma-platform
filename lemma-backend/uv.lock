@@ -889,6 +889,19 @@ wheels = [
 ]
 
 [[package]]
+name = "fakeredis"
+version = "2.37.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "redis" },
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/95/5e/fce3355d20d37dc18f7f4c422653ac69cabffa019afaaf607e26704fb829/fakeredis-2.37.1.tar.gz", hash = "sha256:9045851b0a9fe56312696aadc82435141aa43a193cab462d372c8fb583a7c087", size = 238182, upload-time = "2026-08-18T15:22:01.676Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/e0/fe1c760abd9e9cb5dfbce057b6582cb1ac36dfd8b5ce202e1445605c922d/fakeredis-2.37.1-py3-none-any.whl", hash = "sha256:f15c41be151c1e9206416dece764369a4dedb6b1341df3734c3c2c000e405508", size = 152738, upload-time = "2026-08-18T15:22:00.1Z" },
+]
+
+[[package]]
 name = "fast-depends"
 version = "3.0.8"
 source = { registry = "https://pypi.org/simple" }
@@ -1823,7 +1836,7 @@ wheels = [
 
 [[package]]
 name = "lemma-backend"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1898,6 +1911,7 @@ xberg = [
 dev = [
     { name = "basedpyright" },
     { name = "diff-cover" },
+    { name = "fakeredis" },
     { name = "kubernetes" },
     { name = "lemma-sdk" },
     { name = "nest-asyncio" },
@@ -1974,6 +1988,7 @@ provides-extras = ["local", "gcp-kms", "e2b", "keychain", "xberg"]
 dev = [
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "diff-cover", specifier = ">=9.7.1" },
+    { name = "fakeredis", specifier = ">=2.26.0" },
     { name = "kubernetes", specifier = ">=34.1.0" },
     { name = "lemma-sdk", editable = "../lemma-python" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
@@ -1989,7 +2004,7 @@ dev = [
 
 [[package]]
 name = "lemma-connectors"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "lemma-connectors" }
 dependencies = [
     { name = "attrs" },
@@ -2016,12 +2031,12 @@ dev = [
 
 [[package]]
 name = "lemma-pod-bundle"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "../lemma-pod-bundle" }
 
 [[package]]
 name = "lemma-sdk"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "../lemma-python" }
 dependencies = [
     { name = "attrs" },

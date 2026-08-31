@@ -16,7 +16,7 @@ from app.modules.agent_surfaces.services.display_resource_content import (
     TablePreview,
     apply_file_facts,
     apply_table_rows,
-    deliver_pod_file,
+    resolve_pod_file_parts,
     resolve_table_preview,
 )
 
@@ -73,23 +73,20 @@ async def test_a_file_that_fits_is_attached_and_never_becomes_a_card(pod_files):
     entity = _file_entity(name="q3.png", size_bytes=4096, mime_type="image/png")
     pod_files.get_file_by_path.return_value = entity
     pod_files.download_file_content_by_path.return_value = (entity, b"pixels")
-    adapter = AsyncMock()
-    adapter.send_file_attachment.return_value = True
-
-    delivery = await deliver_pod_file(
+    resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
-        target=_target(adapter),
+        target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/reports/q3.png",
         caption="q3.png",
     )
 
-    assert delivery.delivered is True
-    sent = adapter.send_file_attachment.await_args.kwargs
-    assert sent["file_name"] == "q3.png"
-    assert sent["file_bytes"] == b"pixels"
-    assert sent["mime_type"] == "image/png"
+    assert resolved.facts.delivered is True
+    (attachment,) = resolved.files
+    assert attachment.file_name == "q3.png"
+    assert attachment.content == b"pixels"
+    assert attachment.mime_type == "image/png"
 
 
 async def test_a_pdf_arrives_with_its_first_page_shown_above_it(pod_files):
@@ -103,27 +100,25 @@ async def test_a_pdf_arrives_with_its_first_page_shown_above_it(pod_files):
         entity,
         [SimpleNamespace(page_number=1, jpeg_bytes=b"jpeg-bytes")],
     )
-    adapter = AsyncMock()
-    adapter.send_file_attachment.return_value = True
-
-    delivery = await deliver_pod_file(
+    resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
-        target=_target(adapter),
+        target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/reports/shiplog.pdf",
         caption="shiplog.pdf",
         page_preview=True,
     )
 
-    assert delivery.delivered is True
-    first, second = adapter.send_file_attachment.await_args_list
-    assert first.kwargs["mime_type"] == "image/jpeg"
-    assert first.kwargs["file_bytes"] == b"jpeg-bytes"
+    assert resolved.facts.delivered is True
+    # One envelope, in reading order -- not two sends racing to be first.
+    first, second = resolved.files
+    assert first.mime_type == "image/jpeg"
+    assert first.content == b"jpeg-bytes"
     # The image carries the caption; the document under it does not repeat it.
-    assert first.kwargs["caption"] == "shiplog.pdf"
-    assert second.kwargs["mime_type"] == "application/pdf"
-    assert second.kwargs["caption"] is None
+    assert first.caption == "shiplog.pdf"
+    assert second.mime_type == "application/pdf"
+    assert second.caption is None
 
 
 async def test_a_page_that_will_not_render_still_sends_the_document(pod_files):
@@ -133,23 +128,20 @@ async def test_a_page_that_will_not_render_still_sends_the_document(pod_files):
     pod_files.get_file_by_path.return_value = entity
     pod_files.download_file_content_by_path.return_value = (entity, b"%PDF-1.7")
     pod_files.render_document_page_images.side_effect = RuntimeError("corrupt")
-    adapter = AsyncMock()
-    adapter.send_file_attachment.return_value = True
-
-    delivery = await deliver_pod_file(
+    resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
-        target=_target(adapter),
+        target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/broken.pdf",
         caption="broken.pdf",
         page_preview=True,
     )
 
-    assert delivery.delivered is True
-    assert adapter.send_file_attachment.await_count == 1
+    assert resolved.facts.delivered is True
+    (document,) = resolved.files
     # The caption survives, because nothing above it carried it.
-    assert adapter.send_file_attachment.await_args.kwargs["caption"] == "broken.pdf"
+    assert document.caption == "broken.pdf"
 
 
 async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files):
@@ -162,7 +154,7 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
     pod_files.get_file_by_path.return_value = entity
     adapter = AsyncMock()
 
-    delivery = await deliver_pod_file(
+    resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
         target=_target(adapter),
@@ -171,13 +163,12 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
         caption="raw-export.zip",
     )
 
-    assert delivery.delivered is False
-    assert delivery.fits is False
-    adapter.send_file_attachment.assert_not_awaited()
+    assert resolved.files == [], "an oversize file must not become an attachment"
+    assert resolved.facts.fits is False
     # The bytes were never fetched: the size alone decided it.
     pod_files.download_file_content_by_path.assert_not_awaited()
 
-    plan = apply_file_facts(_file_plan(), delivery)
+    plan = apply_file_facts(_file_plan(), resolved.facts)
     assert plan.title == "raw-export.zip"
     assert plan.summary == "ZIP · 64.0 MB — too large to send in this chat"
 
@@ -186,7 +177,7 @@ async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
     pod_files.get_file_by_path.side_effect = PermissionError("nope")
     adapter = AsyncMock()
 
-    delivery = await deliver_pod_file(
+    resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
         target=_target(adapter),
@@ -195,9 +186,10 @@ async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
         caption="secret.pdf",
     )
 
-    assert delivery == PodFileDelivery(delivered=False)
+    assert resolved.files == []
+    assert resolved.facts == PodFileDelivery(delivered=False)
     plan = _file_plan()
-    assert apply_file_facts(plan, delivery) is plan
+    assert apply_file_facts(plan, resolved.facts) is plan
 
 
 async def test_a_table_that_cannot_be_read_still_lets_the_card_go_out():

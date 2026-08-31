@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from harness.run import a_name_for
-from harness.drivers.api import items_of
+from harness.drivers.api import every_item, items_of
 
 JSON = dict[str, Any]
 
@@ -20,7 +20,15 @@ class SurfaceSteps:
         return items_of(await self.api.get(f"/pods/{pod['id']}/available-surfaces"))
 
     async def surfaces_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/surfaces"))
+        """Every surface on the pod, following the pages.
+
+        Capped at 100, and a standing pod reached 163 leftover Resend surfaces
+        on a real deployment — so cleanup, which reads this to find what to
+        remove, could not see most of what it was there to remove.
+        """
+        return await every_item(
+            lambda params: self.api.get(f"/pods/{pod['id']}/surfaces", params=params)
+        )
 
     async def becomes_reachable_on_telegram(
         self,
@@ -221,8 +229,12 @@ class SurfaceSteps:
             "GET", f"/pods/{in_pod['id']}/surfaces/{name}/channels"
         )
 
-    async def slack_manifest(self) -> Any:
-        return await self.api.call("GET", "/surface-setup/slack/manifest")
+    async def slack_manifest(self, *, for_agent: str | None = None) -> Any:
+        return await self.api.call(
+            "GET",
+            "/surface-setup/slack/manifest",
+            params={"agent_name": for_agent} if for_agent else None,
+        )
 
     async def makes_default_surface(self, surface: JSON, *, platform: str) -> Any:
         return await self.api.call(

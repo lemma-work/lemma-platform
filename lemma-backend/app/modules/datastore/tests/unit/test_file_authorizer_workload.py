@@ -103,9 +103,9 @@ class TestListingAgreesWithOpening:
     workload's row was hidden unless each folder above it was separately
     granted — re-deriving inheritance under a rule that cancels the grant
     cascade it was walking over. An agent could open a file by name and not see
-    it in a listing. In production that was 241 of 241 files withheld from an
-    agent holding a real `folder.read` grant on the folder containing 200 of
-    them, because nobody had granted the folder *above* it.
+    it in a listing. In production that withheld every file from an agent holding
+    a real `folder.read` grant on the folder containing most of them, because
+    nobody had granted the folder *above* it.
     """
 
     @staticmethod

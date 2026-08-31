@@ -332,6 +332,47 @@ impl HostProcessManager {
     }
 
     pub fn new(manifest: HostPackManifest, log_dir: PathBuf) -> io::Result<Arc<Self>> {
+        Self::build(manifest, log_dir, true)
+    }
+
+    /// A manager whose supervisor thread never starts.
+    ///
+    /// For tests that drive `reconcile_crashes` themselves. The supervisor
+    /// calls it once a second, and it is not a passive observer -- it spends
+    /// the restart budget and trips the circuit exactly as a manual call does.
+    /// A test that crashes a service and then reasons about which crash
+    /// exhausted the budget is therefore racing a second driver of the same
+    /// state machine.
+    ///
+    /// The race is not just interleaved bookkeeping. `reconcile_crashes`
+    /// decides `ready_to_spawn` under the state lock and then spawns *after
+    /// releasing it*, so a supervisor descheduled in that gap carries a
+    /// decision made before a crash across to after it, and respawns a service
+    /// whose circuit has since opened. That is what CI hit: `!backend.running`
+    /// failed because the supervisor had resurrected the backend the test had
+    /// just watched trip. Reproduced deterministically by stalling only the
+    /// unnamed (supervisor) thread between that decision and the spawn.
+    ///
+    /// Harmless in production, where the supervisor is the only caller and its
+    /// decisions are therefore serial. It is having a second driver that makes
+    /// it reachable, and that only ever happens in a test.
+    ///
+    /// Not a way of avoiding a hard test. That the supervisor restarts a
+    /// crashed service unprompted is asserted directly by
+    /// `the_supervisor_restarts_a_crashed_service_with_nobody_driving_it`,
+    /// which builds a supervised manager and touches nothing. What the circuit
+    /// tests are about is the transition table underneath, and that has to be
+    /// stepped deliberately to be asserted at all.
+    #[cfg(test)]
+    fn without_supervisor(manifest: HostPackManifest, log_dir: PathBuf) -> io::Result<Arc<Self>> {
+        Self::build(manifest, log_dir, false)
+    }
+
+    fn build(
+        manifest: HostPackManifest,
+        log_dir: PathBuf,
+        supervise: bool,
+    ) -> io::Result<Arc<Self>> {
         let ordered_ids = validate_and_order(&manifest)?;
         let by_id = manifest
             .services
@@ -378,6 +419,9 @@ impl HostProcessManager {
         // `manager_in` -- each still calling `reconcile_crashes`, which
         // *respawns* a service whose test has already panicked past its
         // `stop_all`. A supervisor nobody owns, re-forking shells.
+        if !supervise {
+            return Ok(manager);
+        }
         let monitor = Arc::downgrade(&manager);
         thread::spawn(move || {
             let mut next_rotation = Instant::now() + SERVICE_LOG_ROTATE_INTERVAL;
@@ -639,22 +683,51 @@ impl HostProcessManager {
                 spawn_failure.get_or_insert((id.clone(), error));
             }
         }
-        for id in &self.ordered_ids {
-            // Nothing to wait for on a service that never started; waiting
-            // would just spend its whole health timeout to say so.
-            if spawn_failure
-                .as_ref()
-                .is_some_and(|(failed, _)| failed == id)
-            {
-                continue;
-            }
-            if let Some(health) = self.health_spec(id) {
-                if let Err(error) = self.wait_process_health(id, &health) {
-                    let _ = self.stop_all();
-                    return Err(io::Error::other(format!(
-                        "{id} failed health gate: {error}"
-                    )));
-                }
+        // Gate every service at once, not one after another.
+        //
+        // Each gate requires `stabilization_seconds` of *continuously observed*
+        // health, and `healthy_since` is local to the call -- so a serial loop
+        // charges that dwell once per service. The frontend is ready in about
+        // 0.3s and then sits there healthy while the backend's gate runs, and
+        // only afterwards does its own gate start watching and spend a fresh
+        // two seconds confirming what was already true. Two services, four
+        // seconds, for a guard that needs two.
+        //
+        // Watching them concurrently costs nothing and weakens nothing: every
+        // service still proves the same uninterrupted dwell against the same
+        // probe. It just stops the clock starting late on services that came up
+        // early. This is the same move as spawning before gating above, applied
+        // to the half that was still serial.
+        //
+        // Results are collected in `ordered_ids` order, so the service reported
+        // on a failure does not depend on which thread lost the race.
+        let gates: Vec<(String, io::Result<()>)> = thread::scope(|scope| {
+            let running: Vec<_> = self
+                .ordered_ids
+                .iter()
+                // Nothing to wait for on a service that never started; waiting
+                // would just spend its whole health timeout to say so.
+                .filter(|id| {
+                    !spawn_failure
+                        .as_ref()
+                        .is_some_and(|(failed, _)| failed == *id)
+                })
+                .filter_map(|id| self.health_spec(id).map(|health| (id, health)))
+                .map(|(id, health)| {
+                    scope.spawn(move || (id.clone(), self.wait_process_health(id, &health)))
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|handle| handle.join().expect("health gate thread panicked"))
+                .collect()
+        });
+        for (id, result) in gates {
+            if let Err(error) = result {
+                let _ = self.stop_all();
+                return Err(io::Error::other(format!(
+                    "{id} failed health gate: {error}"
+                )));
             }
         }
         if let Some((_, error)) = spawn_failure {
@@ -2444,7 +2517,10 @@ mod tests {
 
     /// A manager whose installation state stays inside `root`.
     fn manager_in(root: &TempDir, value: HostPackManifest) -> Arc<HostProcessManager> {
-        HostProcessManager::new(value, log_dir_in(root)).unwrap()
+        // No supervisor thread. These tests step the state machine themselves,
+        // and a second driver of it once a second is what made the restart
+        // circuit tests fail on CI and never here.
+        HostProcessManager::without_supervisor(value, log_dir_in(root)).unwrap()
     }
 
     /// A running service's log is truncated under the writer that holds it.
@@ -3227,6 +3303,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn process_ledger_reclaims_only_an_exact_owned_process() {
+        use std::os::unix::process::ExitStatusExt;
+
         let root = tempdir().unwrap();
         let ledger_path = root.path().join("processes.json");
         let installation_id = "0123456789abcdef0123456789abcdef";
@@ -3252,13 +3330,29 @@ mod tests {
         )
         .unwrap();
 
+        // Reaped in parallel, which is the whole trick.
+        //
+        // `terminate_verified_process` signals, then waits for the PID to stop
+        // existing before escalating. A dead child nobody has reaped is a
+        // zombie, and a zombie still answers `kill(pid, 0)` -- so this test's
+        // process could never be observed to exit, the wait ran its full five
+        // seconds every time, and the assertion that followed was left racing
+        // whatever the runner did next. Production never has this problem: a
+        // reclaimed process belonged to a previous locald and is reaped by
+        // init, so its PID really does go away.
+        //
+        // Reaping here restores that, and the exit status is then an exact
+        // answer rather than a deadline: signalled means reclaimed, and a
+        // process that was missed runs out its own 30 seconds and fails
+        // saying so.
+        let reaper = thread::spawn(move || child.wait().unwrap());
         reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(child.try_wait().unwrap().is_some());
+        let status = reaper.join().unwrap();
+        assert!(
+            status.signal().is_some(),
+            "the reclaimed process exited on its own rather than being killed: \
+             {status:?}",
+        );
         assert!(read_process_ledger(&ledger_path)
             .unwrap()
             .entries
@@ -3389,6 +3483,74 @@ mod tests {
         }
     }
 
+    /// A service that came up early must not restart the dwell clock late.
+    ///
+    /// Each gate requires `stabilization_seconds` of *continuously observed*
+    /// health, measured from the first probe that gate itself saw succeed. Run
+    /// one after another, that charges the dwell once per service: the frontend
+    /// is healthy within a fraction of a second and then waits, idle and
+    /// unwatched, for the backend's gate to finish -- and only then does its own
+    /// gate start counting, spending the full window again on a service that
+    /// had been healthy the whole time.
+    ///
+    /// Asserted on the *gap* between the two services' first probes, not on how
+    /// long startup took. An absolute bound is a claim about the machine: this
+    /// began life as "under 1800ms", passed locally at 1.28s, and failed a CI
+    /// runner at 4.31s while the gates were concurrent exactly as intended. The
+    /// gap is the thing the defect is actually about, and a slow machine slows
+    /// both services together, so it stays true wherever it runs.
+    #[cfg(unix)]
+    #[test]
+    fn one_slow_service_does_not_make_every_other_service_wait_its_dwell_again() {
+        let body = Arc::new(Mutex::new(String::new()));
+        let (mut backend_health, backend_probed, backend_server) =
+            slow_response(0, Arc::clone(&body));
+        let (mut frontend_health, frontend_probed, frontend_server) =
+            slow_response(0, Arc::clone(&body));
+        backend_health.stabilization_seconds = 1;
+        frontend_health.stabilization_seconds = 1;
+
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.health = Some(backend_health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        frontend.health = Some(frontend_health);
+
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
+
+        manager.start_all().unwrap();
+        manager.stop_all().unwrap();
+        drop(backend_server);
+        drop(frontend_server);
+
+        let backend_probed = backend_probed.lock().unwrap().expect("backend was probed");
+        let frontend_probed = frontend_probed
+            .lock()
+            .unwrap()
+            .expect("frontend was probed");
+
+        // Both gates start watching together, so both services see their first
+        // probe at about the same moment. Serially, the second is not probed
+        // until the first has finished its whole dwell -- a second later, by
+        // construction, whatever the machine.
+        let gap = if backend_probed > frontend_probed {
+            backend_probed - frontend_probed
+        } else {
+            frontend_probed - backend_probed
+        };
+        assert!(
+            gap < Duration::from_millis(500),
+            "the two services were first probed {gap:?} apart, which is about \
+             the 1s dwell -- the gates are being charged one after another \
+             rather than watched together",
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn backend_config_restart_keeps_the_frontend_process_running() {
@@ -3503,6 +3665,106 @@ mod tests {
         }
     }
 
+    /// Reconcile until the supervisor reaches `what`, or fail saying what it
+    /// actually reached.
+    ///
+    /// Drive to the state, do not count the steps. Two calls happen to be
+    /// what a restart costs today -- one to spend the budget, one to act on it
+    /// -- but that is an implementation detail of `reconcile_crashes`, and a
+    /// test that hard-codes it asserts against whichever state the count lands
+    /// on rather than the one it means. Waiting for the state also fails
+    /// legibly: it says what was actually reached instead of `assertion failed:
+    /// !backend.running`, which is all CI got.
+    ///
+    /// `manager_in` builds these without a supervisor (see
+    /// `without_supervisor`), so nothing else is stepping the machine while
+    /// this runs.
+    ///
+    /// Unix-gated because `process_status` is: it reaps, which needs waitpid.
+    #[cfg(unix)]
+    fn reconcile_until(
+        manager: &HostProcessManager,
+        id: &str,
+        what: &str,
+        reached: impl Fn(&HostProcessStatus) -> bool,
+    ) -> HostProcessStatus {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            manager.reconcile_crashes();
+            let status = process_status(manager, id);
+            if reached(&status) {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} never {what}. running={} circuit_open={} restart_count={} \
+                 last_exit={:?}",
+                status.running,
+                status.circuit_open,
+                status.restart_count,
+                status.last_exit,
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The supervisor restarts a crashed service on its own.
+    ///
+    /// The one thing about it that production depends on, and until this test
+    /// nothing asserted it: every other test drives `reconcile_crashes` by
+    /// hand, so the thread that calls it once a second could have failed to
+    /// spawn at all and the suite would have stayed green.
+    ///
+    /// Waits for the restart instead of timing it. That direction is safe --
+    /// a slow machine only makes the wait longer, never wrong -- which is the
+    /// distinction that made the circuit tests flaky: they counted the
+    /// supervisor's steps, and a loaded runner gave it more of them.
+    #[cfg(unix)]
+    #[test]
+    fn the_supervisor_restarts_a_crashed_service_with_nobody_driving_it() {
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.restart = RestartSpec {
+            max_restarts: 5,
+            window_seconds: 60,
+            backoff_seconds: 0,
+        };
+        // A frontend too: the manifest is required to have one.
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        // Supervised, unlike `manager_in` -- the thread is the subject here.
+        let manager = HostProcessManager::new(value, log_dir_in(&root)).unwrap();
+
+        manager.start_all().unwrap();
+        let first = wait_for_running(&manager, "backend");
+
+        crash(&manager, "backend");
+
+        // Nothing is called on `manager` from here: if it comes back, the
+        // supervisor is what brought it back. It ticks once a second, so this
+        // deadline is ~15 ticks of slack.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let status = process_status(&manager, "backend");
+            if status.running && status.pid != Some(first) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "supervisor never restarted the crashed backend \
+                 (running={} pid={:?} was={:?} restart_count={})",
+                status.running,
+                status.pid,
+                Some(first),
+                status.restart_count,
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn opens_restart_circuit_after_crash_budget_is_exhausted() {
@@ -3535,17 +3797,22 @@ mod tests {
         // a step behind.
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes(); // spends the budgeted restart
-        manager.reconcile_crashes(); // and performs it
-        assert!(process_status(&manager, "backend").running);
+        reconcile_until(&manager, "backend", "used its one budgeted restart", |s| {
+            s.running
+        });
 
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes();
-
-        let backend = process_status(&manager, "backend");
-        assert!(!backend.running);
-        assert!(backend.circuit_open);
+        let backend = reconcile_until(
+            &manager,
+            "backend",
+            "opened its circuit with the budget exhausted",
+            |s| s.circuit_open,
+        );
+        assert!(
+            !backend.running,
+            "an open circuit must not leave it running"
+        );
         assert_eq!(backend.restart_count, 1);
         assert!(backend.last_exit.is_some());
         assert!(process_status(&manager, "frontend").running);
@@ -3590,21 +3857,24 @@ mod tests {
 
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes(); // spends the budgeted restart
-        manager.reconcile_crashes(); // and performs it
-        wait_for_running(&manager, "backend");
+        reconcile_until(&manager, "backend", "used its one budgeted restart", |s| {
+            s.running
+        });
 
         crash(&manager, "backend");
         wait_for_recorded_exit(&manager, "backend");
-        manager.reconcile_crashes();
-        assert!(
-            process_status(&manager, "backend").circuit_open,
-            "the budget is exhausted, so the circuit is open"
+        reconcile_until(
+            &manager,
+            "backend",
+            "opened its circuit with the budget exhausted",
+            |s| s.circuit_open,
         );
 
         // Nothing deliberate happens here — only the window elapsing.
         thread::sleep(Duration::from_millis(4500));
-        manager.reconcile_crashes();
+        reconcile_until(&manager, "backend", "reopened its circuit", |s| {
+            !s.circuit_open
+        });
 
         let backend = process_status(&manager, "backend");
         assert!(

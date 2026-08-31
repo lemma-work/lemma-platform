@@ -309,8 +309,8 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
         service.get_session(user_id=user_id, pod_id=None, session_id="second"),
     )
     # Inside the readiness window, a later call reuses the directory rather than
-    # re-running the mkdir round trip -- 833ms at p50 against a real sandbox, on
-    # a directory created by the first command of the run.
+    # re-running the mkdir round trip -- a real sandbox round trip, on a
+    # directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
     assert manager_client.directories == [(user_id, "/workspace")]
 

@@ -42,9 +42,7 @@ JOURNEY_DIR = SPEC_DIR / "journeys"
 COVERAGE_DOC = SPEC_DIR / "coverage.md"
 SUITE_DIR = ROOT / "tests" / "scenarios"
 OPENAPI = ROOT / "lemma-python" / "lemma_sdk" / "openapi_spec.json"
-ANALYTICS = (
-    ROOT / "lemma-backend" / "app" / "core" / "analytics" / "event_catalog.py"
-)
+ANALYTICS = ROOT / "lemma-backend" / "app" / "core" / "analytics" / "event_catalog.py"
 
 VALID_STATUSES = {"covered", "planned", "gap", "manual", "withdrawn"}
 
@@ -69,12 +67,26 @@ class Scenario:
     has_gap_note: bool = False
 
 
+#: Marks that take a scenario out of the lane a normal run collects.
+#: `sandbox` and `live` are deselected by the suite's own default `-m`
+#: expression (`tests/scenarios/pyproject.toml`); `stack_lane` is deselected
+#: whenever `--base-url` names a deployment the suite does not own.
+#:
+#: These are all legitimate — a promise about a *broken* deployment cannot be
+#: proved against a working one. What is not legitimate is reporting such a
+#: promise as `covered` with no hint that nothing routinely runs its proof,
+#: which is how eight function and packaging promises came to read as covered
+#: while only the sandbox lane could ever have proved them.
+DESELECTED_LANES = ("sandbox", "live", "stack_lane")
+
+
 @dataclass
 class ScenarioTest:
     name: str
     file: str
     proves: list[str] = field(default_factory=list)
     covers: list[str] = field(default_factory=list)
+    lanes: frozenset[str] = frozenset()
 
 
 def _blocks(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str, int]]:
@@ -178,6 +190,43 @@ def _decorator_strings(node: ast.AST, wanted: str) -> list[str]:
     return found
 
 
+def _lane_marks(nodes: list[ast.AST]) -> set[str]:
+    """Which deselecting lane marks appear among these decorators/marks.
+
+    Reads `pytest.mark.live`, a bare `live`, and `stack_lane(...)` alike, since
+    the suite writes all three.
+    """
+    found: set[str] = set()
+    for node in nodes:
+        target = node.func if isinstance(node, ast.Call) else node
+        name = (
+            target.attr
+            if isinstance(target, ast.Attribute)
+            else target.id
+            if isinstance(target, ast.Name)
+            else None
+        )
+        if name in DESELECTED_LANES:
+            found.add(name)
+    return found
+
+
+def _module_lane_marks(tree: ast.Module) -> set[str]:
+    """Lane marks from a module-level `pytestmark = [...]`, which apply to all."""
+    found: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
+        ):
+            continue
+        value = node.value
+        elements = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+        found |= _lane_marks(list(elements))
+    return found
+
+
 def load_tests() -> tuple[list[ScenarioTest], list[str]]:
     tests: list[ScenarioTest] = []
     errors: list[str] = []
@@ -191,6 +240,7 @@ def load_tests() -> tuple[list[ScenarioTest], list[str]]:
         except SyntaxError as exc:
             errors.append(f"{rel}: cannot parse ({exc})")
             continue
+        module_lanes = _module_lane_marks(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -201,7 +251,15 @@ def load_tests() -> tuple[list[ScenarioTest], list[str]]:
             if not proves and not covers:
                 continue
             tests.append(
-                ScenarioTest(name=node.name, file=rel, proves=proves, covers=covers)
+                ScenarioTest(
+                    name=node.name,
+                    file=rel,
+                    proves=proves,
+                    covers=covers,
+                    lanes=frozenset(
+                        module_lanes | _lane_marks(list(node.decorator_list))
+                    ),
+                )
             )
     return tests, errors
 
@@ -238,9 +296,7 @@ OPERATIONS: set[str] = set()
 EVENTS: set[str] = set()
 
 
-def render_coverage(
-    scenarios: list[Scenario], tests: list[ScenarioTest]
-) -> str:
+def render_coverage(scenarios: list[Scenario], tests: list[ScenarioTest]) -> str:
     by_scenario: dict[str, list[ScenarioTest]] = defaultdict(list)
     for test in tests:
         for scenario_id in test.proves:
@@ -294,6 +350,39 @@ def render_coverage(
     lines.append(f"| Product events | {len(exercised & EVENTS)} | {len(EVENTS)} |")
     lines.append("")
 
+    # A promise every one of whose proofs sits in a deselected lane. It is
+    # `covered` in the sense the gate means — a test names it — but no ordinary
+    # run collects that test, so nothing has actually demonstrated the promise
+    # in a long time and the report said nothing about it.
+    lane_only: list[tuple[Scenario, set[str]]] = []
+    for scenario in scenarios:
+        proving = by_scenario.get(scenario.id, [])
+        if not proving or scenario.status != "covered":
+            continue
+        if all(test.lanes for test in proving):
+            lane_only.append(
+                (scenario, {lane for test in proving for lane in test.lanes})
+            )
+    if lane_only:
+        lines += [
+            "## Covered, but only in a lane that is not routinely run",
+            "",
+            "Every test proving these carries a mark that takes it out of the",
+            "default selection — `sandbox` and `live` are excluded by the suite's",
+            "own `-m` expression, and `stack_lane` is dropped whenever the run",
+            "targets a deployment the suite does not own. That is legitimate: a",
+            "promise about an unconfigured deployment cannot be proved against a",
+            "working one. It is listed because `covered` otherwise reads as",
+            "`demonstrated recently`, and for these it does not.",
+            "",
+            "| Scenario | Lane |",
+            "| --- | --- |",
+        ]
+        for scenario, lanes in lane_only:
+            marks = ", ".join(f"`{lane}`" for lane in sorted(lanes))
+            lines.append(f"| `{scenario.id}` {scenario.title} | {marks} |")
+        lines.append("")
+
     by_journey: dict[str, list[Scenario]] = defaultdict(list)
     for scenario in scenarios:
         by_journey[scenario.journey_file].append(scenario)
@@ -308,9 +397,7 @@ def render_coverage(
         ]
         for scenario in group:
             proving = by_scenario.get(scenario.id, [])
-            proof = (
-                ", ".join(f"`{test.name}`" for test in proving) if proving else "—"
-            )
+            proof = ", ".join(f"`{test.name}`" for test in proving) if proving else "—"
             lines.append(
                 f"| `{scenario.id}` {scenario.title} | `{scenario.status}` | {proof} |"
             )

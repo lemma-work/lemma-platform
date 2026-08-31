@@ -24,6 +24,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
+from app.modules.agent.infrastructure.harnesses import pydantic_ai_driver
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 
@@ -88,8 +89,13 @@ async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> Non
             events.append(event)
             should_stop = True
 
+    # The MESSAGE is the point of `test_a_stop_keeps_the_answer_already_shown`
+    # below; it is here because this list used to read TOKEN, STOPPED and that
+    # missing message was a defect, not the contract. What this test is about
+    # is the line above: the scope unwinds in the generator's own task.
     assert [event.type for event in events] == [
         AgentEventType.TOKEN,
+        AgentEventType.MESSAGE,
         AgentEventType.STOPPED,
     ]
 
@@ -250,11 +256,116 @@ class TestPausingToolsBesideFinalAnswer:
                     history_summarization_enabled=False,
                 ),
                 agent_run_id=uuid4(),
-                malformed_tool_call_ids=set(),
-                emitted_tool_response_ids=set(),
                 should_stop=None,
             )
         ]
 
         assert captured["end_strategy"] == "graceful"
         assert [event.type for event in events] == [AgentEventType.USAGE]
+
+
+@pytest.mark.asyncio
+async def test_a_stop_keeps_the_answer_already_shown() -> None:
+    """Stop must not destroy the reply the user is reading.
+
+    `_emit_token_chunks` ends its stream by emitting STOPPED, and the driver
+    returned on that -- which landed the stop between "these tokens were shown"
+    and "this part became a message". The tokens had already been streamed to
+    the client, the message was never written, and the client then cleared the
+    text it had been showing. Pressing Stop deleted the answer.
+
+    The part is the atomic unit: a stop arriving inside one waits for it.
+    """
+    should_stop = False
+    events = []
+
+    async def stop_requested() -> bool:
+        return should_stop
+
+    streamer = ModelRequestStreamer(
+        emit_tokens=True,
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000001"),
+        should_stop=stop_requested,
+    )
+    with anyio.move_on_after(10, shield=True):
+        async for event in streamer._stream_model_request(
+            _Node(),
+            _Run(),
+            malformed_tool_call_ids=set(),
+        ):
+            events.append(event)
+            should_stop = True
+
+    kinds = [event.type for event in events]
+    assert AgentEventType.MESSAGE in kinds, (
+        "the streamed text was never persisted, so the stop discarded it"
+    )
+    message = events[kinds.index(AgentEventType.MESSAGE)]
+    assert message.data.text == "hello world"
+    # And the stop still ends the stream, last.
+    assert kinds[-1] is AgentEventType.STOPPED
+
+
+class TestAStopReachesABusyDriver:
+    """Stop used to do nothing while a tool call was running.
+
+    Every stop check the driver makes sits between streamed chunks, so none of
+    them runs during tool execution -- and `exec_command` is allowed to hold for
+    300 seconds. The consumer waited on the driver's queue and nothing else, so
+    pressing Stop had no effect at all until the tool returned, while the client
+    went on showing the run as live. That is the "Stop does nothing" report.
+    """
+
+    async def test_a_stop_wins_when_the_driver_is_busy(self) -> None:
+        import asyncio as _asyncio
+
+        queue: _asyncio.Queue = _asyncio.Queue()  # nothing will ever arrive
+
+        async def stop_requested() -> bool:
+            return True
+
+        result = await _asyncio.wait_for(
+            pydantic_ai_driver.next_event_or_stop(queue, stop_requested),
+            timeout=5,
+        )
+
+        assert result is pydantic_ai_driver.STOP_WHILE_BUSY
+
+    async def test_an_event_that_arrives_is_never_dropped_for_a_stop(self) -> None:
+        """The race must not lose work. A queued event is returned even when a
+        stop is pending -- it has already happened, and dropping it would leave
+        the history missing something the run really did."""
+        import asyncio as _asyncio
+
+        queue: _asyncio.Queue = _asyncio.Queue()
+        await queue.put(("event", "payload"))
+
+        async def stop_requested() -> bool:
+            return True
+
+        result = await _asyncio.wait_for(
+            pydantic_ai_driver.next_event_or_stop(queue, stop_requested),
+            timeout=5,
+        )
+
+        assert result == ("event", "payload")
+
+    async def test_it_waits_for_the_driver_when_no_stop_is_asked_for(self) -> None:
+        import asyncio as _asyncio
+
+        queue: _asyncio.Queue = _asyncio.Queue()
+
+        async def stop_requested() -> bool:
+            return False
+
+        async def deliver() -> None:
+            await _asyncio.sleep(0.05)
+            await queue.put(("done", None))
+
+        _asyncio.get_running_loop().create_task(deliver())
+        result = await _asyncio.wait_for(
+            pydantic_ai_driver.next_event_or_stop(queue, stop_requested),
+            timeout=5,
+        )
+
+        assert result == ("done", None)

@@ -61,6 +61,7 @@ class ConversationQueries:
         type: ConversationType | None = None,
         metadata_filters: dict[str, object] | None = None,
         parent_id: UUID | None = None,
+        archived: bool = False,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]:
@@ -84,6 +85,7 @@ class ConversationQueries:
             conversation_type=type,
             metadata_filters=metadata_filters,
             parent_id=parent_id,
+            archived=archived,
             cursor=cursor,
             limit=limit,
         )

@@ -29,7 +29,6 @@ from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMi
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.composition.surface_agent import ConversationService
 from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfaceDirectWebhookIngress,
     SurfaceIngressRequest,
     SurfacePlatformWebhookIngress,
 )
@@ -68,6 +67,7 @@ from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
+    AttachmentIngest,
     IngestedAttachment,
     SurfaceFileIngestService,
 )
@@ -147,14 +147,42 @@ class AgentSurfaceIngressService(
             self.identity_service = None
             self.credential_resolver = None
 
+    def split_webhook_deliveries(
+        self, request: SurfaceIngressRequest
+    ) -> list[SurfaceIngressRequest]:
+        """One webhook delivery, as the one-or-more inbound events it carries.
+
+        Only the platform knows whether its webhook can batch, so the question
+        is asked of the adapter; every adapter that cannot answers "itself" and
+        this returns the request unchanged, which is the whole of the behaviour
+        for six of the seven platforms.
+        """
+        if not isinstance(request, SurfacePlatformWebhookIngress):
+            return [request]
+        platform = self._resolve_platform(request.source)
+        adapter = self.adapter_registry.get(platform) if platform else None
+        if adapter is None:
+            return [request]
+        # Not defended with a catch: `payload` is a validated dict, every split
+        # is isinstance-guarded, and the default returns its argument. A raise
+        # here would mean a genuine bug, and swallowing it would hide the same
+        # class of silent message loss this exists to end.
+        payloads = adapter.split_inbound_payloads(request.payload)
+        if len(payloads) <= 1:
+            return [request]
+        logger.info(
+            "agent_surfaces.ingress_service.webhook_carried_several_messages.observed",
+            source=request.source,
+            message_count=len(payloads),
+        )
+        return [request.model_copy(update={"payload": payload}) for payload in payloads]
+
     async def prepare_ingress(
         self, request: SurfaceIngressRequest
     ) -> AgentSurfaceContext | None:
         if isinstance(request, SurfacePlatformWebhookIngress):
             return await self._prepare_platform_webhook_ingress(request)
-        if isinstance(request, SurfaceDirectWebhookIngress):
-            return await self._prepare_surface_webhook_ingress(request)
-        return await self._prepare_schedule_ingress(request)
+        return await self._prepare_surface_webhook_ingress(request)
 
     async def execute_chat(self, context: dict[str, Any] | AgentSurfaceContext) -> None:
         parsed_context = (
@@ -212,16 +240,17 @@ class AgentSurfaceIngressService(
 
         # Auto-ingest any user-provided files into the pod datastore (/me/{platform})
         # so surface files behave like web uploads; failures never block the run.
-        ingested: list[IngestedAttachment] = []
+        ingest = AttachmentIngest()
         if context.pod_id is not None:
             with suppress(Exception):
-                ingested = await self.file_ingest_service.ingest_attachments(
+                ingest = await self.file_ingest_service.ingest_attachments(
                     pod_id=context.pod_id,
                     platform=context.platform,
                     user_id=context.user_id,
                     parsed=context.event,
                     credentials=credentials,
                 )
+        ingested: list[IngestedAttachment] = ingest.saved
 
         metadata = context.message_metadata.as_message_metadata()
         metadata.update(
@@ -234,6 +263,13 @@ class AgentSurfaceIngressService(
         )
         if ingested:
             metadata["ingested_files"] = [item.path for item in ingested]
+        if ingest.failed:
+            # The agent has to be able to tell "they sent nothing" from "they
+            # sent something I never received" — otherwise it answers the text
+            # alone and looks like it ignored the photo.
+            metadata["failed_files"] = [
+                {"name": item.name, "reason": item.reason} for item in ingest.failed
+            ]
 
         # Group/channel continuity: each user has a separate conversation, so fetch
         # the last few thread/channel messages fresh for THIS run and hand them to
@@ -272,13 +308,9 @@ class AgentSurfaceIngressService(
                     conversation_id=context.conversation_id,
                 )
 
-        run_result = await self._commit_inbound_message(context, message_text, metadata)
-        if run_result is not None and not run_result.started_new_run:
-            await adapter.send_message(
-                credentials=credentials,
-                event=context.event,
-                message=(
-                    "Got it — I added that while I’m working. "
-                    "I’ll carry it into the next turn."
-                ),
-            )
+        # No acknowledgement for a message that lands mid-run. One message is
+        # routinely several webhooks on a chat surface, so "I'll get to this"
+        # was mostly the agent talking to itself about its own plumbing -- and
+        # it is no longer true: `PendingUserMessagesCapability` steers these
+        # into the run already going, which answers all of them at once.
+        await self._commit_inbound_message(context, message_text, metadata)

@@ -130,8 +130,6 @@ class TestEveryEmailPlatformRendersTheSameWay:
     @pytest.mark.parametrize(
         "module_path",
         [
-            "app.modules.agent_surfaces.platforms.gmail.service",
-            "app.modules.agent_surfaces.platforms.outlook.service",
             "app.modules.agent_surfaces.platforms.resend.service",
         ],
     )

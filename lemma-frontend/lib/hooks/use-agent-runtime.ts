@@ -149,7 +149,11 @@ export const useAgentHostHarnessOwners = (hosts: readonly AgentHost[]) => {
             owners.set(harness.id, host.display_name);
         }
     });
-    return owners;
+    // Whether the map can be trusted yet. Callers use it to decide which
+    // profiles have a computer to sit under, and on the first frame it is empty
+    // for every one of them — so a caller that read it as settled would draw
+    // every coding agent as orphaned and then move it a moment later.
+    return { owners, isPending: results.some((result) => result.isPending) };
 };
 
 // A paired computer belongs to the person who paired it, not to a workspace:

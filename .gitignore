@@ -61,6 +61,15 @@ __pycache__/
 # CodeQL databases and SARIF output from `make codeql`.
 .codeql/
 
+# Working notes that are not documentation: audit findings, incident write-ups,
+# review transcripts, migration narratives, anything with production figures in
+# it. CONTRIBUTING.md says these belong in the pull request that does the work,
+# not in `docs/` — this is the untracked place to keep one while you are writing
+# it. A public repository publishes `docs/` to everyone who clones it, and a
+# file committed once stays in history whatever the ignore rules say later.
+/docs/internal/
+*.internal.md
+
 # Local benchmark corpus for the datastore load tests (~310MB of arXiv PDFs).
 # Reproducible via lemma-backend/load_tests/fetch_arxiv_corpus.py, which is the
 # source of truth for which papers are in it — so the bytes never belong in git.
