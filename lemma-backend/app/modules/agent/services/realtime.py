@@ -76,7 +76,7 @@ def message_payload(
     agent_run_id: UUID | None,
     message: dict[str, object],
 ) -> dict[str, object]:
-    """A message frame. Optional run id, unlike the run-scoped frames below.
+    """A message frame. Optional run id, unlike the run-scoped frames here.
 
     A message can exist without a run -- a tool return closed by the MCP bridge
     outside one, a superseded return replayed from an older turn. Frames are
