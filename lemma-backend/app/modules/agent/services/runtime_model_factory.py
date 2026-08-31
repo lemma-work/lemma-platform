@@ -34,6 +34,9 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.transport_errors import (
     RETRYABLE_STATUS_CODES,
 )
+from app.modules.agent.services.model_stream_budget import (
+    ModelStreamBudgetTransport,
+)
 from app.modules.agent.services.openai_schema_compat import (
     openai_compatible_model_profile,
 )
@@ -135,36 +138,60 @@ def _should_retry_status(response: httpx.Response) -> None:
 
 
 def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
+    # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
+    # returns a transport passed to it *before* it ever looks at `limits`, so a
+    # `limits=` beside a custom `transport=` is accepted and silently discarded:
+    # this pool ran on httpx's defaults (20 keepalive, 5s expiry) while the
+    # settings said 100 and 30, and `agent_model_http_max_connections` did
+    # nothing at all. Building the base transport here is what makes the setting
+    # real, and it has to be built explicitly anyway — AsyncTenacityTransport
+    # wraps `AsyncHTTPTransport()` with no arguments when handed nothing.
+    pooled = httpx.AsyncHTTPTransport(
+        limits=httpx.Limits(
+            max_connections=agent_settings.agent_model_http_max_connections,
+            max_keepalive_connections=agent_settings.agent_model_http_max_connections,
+            keepalive_expiry=30.0,
+        ),
+    )
+    retrying = AsyncTenacityTransport(
+        config=RetryConfig(
+            retry=lambda state: isinstance(
+                state.outcome.exception() if state.outcome else None,
+                (httpx.TransportError, httpx.HTTPStatusError),
+            ),
+            wait=wait_retry_after(
+                fallback_strategy=wait_exponential(multiplier=1, max=30),
+                max_wait=60,
+            ),
+            stop=stop_after_attempt(3),
+            reraise=True,
+        ),
+        wrapped=pooled,
+        validate_response=_should_retry_status,
+    )
     return httpx.AsyncClient(
         # Split timeouts: the read timeout is per-chunk, so it is the "provider
         # has gone away" threshold rather than a budget for the whole turn — a
-        # long tool-using answer streams for minutes without tripping it.
+        # long tool-using answer streams for minutes without tripping it. What
+        # it therefore cannot see is a provider that keeps sending *something*
+        # forever, which is what the stream budget outside it is for.
         timeout=httpx.Timeout(
             connect=agent_settings.agent_model_http_connect_timeout_seconds,
             read=agent_settings.agent_model_http_read_timeout_seconds,
             write=30.0,
             pool=10.0,
         ),
-        limits=httpx.Limits(
-            max_connections=agent_settings.agent_model_http_max_connections,
-            max_keepalive_connections=agent_settings.agent_model_http_max_connections,
-            keepalive_expiry=30.0,
-        ),
         headers={str(key): str(value) for key, value in headers.items()},
-        transport=AsyncTenacityTransport(
-            config=RetryConfig(
-                retry=lambda state: isinstance(
-                    state.outcome.exception() if state.outcome else None,
-                    (httpx.TransportError, httpx.HTTPStatusError),
-                ),
-                wait=wait_retry_after(
-                    fallback_strategy=wait_exponential(multiplier=1, max=30),
-                    max_wait=60,
-                ),
-                stop=stop_after_attempt(3),
-                reraise=True,
+        # Outermost, so the budget covers the response body of whichever attempt
+        # tenacity finally returns. It has to be out here regardless: tenacity
+        # retries `handle_async_request`, which is done once the headers land, so
+        # nothing inside it is still watching while the body streams.
+        transport=ModelStreamBudgetTransport(
+            retrying,
+            first_chunk_seconds=(
+                agent_settings.agent_model_stream_first_chunk_timeout_seconds
             ),
-            validate_response=_should_retry_status,
+            total_seconds=agent_settings.agent_model_stream_total_timeout_seconds,
         ),
     )
 

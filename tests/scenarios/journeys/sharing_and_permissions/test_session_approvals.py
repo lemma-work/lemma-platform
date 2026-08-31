@@ -85,6 +85,7 @@ async def test_approving_runs_the_described_action(pod_with_two_records):
     alice, pod, table, first, second, agent = pod_with_two_records
 
     conversation = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=(
@@ -113,6 +114,7 @@ async def test_denying_leaves_the_action_undone(pod_with_two_records):
     del second
 
     conversation = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=(
@@ -158,6 +160,7 @@ async def test_a_session_approval_stops_repeat_asking(pod_with_two_records):
     )
 
     conversation = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=ungranted["name"],
         saying=(
@@ -191,6 +194,7 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     alice, pod, table, first, second, agent = pod_with_two_records
 
     approved = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=(f"Delete the row titled 'first' from the {table['name']} table."),
@@ -205,6 +209,7 @@ async def test_a_session_approval_does_not_leak_to_another_conversation(
     # The only thing that changed is which conversation it is happening in,
     # which is precisely what a *session* approval is scoped to.
     fresh = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=(f"Delete the row titled 'second' from the {table['name']} table."),

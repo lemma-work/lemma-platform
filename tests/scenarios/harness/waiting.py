@@ -55,6 +55,16 @@ UNTIL_A_RUN_SETTLES = 120.0
 #: answer.
 UNTIL_A_MODEL_ACTS = 180.0
 
+#: A run a person is *steering*: it asks, they answer, it carries on, and this
+#: is the patience for the whole exchange rather than for one turn of it. Longer
+#: than the others because it spans several model turns end to end, and because
+#: it is the bound that used to be supplied by accident — the send was made over
+#: the stream, so the harness's own 150s per-request timeout capped the model
+#: while no scenario said so. Measured against dev, one model call alone reaches
+#: 194s at the 99.9th percentile, so anything shorter is a coin toss dressed up
+#: as an assertion.
+UNTIL_A_STEERED_RUN_FINISHES = 300.0
+
 #: Work the product does on its own schedule — a trigger firing, a document
 #: converting, a bundle exporting, a failing schedule giving up.
 UNTIL_BACKGROUND_WORK_LANDS = 180.0
