@@ -28,7 +28,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.stack import inbound_email_domain, webhook_signing_secret
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -210,7 +210,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
         lambda: alice.conversations_in(pod),
         bool,
         describe="the email to open a conversation in the pod that owns the address",
-        timeout=120.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     # The thread is created before the message is persisted onto it, so reading
     # straight away finds an empty conversation and reports a working feature as
@@ -221,7 +221,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
             "take a look" in str(message.get("text") or "") for message in messages
         ),
         describe="the email's words to reach the conversation it opened",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert said, said
 
