@@ -178,18 +178,20 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
             or settings.lemma_openai_base_url,
             # pydantic-ai defaults to `self._usage += chunk_usage` per streamed
-            # SSE chunk, correct only for a provider that sends usage once (on
-            # the final chunk) or true per-chunk deltas. Verified directly
-            # against Fireworks that some models (glm-5.3-flash) instead send
-            # already-cumulative usage on every chunk -- prompt_tokens constant,
-            # completion_tokens counting up -- which the default `+=` then sums
-            # again on top of itself. One real agent turn recorded 193M input
-            # tokens this way. `openai_continuous_usage_stats` switches
-            # pydantic-ai to `self._usage = chunk_usage` (replace), which is
-            # correct for both conventions: a single final chunk still lands on
-            # the right total, and a cumulative-per-chunk stream stops being
-            # re-summed. Provider-wide, not glm-5.3-flash-specific -- deepseek-
-            # v4-flash-0731 sends usage once, so this is a no-op there.
+            # SSE chunk, correct only for a provider that sends usage once or
+            # sends true per-chunk deltas. Some models behind this provider
+            # instead repeat an already-cumulative total on every chunk, which
+            # the default then adds on top of itself, billing a turn as a
+            # multiple of what it used. `openai_continuous_usage_stats` switches
+            # pydantic-ai to replace rather than add, which lands on the right
+            # total under either convention. Set on the profile rather than per
+            # model: the catalog is heterogeneous, and replace is safe for every
+            # member of it.
+            #
+            # The same flag also puts a non-standard field in the request body,
+            # which a strict endpoint rejects outright.
+            # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
+            # see its docstring for why the two halves have to be separated.
             model_settings={"openai_continuous_usage_stats": True},
         ),
         credentials=ApiKeyRuntimeCredentials(api_key=api_key),

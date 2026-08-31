@@ -331,6 +331,187 @@ async def test_non_default_model_run_records_nonzero_cost(
     assert limits.json()["org_monthly"]["used_usd"] >= usage_event["cost_usd"]
 
 
+# Two questions of the same size, one answered briefly and one at length. The
+# prompt is what is being checked, and it barely differs between them -- so the
+# prompt cost should barely differ either.
+_SHORT_ANSWER_PROMPT = "Reply with exactly: ok"
+_LONG_ANSWER_PROMPT = (
+    "Count from 1 to 60. Put each number on its own line, and write nothing else."
+)
+
+# What re-summing looks like from the outside. Counting the prompt once per
+# streamed chunk instead of once ties the prompt cost to the length of the
+# answer, so the long run's prompt inflates by roughly the ratio of the two
+# chunk counts while the short run stays cheap.
+#
+# Asserted as a ratio between two runs rather than a fixed ceiling: a ceiling
+# encodes today's system-prompt size, goes stale the moment an instruction is
+# added, and fails for a reason that has nothing to do with billing.
+_PROMPT_COST_GROWTH_LIMIT = 2.0
+
+# Enough chunks for the multiplier above to be unmistakable if it were applied.
+_A_LONG_ANSWER = 40
+
+# A price per token outside this band is not a rate, it is a units error -- a
+# catalog entry priced per million as though it were per token, or a missing
+# entry quietly costing nothing.
+_SANE_COST_PER_TOKEN = (1e-9, 1e-3)
+
+
+async def _run_once_and_read_usage(
+    authenticated_client,
+    *,
+    org_id: str,
+    user_id: str,
+    pod_id: str,
+    agent: dict,
+    model_name: str,
+    prompt: str,
+    title: str,
+) -> dict:
+    """One agent turn in its own conversation, and the usage it recorded.
+
+    A fresh conversation each time so the two runs are comparable: replying into
+    the first one would carry its history into the second prompt and inflate the
+    thing being measured.
+    """
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"agent_name": agent["name"], "title": title},
+    )
+    assert create_conversation.status_code == 201, create_conversation.text
+    conversation_id = create_conversation.json()["id"]
+
+    # Fails here when the request carries a field the endpoint does not accept:
+    # the provider rejects it outright and the run never reaches COMPLETED.
+    events = await _post_sse(
+        authenticated_client,
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages",
+        {"content": prompt},
+    )
+    assert events[-1]["type"] == "completed", events
+    assert events[-1]["data"]["status"] == AgentRunStatus.COMPLETED.value, events
+
+    return await _wait_for_usage_event(
+        authenticated_client,
+        org_id=org_id,
+        pod_id=pod_id,
+        agent_id=agent["id"],
+        user_id=user_id,
+        agent_run_id=events[-1]["agent_run_id"],
+        model_name=model_name,
+    )
+
+
+def _assert_billed_coherently(usage_event: dict, model_name: str) -> None:
+    assert usage_event["input_tokens"] > 0, usage_event
+    assert usage_event["output_tokens"] > 0, usage_event
+    assert usage_event["total_tokens"] == (
+        usage_event["input_tokens"] + usage_event["output_tokens"]
+    )
+    assert usage_event["cost_usd"] > 0, usage_event
+
+    cost_per_token = usage_event["cost_usd"] / usage_event["total_tokens"]
+    low, high = _SANE_COST_PER_TOKEN
+    assert low < cost_per_token < high, (
+        f"{model_name} priced at {cost_per_token} per token, outside the band a "
+        f"real rate falls in."
+    )
+
+
+@pytest.mark.real_llm
+# Two real runs per model, and a catalog may hold a reasoning model that spends
+# minutes on one of them. This lane is local and manual -- it is not in front of
+# the merge button, so the per-test budget that applies there does not apply
+# here, and waiting on a slow model is not a reason to leave it uncovered.
+@pytest.mark.timeout(900)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+@pytest.mark.parametrize("model_name", system_lemma_model_names())
+async def test_every_configured_model_streams_and_bills_what_it_used(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    worker,
+    monkeypatch,
+    model_name,
+):
+    """Every model in the catalog must survive a streamed run and bill for it.
+
+    Parametrised over the configured catalog rather than named models, because
+    both failures this covers are per-model and neither is reachable from the
+    default one.
+
+    A model whose endpoint validates its input rejects a request carrying a
+    non-standard `stream_options` field, and the run never completes -- so the
+    first half of this test is simply that it does, for every model shipped.
+
+    A model that repeats an already-cumulative usage total on every chunk gets
+    its prompt counted once per chunk if the streaming handler adds instead of
+    replaces. That fails nothing and raises no error; it just bills a number
+    nobody can explain. So the second half asks the same agent two questions of
+    the same size, one answered briefly and one at length, and holds the prompt
+    cost to the question rather than to the answer.
+    """
+    _ = worker
+    real_api_key = system_lemma_api_key()
+    monkeypatch.setenv("LEMMA_OPENAI_API_KEY", real_api_key)
+    monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
+    org_id = fixed_test_org["id"]
+    user_id = fixed_test_user["id"]
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": f"Billing Agent {uuid4().hex[:8]}",
+            "instruction": "Follow the request exactly. Add no commentary.",
+            "agent_runtime": {
+                "profile_id": "system:lemma",
+                "model_name": model_name,
+            },
+        },
+    )
+    assert create_agent.status_code == 201, create_agent.text
+    agent = create_agent.json()
+
+    short_run = await _run_once_and_read_usage(
+        authenticated_client,
+        org_id=org_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        agent=agent,
+        model_name=model_name,
+        prompt=_SHORT_ANSWER_PROMPT,
+        title=f"Short answer {model_name}",
+    )
+    long_run = await _run_once_and_read_usage(
+        authenticated_client,
+        org_id=org_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        agent=agent,
+        model_name=model_name,
+        prompt=_LONG_ANSWER_PROMPT,
+        title=f"Long answer {model_name}",
+    )
+
+    _assert_billed_coherently(short_run, model_name)
+    _assert_billed_coherently(long_run, model_name)
+
+    # The two runs really did stream at different lengths, which is what makes
+    # the comparison below meaningful rather than incidental.
+    assert long_run["output_tokens"] > _A_LONG_ANSWER, long_run
+    assert long_run["output_tokens"] > short_run["output_tokens"], (short_run, long_run)
+
+    growth = long_run["input_tokens"] / short_run["input_tokens"]
+    assert growth < _PROMPT_COST_GROWTH_LIMIT, (
+        f"{model_name} charged {growth:.1f}x the prompt tokens for the longer "
+        f"answer to a question of the same size "
+        f"({short_run['input_tokens']} -> {long_run['input_tokens']}). The "
+        f"prompt is being counted once per streamed chunk rather than once."
+    )
+
+
 @pytest.mark.skipif(
     os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
     reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
