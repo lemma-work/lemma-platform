@@ -1523,3 +1523,64 @@ async def test_create_account_allows_when_existing_identity_unhealthy():
     )
     account_repo.create.assert_awaited_once()
     assert account.provider_account_id == "acc-dup"
+
+
+async def test_the_catalog_profile_supplies_the_provider_identity():
+    """`native_profile` is the vendored-client path and covers Gmail, Drive and
+    Slack only. Reading the provider identity from it alone meant every
+    `http`-kind connector with a profile operation -- GitHub, and every native
+    connector after it -- stored an account with no identity, which is the value
+    the duplicate-connect guard and re-auth matching key on."""
+    user_id = uuid4()
+    auth_config = _auth_config("github")
+    connect_request = ConnectRequestEntity(
+        id=uuid4(),
+        user_id=user_id,
+        organization_id=ORG_ID,
+        auth_config_id=auth_config.id,
+        connector_id="github",
+        authorization_url="https://auth",
+        status=ConnectRequestStatus.PENDING,
+        attributes={"state": "state-gh"},
+    )
+    auth_provider = AsyncMock()
+    auth_provider.exchange_code_for_credentials.return_value = OAuthCredentials(
+        access_token="ghu_token"
+    )
+    registry = Mock()
+    registry.get.return_value = auth_provider
+
+    account_repo = AsyncMock()
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = None
+    account_repo.get_by_user_and_auth_config.return_value = None
+    account_repo.create.side_effect = lambda entity: entity
+    connect_repo = AsyncMock()
+    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.update.side_effect = lambda req: req
+
+    service = _service(
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("github"))
+        ),
+        auth_config_repository=_auth_config_repo(auth_config),
+        account_repository=account_repo,
+        connect_request_repository=connect_repo,
+        auth_provider_registry=registry,
+    )
+
+    with (
+        patch.object(
+            service, "_load_native_account_profile", AsyncMock(return_value=None)
+        ),
+        patch.object(
+            service,
+            "_fetch_account_profile",
+            AsyncMock(return_value={"login": "sreejinping", "id": 298642121}),
+        ),
+    ):
+        account = await service.handle_oauth_callback(
+            redirect_uri="https://cb?state=state-gh&code=abc",
+            state="state-gh",
+        )
+
+    assert account.provider_account_id == "sreejinping"

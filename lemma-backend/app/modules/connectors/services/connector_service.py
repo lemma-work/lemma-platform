@@ -933,31 +933,40 @@ class ConnectorService:
                     }
                 }
             )
-        provider_account_id = (
-            provider_account_id
-            or self._extract_provider_account_id_from_profile(
-                connector.id, native_profile
-            )
-        )
         email_profile = await self._fetch_account_profile(
             connector,
             self._provider_value(auth_config),
             credentials,
+        )
+        # The one profile this app actually populates. The catalog-driven
+        # fetch works for any connector with a profile operation configured;
+        # the Lemma-native one covers Gmail/Drive/Slack alone, and only one of
+        # the two is ever populated for a given app.
+        #
+        # Reading the identity from `native_profile` only meant every
+        # `http`-kind connector with a profile operation -- GitHub, and every
+        # native connector after it -- stored an account with no provider
+        # identity. That is the value the duplicate-connect guard and re-auth
+        # matching key on, so without it a second identity's re-auth is matched
+        # to the user's default account and overwrites its credentials.
+        account_profile = email_profile or native_profile
+        provider_account_id = (
+            provider_account_id
+            or self._extract_provider_account_id_from_profile(
+                connector.id, account_profile
+            )
         )
         email = self._extract_account_email(
             connector.id, credentials, email_profile
         ) or self._extract_account_email(connector.id, credentials, native_profile)
 
         # Human-friendly label for the account list (team name / mailbox / …),
-        # falling back to the email when the app has no better label. Prefer
-        # the catalog-driven profile (works for any app with a profile
-        # operation configured) over the Lemma-native one (Gmail/Drive/Slack
-        # only) since only one of the two is ever populated for a given app.
+        # falling back to the email when the app has no better label.
         display_name = (
             await resolve_account_identity(
                 connector_id=connector.id,
                 credentials=credentials,
-                profile=email_profile or native_profile,
+                profile=account_profile,
             )
         ).display_name or email
 
