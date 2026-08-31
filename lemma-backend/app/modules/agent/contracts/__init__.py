@@ -13,6 +13,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
     MessageRole,
+    AgentKind,
     AgentToolset,
 )
 from app.modules.agent.api.schemas import AgentResponse
@@ -33,6 +34,7 @@ __all__ = [
     "AgentEvent",
     "AgentEventType",
     "AgentRunApprovalDecision",
+    "AgentKind",
     "AgentResponse",
     "AgentToolset",
     "AskUserRequest",

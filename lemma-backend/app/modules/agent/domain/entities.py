@@ -11,6 +11,7 @@ from pydantic import Field
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.value_objects import (
+    AgentKind,
     AgentRuntimeConfig,
     AgentRunStatus,
     AgentToolset,
@@ -27,8 +28,11 @@ from app.modules.agent.domain.value_objects import (
 class Agent(Entity):
     """Reusable agent definition.
 
-    Persisted agents are pod-owned. The service may also build a virtual pod
-    assistant entity with the same pod_id and no persisted agent row.
+    Every agent is pod-owned and every agent has a row, the pod's own assistant
+    included -- ``kind`` says which of them nobody created. It used to be the
+    one exception, synthesised on the way past with no row behind it, which is
+    why so much of this module still asks "is there an agent?" when it means
+    "is this the pod's own".
     """
 
     resource_type: ClassVar[ResourceType] = ResourceType.AGENT
@@ -36,6 +40,7 @@ class Agent(Entity):
     pod_id: UUID
     user_id: UUID
     name: str
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"

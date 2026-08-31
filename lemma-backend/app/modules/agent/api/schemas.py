@@ -21,6 +21,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
     AgentRunStatus,
+    AgentKind,
     AgentToolset,
     ConversationStatus,
     ConversationType,
@@ -74,6 +75,10 @@ class AgentResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
+    # Which of these the pod came with. A client renders the default
+    # assistant beside the agents somebody made, and has to be able to tell
+    # them apart to withhold edit and delete -- it is the same list.
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"
@@ -109,6 +114,10 @@ class AgentSummaryResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
+    # Which of these the pod came with. A client renders the default
+    # assistant beside the agents somebody made, and has to be able to tell
+    # them apart to withhold edit and delete -- it is the same list.
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"
