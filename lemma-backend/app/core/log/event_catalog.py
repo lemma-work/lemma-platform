@@ -118,6 +118,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.summarization_model.resolution_failed.observed': EventSpec('warning', frozenset({'model_name'})),
     'agent.tools.image_payload.downscale_skipped.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'agent.usage.implausible_provider_count.degraded': EventSpec('warning', frozenset({'reported_value', 'usage_field'})),
+    'agent.usage.missing_provider_count.degraded': EventSpec('warning', frozenset({'request_count', 'usage_field'})),
     'agent.vision_service.description_failed.degraded': EventSpec('warning', frozenset()),
     'agent.web_fetch.batch_deadline_reached.degraded': EventSpec('warning', frozenset({'captured', 'requested'})),
     'agent.web_fetch.failed.degraded': EventSpec('warning', frozenset()),
