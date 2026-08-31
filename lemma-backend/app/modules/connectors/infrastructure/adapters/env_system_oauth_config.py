@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
+from dotenv import dotenv_values
+
+from app.core.settings_env import dotenv_path
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
@@ -86,6 +90,31 @@ NATIVE_LEMMA_SYSTEM_OAUTH: dict[str, SystemOAuthCredentialRef] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _dotenv_values() -> dict[str, str]:
+    """The deployment's `.env`, consulted only when a variable is not exported.
+
+    These variable *names* come from catalog data (`client_id_env`), so they
+    cannot be pydantic-settings fields and have to be looked up at runtime --
+    which meant `os.getenv` and nothing else. In production that is right: the
+    variables really are exported. On a developer's machine every other setting
+    in the application comes from `.env`, so a client id written there was
+    invisible here and the connector reported itself unconfigured with nothing
+    to explain why.
+    """
+    path = dotenv_path()
+    if not path:
+        return {}
+    try:
+        return {
+            key: value
+            for key, value in dotenv_values(path).items()
+            if value is not None
+        }
+    except OSError:
+        return {}
+
+
 class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
     """Resolve native Lemma OAuth config from code + env without storing it in DB.
 
@@ -111,7 +140,7 @@ class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
 
     def _first_env_value(self, names: list[str]) -> str | None:
         for name in names:
-            value = os.getenv(name)
+            value = os.getenv(name) or _dotenv_values().get(name)
             if value:
                 return value
         return None

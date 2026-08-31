@@ -116,6 +116,9 @@ from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
+from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
+    _dotenv_values,
+)
 from app.modules.connectors.infrastructure.adapters.schema_compiler import (
     PydanticCodeSchemaCompiler,
 )
@@ -539,7 +542,14 @@ def _env_names(value: object) -> list[str]:
 
 
 def _env_available(value: object) -> bool:
-    return any(bool(os.getenv(name)) for name in _env_names(value))
+    # Same fallback the runtime adapter uses: on a developer's machine these
+    # live in `.env` rather than the exported environment, and seeding
+    # `system_default_available=False` there records a falsehood that read-time
+    # enrichment then silently contradicts.
+    return any(
+        bool(os.getenv(name) or _dotenv_values().get(name))
+        for name in _env_names(value)
+    )
 
 
 def _system_oauth_available(system_oauth: dict[str, object] | None) -> bool:
