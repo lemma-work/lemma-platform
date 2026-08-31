@@ -35,6 +35,11 @@ import { useAddPodMember, usePodMembers } from '@/lib/hooks/use-pod-members';
 import { usePod } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { buildShareLink } from '@/lib/share/share-link';
+import {
+    offersInviteFor,
+    podMemberEmails,
+    resolveAlreadyHere,
+} from '@/lib/pods/add-people-matching';
 import { OrganizationRole, PodJoinPolicy, PodRole } from '@/lib/types';
 import {
     buildPodInviteRedirectUri,
@@ -191,13 +196,32 @@ function AddPeopleComposer({ podId, onClose }: { podId: string; onClose: () => v
         () => new Set(drafts.map((draft) => (draft.kind === 'email' ? draft.email : draft.email || '').toLowerCase())),
         [drafts],
     );
+    /** Every address the backend knows a member of this pod by. */
+    const memberEmails = useMemo(() => podMemberEmails(members), [members]);
+
     // Only offered once the address matches nobody we could simply add: a
-    // colleague already in the organization is added, never re-invited.
-    const offersInvite =
-        isEmail(trimmedQuery)
-        && !draftedEmails.has(trimmedQuery.toLowerCase())
-        && !candidates.some((candidate) => candidate.email?.toLowerCase() === trimmedQuery.toLowerCase())
-        && !members.some((member) => (member.user_email || '').toLowerCase() === trimmedQuery.toLowerCase());
+    // colleague already in the organization is added, never re-invited, and
+    // somebody already in the pod is neither.
+    const offersInvite = isEmail(trimmedQuery) && offersInviteFor({
+        query: trimmedQuery,
+        members,
+        candidateEmails: candidates.map((candidate) => candidate.email),
+        draftedEmails: [...draftedEmails],
+    });
+
+    /**
+     * Who the query names that there is nothing left to do about.
+     *
+     * Typing the address of somebody already in the pod used to land on "Nobody
+     * by that name. Type a full email address to invite them." — the opposite of
+     * true, and the one wrong answer that reads as a bug rather than an empty
+     * list. Both halves of the field's promise need an answer: a person already
+     * here, and a person already sitting in the box below.
+     */
+    const alreadyHere = useMemo(
+        () => resolveAlreadyHere({ query: trimmedQuery, members, drafts }),
+        [drafts, members, trimmedQuery],
+    );
 
     const emailDrafts = drafts.filter((draft): draft is Extract<Draft, { kind: 'email' }> => draft.kind === 'email');
     const hasEmailInvites = emailDrafts.length > 0;
@@ -262,9 +286,17 @@ function AddPeopleComposer({ podId, onClose }: { podId: string; onClose: () => v
 
         const byEmail = new Map(candidates.map((candidate) => [candidate.email?.toLowerCase(), candidate]));
         const additions: Draft[] = [];
+        let alreadyMembers = 0;
         for (const email of emails) {
             const key = email.toLowerCase();
             if (draftedEmails.has(key) || additions.some((draft) => draft.key.endsWith(key))) continue;
+            // Nobody in the pod is invited into it again. Pasting a team list at
+            // a pod half the team is already in is the ordinary case, not the
+            // exception, and it used to mail every one of them.
+            if (memberEmails.has(key)) {
+                alreadyMembers += 1;
+                continue;
+            }
             // Someone already in the organization is added outright — pasting a
             // list should not mail an invitation to the desk next to you.
             const known = byEmail.get(key);
@@ -279,6 +311,14 @@ function AddPeopleComposer({ podId, onClose }: { podId: string; onClose: () => v
                 continue;
             }
             additions.push({ key: `email:${key}`, kind: 'email', email });
+        }
+
+        // Said rather than swallowed: a list that comes back shorter than the
+        // one you pasted has to explain the difference.
+        if (alreadyMembers > 0) {
+            toast.info(alreadyMembers === 1
+                ? '1 address is already a member of this pod'
+                : `${alreadyMembers} addresses are already members of this pod`);
         }
 
         if (additions.length === 0) return;
@@ -452,13 +492,45 @@ function AddPeopleComposer({ podId, onClose }: { podId: string; onClose: () => v
                             </CommandGroup>
                         ) : null}
 
-                        <CommandEmpty>
-                            {trimmedQuery && !canInviteByEmail
-                                ? 'Nobody by that name. Only organization owners and editors can invite people by email.'
-                                : trimmedQuery
-                                    ? 'Nobody by that name. Type a full email address to invite them.'
-                                    : 'Everyone in your organization is already in this pod.'}
-                        </CommandEmpty>
+                        {alreadyHere.length > 0 ? (
+                            /* Plain rows rather than `CommandItem`: there is
+                               nothing here to select, and a row that highlights
+                               under the arrow keys but does nothing on Enter is
+                               a worse answer than no row at all. */
+                            <div className="px-1 pb-1">
+                                {matches.length > 0 || (offersInvite && canInviteByEmail) ? (
+                                    <p className="px-2 pb-1 pt-1.5 type-eyebrow">Already here</p>
+                                ) : null}
+                                {alreadyHere.map((person) => (
+                                    <div
+                                        key={person.key}
+                                        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                                    >
+                                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs text-[var(--text-tertiary)]">
+                                            {initialOf(person.name)}
+                                        </span>
+                                        <span className="truncate text-[var(--text-secondary)]">{person.name}</span>
+                                        <span className="ml-auto shrink-0 text-xs text-[var(--text-tertiary)]">
+                                            {person.note}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+
+                        {/* cmdk decides whether an empty state is due from the
+                            item count, and these rows are not items — so the
+                            one case it cannot see is the one where the answer
+                            is right above it. */}
+                        {alreadyHere.length === 0 ? (
+                            <CommandEmpty>
+                                {trimmedQuery && !canInviteByEmail
+                                    ? 'Nobody by that name. Only organization owners and editors can invite people by email.'
+                                    : trimmedQuery
+                                        ? 'Nobody by that name. Type a full email address to invite them.'
+                                        : 'Everyone in your organization is already in this pod.'}
+                            </CommandEmpty>
+                        ) : null}
                     </CommandList>
                 </div>
             </Command>
