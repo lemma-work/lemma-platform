@@ -225,9 +225,9 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
 async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
     """The reason the key dropped the conversation id.
 
-    89.9% of production runs are the first run of their conversation, so a
-    conversation-keyed brief missed on ~90% of runs and rebuilt from the
-    database on the hot path. Nothing in the brief is conversation-derived, so
+    Most runs are the first run of their conversation, so a conversation-keyed
+    brief missed on nearly every run and rebuilt from the database on the hot
+    path. Nothing in the brief is conversation-derived, so
     the second conversation must be served the first one's brief.
     """
     monkeypatch.setattr(

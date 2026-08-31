@@ -22,7 +22,7 @@ from app.core.log.log import _ClientDisconnectFilter
 # One of four records production emits. `ConnectionClosed.__str__` builds a
 # different string depending on who closed and whether a close frame came back,
 # and only this branch happens to contain "no close frame received" -- which is
-# why a filter requiring that phrase let the other three through, 26 a day.
+# why a filter requiring that phrase let the other three through.
 _DISCONNECT = (
     "ConnectionClosedError exception in shielded future\n"
     "future: <Future finished exception=ConnectionClosedError(None, "

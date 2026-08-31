@@ -84,10 +84,10 @@ class WorkspaceSandboxService:
         tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
     ] = {}
     # Directories already created, by the same key. The singleflight above only
-    # collapses concurrent callers, so every tool call re-ran the mkdir round
-    # trip -- 833ms at p50, on a directory that had existed since the first
-    # command. The key carries the storage generation, so a disk reset misses
-    # while a mere container recreate keeps what is still on the volume.
+    # collapses concurrent callers, so every tool call paid a full sandbox round
+    # trip to mkdir a directory that had existed since the first command. The
+    # key carries the storage generation, so a disk reset misses while a mere
+    # container recreate keeps what is still on the volume.
     _ready_directories: dict[tuple[int, UUID, str, int, str], float] = {}
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 

@@ -291,8 +291,8 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
 
     Reading the same file by path already worked, because the single-file path
     judges the file alone. So the two disagreed: an agent could open a file it
-    could not see listed. In production that was 241 of 241 files withheld from
-    an agent holding a real grant on the folder containing 200 of them.
+    could not see listed. In production that withheld every file from an agent
+    holding a real grant on the folder containing most of them.
     """
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     owner = DatastoreApi(authenticated_client, pod_id)
@@ -331,7 +331,7 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
     try:
         # Search is the operation that broke: it filters every file in the pod
         # through `get_visible_file_ids`, which is where the ancestor walk ran.
-        # That is also the call that logged `241 of 241 withheld`.
+        # That is also the call that logged every file as withheld.
         results = await agent_api.search_files(NEEDLE, search_method="TEXT")
         assert tree["leaf"]["id"] in {r["file_id"] for r in results["items"]}, results
 

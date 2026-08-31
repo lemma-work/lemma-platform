@@ -165,7 +165,7 @@ class SystemModelScheduleFilter:
 
         This embedded the whole trigger payload with ``indent=2``. A webhook
         body is whatever the provider chose to send, so the prompt had no upper
-        size at all -- production ran 32,653 to 100,883 tokens against a 32,000
+        size at all -- real payloads ran several times over the 32,000-token
         limit, and every one of those runs failed *after* the model had been
         called and billed, because the resolved system model cannot count
         tokens before a request.

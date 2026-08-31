@@ -77,11 +77,12 @@ async def handle_llm_filter_task(
         # was caught. `UsageLimitExceededError` is ours -- the pod's billing
         # budget. `UsageLimitExceeded` is pydantic-ai's, raised when a run
         # exceeds `input_tokens_limit`, and it is the one production actually
-        # hits: 21 a day, every one of them an event too large for the filter's
-        # token budget. It matched nothing here, so it escaped unhandled, no
-        # ledger row was written, the breaker counted nothing, the schedule was
-        # never deactivated and the owner was never emailed. The safety net
-        # below was real and simply never applied to the failure that occurs.
+        # hits -- routinely, every occurrence an event too large for the
+        # filter's token budget. It matched nothing here, so it escaped
+        # unhandled, no ledger row was written, the breaker counted nothing,
+        # the schedule was never deactivated and the owner was never emailed.
+        # The safety net below was real and simply never applied to the failure
+        # that occurs.
         #
         # Policy lives here, at the task boundary, not in the processor. The
         # processor raises every filter failure alike and is right to — a

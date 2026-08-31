@@ -78,10 +78,11 @@ class ScheduleRunRecoveryService:
                     # skipped once it has been inspected and found still
                     # running, so the delay is one re-inspection interval, not
                     # the run's whole life. And the interval is not the binding
-                    # constraint anyway: 100 rows per tick every 5 minutes over
-                    # the ~1,375 rows production parks on human form waits is a
-                    # ~69-minute round trip on its own. Before this filter
-                    # existed the sweep was slower still, because it spent those
+                    # constraint anyway: at 100 rows per tick every 5 minutes,
+                    # the standing backlog of runs parked on human form waits
+                    # takes the sweep over an hour to work through on its own.
+                    # Before this filter existed the sweep was slower still,
+                    # because it spent those
                     # ticks re-reading the same head of the queue. The ordering
                     # below is what actually bounds the delay; this only stops a
                     # small in-flight set from being re-read every 5 minutes for

@@ -56,8 +56,8 @@ class ConversationOpeningTextsMixin:
 
         Titling needs exactly two strings. Reading them through
         ``include_messages=True`` loaded the whole transcript and turned every
-        row into an entity first — on a long thread that was 1.4s of Python
-        inside an open transaction to answer a question about two rows. Same
+        row into an entity first — on a long thread, seconds of Python inside an
+        open transaction to answer a question about two rows. Same
         shape of fix as the one recorded above for ``include_runs``.
 
         Each leg stops at its first qualifying row on

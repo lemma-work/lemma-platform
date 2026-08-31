@@ -300,8 +300,8 @@ class TrailingSlashMiddleware:
     reads it from *outside* this middleware. With a copy the router wrote to an
     object the observer never saw, so every request whose path ended in a slash
     was logged as ``route: "unmatched"`` regardless of what it actually matched
-    or returned -- silently seeding the bucket that production's fixed-cost
-    5.2s "unmatched" 404s were being investigated in.
+    or returned -- silently seeding the bucket that a fixed-cost class of slow
+    "unmatched" 404s was being investigated in.
     """
 
     def __init__(self, app):
@@ -447,7 +447,7 @@ class RequestObserverMiddleware:
                     }
                     # "unmatched" names no request, so a slow or failing one in
                     # that bucket cannot be investigated at all: two separate
-                    # passes at production's fixed-cost 5.2s `unmatched` 404s
+                    # passes at a fixed-cost class of slow `unmatched` 404s
                     # failed for exactly this reason. Populated only for that
                     # bucket -- a real route template is already the identity,
                     # and raw paths are unbounded.

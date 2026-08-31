@@ -175,8 +175,8 @@ class AppHostRoutingMiddleware:
         # that reads it sits *outside* this middleware — so with a copy the
         # router wrote to an object the observer never saw, and every app-host
         # request was logged as `route: "unmatched"`. That covered the whole
-        # apps product: 52 slow 404s and 21 slow 200s in a day, none of them
-        # attributable to a route on any per-route dashboard.
+        # apps product: every slow request it served landed in a bucket no
+        # per-route dashboard could attribute to anything.
         scope["path"] = new_path
         scope["raw_path"] = new_path.encode("utf-8")
         scope["headers"] = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]

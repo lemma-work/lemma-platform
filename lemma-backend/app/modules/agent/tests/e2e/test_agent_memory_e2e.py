@@ -88,7 +88,7 @@ async def _brief(*, agent_name: str, pod_id: str, user_id: str) -> str:
         )
     assert agent is not None
     # A conversation that has never run before -- the case that matters, since
-    # 90% of runs are the first of their conversation.
+    # most runs are the first of their conversation.
     conversation = type(
         "_Conversation", (), {"id": uuid4(), "is_pod_assistant": False}
     )()
