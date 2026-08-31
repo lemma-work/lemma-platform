@@ -156,7 +156,7 @@ def reset_engine_state() -> None:
 
 
 class LazyAsyncSessionMaker:
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> AsyncSession:
         return get_session_maker()(*args, **kwargs)
 
     def configure(self, **kwargs):

@@ -35,9 +35,17 @@ def _service(agent, *, exists: bool):
     repository.update.return_value = agent
     # Create checks for a clash first; update has to find the agent it edits.
     repository.get_by_pod_and_name.return_value = agent if exists else None
+    # The service's own uow, not one reached through the repository. Handed back
+    # so the tests can assert the derivation is passed *this* one: an `AsyncMock`
+    # repository answers `.uow` with a fresh mock whatever happens, so nothing
+    # here would notice the service reading the wrong one.
+    uow = AsyncMock()
     return (
-        AgentService(agent_repository=repository, authorization_service=AsyncMock()),
+        AgentService(
+            uow=uow, agent_repository=repository, authorization_service=AsyncMock()
+        ),
         repository,
+        uow,
     )
 
 
@@ -53,10 +61,11 @@ def _agent(toolsets):
 @pytest.mark.asyncio
 async def test_creating_an_agent_derives_its_memory_grant(monkeypatch):
     agent = _agent([AgentToolset.MEMORY])
-    service, _ = _service(agent, exists=False)
+    service, _, uow = _service(agent, exists=False)
     asked: dict = {}
 
-    async def _derive(uow, **kwargs):
+    async def _derive(derive_uow, **kwargs):
+        asked["uow"] = derive_uow
         asked.update(kwargs)
 
     monkeypatch.setattr(
@@ -78,6 +87,7 @@ async def test_creating_an_agent_derives_its_memory_grant(monkeypatch):
 
     assert asked, "the service created an agent without deriving its memory grant"
     assert asked["toolsets"] == [AgentToolset.MEMORY]
+    assert asked["uow"] is uow
 
 
 @pytest.mark.asyncio
@@ -87,10 +97,11 @@ async def test_updating_derives_from_the_agent_as_saved_not_from_the_request(
     # A PATCH that omits `toolsets` is not the same thing as one turning memory
     # off. Reading the request would revoke the grant on any unrelated edit.
     agent = _agent([AgentToolset.MEMORY])
-    service, _ = _service(agent, exists=True)
+    service, _, uow = _service(agent, exists=True)
     asked: dict = {}
 
-    async def _derive(uow, **kwargs):
+    async def _derive(derive_uow, **kwargs):
+        asked["uow"] = derive_uow
         asked.update(kwargs)
 
     monkeypatch.setattr(
@@ -105,3 +116,4 @@ async def test_updating_derives_from_the_agent_as_saved_not_from_the_request(
     )
 
     assert asked["toolsets"] == [AgentToolset.MEMORY]
+    assert asked["uow"] is uow

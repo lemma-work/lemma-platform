@@ -43,11 +43,16 @@ def validate_conversation_access(
     user_id: UUID,
     pod_id: UUID,
     agent_id: UUID | None = None,
-) -> None:
+) -> Conversation:
     """Raise `ConversationNotFoundError` unless this caller may reach it.
 
     Not-found rather than forbidden on purpose: a conversation in someone else's
     pod should not be distinguishable from one that does not exist.
+
+    Returns the conversation it validated. Every caller passes the `| None`
+    straight off a repository read and then goes on to use it, so handing back
+    the non-`None` value is what lets them do that without each one re-asserting
+    a narrowing this function already performed.
     """
     if conversation is None:
         raise ConversationNotFoundError()
@@ -57,13 +62,14 @@ def validate_conversation_access(
         raise ConversationNotFoundError()
     if agent_id is not None and conversation.agent_id != agent_id:
         raise ConversationNotFoundError()
+    return conversation
 
 
 async def resolve_agent(
     conversation: Conversation,
     *,
     user_id: UUID,
-    agent_repository: object,
+    agent_repository: AgentRepository,
     agent_name: str | None = None,
 ) -> Agent:
     """The agent answering on this conversation, real or the pod assistant.
@@ -87,7 +93,7 @@ async def resolve_agent(
             toolsets=list(POD_DEFAULT_AGENT_TOOLSETS),
         )
 
-    agent = await agent_repository.get(conversation.agent_id)  # type: ignore[attr-defined]
+    agent = await agent_repository.get(conversation.agent_id)
     if agent is None:
         raise AgentNotFoundError(str(conversation.agent_id))
     if agent_name is not None and agent.name != agent_name:
@@ -141,9 +147,8 @@ async def authorized_conversation(
         pod_id=pod_id,
         agent_name=agent_name,
     )
-    conversation = await conversation_repository.get_conversation(conversation_id)
-    validate_conversation_access(
-        conversation,
+    conversation = validate_conversation_access(
+        await conversation_repository.get_conversation(conversation_id),
         user_id=user_id,
         pod_id=pod_id,
         agent_id=agent_id,

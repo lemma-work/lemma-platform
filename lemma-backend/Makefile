@@ -211,7 +211,7 @@ coverage-e2e:
 
 coverage-backend-unit:
 	@mkdir -p $(BACKEND_COVERAGE_DIR)
-	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
+	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
 		-m "$(UNIT_MARKERS)" \
@@ -222,7 +222,7 @@ coverage-backend-e2e-shard:
 	@test -n "$(E2E_ARGS)" || (echo "E2E_ARGS is required" && exit 1)
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required, e.g. e2e-surfaces" && exit 1)
 	@mkdir -p $(BACKEND_COVERAGE_DIR)
-	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
+	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
 		$(E2E_PARALLEL) $(E2E_ARGS) \
@@ -304,6 +304,11 @@ lint-connectors:
 test-connectors:
 	uv run pytest lemma-connectors/tests -q
 
+# `app/modules/agent/api/dependencies.py` is in the list for one line it holds:
+# it hands the concrete `ConversationRepository` to a parameter typed as the
+# port, which is the only place basedpyright checks the two against each other.
+# Without it the port can drift *ahead* of its implementation and nothing fails
+# -- the mirror image of the drift the services directory now catches.
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \
@@ -311,6 +316,9 @@ typecheck-critical:
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
 		app/core/infrastructure/events \
+		app/modules/agent/api/dependencies.py \
+		app/modules/agent/domain/ports.py \
+		app/modules/agent/services \
 		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \

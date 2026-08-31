@@ -362,16 +362,26 @@ class AgentRuntimeProfileEditor:
             changes["default_model_name"] = catalog[0].name
 
         if patch.config_changed:
-            config_type = (
-                AnthropicCompatibleRuntimeConfig
-                if is_anthropic
-                else OpenAICompatibleRuntimeConfig
-            )
-            changes["config"] = config_type(
-                base_url=patch.base_url,
-                headers=patch.headers,
-                model_settings=patch.model_settings,
-            )
+            # Branched rather than picking a class, because the two disagree
+            # about the one field: Anthropic may run against its default
+            # endpoint with none, OpenAI-compatible cannot.
+            base_url = HttpUrl(patch.base_url) if patch.base_url is not None else None
+            if is_anthropic:
+                changes["config"] = AnthropicCompatibleRuntimeConfig(
+                    base_url=base_url,
+                    headers=patch.headers,
+                    model_settings=patch.model_settings,
+                )
+            else:
+                if base_url is None:
+                    # `_next_base_url` already refuses to clear it here; this is
+                    # the same rule stated where the model actually needs it.
+                    raise ValueError("An OpenAI-compatible profile requires a base URL")
+                changes["config"] = OpenAICompatibleRuntimeConfig(
+                    base_url=base_url,
+                    headers=patch.headers,
+                    model_settings=patch.model_settings,
+                )
 
         if not changes:
             return profile

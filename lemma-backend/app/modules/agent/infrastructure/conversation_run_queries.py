@@ -38,7 +38,7 @@ from app.modules.agent.infrastructure.repositories.conversation_status_repair im
 from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import (
+from app.modules.agent.domain.run_projections import (
     StaleAgentRunRef,
     StrandedConversationRef,
 )

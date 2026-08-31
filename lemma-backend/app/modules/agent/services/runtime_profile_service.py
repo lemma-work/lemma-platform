@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from uuid import UUID
 
 
-from pydantic import HttpUrl
+from pydantic import BaseModel, HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.domain.errors import DomainError
@@ -32,6 +33,10 @@ from app.modules.agent.domain.value_objects import (
     HarnessKind,
 )
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostHarnessModel,
+    AgentHostModel,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -286,7 +291,7 @@ class AgentRuntimeProfileService:
         user_id: UUID,
         scope: RuntimeProfileScope,
         require_owner: bool = True,
-    ) -> object:
+    ) -> AgentHostHarnessModel:
         """See `RuntimeProfileCreation.require_ready_harness`."""
         return await self.creation.require_ready_harness(
             harness_id=harness_id,
@@ -446,8 +451,8 @@ class AgentRuntimeProfileService:
 
 def _profile_availability(
     profile: AgentRuntimeProfile,
-    harnesses: dict[UUID, object],
-    hosts: dict[UUID, object],
+    harnesses: Mapping[UUID, AgentHostHarnessModel],
+    hosts: Mapping[UUID, AgentHostModel],
 ) -> RuntimeProfileAvailability | None:
     """Why a harness-backed profile can or cannot take work.
 
@@ -459,17 +464,15 @@ def _profile_availability(
     harness = harnesses.get(profile.harness_id)
     if harness is None:
         return RuntimeProfileAvailability.NOT_INSTALLED
-    host = hosts.get(getattr(harness, "host_id", None))
-    if host is None or getattr(host, "revoked_at", None) is not None:
+    host = hosts.get(harness.host_id)
+    if host is None or host.revoked_at is not None:
         return RuntimeProfileAvailability.UNAVAILABLE
     if (
-        effective_agent_host_status(
-            getattr(host, "status", None), getattr(host, "last_seen_at", None)
-        )
+        effective_agent_host_status(host.status, host.last_seen_at)
         is not AgentHostStatus.ONLINE
     ):
         return RuntimeProfileAvailability.OFFLINE
-    if getattr(harness, "health", None) != AgentHostHarnessHealth.READY.value:
+    if harness.health != AgentHostHarnessHealth.READY.value:
         return RuntimeProfileAvailability.UNAVAILABLE
     return RuntimeProfileAvailability.READY
 
@@ -501,9 +504,8 @@ def _selected_model(
 def _config_dict(config: object | None) -> dict[str, object]:
     if config is None:
         return {}
-    model_dump = getattr(config, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(mode="json")
+    if isinstance(config, BaseModel):
+        return config.model_dump(mode="json")
     if isinstance(config, dict):
         return config
     return {}

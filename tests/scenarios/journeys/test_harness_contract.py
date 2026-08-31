@@ -130,8 +130,10 @@ def test_a_scenario_waits_on_a_named_budget():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(
-                node.func, "id", ""
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
             )
             if name not in {"eventually", "waits_for_an_approval_in"}:
                 continue

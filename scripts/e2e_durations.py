@@ -64,6 +64,24 @@ def _cases(paths: list[Path], *, passing_only: bool = False) -> list[tuple[float
     return cases
 
 
+def _phases(paths: list[Path]) -> dict:
+    """The per-phase breakdown pytest wrote beside each JUnit, if it did.
+
+    Optional on purpose: an older artifact, or a run that predates the
+    conftest hook, still checks -- just against the JUnit total, which is what
+    happened before.
+    """
+    merged: dict = {"session_setup_carriers": [], "phases": {}}
+    for path in paths:
+        sidecar = path.with_suffix(".phases.json")
+        if not sidecar.exists():
+            continue
+        data = json.loads(sidecar.read_text())
+        merged["session_setup_carriers"].extend(data.get("session_setup_carriers", ()))
+        merged["phases"].update(data.get("phases", {}))
+    return merged
+
+
 def summarize(cases: list[tuple[float, str, str]], top: int) -> int:
     total = sum(seconds for seconds, _, _ in cases)
     tail = sum(seconds for seconds, _, _ in cases[:top])
@@ -80,14 +98,45 @@ def summarize(cases: list[tuple[float, str, str]], top: int) -> int:
     return 0
 
 
-def check(cases: list[tuple[float, str, str]], budget: float) -> int:
+def _own_seconds(
+    cases: list[tuple[float, str, str]], phases: dict
+) -> list[tuple[float, str]]:
+    """Each test's own cost, which is not always the number in the JUnit.
+
+    pytest charges session-scoped fixture setup to whichever test triggers it
+    first. On an e2e shard that is testcontainers, the schema build and a worker
+    subprocess -- twenty-five to thirty-five seconds of one-time infrastructure,
+    landing on one arbitrary test and varying by eight seconds run to run.
+
+    Judging that test on the total is wrong twice over. It fires on whoever
+    sorts first rather than on anything slow, and every remedy the error offers
+    is useless against it: `@pytest.mark.slow` moves the test, and the session
+    setup simply lands on the next one.
+
+    So the carrier is judged on call plus teardown. That drops its own
+    function-scoped setup too, a couple of seconds, which is the conservative
+    direction for a test the budget should not have been measuring anyway.
+    """
+    carriers = set(phases.get("session_setup_carriers", ()))
+    by_case = phases.get("phases", {})
+    own: list[tuple[float, str]] = []
+    for seconds, classname, name in cases:
+        case = f"{classname}::{name}"
+        if case in carriers and case in by_case:
+            recorded = by_case[case]
+            seconds = recorded.get("call", 0.0) + recorded.get("teardown", 0.0)
+        own.append((seconds, case))
+    return own
+
+
+def check(cases: list[tuple[float, str, str]], budget: float, phases: dict) -> int:
     allowed = {
         entry["test"]: entry
         for entry in json.loads(BASELINE.read_text())["allowed"]
     }
     over = [
-        (seconds, f"{classname}::{name}")
-        for seconds, classname, name in cases
+        (seconds, test)
+        for seconds, test in _own_seconds(cases, phases)
         if seconds > budget
     ]
     new = [(seconds, test) for seconds, test in over if test not in allowed]
@@ -117,13 +166,14 @@ def main() -> int:
     args = parser.parse_args()
 
     cases = _cases(args.junit, passing_only=args.check)
+    phases = _phases(args.junit)
     if not cases:
         # In --check this is the correct answer for a shard whose every test
         # failed: the run is already red for a better reason.
         print(f"no passing testcases found in {[str(p) for p in args.junit]}",
               file=sys.stderr)
         return 0 if args.check else 1
-    return (check(cases, args.budget_seconds) if args.check
+    return (check(cases, args.budget_seconds, phases) if args.check
             else summarize(cases, args.top))
 
 
