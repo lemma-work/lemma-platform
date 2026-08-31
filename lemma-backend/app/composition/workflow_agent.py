@@ -8,7 +8,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
@@ -71,39 +70,6 @@ class AgentControlAdapter(AgentPort):
             agent_id=agent.id,
             agent_name=agent.name,
             agent_runtime=agent.agent_runtime,
-            input_data=input_data,
-            pod_id=pod_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            workflow_run_id=workflow_run_id,
-            source=source,
-            conversation_metadata=conversation_metadata,
-            instructions=instructions,
-        )
-
-    async def run_pod_default_agent(
-        self,
-        input_data: dict[str, Any],
-        pod_id: UUID,
-        user_id: UUID,
-        conversation_id: UUID | None = None,
-        workflow_run_id: UUID | None = None,
-        source: str = "WORKFLOW_RUN",
-        conversation_metadata: dict[str, Any] | None = None,
-        instructions: str | None = None,
-    ) -> UUID:
-        """Start a headless run answered by the pod's default assistant.
-
-        There is no row to look up and none to create: a conversation with a
-        null ``agent_id`` *is* the default assistant, and `resolve_agent`
-        synthesises it for the runner exactly as it does for a person's chat.
-        So this is `run_agent` with the lookup removed, not a second execution
-        path — everything after the conversation exists is identical.
-        """
-        return await self._start_conversation(
-            agent_id=None,
-            agent_name=DEFAULT_POD_AGENT_NAME,
-            agent_runtime=None,
             input_data=input_data,
             pod_id=pod_id,
             user_id=user_id,

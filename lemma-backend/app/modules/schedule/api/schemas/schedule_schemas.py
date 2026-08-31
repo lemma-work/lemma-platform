@@ -10,9 +10,7 @@ from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
     ScheduleRunStatus,
     ScheduleFireStatus,
-    INSTRUCTION_REQUIRED,
     ScheduleType,
-    is_pod_default_agent_target,
     normalize_datastore_schedule_config,
 )
 
@@ -91,16 +89,10 @@ class CreateScheduleRequest(BaseModel):
             and not self.connector_trigger_id
         ):
             raise ValueError("Agent webhook schedules require connector_trigger_id")
-        # A named agent's identity is its own instruction, so a schedule may add
-        # to it or say nothing. The default assistant's instruction is the empty
-        # string — it is whoever the conversation needs it to be — so a schedule
-        # that does not say what to do is one that fires an assistant at a JSON
-        # payload with no job. Refuse at creation rather than at 9am.
-        if (
-            is_pod_default_agent_target(self.agent_name)
-            and not (self.instruction or "").strip()
-        ):
-            raise ValueError(INSTRUCTION_REQUIRED)
+        # "A target with no standing instruction must be told what to do" is
+        # enforced in the service, not here: it is a question about the resolved
+        # agent, and a validator cannot look one up. The cost is that it comes
+        # back as a 400 rather than a field-scoped 422.
         if self.workflow_name and self.connector_trigger_id:
             raise ValueError(
                 "connector_trigger_id is only valid for agent webhook schedules; "
@@ -128,15 +120,6 @@ class UpdateScheduleRequest(BaseModel):
     def allow_at_most_one_target_name(self) -> "UpdateScheduleRequest":
         if self.agent_name and self.workflow_name:
             raise ValueError("Only one of agent_name or workflow_name can be provided")
-        # Retargeting onto the default assistant has the same requirement as
-        # creating there. Retargeting *away* is unconstrained, and an update
-        # that leaves the target alone is checked by the service, which is the
-        # only side that knows what the schedule already points at.
-        if (
-            is_pod_default_agent_target(self.agent_name)
-            and not (self.instruction or "").strip()
-        ):
-            raise ValueError(INSTRUCTION_REQUIRED)
         # schedule_type is unknown here; the service enforces the DATASTORE
         # rules. Normalize eagerly when the config is recognizably datastore
         # so users get a field-scoped 422 instead of a service-level 400.
@@ -155,9 +138,9 @@ class ScheduleResponse(BaseModel):
     schedule_type: ScheduleType
     agent_id: UUID | None
     workflow_id: UUID | None
-    targets_pod_default: bool = False
-    # `POD_DEFAULT` when the target is the default assistant, which has no row
-    # to read a name off — so a client can render the target uniformly.
+    # `POD_DEFAULT` when the target is the pod's own assistant. That is the
+    # selector the API takes rather than the row's internal name, so a client
+    # reads back exactly what it wrote.
     agent_name: str | None = None
     workflow_name: str | None = None
     config: dict

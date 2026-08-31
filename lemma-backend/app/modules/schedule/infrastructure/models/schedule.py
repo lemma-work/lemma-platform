@@ -19,7 +19,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB
 
-from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
+from app.core.authorization.delegation import (
+    POD_DEFAULT_AGENT_SELECTOR,
+    is_pod_default_agent,
+)
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
@@ -58,17 +61,6 @@ class Schedule(UUIDAuditBase):
         nullable=True,
         index=True,
     )
-    # The pod's default assistant, which has no `agents` row to point at. A
-    # column rather than a sentinel in `agent_id`, because that column is a
-    # real foreign key and no sentinel would satisfy it.
-    targets_pod_default: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default=text("false"),
-        default=False,
-        index=True,
-    )
-
     # For WEBHOOK schedules: reference to app connector
     account_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True, index=True
@@ -121,14 +113,11 @@ class Schedule(UUIDAuditBase):
     agent: Mapped[Any] = relationship("AgentModel", foreign_keys=[agent_id])
 
     __table_args__ = (
-        # A schedule starts exactly one thing. The service says so too, but the
-        # target is now three columns rather than two, and "agent_id set *and*
-        # targets_pod_default true" is the kind of state that only shows up
-        # months later as a schedule that fires twice.
+        # A schedule starts exactly one thing. The service says so too, but
+        # "agent_id set *and* workflow_id set" is the kind of state that only
+        # shows up months later as a schedule that fires twice.
         CheckConstraint(
-            "(agent_id IS NOT NULL)::int "
-            "+ (workflow_id IS NOT NULL)::int "
-            "+ targets_pod_default::int <= 1",
+            "(agent_id IS NOT NULL)::int + (workflow_id IS NOT NULL)::int <= 1",
             name="ck_schedules_single_target",
         ),
         Index("ix_schedules_user_pod", "user_id", "pod_id"),
@@ -152,10 +141,11 @@ class Schedule(UUIDAuditBase):
     def to_entity(self) -> ScheduleEntity:
         workflow = self.__dict__.get("workflow")
         agent = self.__dict__.get("agent")
-        # The default assistant has no row to read a name off, so its selector
-        # is echoed back instead. Without this a Lem-targeted schedule reads as
-        # having no target at all on the wire, and an export would lose it.
-        if self.targets_pod_default:
+        # The assistant is echoed back as the wire selector rather than as its
+        # row's name. `POD_DEFAULT` is what the API takes, what the CLI passes
+        # and what every exported bundle already contains, and `pod_default` is
+        # an internal name nobody has ever had to type.
+        if agent is not None and is_pod_default_agent(agent.id, pod_id=self.pod_id):
             agent_name = POD_DEFAULT_AGENT_SELECTOR
         else:
             agent_name = agent.name if agent else None

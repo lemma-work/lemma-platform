@@ -764,9 +764,6 @@ async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeyp
             "agent_name": "POD_DEFAULT",
             "config": {"cron": "0 9 * * *"},
             "instruction": "Check the overnight queue.",
-            # Exported alongside, and deliberately not in the apply allow-list:
-            # the target is derived from `agent_name`, not restated.
-            "targets_pod_default": True,
         },
     )
     fake = FakeScheduleService()

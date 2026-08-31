@@ -88,7 +88,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             schedule_type=entity.schedule_type,
             agent_id=entity.agent_id,
             workflow_id=entity.workflow_id,
-            targets_pod_default=entity.targets_pod_default,
             config=entity.config,
             instruction=entity.instruction,
             filter_instruction=entity.filter_instruction,
@@ -306,7 +305,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         user_id: Optional[UUID] = None,
         agent_id: Optional[UUID] = None,
         workflow_id: Optional[UUID] = None,
-        targets_pod_default: bool | None = None,
         name: str | None = None,
         ctx: Context | None = None,
         limit: int = 100,
@@ -337,7 +335,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             user_id=user_id,
             agent_id=agent_id,
             workflow_id=workflow_id,
-            targets_pod_default=targets_pod_default,
             name=name,
             cursor=cursor,
         ):

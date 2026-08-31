@@ -160,17 +160,24 @@ async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
 
 
 @pytest.mark.anyio
-async def test_pod_default_run_creates_a_conversation_with_no_agent(monkeypatch):
-    """The whole mechanism, in one assertion: `agent_id` is null.
+async def test_the_assistant_is_started_like_any_other_agent(monkeypatch):
+    """The whole mechanism, in one assertion: it is an ordinary lookup.
 
-    A conversation with no agent *is* the pod's default assistant -- the runner
-    synthesises Lem from exactly that, the prompt picks its base prompt off
-    `is_pod_assistant`, which is the same null check. So starting Lem headlessly
-    needs no new execution path, only a conversation that names nobody.
+    Starting the pod's own assistant headlessly used to need its own method,
+    because there was no row to look up and `run_agent_by_id` could only raise
+    for it. Now its row's id is the pod's, so the ordinary path serves it -- and
+    the conversation still reads as the assistant's, which is what selects its
+    base prompt.
     """
     adapter = AgentControlAdapter(Mock(session=Mock()))
     pod_id = uuid4()
-    adapter.agent_repo = Mock(get=AsyncMock(), get_by_pod_and_name=AsyncMock())
+    assistant = SimpleNamespace(
+        id=pod_id, pod_id=pod_id, name="pod_default", agent_runtime=None
+    )
+    adapter.agent_repo = Mock(
+        get=AsyncMock(return_value=assistant),
+        get_by_pod_and_name=AsyncMock(return_value=assistant),
+    )
     created = SimpleNamespace(id=uuid4())
     adapter.conversation_repo = Mock(
         create_conversation=AsyncMock(return_value=created),
@@ -181,7 +188,8 @@ async def test_pod_default_run_creates_a_conversation_with_no_agent(monkeypatch)
     adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
     adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
 
-    result = await adapter.run_pod_default_agent(
+    result = await adapter.run_agent_by_id(
+        agent_id=pod_id,
         input_data={"payload": {}},
         pod_id=pod_id,
         user_id=uuid4(),
@@ -190,17 +198,16 @@ async def test_pod_default_run_creates_a_conversation_with_no_agent(monkeypatch)
     )
 
     assert result == created.id
-    # No lookup happened, because there is nothing to look up.
-    adapter.agent_repo.get.assert_not_awaited()
-    adapter.agent_repo.get_by_pod_and_name.assert_not_awaited()
     conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
-    assert conversation.agent_id is None
+    assert conversation.agent_id == pod_id
+    # Still the assistant, and still selects the assistant's base prompt.
     assert conversation.is_pod_assistant
     # The trigger's words reach the run as conversation instructions, which the
-    # prompt appends after the agent instruction Lem does not have.
+    # prompt appends after the agent's own -- which the assistant does not have.
     assert conversation.instructions == "Post the overnight summary."
     assert (
-        adapter.conversation_repo.create_agent_run.await_args.kwargs["agent_id"] is None
+        adapter.conversation_repo.create_agent_run.await_args.kwargs["agent_id"]
+        == pod_id
     )
 
 

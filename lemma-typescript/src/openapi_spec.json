@@ -343,6 +343,10 @@
             "title": "Instruction",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -477,6 +481,10 @@
           "instruction": {
             "title": "Instruction",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -1449,6 +1457,15 @@
         "title": "AgentHostStatus",
         "type": "string"
       },
+      "AgentKind": {
+        "description": "Whether somebody made this agent, or the pod came with it.\n\nThe pod's default assistant used to be the absence of an agent: a\nconversation naming nobody, synthesised at runtime against one sentinel id\nshared by every pod. That absence could not be pointed at by a foreign key,\nso anything wanting to name it grew its own way of saying so \u2014 a boolean on\nthe schedule, a second boolean on a channel route, a magic string in a map\nof who answers whose DMs.\n\nA kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is\npinned by check constraints to exactly one row per pod, whose id is the\npod's own \u2014 so \"is this the default assistant?\" stays a comparison rather\nthan a query, which matters on paths that answer it per request.",
+        "enum": [
+          "USER",
+          "POD_DEFAULT"
+        ],
+        "title": "AgentKind",
+        "type": "string"
+      },
       "AgentListResponse": {
         "properties": {
           "items": {
@@ -2162,6 +2179,10 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -4976,6 +4997,7 @@
                 "type": "null"
               }
             ],
+            "description": "Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the pod's default assistant, which has no name of its own.",
             "title": "Agent Name"
           },
           "config": {
@@ -5019,6 +5041,19 @@
             ],
             "description": "Optional schema for the schedule-level filter output. Filters belong to the schedule, not the workflow start.",
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the target should do when this fires, in your own words. Reaches an agent as the run's conversation instructions, layered after the agent's own. Required when targeting the default assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides whether to fire.",
+            "title": "Instruction"
           },
           "name": {
             "anyOf": [
@@ -12073,6 +12108,17 @@
             "title": "Id",
             "type": "string"
           },
+          "instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
+          },
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
@@ -14819,6 +14865,18 @@
               }
             ],
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
           },
           "is_active": {
             "anyOf": [

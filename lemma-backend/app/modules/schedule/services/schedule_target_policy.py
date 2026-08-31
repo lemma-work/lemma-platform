@@ -1,58 +1,81 @@
 """What a schedule may wake, and what it must say when it does.
 
-A schedule's target used to be two nullable foreign keys, and "exactly one of
-them" was the whole rule. The pod's default assistant is a third arm that no
-foreign key can express — it has no ``agents`` row, because a conversation with
-a null ``agent_id`` *is* the assistant — so the rules gained enough shape to be
-worth stating in one place, next to ``schedule_update_policy`` and
-``time_schedule_policy`` rather than inside the service that calls all three.
-
 Two rules live here:
 
-*Exactly one target.* Three columns now, so "set the new one" is not enough —
-the other two have to be cleared in the same breath, or a schedule ends up
+*Exactly one target.* Two nullable foreign keys, and "set the new one" is not
+enough — the other has to be cleared in the same breath, or a schedule ends up
 pointed at two things and fires twice. The table's check constraint refuses
 that state; these helpers are what stop it being reached.
 
-*The assistant must be told what to do.* A named agent is its own standing
-instruction, so a schedule may add to it or say nothing at all. The default
-assistant's instruction is the empty string — it is whoever the conversation
-needs it to be — so a schedule that wakes it and says nothing wakes it to a
-trigger payload with no job. That is refused at save time rather than
-discovered at 9am, which is the same call ``DatastoreScheduleConfig`` makes
-about conditions no operation could satisfy.
+*A target with nothing to say for itself must be told what to do.* An agent's
+standing instruction says what it is *for*, and a schedule's says what *this
+firing* is for; an agent that has the first may be woken without the second.
+The pod's own assistant has no standing instruction — it is whoever the
+conversation needs it to be — so waking it without one wakes it to a trigger
+payload and no job.
+
+That rule is stated against the agent's instruction rather than against which
+agent it is, which is both more general and, today, exactly equivalent: a blank
+instruction is refused everywhere an agent can be created, so the assistant is
+the only agent that can have one. Being keyed on data rather than on identity
+is why this module no longer needs to know what a pod default agent is.
+
+The check moved from the request schema to here when the assistant gained a
+row. A Pydantic validator cannot look one up, so it could only ever have
+recognised the *name*; this sees the resolved target and asks it directly.
 """
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_NAME,
+    POD_DEFAULT_AGENT_SELECTOR_ALIASES,
+    is_pod_default_agent,
+)
 from app.modules.schedule.domain.errors import ScheduleValidationError
 from app.modules.schedule.domain.interfaces import ScheduleTarget
 from app.modules.schedule.domain.schedule import (
     INSTRUCTION_REQUIRED,
     ScheduleCreateEntity,
-    ScheduleEntity,
     ScheduleUpdateEntity,
-    is_pod_default_agent_target,
 )
 
 
-def pod_default_target_fields() -> dict[str, object]:
-    """The three target columns, for the default assistant."""
-    return {"agent_id": None, "workflow_id": None, "targets_pod_default": True}
+def normalize_agent_selector(agent_name: str) -> str:
+    """The wire selector for the pod's assistant, resolved to its row's name.
+
+    `POD_DEFAULT` is what the API, the CLI and every exported bundle say, and it
+    is not a name -- it predates the assistant having one. Normalising here is
+    what lets a single `get_by_pod_and_name` serve the assistant and every other
+    agent, instead of the caller branching on which it is.
+    """
+    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return DEFAULT_POD_AGENT_NAME
+    return agent_name
+
+
+def agent_execute_ref(agent_id: UUID, *, pod_id: UUID) -> ResourceRef:
+    """What `agent.execute` is asked about for this target."""
+    if is_pod_default_agent(agent_id, pod_id=pod_id):
+        return ResourceRef.pod(pod_id)
+    return ResourceRef(
+        resource_type=ResourceType.AGENT,
+        resource_id=agent_id,
+        pod_id=pod_id,
+    )
 
 
 def named_agent_target_fields(agent_id) -> dict[str, object]:
-    """The three target columns, for an agent with a row."""
-    return {"agent_id": agent_id, "workflow_id": None, "targets_pod_default": False}
+    """Both target columns, for an agent."""
+    return {"agent_id": agent_id, "workflow_id": None}
 
 
 def workflow_target_fields(workflow_id) -> dict[str, object]:
-    """The three target columns, for a workflow."""
-    return {
-        "agent_id": None,
-        "workflow_id": workflow_id,
-        "targets_pod_default": False,
-    }
+    """Both target columns, for a workflow."""
+    return {"agent_id": None, "workflow_id": workflow_id}
 
 
 def validate_single_target(schedule_create: ScheduleCreateEntity) -> bool:
@@ -65,7 +88,6 @@ def validate_single_target(schedule_create: ScheduleCreateEntity) -> bool:
     targets = (
         schedule_create.agent_id is not None,
         schedule_create.workflow_id is not None,
-        schedule_create.targets_pod_default,
     )
     if sum(targets) > 1:
         raise ScheduleValidationError(
@@ -74,37 +96,43 @@ def validate_single_target(schedule_create: ScheduleCreateEntity) -> bool:
     return any(targets)
 
 
-def validate_pod_default_instruction(schedule_create: ScheduleCreateEntity) -> None:
-    """The authoritative copy of the rule the create request also checks.
+def validate_target_instruction(agent, instruction: str | None) -> None:
+    """A target that carries no purpose of its own must be given one here.
 
-    ``CreateScheduleRequest`` gives an HTTP caller a field-scoped 422, but
-    bundle import builds the entity directly and never sees it — and a
-    hand-written bundle is exactly where a schedule with nothing to do would
-    come from.
+    ``agent`` is the resolved row, not a name -- which is the whole reason this
+    lives in the service layer rather than in the request schema.
     """
-    if schedule_create.targets_pod_default and not _said(schedule_create.instruction):
+    if agent is not None and not _said(agent.instruction) and not _said(instruction):
         raise ScheduleValidationError(INSTRUCTION_REQUIRED)
 
 
+async def target_agent_after_update(resolver, existing, update_data: dict):
+    """The agent this schedule will point at once the update lands.
+
+    None when it will point at a workflow or at nothing -- neither has a
+    standing instruction to be asked about.
+    """
+    agent_id = update_data.get("agent_id", existing.agent_id)
+    if agent_id is None:
+        return None
+    return await resolver.get_agent(agent_id)
+
+
 def validate_instruction_survives_update(
-    existing: ScheduleEntity,
+    agent,
     schedule_update: ScheduleUpdateEntity,
 ) -> None:
     """An edit that leaves the target alone can still empty the instruction.
 
-    The request schema cannot see what the schedule already points at; this
-    can. Retargeting *away* from the assistant is unconstrained — a named agent
-    or a workflow does not need the sentence, so dropping it loses nothing.
+    ``agent`` is whatever the schedule will point at once this update lands.
+    Retargeting onto something with a standing instruction of its own is
+    unconstrained -- dropping the sentence there loses nothing.
     """
     if schedule_update.instruction is None:
         return
     if _retargeting_away(schedule_update):
         return
-    stays_pod_default = existing.targets_pod_default or is_pod_default_agent_target(
-        schedule_update.agent_name
-    )
-    if stays_pod_default and not _said(schedule_update.instruction):
-        raise ScheduleValidationError(INSTRUCTION_REQUIRED)
+    validate_target_instruction(agent, schedule_update.instruction)
 
 
 def derive_webhook_target_from_workflow_start(
@@ -151,10 +179,12 @@ def derive_webhook_target_from_workflow_start(
 
 
 def _retargeting_away(schedule_update: ScheduleUpdateEntity) -> bool:
-    return bool(schedule_update.workflow_name) or (
-        bool(schedule_update.agent_name)
-        and not is_pod_default_agent_target(schedule_update.agent_name)
-    )
+    """Whether this update points the schedule at a workflow instead.
+
+    A workflow is its own set of steps and has nowhere to put a sentence, so it
+    never needs one.
+    """
+    return bool(schedule_update.workflow_name)
 
 
 def _said(instruction: str | None) -> bool:

@@ -343,6 +343,10 @@
             "title": "Instruction",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -477,6 +481,10 @@
           "instruction": {
             "title": "Instruction",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -1449,6 +1457,15 @@
         "title": "AgentHostStatus",
         "type": "string"
       },
+      "AgentKind": {
+        "description": "Whether somebody made this agent, or the pod came with it.\n\nThe pod's default assistant used to be the absence of an agent: a\nconversation naming nobody, synthesised at runtime against one sentinel id\nshared by every pod. That absence could not be pointed at by a foreign key,\nso anything wanting to name it grew its own way of saying so \u2014 a boolean on\nthe schedule, a second boolean on a channel route, a magic string in a map\nof who answers whose DMs.\n\nA kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is\npinned by check constraints to exactly one row per pod, whose id is the\npod's own \u2014 so \"is this the default assistant?\" stays a comparison rather\nthan a query, which matters on paths that answer it per request.",
+        "enum": [
+          "USER",
+          "POD_DEFAULT"
+        ],
+        "title": "AgentKind",
+        "type": "string"
+      },
       "AgentListResponse": {
         "properties": {
           "items": {
@@ -2162,6 +2179,10 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -12181,11 +12202,6 @@
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
-          },
-          "targets_pod_default": {
-            "default": false,
-            "title": "Targets Pod Default",
-            "type": "boolean"
           },
           "updated_at": {
             "format": "date-time",

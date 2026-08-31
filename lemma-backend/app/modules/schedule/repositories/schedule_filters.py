@@ -19,7 +19,6 @@ def list_filters(
     user_id,
     agent_id,
     workflow_id,
-    targets_pod_default,
     name,
     cursor,
 ) -> list:
@@ -30,10 +29,9 @@ def list_filters(
     filter should be a line here rather than another branch inside a method
     that also does authorization, pagination and hydration.
 
-    Falsy-vs-None matters and differs by column. ``is_active`` and
-    ``targets_pod_default`` are booleans where ``False`` is a real filter, so
-    they test ``is not None``; the rest are ids and names where the empty value
-    means "not asked for".
+    Falsy-vs-None matters and differs by column. ``is_active`` is a boolean
+    where ``False`` is a real filter, so it tests ``is not None``; the rest are
+    ids and names where the empty value means "not asked for".
     """
     clauses = []
     if schedule_type:
@@ -48,8 +46,6 @@ def list_filters(
         clauses.append(Schedule.agent_id == agent_id)
     if workflow_id:
         clauses.append(Schedule.workflow_id == workflow_id)
-    if targets_pod_default is not None:
-        clauses.append(Schedule.targets_pod_default.is_(targets_pod_default))
     if name:
         clauses.append(Schedule.name == name)
     if cursor is not None:

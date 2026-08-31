@@ -28,6 +28,7 @@ from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import FILES_MANIFEST, POD_MANIFEST_FILE, TABLE_DATA_FILE
 
+from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import (
@@ -347,7 +348,9 @@ class ServiceExistingResources:
             requester_user_id=self._user_id,
             ctx=self._ctx,
         )
-        return {str(a.name or "") for a in agents}
+        # Excluded to match the exporter -- a bundle can never contain one, so
+        # this must never plan an update against the target pod's.
+        return {str(a.name or "") for a in agents if is_exportable_agent(a)}
 
     async def workflow_names(self) -> set[str]:
         from app.composition.pod_bundle_resources import get_workflow_service

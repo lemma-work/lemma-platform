@@ -33,7 +33,6 @@ export type ScheduleDetailResponse = {
     readonly paused_by_failures: boolean;
     pod_id: (string | null);
     schedule_type: ScheduleType;
-    targets_pod_default?: boolean;
     updated_at: string;
     user_id: string;
     visibility: string;

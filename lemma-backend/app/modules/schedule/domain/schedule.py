@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.core.authorization.context import ResourceType
-from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.domain.entity import Entity
 from app.modules.schedule.domain.match_conditions import (
     ColumnCondition,
@@ -30,21 +29,9 @@ class ScheduleType(str, Enum):
 #: person hitting this rule through the API and through a bundle should be told
 #: the same thing.
 INSTRUCTION_REQUIRED = (
-    "Schedules targeting the default assistant require an instruction saying "
-    "what it should do when they fire."
+    "This agent has no standing instruction of its own, so a schedule that "
+    "wakes it must say what it should do when it fires."
 )
-
-
-def is_pod_default_agent_target(agent_name: str | None) -> bool:
-    """Whether this target name means the pod's default assistant.
-
-    The default assistant has no `agents` row — it is synthesised from a
-    conversation whose `agent_id` is null — so a schedule cannot name it
-    through the `agent_id` foreign key the way it names every other agent.
-    It is named on the wire by the same selector the conversation API already
-    accepts, and stored as `targets_pod_default`.
-    """
-    return bool(agent_name) and agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES
 
 
 class TimeScheduleConfig(BaseModel):
@@ -230,10 +217,6 @@ class ScheduleEntity(Entity):
     schedule_type: ScheduleType
     agent_id: UUID | None = None
     workflow_id: UUID | None = None
-    # The pod's default assistant as a target. It has no `agents` row, so it
-    # cannot be named through `agent_id`; this flag is the third arm of the
-    # target discriminator alongside those two ids.
-    targets_pod_default: bool = False
     agent_name: str | None = None
     workflow_name: str | None = None
     # Type-specific config
@@ -289,11 +272,7 @@ class ScheduleEntity(Entity):
     @property
     def has_target(self) -> bool:
         """Whether anything is wired to this schedule's firing."""
-        return (
-            self.agent_id is not None
-            or self.workflow_id is not None
-            or self.targets_pod_default
-        )
+        return self.agent_id is not None or self.workflow_id is not None
 
 
 class ScheduleCreateEntity(BaseModel):
@@ -305,7 +284,6 @@ class ScheduleCreateEntity(BaseModel):
     schedule_type: ScheduleType
     agent_id: UUID | None = None
     workflow_id: UUID | None = None
-    targets_pod_default: bool = False
     agent_name: str | None = None
     workflow_name: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
@@ -333,7 +311,6 @@ class ScheduleUpdateEntity(BaseModel):
     name: str | None = None
     agent_id: UUID | None = None
     workflow_id: UUID | None = None
-    targets_pod_default: bool | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
     instruction: str | None = None

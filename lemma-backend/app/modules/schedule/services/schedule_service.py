@@ -26,7 +26,6 @@ from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleType,
     ScheduleUpdateEntity,
-    is_pod_default_agent_target,
     normalize_datastore_schedule_config,
 )
 from app.modules.schedule.repositories.schedule_repository import (
@@ -37,11 +36,13 @@ from app.modules.schedule.services.time_schedule_policy import (
 )
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
 from app.modules.schedule.services.schedule_target_policy import (
+    agent_execute_ref,
+    normalize_agent_selector,
+    target_agent_after_update,
     derive_webhook_target_from_workflow_start,
     named_agent_target_fields,
-    pod_default_target_fields,
     validate_instruction_survives_update,
-    validate_pod_default_instruction,
+    validate_target_instruction,
     validate_single_target,
     workflow_target_fields,
 )
@@ -209,22 +210,28 @@ class ScheduleService:
                 await self._agent_target_fields(
                     pod_id=schedule_create.pod_id,
                     agent_name=schedule_create.agent_name,
+                    instruction=schedule_create.instruction,
                 )
             )
         return schedule_create.model_copy(update=update_data)
 
     async def _agent_target_fields(
-        self, *, pod_id: UUID, agent_name: str
+        self, *, pod_id: UUID, agent_name: str, instruction: str | None
     ) -> dict[str, object]:
-        """The three target columns for whichever agent this name means.
+        """The target columns for whichever agent this name means.
 
-        The default assistant resolves to no row, so the lookup every other
-        agent goes through would raise "Agent target not found in pod" for it —
-        which is what scheduling Lem used to hit.
+        `POD_DEFAULT` is a wire selector rather than a name, so it is normalised
+        to the row's own before the lookup -- after which the pod's assistant is
+        found by exactly the query every other agent is found by.
+
+        The instruction rule is checked here because this is where the resolved
+        agent is in hand: the question is whether *it* has a standing
+        instruction, which a name alone cannot answer.
         """
-        if is_pod_default_agent_target(agent_name):
-            return pod_default_target_fields()
-        agent = await self._get_agent_by_name(pod_id=pod_id, agent_name=agent_name)
+        agent = await self._get_agent_by_name(
+            pod_id=pod_id, agent_name=normalize_agent_selector(agent_name)
+        )
+        validate_target_instruction(agent, instruction)
         return named_agent_target_fields(agent.id)
 
     async def _resolve_update_target(
@@ -271,9 +278,19 @@ class ScheduleService:
                 await self._agent_target_fields(
                     pod_id=existing.pod_id,
                     agent_name=schedule_update.agent_name,
+                    instruction=(
+                        schedule_update.instruction
+                        if schedule_update.instruction is not None
+                        else existing.instruction
+                    ),
                 )
             )
-        validate_instruction_survives_update(existing, schedule_update)
+        # Whatever the schedule points at once this lands -- the retargeted
+        # agent if it is being retargeted, otherwise the one it already had.
+        target_agent = await target_agent_after_update(
+            self.target_resolver, existing, update_data
+        )
+        validate_instruction_survives_update(target_agent, schedule_update)
         update_data.pop("workflow_name", None)
         update_data.pop("agent_name", None)
         return update_data
@@ -334,7 +351,6 @@ class ScheduleService:
     async def _validate_target(self, schedule_create: ScheduleCreateEntity) -> None:
         if not validate_single_target(schedule_create):
             return
-        validate_pod_default_instruction(schedule_create)
 
         if schedule_create.pod_id is None:
             raise ScheduleValidationError("pod_id is required for target schedules")
@@ -533,7 +549,6 @@ class ScheduleService:
         """List schedules."""
         agent_id = None
         workflow_id = None
-        targets_pod_default = None
         if agent_name and workflow_name:
             raise ScheduleValidationError(
                 "Only one of agent_name or workflow_name can be provided"
@@ -541,12 +556,11 @@ class ScheduleService:
         if agent_name:
             if pod_id is None:
                 raise ScheduleValidationError("pod_id is required for agent schedules")
-            if is_pod_default_agent_target(agent_name):
-                targets_pod_default = True
-            else:
-                agent_id = (
-                    await self._get_agent_by_name(pod_id=pod_id, agent_name=agent_name)
-                ).id
+            agent_id = (
+                await self._get_agent_by_name(
+                    pod_id=pod_id, agent_name=normalize_agent_selector(agent_name)
+                )
+            ).id
         if workflow_name:
             if pod_id is None:
                 raise ScheduleValidationError(
@@ -569,7 +583,6 @@ class ScheduleService:
             user_id=user_id,
             agent_id=agent_id,
             workflow_id=workflow_id,
-            targets_pod_default=targets_pod_default,
             name=normalized_name,
             ctx=ctx,
             limit=limit,
@@ -594,23 +607,14 @@ class ScheduleService:
         if ctx is None:
             raise RuntimeError("Context is required for schedule target authorization")
         if schedule.agent_id is not None:
+            # The assistant is asked about pod-scoped, the same as everywhere
+            # else it is asked about. Its row's id *is* the pod's, so both arms
+            # would name the same thing -- but the resource type is not
+            # cosmetic, and an AGENT-typed check would newly hit the
+            # resource-owner shortcut for whoever created the pod.
             await ctx.require(
                 Permissions.AGENT_EXECUTE,
-                ResourceRef(
-                    resource_type=ResourceType.AGENT,
-                    resource_id=schedule.agent_id,
-                    pod_id=schedule.pod_id,
-                ),
-            )
-        if schedule.targets_pod_default:
-            # Pod-scoped, because there is no agent resource to scope to: the
-            # default assistant has no row, so no grant, no visibility and no
-            # sharing can be recorded against it. `agent.execute` in this pod
-            # is the honest question, and it is the same one every surface
-            # already answers before letting the assistant reply.
-            await ctx.require(
-                Permissions.AGENT_EXECUTE,
-                ResourceRef.pod(schedule.pod_id),
+                agent_execute_ref(schedule.agent_id, pod_id=schedule.pod_id),
             )
         if schedule.workflow_id is not None:
             await ctx.require(

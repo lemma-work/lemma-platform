@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentKind } from './AgentKind.js';
 import type { AgentPermissionsResponse } from './AgentPermissionsResponse.js';
 import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
 import type { AgentToolset } from './AgentToolset.js';
@@ -14,6 +15,7 @@ export type AgentDetailResponse = {
     id: string;
     input_schema?: (Record<string, any> | null);
     instruction: string;
+    kind?: AgentKind;
     metadata?: (Record<string, any> | null);
     name: string;
     output_schema?: (Record<string, any> | null);

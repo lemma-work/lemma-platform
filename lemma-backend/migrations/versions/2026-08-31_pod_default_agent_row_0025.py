@@ -213,7 +213,9 @@ def downgrade() -> None:
         )
     )
     op.execute(
-        sa.text("UPDATE agent_conversations SET agent_id = NULL WHERE agent_id = pod_id")
+        sa.text(
+            "UPDATE agent_conversations SET agent_id = NULL WHERE agent_id = pod_id"
+        )
     )
     op.execute(sa.text("DELETE FROM agents WHERE kind = 'POD_DEFAULT'"))
 

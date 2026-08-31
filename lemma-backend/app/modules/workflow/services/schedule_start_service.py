@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
@@ -74,39 +74,21 @@ def _accept_inactive_one_time_fire(
     return configured == occurred_at and schedule_event_id == expected_event_id
 
 
-def _targets_pod_default(schedule) -> bool:
-    """Whether this schedule wakes the assistant rather than a named agent.
-
-    Both are agent targets; only one of them has a row. Read off ``agent_id``
-    being null rather than the flag alone, because that is the same question
-    the dispatch below has to answer, and two ways of asking it could disagree.
-    """
-    return schedule.agent_id is None
-
-
 def _agent_target_ref(schedule, *, pod_id: UUID) -> ResourceRef:
     """What ``agent.execute`` is asked about for this target.
 
-    The default assistant has no agent resource to scope to — no row, so no
-    grant, no visibility and no sharing can be recorded against it. Asking
-    about a made-up id would be a check on a resource that does not exist,
-    which is not a check; the pod is the honest question, and it is the same
-    one every surface already answers before letting the assistant reply.
+    The pod's own assistant is asked about pod-scoped. Its row's id *is* the
+    pod's, so both arms name the same thing -- but the resource type is not
+    cosmetic: grants match on (type, id), and an AGENT-typed check would newly
+    hit the resource-owner shortcut for whoever created the pod.
     """
-    if _targets_pod_default(schedule):
+    if is_pod_default_agent(schedule.agent_id, pod_id=pod_id):
         return ResourceRef.pod(pod_id)
     return ResourceRef(
         resource_type=ResourceType.AGENT,
         resource_id=schedule.agent_id,
         pod_id=pod_id,
     )
-
-
-def _agent_target_label(schedule) -> str:
-    """How this target names itself in a log line."""
-    if _targets_pod_default(schedule):
-        return DEFAULT_POD_AGENT_NAME
-    return str(schedule.agent_id)
 
 
 class ScheduleStartService:
@@ -133,18 +115,13 @@ class ScheduleStartService:
     ) -> UUID:
         """Start the conversation this firing hands over to.
 
-        The two arms differ only in how the answering agent is named. The
-        default assistant is named by not naming one: the adapter creates a
-        conversation with a null ``agent_id``, which is what the runner already
-        synthesises it from. ``run_agent_by_id`` cannot serve it, because the
-        row it looks up does not exist.
-
-        The schedule's instruction rides along either way. A named agent's
-        standing instruction says what it is for and this says what *this run*
-        is for; the assistant has only the second.
+        One arm, because the pod's own assistant is looked up by id like every
+        other agent now. The schedule's instruction rides along either way: an
+        agent's standing instruction says what it is for, and this says what
+        *this run* is for.
         """
-        adapter = self._engine.agent_adapter
-        common = dict(
+        return await self._engine.agent_adapter.run_agent_by_id(
+            agent_id=schedule.agent_id,
             input_data=trigger.to_context_value(),
             pod_id=pod_id,
             user_id=user_id,
@@ -152,9 +129,6 @@ class ScheduleStartService:
             source="SCHEDULE",
             instructions=schedule.instruction,
         )
-        if _targets_pod_default(schedule):
-            return await adapter.run_pod_default_agent(**common)
-        return await adapter.run_agent_by_id(agent_id=schedule.agent_id, **common)
 
     async def handle_schedule_fired(
         self,
@@ -255,7 +229,7 @@ class ScheduleStartService:
                 raise
             return
 
-        if schedule.agent_id is not None or schedule.targets_pod_default:
+        if schedule.agent_id is not None:
             try:
                 pod_id = _schedule_pod_id(schedule)
                 ctx = await self._build_user_context(
@@ -287,7 +261,7 @@ class ScheduleStartService:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
                 logger.debug(
                     "workflow.schedule_start_service.start_agent_schedule.propagated",
-                    agent_id=_agent_target_label(schedule),
+                    agent_id=str(schedule.agent_id),
                     schedule_id=schedule_id,
                     exc_info=True,
                 )

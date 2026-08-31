@@ -34,7 +34,6 @@ def _schedule(**overrides) -> SimpleNamespace:
         "user_id": uuid4(),
         "workflow_id": None,
         "agent_id": None,
-        "targets_pod_default": False,
         "instruction": None,
         "is_active": True,
         "schedule_type": SimpleNamespace(value="TIME"),
@@ -42,9 +41,7 @@ def _schedule(**overrides) -> SimpleNamespace:
         **overrides,
     }
     fields["has_target"] = (
-        fields["agent_id"] is not None
-        or fields["workflow_id"] is not None
-        or fields["targets_pod_default"]
+        fields["agent_id"] is not None or fields["workflow_id"] is not None
     )
     return SimpleNamespace(**fields)
 
@@ -591,28 +588,27 @@ async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -
 
 
 @pytest.mark.anyio
-async def test_pod_default_schedule_starts_the_assistant_with_its_instruction(
+async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
     monkeypatch,
 ):
-    """A Lem-targeted schedule dispatches without an agent row.
+    """A schedule pointed at the pod's own assistant is an agent schedule.
 
-    The default assistant has no ``agents`` row, so ``run_agent_by_id`` -- which
-    looks one up -- can only raise for it. The target is a flag on the schedule,
-    and the run it starts is a conversation with a null ``agent_id``: exactly
-    what ``resolve_agent`` already synthesises Lem from.
+    It used to need a second dispatch arm, because the assistant had no
+    ``agents`` row and ``run_agent_by_id`` -- which looks one up -- could only
+    raise for it. Its row's id is the pod's now, so there is one arm.
 
     The instruction rides along because nothing else on the run says what it is
-    for. A named agent's standing instruction answers that; Lem's is the empty
-    string, so without this the assistant wakes to a JSON payload and no job.
+    for. A named agent's standing instruction answers that; the assistant has
+    none, so without this it wakes to a JSON payload and no job.
     """
     engine = _engine_with_mocks()
     conversation_id = uuid4()
-    engine.agent_adapter.run_pod_default_agent = AsyncMock(return_value=conversation_id)
-    engine.agent_adapter.run_agent_by_id = AsyncMock()
+    pod_id = uuid4()
+    engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=conversation_id)
     schedule = _schedule(
-        agent_id=None,
+        pod_id=pod_id,
+        agent_id=pod_id,  # the assistant's row id *is* its pod's
         workflow_id=None,
-        targets_pod_default=True,
         instruction="Summarise yesterday's open tickets.",
         schedule_type=SimpleNamespace(value="TIME"),
     )
@@ -648,8 +644,8 @@ async def test_pod_default_schedule_starts_the_assistant_with_its_instruction(
         schedule_event_id="cron:lem-1",
     )
 
-    engine.agent_adapter.run_agent_by_id.assert_not_awaited()
-    call = engine.agent_adapter.run_pod_default_agent.await_args.kwargs
+    call = engine.agent_adapter.run_agent_by_id.await_args.kwargs
+    assert call["agent_id"] == pod_id
     assert call["conversation_id"] == target_run_id
     assert call["instructions"] == "Summarise yesterday's open tickets."
     # The ledger still records it as an agent target: Lem is an agent, it just
@@ -663,17 +659,21 @@ async def test_pod_default_schedule_starts_the_assistant_with_its_instruction(
 async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
     monkeypatch,
 ):
-    """There is no agent resource to authorize against, so the pod is the ref.
+    """The assistant is asked about pod-scoped, even though it now has a row.
 
-    Passing a made-up agent id here would ask about a resource that does not
-    exist, and a permission check on a non-existent resource is not a check.
+    Both arms would name the same id -- its row's id is the pod's -- so this is
+    a choice about the resource *type*, not the value. Grants match on
+    (type, id), and an AGENT-typed check would newly hit the resource-owner
+    shortcut for whoever created the pod: a silent widening nobody asked for.
     """
     from app.core.authorization.context import ResourceType
 
     engine = _engine_with_mocks()
-    engine.agent_adapter.run_pod_default_agent = AsyncMock(return_value=uuid4())
+    engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=uuid4())
+    pod_id = uuid4()
     schedule = _schedule(
-        targets_pod_default=True,
+        pod_id=pod_id,
+        agent_id=pod_id,
         instruction="Check the overnight queue.",
         schedule_type=SimpleNamespace(value="TIME"),
     )

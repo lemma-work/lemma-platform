@@ -153,26 +153,6 @@ class AgentPort(ABC):
         ...
 
     @abstractmethod
-    async def run_pod_default_agent(
-        self,
-        input_data: Dict[str, Any],
-        pod_id: UUID,
-        user_id: UUID,
-        conversation_id: UUID | None = None,
-        workflow_run_id: UUID | None = None,
-        source: str = "WORKFLOW_RUN",
-        conversation_metadata: Dict[str, Any] | None = None,
-        instructions: str | None = None,
-    ) -> UUID:
-        """Starts a run answered by the pod's default assistant.
-
-        Separate from ``run_agent`` because the default assistant has no name
-        to look up and no row to find: it is the agent a conversation gets when
-        it names none.
-        """
-        ...
-
-    @abstractmethod
     async def get_conversation_status(self, conversation_id: UUID) -> Dict[str, Any]:
         """Gets status and output from the latest internal run in a conversation."""
         ...

@@ -55,7 +55,6 @@ class ScheduleDetailResponse:
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
         last_run_id (None | str | Unset):
-        targets_pod_default (bool | Unset):  Default: False.
         workflow_name (None | str | Unset):
     """
 
@@ -85,7 +84,6 @@ class ScheduleDetailResponse:
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
-    targets_pod_default: bool | Unset = False
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -201,8 +199,6 @@ class ScheduleDetailResponse:
         else:
             last_run_id = self.last_run_id
 
-        targets_pod_default = self.targets_pod_default
-
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
             workflow_name = UNSET
@@ -249,8 +245,6 @@ class ScheduleDetailResponse:
             field_dict["last_fired_at"] = last_fired_at
         if last_run_id is not UNSET:
             field_dict["last_run_id"] = last_run_id
-        if targets_pod_default is not UNSET:
-            field_dict["targets_pod_default"] = targets_pod_default
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -465,8 +459,6 @@ class ScheduleDetailResponse:
 
         last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
 
-        targets_pod_default = d.pop("targets_pod_default", UNSET)
-
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -503,7 +495,6 @@ class ScheduleDetailResponse:
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
-            targets_pod_default=targets_pod_default,
             workflow_name=workflow_name,
         )
 

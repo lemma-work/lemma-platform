@@ -15,6 +15,11 @@ class ScheduleTarget:
     id: UUID
     pod_id: UUID
     name: str
+    #: The target's *standing* instruction -- what it is for, as against what a
+    #: firing is for. A target without one has to be told by the schedule, which
+    #: is the rule `validate_target_instruction` enforces; the pod's own
+    #: assistant is the only agent that can have none.
+    instruction: str | None = None
     is_global_workflow: bool = False
     event_trigger_id: str | None = None
     event_trigger_config: dict[str, object] | None = None
@@ -104,7 +109,6 @@ class ScheduleRepository(ABC):
         user_id: Optional[UUID] = None,
         agent_id: Optional[UUID] = None,
         workflow_id: Optional[UUID] = None,
-        targets_pod_default: bool | None = None,
         name: str | None = None,
         ctx: Context | None = None,
         limit: int = 100,

@@ -75,6 +75,7 @@ def effective_agent_id(agent_id: UUID | None, *, pod_id: UUID) -> UUID:
     """
     return pod_id if is_pod_default_agent(agent_id, pod_id=pod_id) else agent_id
 
+
 # No workload — the default pod agent included — performs these by default.
 # A workload needs either an explicit grant of the destructive permission
 # (standing authority; keeps headless schedules/functions working) or a live

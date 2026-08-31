@@ -59,6 +59,7 @@ _NAME_TO_MODULE = {
     'AgentHostRunCheckpointDetail': 'agent_host_run_checkpoint_detail',
     'AgentHostRunState': 'agent_host_run_state',
     'AgentHostStatus': 'agent_host_status',
+    'AgentKind': 'agent_kind',
     'AgentListResponse': 'agent_list_response',
     'AgentMessageResponse': 'agent_message_response',
     'AgentNode': 'agent_node',
@@ -577,6 +578,7 @@ if TYPE_CHECKING:
     from .agent_host_run_checkpoint_detail import AgentHostRunCheckpointDetail
     from .agent_host_run_state import AgentHostRunState
     from .agent_host_status import AgentHostStatus
+    from .agent_kind import AgentKind
     from .agent_list_response import AgentListResponse
     from .agent_message_response import AgentMessageResponse
     from .agent_node import AgentNode
@@ -1108,6 +1110,7 @@ __all__ = [
     'AgentHostRunCheckpointDetail',
     'AgentHostRunState',
     'AgentHostStatus',
+    'AgentKind',
     'AgentListResponse',
     'AgentMessageResponse',
     'AgentNode',

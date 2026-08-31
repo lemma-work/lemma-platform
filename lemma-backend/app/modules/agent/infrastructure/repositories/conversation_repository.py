@@ -60,6 +60,7 @@ from app.modules.agent.infrastructure.repositories.conversation_opening_texts im
     ConversationOpeningTextsMixin,
 )
 
+
 class ConversationRepository(
     ConversationApprovalQueriesMixin,
     ConversationOpeningTextsMixin,
