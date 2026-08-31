@@ -32,6 +32,7 @@ def _surface(pod_id, platform=SurfacePlatform.WHATSAPP, *, created_offset=0):
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=pod_id,
+        agent_id=pod_id,
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),

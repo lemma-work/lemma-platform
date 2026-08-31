@@ -183,14 +183,11 @@ def update_channels(
     pod: str | None = typer.Option(None, "--pod"),
     channel_id: str | None = typer.Option(None, "--channel-id"),
     channel_name: str | None = typer.Option(None, "--channel-name"),
-    agent_name: str | None = typer.Option(
-        None, "--agent", "--agent-name", help="Agent that handles this channel."
-    ),
     data: str | None = typer.Option(
         None,
         "--data",
         "-d",
-        help='Raw JSON channel routes, e.g. [{"channel_id": ..., "agent_name": ...}].',
+        help='Raw JSON channel list, e.g. [{"channel_id": ..., "channel_name": ...}].',
     ),
     file: Path | None = typer.Option(
         None,
@@ -201,7 +198,12 @@ def update_channels(
         readable=True,
     ),
 ) -> None:
-    """Replace ALL channel routes on a surface (Slack/Teams only)."""
+    """Replace the channels a surface answers in (Slack/Teams only).
+
+    An allow-list, not a routing table: a surface answers as exactly one agent,
+    so a channel says where that agent may be spoken to. Give an agent its own
+    app if it needs its own channels.
+    """
     state = state_from_ctx(ctx)
     raw = read_json(data, file, required=False)
     if isinstance(raw, dict) and "channels" in raw:
@@ -214,7 +216,6 @@ def update_channels(
                 {
                     "channel_id": channel_id,
                     "channel_name": channel_name,
-                    "agent_name": agent_name,
                 }
             )
         ]

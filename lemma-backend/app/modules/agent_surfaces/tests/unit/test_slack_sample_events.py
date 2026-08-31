@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
+from app.modules.agent.contracts import AgentKind
 from app.core.authorization.context import ActorType, Context
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent.domain.entities import Conversation
@@ -81,7 +82,9 @@ def _build_service(*, surface, conversation_service, monkeypatch):
     surface_repository = AsyncMock()
     surface_repository.list_active_by_type.return_value = [surface]
     conversation_service.agent_repository.get = AsyncMock(
-        return_value=SimpleNamespace(name="Slack Surface Assistant")
+        return_value=SimpleNamespace(
+            name="Slack Surface Assistant", kind=AgentKind.USER
+        )
     )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None

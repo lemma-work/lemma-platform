@@ -26,17 +26,7 @@ class SurfaceBehaviorConfigInput:
         dm_conversation_reset_after_hours (int | Unset):  Default: 24.
         identity (SurfaceIdentityConfigInput | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
-        slack (SurfaceSlackConfigInput | Unset): The Slack settings a *caller* owns.
-
-            Not the per-person DM agent map: that is written from inside Slack — each
-            person picks their own in the App Home — so it is readable here and never
-            writable, which keeps one editor from reassigning everybody.
-
-            ``dedicated_to_agent`` is the caller's, though, and has to be: it says this
-            app was made as one agent's own bot, which is a fact about why the app
-            exists and cannot be read off the surface. Setting it is what withdraws the
-            per-person choice, so it is the one Slack setting that decides whether the
-            other is offered at all.
+        slack (SurfaceSlackConfigInput | Unset): The Slack settings a caller owns.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
     """
 

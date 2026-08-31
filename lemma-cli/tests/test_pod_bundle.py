@@ -1885,11 +1885,12 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
         "connector_kind": "composio",
         "is_enabled": True,
         "config": {
+            # The place travels, not a per-channel agent: a surface answers as
+            # exactly one agent, named once by `default_agent_name` above.
             "channels": [
                 {
                     "channel_id": "C123",
                     "channel_name": "support",
-                    "agent_name": "triage-agent",
                 }
             ],
             "identity": {"allowed_domains": ["example.com"]},

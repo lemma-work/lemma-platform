@@ -2280,7 +2280,7 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
     }
 
 
-def test_surfaces_channels_builds_route_payload(monkeypatch):
+def test_surfaces_channels_builds_the_allow_list(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeSurfaces:
@@ -2315,8 +2315,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
             "C123",
             "--channel-name",
             "general",
-            "--agent",
-            "triage",
         ],
     )
 
@@ -2330,7 +2328,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
                     {
                         "channel_id": "C123",
                         "channel_name": "general",
-                        "agent_name": "triage",
                     }
                 ]
             }

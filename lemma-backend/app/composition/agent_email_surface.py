@@ -51,10 +51,15 @@ async def provision_pod_assistant_email_surface(
 ) -> str | None:
     """Create the pod assistant's mailbox, returning its address.
 
-    Both ``agent_id`` and ``agent_name`` are None. That is not "unset": a surface
-    with no agent of its own is exactly what ``surfaces_for_agent`` looks for on
-    the assistant's behalf, and a None name is what makes the address the pod's
-    own — ``acme@`` rather than ``pod-default.acme@``.
+    ``agent_id`` is the pod's own id, because that is the assistant's row id --
+    the mailbox belongs to it as plainly as any agent's belongs to theirs. It
+    used to be None, back when a surface with no agent was how the assistant was
+    named; that is what let one column mean two things.
+
+    ``agent_name`` stays None, and for a different reason: it is what the
+    address is built from, and the assistant's stored name is the internal
+    ``pod_default``. None keeps the address the pod's own -- ``acme@`` rather
+    than ``pod-default.acme@``.
 
     The pod's name is passed in rather than looked up. The caller is pod creation
     and already holds it, and the row a lookup would read is the one it just
@@ -72,7 +77,7 @@ async def provision_pod_assistant_email_surface(
         get_surface_service(uow),
         uow.session,
         pod_id=pod_id,
-        agent_id=None,
+        agent_id=pod_id,
         agent_name=None,
         pod_name=pod_name,
     )
@@ -82,7 +87,11 @@ async def provision_pod_assistant_email_surface(
 async def teardown_agent_surfaces(uow, *, pod_id: UUID, agent_id: UUID) -> int:
     """Delete the surfaces belonging to an agent being deleted.
 
-    ``agent_surfaces.agent_id`` is ``ON DELETE SET NULL``, so leaving them
+    ``agent_surfaces.agent_id`` is ``ON DELETE CASCADE``, so the rows go with
+    the agent on their own. This still runs, for the provider side: a webhook to
+    deregister and an address to free. It used to be load-bearing for
+    correctness -- a nulled row was indistinguishable from the assistant's own
+    surface -- and the cascade is what took that job over. Formerly: leaving them
     behind does not orphan them — it turns them into agentless surfaces, which
     is what the pod assistant's own mailbox is. The pod then has two and starts
     answering from a deleted agent's address.

@@ -15,25 +15,15 @@ T = TypeVar("T", bound="SurfaceChannelRouteResponse")
 class SurfaceChannelRouteResponse:
     """
     Attributes:
-        agent_name (None | str | Unset):
         channel_id (None | str | Unset):
         channel_name (None | str | Unset):
-        use_pod_assistant (bool | Unset):  Default: False.
     """
 
-    agent_name: None | str | Unset = UNSET
     channel_id: None | str | Unset = UNSET
     channel_name: None | str | Unset = UNSET
-    use_pod_assistant: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        agent_name: None | str | Unset
-        if isinstance(self.agent_name, Unset):
-            agent_name = UNSET
-        else:
-            agent_name = self.agent_name
-
         channel_id: None | str | Unset
         if isinstance(self.channel_id, Unset):
             channel_id = UNSET
@@ -46,34 +36,19 @@ class SurfaceChannelRouteResponse:
         else:
             channel_name = self.channel_name
 
-        use_pod_assistant = self.use_pod_assistant
-
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
-        if agent_name is not UNSET:
-            field_dict["agent_name"] = agent_name
         if channel_id is not UNSET:
             field_dict["channel_id"] = channel_id
         if channel_name is not UNSET:
             field_dict["channel_name"] = channel_name
-        if use_pod_assistant is not UNSET:
-            field_dict["use_pod_assistant"] = use_pod_assistant
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-
-        def _parse_agent_name(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        agent_name = _parse_agent_name(d.pop("agent_name", UNSET))
 
         def _parse_channel_id(data: object) -> None | str | Unset:
             if data is None:
@@ -93,13 +68,9 @@ class SurfaceChannelRouteResponse:
 
         channel_name = _parse_channel_name(d.pop("channel_name", UNSET))
 
-        use_pod_assistant = d.pop("use_pod_assistant", UNSET)
-
         surface_channel_route_response = cls(
-            agent_name=agent_name,
             channel_id=channel_id,
             channel_name=channel_name,
-            use_pod_assistant=use_pod_assistant,
         )
 
         surface_channel_route_response.additional_properties = d

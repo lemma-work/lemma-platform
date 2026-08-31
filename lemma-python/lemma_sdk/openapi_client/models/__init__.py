@@ -438,7 +438,6 @@ _NAME_TO_MODULE = {
     'SurfaceSetupStep': 'surface_setup_step',
     'SurfaceSlackConfigInput': 'surface_slack_config_input',
     'SurfaceSlackConfigResponse': 'surface_slack_config_response',
-    'SurfaceSlackConfigResponseDmAgentByUser': 'surface_slack_config_response_dm_agent_by_user',
     'SurfaceSystemClaim': 'surface_system_claim',
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUpdateRequest': 'surface_update_request',
@@ -957,7 +956,6 @@ if TYPE_CHECKING:
     from .surface_setup_step import SurfaceSetupStep
     from .surface_slack_config_input import SurfaceSlackConfigInput
     from .surface_slack_config_response import SurfaceSlackConfigResponse
-    from .surface_slack_config_response_dm_agent_by_user import SurfaceSlackConfigResponseDmAgentByUser
     from .surface_system_claim import SurfaceSystemClaim
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_update_request import SurfaceUpdateRequest
@@ -1489,7 +1487,6 @@ __all__ = [
     'SurfaceSetupStep',
     'SurfaceSlackConfigInput',
     'SurfaceSlackConfigResponse',
-    'SurfaceSlackConfigResponseDmAgentByUser',
     'SurfaceSystemClaim',
     'SurfaceTelegramConfigInput',
     'SurfaceUpdateRequest',

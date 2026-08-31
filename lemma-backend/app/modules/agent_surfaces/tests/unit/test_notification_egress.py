@@ -87,10 +87,17 @@ def _link_for(surface: AgentSurfaceEntity) -> AgentSurfaceConversationLink:
     )
 
 
-def _email_surface() -> AgentSurfaceEntity:
+def _email_surface(pod_id: UUID | None = None) -> AgentSurfaceEntity:
+    """The pod's own mailbox, which belongs to its assistant.
+
+    `agent_id == pod_id` is not a coincidence: the assistant's row id *is* its
+    pod's, which is what lets a surface name it through an ordinary foreign key.
+    """
+    pod_id = pod_id or uuid4()
     return AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id,
+        agent_id=pod_id,
         name="resend",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
@@ -483,8 +490,11 @@ async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
     # Its own, not one borrowed from a named agent: sending from another agent's
     # bot puts the wrong name on the message.
     assert [c.surface.id for c in channels] == [assistant_mailbox.id]
-    _, agent_id, _ = provisioner.await_args.args
-    assert agent_id is None
+    # Named by its row's id, which is its pod's -- callers used to say "the
+    # assistant" by passing nothing, and the resolver now normalises that to
+    # the id before anything looks a surface up.
+    pod_id, agent_id, _ = provisioner.await_args.args
+    assert agent_id == pod_id
 
 
 async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
@@ -623,10 +633,15 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
 # --------------------------------------------------- routing follows the agent
 
 
-def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM):
+def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
+    """One surface, owned by one agent -- there is no other kind.
+
+    ``pod_id`` matters when the owner is meant to be the pod's own assistant,
+    whose row id *is* its pod's: pass the same value for both.
+    """
     surface = AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id or uuid4(),
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
@@ -696,8 +711,9 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     Inbound routing still honours a user's default surface — that question is
     genuinely "which of our surfaces did this person mean to talk to".
     """
+    pod_id = uuid4()
     service = _notification_service(
-        surfaces=(_surface_for(None, SurfacePlatform.RESEND),)
+        surfaces=(_surface_for(pod_id, SurfacePlatform.RESEND, pod_id=pod_id),)
     )
 
     # Autospecced against the Protocol: reading a method it no longer declares
@@ -706,7 +722,7 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
         service.membership.get_user_default_surface_ids
 
     channels, _ = await service.resolve_channels(
-        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None
+        pod_id=pod_id, recipient_user_id=uuid4(), actor_agent_id=None
     )
 
     assert channels, "pod-assistant delivery still resolves without preferences"
@@ -796,18 +812,22 @@ async def test_the_pod_assistant_mailbox_is_named_for_the_pod_not_the_assistant(
     """
     _email_configured(monkeypatch)
 
-    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    pod_id = uuid4()
+    provisioner = AsyncMock(return_value=(_email_surface(pod_id), None))
     service = _notification_service(provisioner=provisioner, surfaces=())
 
     await service.resolve_channels(
-        pod_id=uuid4(),
+        pod_id=pod_id,
         recipient_user_id=uuid4(),
-        actor_agent_id=None,
+        actor_agent_id=pod_id,
         agent_name="pod_default",
     )
 
-    _, agent_id, agent_name = provisioner.await_args.args
-    assert agent_id is None
+    pod_id, agent_id, agent_name = provisioner.await_args.args
+    assert agent_id == pod_id
+    # The name is what the address is built from, and the assistant's stored
+    # name is `pod_default` -- an internal identifier. None keeps the mailbox
+    # the pod's own: `acme@`, not `pod-default.acme@`.
     assert agent_name is None
 
 

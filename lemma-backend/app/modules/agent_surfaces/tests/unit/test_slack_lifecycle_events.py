@@ -195,21 +195,17 @@ async def test_setup_button_yields_the_trigger_needed_to_open_a_modal():
     }
 
 
-async def test_submitting_an_agent_names_it():
+async def test_submitting_the_modal_allows_the_channel():
+    """The submission carries a place, not a choice.
+
+    It used to carry the agent picked from a dropdown. One app is one agent, so
+    the only thing left to say is which channel it may answer in.
+    """
     parsed = SlackMessageParser().parse_channel_setup(_submit_payload("sales-agent"))
 
     assert parsed["kind"] == "submit"
     assert parsed["channel_id"] == "C_SALES"
-    assert parsed["agent_name"] == "sales-agent"
-
-
-async def test_pod_assistant_submits_as_no_named_agent():
-    """The pod assistant *is* an empty agent name on the route, not a name."""
-    parsed = SlackMessageParser().parse_channel_setup(
-        _submit_payload("__pod_assistant__")
-    )
-
-    assert parsed["agent_name"] is None
+    assert "agent_name" not in parsed
 
 
 async def test_unrelated_interactions_are_not_channel_setup():
@@ -223,21 +219,6 @@ async def test_unrelated_interactions_are_not_channel_setup():
         is None
     )
     assert parser.parse_channel_setup({}) is None
-
-
-async def test_modal_offers_the_pod_assistant_first_then_agents():
-    from app.modules.agent_surfaces.platforms.slack.blocks import channel_setup_modal
-
-    view = channel_setup_modal(
-        channel_id="C_SALES", channel_label="sales", agent_names=["a1", "a2"]
-    )
-
-    assert view["callback_id"] == "lemma_channel_setup_view"
-    # A view_submission carries no channel of its own — it rides private_metadata.
-    assert '"channel_id":"C_SALES"' in view["private_metadata"]
-    options = view["blocks"][1]["element"]["options"]
-    assert [o["value"] for o in options] == ["__pod_assistant__", "a1", "a2"]
-    assert "#sales" in view["blocks"][0]["text"]["text"]
 
 
 async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
@@ -260,7 +241,7 @@ async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
     view = channel_setup_modal(
         channel_id="C_SALES",
         channel_label="sales",
-        agent_names=["sales-agent"],
+        agent_name="triage",
         surface_id=opened["surface_id"],
     )
     submitted_payload = _submit_payload("sales-agent")
@@ -275,7 +256,7 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
 
     view = app_home_view(
         pod_name=None,
-        dm_agent_name=None,
+        agent_name="triage",
         channel_routes=[],
         surface_choices=[("Sales pod", "00000000-0000-0000-0000-000000000001")],
     )
@@ -296,86 +277,12 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
     }
 
 
-async def test_pod_assistant_route_is_not_the_surface_default():
-    """Picking the default responder must not silently mean "whatever agent3 is".
-
-    It is a conversation with *no* agent. Storing it as an empty
-    agent_name made it indistinguishable from an unconfigured route, so it fell
-    through to ``surface.agent_id`` — and a channel set to the pod assistant
-    kept answering as the surface's default agent.
-    """
-    from app.modules.agent_surfaces.domain.entities import SurfaceChannelRoute
-
-    pod_assistant = SurfaceChannelRoute(channel_id="C1", use_pod_assistant=True)
-    unconfigured = SurfaceChannelRoute(channel_id="C2")
-    named = SurfaceChannelRoute(channel_id="C3", agent_name="sales-agent")
-
-    # Three distinct states, not two.
-    assert pod_assistant.use_pod_assistant is True
-    assert pod_assistant.agent_name is None
-    assert unconfigured.use_pod_assistant is False
-    assert unconfigured.agent_name is None
-    assert named.use_pod_assistant is False
-    assert named.agent_name == "sales-agent"
-
-
-async def test_home_dm_picker_round_trip_parses():
-    parser = SlackMessageParser()
-    opened = parser.parse_channel_setup(
-        {
-            "type": "block_actions",
-            "team": {"id": "T1"},
-            "user": {"id": "U_HUMAN"},
-            "trigger_id": "trig-9",
-            "actions": [{"action_id": "lemma_dm_agent_setup", "type": "button"}],
-        }
-    )
-    assert opened == {
-        "kind": "open_dm",
-        "trigger_id": "trig-9",
-        "tenant_id": "T1",
-        "actor_external_user_id": "U_HUMAN",
-    }
-
-    submitted = parser.parse_channel_setup(
-        {
-            "type": "view_submission",
-            "team": {"id": "T1"},
-            "user": {"id": "U_HUMAN"},
-            "view": {
-                "callback_id": "lemma_dm_agent_view",
-                "state": {
-                    "values": {
-                        "lemma_dm_agent": {
-                            "lemma_dm_agent_select": {
-                                "selected_option": {"value": "sales-agent"}
-                            }
-                        }
-                    }
-                },
-            },
-        }
-    )
-    assert submitted["kind"] == "submit_dm"
-    assert submitted["agent_name"] == "sales-agent"
-    assert submitted["actor_external_user_id"] == "U_HUMAN"
-
-
-async def test_dm_picker_is_per_person_not_per_workspace():
-    """Two people in one Slack can talk to different agents."""
-    from app.modules.agent_surfaces.domain.entities import SurfaceSlackConfig
-
-    config = SurfaceSlackConfig(dm_agent_by_user={"U_A": "agent-a"})
-    assert config.agent_for_user("U_A") == "agent-a"
-    assert config.agent_for_user("U_B") is None  # falls back to the surface default
-
-
 async def test_home_lists_agents_and_apps():
     from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name="Test1",
-        dm_agent_name="agent3",
+        agent_name="triage",
         channel_routes=[("C1", None)],
         agents=[("agent3", "Handles ops questions")],
         apps=[("Dashboard", "https://d.test")],
@@ -385,8 +292,10 @@ async def test_home_lists_agents_and_apps():
     assert "agent3" in rendered
     assert "Handles ops questions" in rendered
     assert "https://d.test" in rendered
-    # The personal setting is directly actionable from the tab.
-    assert "lemma_dm_agent_setup" in rendered
+    # The tab states who this bot is rather than offering to change it: one
+    # app answers as one agent, so there is nothing to pick.
+    assert "You are talking to" in rendered
+    assert "lemma_dm_agent_setup" not in rendered
 
 
 async def test_only_modal_opening_clicks_take_the_synchronous_fast_lane():
@@ -404,115 +313,10 @@ async def test_only_modal_opening_clicks_take_the_synchronous_fast_lane():
     def click(action_id: str) -> dict:
         return {"type": "block_actions", "actions": [{"action_id": action_id}]}
 
-    assert _opens_a_slack_modal(click("lemma_dm_agent_setup")) is True
+    # The DM picker is gone: one bot answers as one agent.
+    assert _opens_a_slack_modal(click("lemma_dm_agent_setup")) is False
     assert _opens_a_slack_modal(click("lemma_channel_setup")) is True
     # An ask_user answer resumes a run; it is not time-critical.
     assert _opens_a_slack_modal(click("lemma_form_submit")) is False
     assert _opens_a_slack_modal({"type": "event_callback"}) is False
     assert _opens_a_slack_modal({}) is False
-
-
-async def test_choosing_the_pod_assistant_is_distinct_from_never_choosing():
-    """Third time this distinction bit: absence is not a choice.
-
-    Deleting the entry made "I picked the pod assistant" identical to "I never
-    picked", so the pick silently resolved to the surface's default agent — the
-    Home tab kept saying `agent3` and DMs kept going there.
-    """
-    from app.modules.agent_surfaces.domain.entities import SurfaceSlackConfig
-
-    picked_assistant = SurfaceSlackConfig(
-        dm_agent_by_user={"U_A": SurfaceSlackConfig.POD_ASSISTANT}
-    )
-    picked_agent = SurfaceSlackConfig(dm_agent_by_user={"U_A": "sales-agent"})
-    never_picked = SurfaceSlackConfig()
-
-    assert picked_assistant.chose_pod_assistant("U_A") is True
-    assert picked_assistant.agent_for_user("U_A") is None
-
-    assert picked_agent.chose_pod_assistant("U_A") is False
-    assert picked_agent.agent_for_user("U_A") == "sales-agent"
-
-    assert never_picked.chose_pod_assistant("U_A") is False
-    assert never_picked.agent_for_user("U_A") is None
-    # ...and the two "None" answers above mean different things.
-    assert picked_assistant.choice_for_user("U_A") != never_picked.choice_for_user(
-        "U_A"
-    )
-
-
-async def test_pod_assistant_dm_does_not_wear_the_default_agents_name():
-    """A person who picked the pod assistant must not be answered by `agent3`.
-
-    Only *channel* routes were checked, so the per-person DM choice fell through
-    to the surface default and the reply was authored with that agent's name
-    and avatar.
-    """
-    from types import SimpleNamespace
-    from app.modules.agent_surfaces.domain.entities import (
-        SurfaceConfig,
-        SurfacePlatform,
-        SurfaceSlackConfig,
-    )
-    from app.modules.agent_surfaces.services.ingress_service import (
-        AgentSurfaceIngressService,
-    )
-
-    config = SurfaceConfig(
-        slack=SurfaceSlackConfig(
-            dm_agent_by_user={"U_A": SurfaceSlackConfig.POD_ASSISTANT}
-        )
-    )
-    surface = SimpleNamespace(
-        surface_type=SurfacePlatform.SLACK,
-        config=config,
-        channel_route_for=lambda **_: None,
-    )
-    chose = SimpleNamespace(
-        surface=surface,
-        link=SimpleNamespace(external_user_id="U_A", external_channel_id="D1"),
-    )
-    did_not = SimpleNamespace(
-        surface=surface,
-        link=SimpleNamespace(external_user_id="U_B", external_channel_id="D2"),
-    )
-
-    check = AgentSurfaceIngressService._routes_to_pod_assistant
-    assert check(None, chose) is True
-    assert check(None, did_not) is False
-
-
-async def test_a_dedicated_bot_refuses_a_dm_picker_left_open_on_a_stale_home_tab():
-    """Slack keeps a published Home tab until it is republished.
-
-    So the "Change" button outlives the decision to make this bot one agent's
-    own — anyone whose Home tab was rendered before it can still press it. The
-    modal must not open there: it would offer a choice this bot cannot honour.
-    """
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    from app.modules.agent_surfaces.domain.entities import SurfaceConfig
-    from app.modules.agent_surfaces.services.surface_configuration import (
-        SurfaceConfigurationMixin,
-    )
-
-    class _Service(SurfaceConfigurationMixin):
-        def __init__(self):
-            self._visible_agents = AsyncMock(return_value=[])
-
-    surface = SimpleNamespace(
-        config=SurfaceConfig.model_validate({"slack": {"dedicated_to_agent": True}})
-    )
-    adapter = AsyncMock()
-
-    await _Service()._open_dm_setup(
-        adapter, {}, {"trigger_id": "trig-9"}, surface, None
-    )
-    adapter.open_dm_agent_modal.assert_not_awaited()
-
-    # ...and a modal already open cannot be submitted into dead storage either.
-    await _Service()._submit_dm_setup(
-        adapter, {}, {"agent_name": "someone-else"}, surface, None
-    )
-    adapter.publish_home_view.assert_not_awaited()

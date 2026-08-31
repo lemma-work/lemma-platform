@@ -203,11 +203,14 @@ def _patch_send(monkeypatch, sent: dict):
 async def test_the_pod_assistant_does_not_claim_to_be_an_agent_row(monkeypatch):
     """`notifications.actor_agent_id` is a foreign key into `agents`.
 
-    The pod assistant's id is `00000000-…-0001`, an authorization sentinel that
-    is never inserted into that table, so passing it through fails the insert —
-    and because the failure escapes before commit, the notification row is
-    rolled back too and the recipient gets nothing at all. The column is
-    nullable exactly for actors that are not agents.
+    A delegation token can still name the assistant by the sentinel
+    `00000000-…-0001`, which is not a row in that table -- tokens are signed and
+    outlive the deploy that stopped issuing them. Passing it through fails the
+    insert, and because the failure escapes before commit the notification row
+    is rolled back too and the recipient gets nothing at all.
+
+    The assistant has a row now, so the fix is no longer to send nothing: it is
+    to send the row's id, which is the pod's own.
     """
     from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.modules.agent.tools.messaging.models import MessageUserRequest
@@ -227,7 +230,7 @@ async def test_the_pod_assistant_does_not_claim_to_be_an_agent_row(monkeypatch):
     )
 
     assert result.success is True
-    assert sent["actor_agent_id"] is None
+    assert sent["actor_agent_id"] == ctx.deps.pod_id
     # Still attributed, so the recipient is not messaged by nobody.
     assert sent["agent_name"] == "pod_default"
 

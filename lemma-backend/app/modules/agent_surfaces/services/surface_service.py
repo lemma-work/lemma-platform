@@ -115,7 +115,7 @@ class AgentSurfaceService(
         self,
         *,
         pod_id: UUID,
-        agent_id: UUID | None,
+        agent_id: UUID,
         platform: SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,

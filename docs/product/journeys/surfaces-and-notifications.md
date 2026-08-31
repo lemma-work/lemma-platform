@@ -35,6 +35,12 @@ it is asked, not skipped.
 
 - When a person connects a surface for a platform and binds it to an agent, the
   system shall start accepting messages for that pod on that platform.
+- A surface shall answer as exactly one agent. Where a person wants a second
+  agent reachable on a platform, the system shall let them make that agent its
+  own bot rather than sharing one.
+- Where a platform has channels or groups, the system shall treat the ones a
+  person names as the places that surface's agent may be spoken to, and shall
+  not answer elsewhere.
 - When a surface is connected, the system shall record `surface.connected`.
 - The system shall tell a person what is still needed to finish setup, at each
   step, rather than failing at the first message.
@@ -62,7 +68,8 @@ it is asked, not skipped.
 **Status:** covered
 
 - When a person points a surface at a different agent, the system shall route
-  later messages to the new agent and shall leave existing threads readable.
+  later messages to the new agent and shall leave existing threads readable,
+  under the name that answered them at the time.
 - When a person deletes a surface, the system shall stop accepting messages on
   it.
 - When a pod is deleted, the system shall stop every surface belonging to it.

@@ -58,6 +58,7 @@ def _surface(platform: SurfacePlatform, surface_id=None) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=surface_id or uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
@@ -345,6 +346,7 @@ def _dm_surface(reset_hours: int = 24) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(dm_conversation_reset_after_hours=reset_hours),
@@ -432,38 +434,40 @@ def test_the_ingress_service_answers_every_call_delivery_makes():
     assert isinstance(service, SurfaceNotificationEgressPort)
 
 
-def test_an_agent_falls_back_to_the_pods_own_surface():
-    """The shape almost every existing pod has, and the regression that broke it.
+def test_an_agent_never_speaks_through_another_agents_surface():
+    """The identity rule, with nothing behind it any more.
 
-    One pod-level Slack or Telegram bot with no agent of its own, routed to
-    named agents by channel. Scoping strictly to `surface.agent_id == actor`
-    resolved to nothing, so every agent in every pod predating per-agent
-    mailboxes could suddenly reach nobody. The pod's own bot borrows no other
-    agent's identity, and the message still names the agent.
+    An agent used to borrow a surface that belonged to nobody, which is how one
+    bot served a whole pod. That went with the shared bot, and it was already
+    half-broken: the message went out under the borrower's name but the *reply*
+    was handled by whoever the surface actually belonged to, because the
+    conversation was opened against the surface's agent.
+
+    An agent with no surface of its own is not stuck -- the resolver mints it a
+    mailbox -- but it never speaks through somebody else's.
     """
     from app.modules.agent_surfaces.services.notification_delivery import (
         surfaces_for_agent,
     )
 
-    pod_surface = _surface(SurfacePlatform.SLACK)
-    pod_surface.agent_id = None
+    assistants_surface = _surface(SurfacePlatform.SLACK)
 
-    assert surfaces_for_agent([pod_surface], actor_agent_id=uuid4()) == [pod_surface]
+    assert surfaces_for_agent([assistants_surface], actor_agent_id=uuid4()) == []
 
 
-def test_an_agent_with_its_own_surface_does_not_borrow_the_pods():
-    """The fallback must not weaken the identity rule it sits behind."""
+def test_an_agent_speaks_through_its_own():
     from app.modules.agent_surfaces.services.notification_delivery import (
         surfaces_for_agent,
     )
 
     agent_id = uuid4()
-    pod_surface = _surface(SurfacePlatform.SLACK)
-    pod_surface.agent_id = None
+    assistants_surface = _surface(SurfacePlatform.SLACK)
     own = _surface(SurfacePlatform.TELEGRAM)
     own.agent_id = agent_id
 
-    assert surfaces_for_agent([pod_surface, own], actor_agent_id=agent_id) == [own]
+    assert surfaces_for_agent([assistants_surface, own], actor_agent_id=agent_id) == [
+        own
+    ]
 
 
 def test_every_mail_platform_is_one_email_channel():

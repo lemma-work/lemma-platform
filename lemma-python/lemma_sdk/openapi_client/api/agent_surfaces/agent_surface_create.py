@@ -82,8 +82,8 @@ def sync_detailed(
         body (SurfaceCreateRequest): Body for `POST /pods/{pod_id}/surfaces` — creates one
             surface.
 
-            A pod may have several surfaces of the same ``platform`` (different
-            bots/accounts, each routed to its own agent); ``name`` is the stable,
+            A pod may have several surfaces of the same ``platform`` — one bot per
+            agent is the model, not the exception; ``name`` is the stable,
             pod-unique identifier used to address it afterward. When omitted, it
             defaults to the lowercased platform (so the common single-surface-per-
             platform case needs no name at all) — pick an explicit name to create a
@@ -126,8 +126,8 @@ def sync(
         body (SurfaceCreateRequest): Body for `POST /pods/{pod_id}/surfaces` — creates one
             surface.
 
-            A pod may have several surfaces of the same ``platform`` (different
-            bots/accounts, each routed to its own agent); ``name`` is the stable,
+            A pod may have several surfaces of the same ``platform`` — one bot per
+            agent is the model, not the exception; ``name`` is the stable,
             pod-unique identifier used to address it afterward. When omitted, it
             defaults to the lowercased platform (so the common single-surface-per-
             platform case needs no name at all) — pick an explicit name to create a
@@ -165,8 +165,8 @@ async def asyncio_detailed(
         body (SurfaceCreateRequest): Body for `POST /pods/{pod_id}/surfaces` — creates one
             surface.
 
-            A pod may have several surfaces of the same ``platform`` (different
-            bots/accounts, each routed to its own agent); ``name`` is the stable,
+            A pod may have several surfaces of the same ``platform`` — one bot per
+            agent is the model, not the exception; ``name`` is the stable,
             pod-unique identifier used to address it afterward. When omitted, it
             defaults to the lowercased platform (so the common single-surface-per-
             platform case needs no name at all) — pick an explicit name to create a
@@ -207,8 +207,8 @@ async def asyncio(
         body (SurfaceCreateRequest): Body for `POST /pods/{pod_id}/surfaces` — creates one
             surface.
 
-            A pod may have several surfaces of the same ``platform`` (different
-            bots/accounts, each routed to its own agent); ``name`` is the stable,
+            A pod may have several surfaces of the same ``platform`` — one bot per
+            agent is the model, not the exception; ``name`` is the stable,
             pod-unique identifier used to address it afterward. When omitted, it
             defaults to the lowercased platform (so the common single-surface-per-
             platform case needs no name at all) — pick an explicit name to create a

@@ -29,6 +29,7 @@ def _surface(pod_id, surface_id) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=surface_id,
         pod_id=pod_id,
+        agent_id=pod_id,
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),

@@ -156,6 +156,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="resend-ops",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
