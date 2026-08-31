@@ -5,31 +5,26 @@ Split from `ConversationRepository` the way `ConversationRunQueriesMixin` and
 caller (`ConversationTitleService`), and it brings a query builder and a return
 type along with it that nothing else in the repository touches.
 
-`ConversationOpeningTexts` is re-exported from `conversation_repository` so the
-import path callers already use keeps working.
+`ConversationOpeningTexts` lives in `domain/run_projections.py` -- `ports.py`
+has to name it -- and is re-exported here and from `conversation_repository` so
+the import paths callers already use keep working.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select, union_all
 
+from app.modules.agent.domain.run_projections import ConversationOpeningTexts
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
 from app.modules.agent.infrastructure.models import MessageModel
+
+__all__ = ["ConversationOpeningTexts", "ConversationOpeningTextsMixin"]
 
 
 # Python's ``str.strip()`` set, so the SQL blank test and the caller's agree.
 _ASCII_WHITESPACE = " \t\n\r\v\f"
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationOpeningTexts:
-    """The two message bodies a conversation title is derived from."""
-
-    user_text: str | None = None
-    assistant_text: str | None = None
 
 
 def _first_text_of_role(conversation_id: UUID, role: str):

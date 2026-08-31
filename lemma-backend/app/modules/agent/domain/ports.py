@@ -9,7 +9,11 @@ from app.core.authorization.context import Context
 from app.modules.agent.domain.events import AgentDomainEvent
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import (
+    ConversationOpeningTexts,
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRunApprovalDecision,
@@ -123,6 +127,14 @@ class ConversationRepository(Protocol):
 
     async def lock_conversation(self, conversation_id: UUID) -> None: ...
 
+    async def get_conversation_opening_texts(
+        self, conversation_id: UUID
+    ) -> ConversationOpeningTexts: ...
+
+    async def find_existing_voice_transcript(
+        self, conversation_id: UUID, paths: tuple[str, ...]
+    ) -> str | None: ...
+
     async def set_conversation_status(
         self,
         *,
@@ -188,9 +200,25 @@ class ConversationRepository(Protocol):
         limit: int = 200,
     ) -> list[StaleAgentRunRef]: ...
 
+    async def list_runs_stuck_stopping(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]: ...
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]: ...
+
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 
     async def count_queued_user_messages(self, agent_run_id: UUID) -> int: ...
+
+    async def claim_queued_user_messages(self, agent_run_id: UUID) -> list[Message]: ...
 
     async def list_agent_runs_with_messages(
         self,
