@@ -93,20 +93,54 @@ async def mailbox(world, run):
 
 
 async def _deliver(
-    alice, *, to: str, subject: str, text: str, message_id: str, sender: str | None = None
+    alice,
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    message_id: str,
+    sender: str | None = None,
+    authenticated: bool = True,
 ):
+    """One inbound email, shaped the way Resend delivers one.
+
+    Including its `Authentication-Results`, which is the part that is easy to
+    leave out and changes the answer. `From:` is text the sender chose, so Lemma
+    resolves it to a colleague only when the receiving mail service vouched for
+    it; without the header the sender is a stranger, and a stranger is told how
+    to get access rather than having a conversation opened for them. Both are
+    correct, and only one of them is what this file's scenarios are about.
+
+    Real mail always carries it — Resend receives through SES, which writes the
+    header on every message — so a forged delivery without one is not a
+    stricter test, it is a different message than any Lemma actually receives.
+    `authenticated=False` sends that different message on purpose, for the
+    scenario about a sender nobody vouched for.
+    """
     import json as _json
+
+    from_address = sender or alice.email
+    headers = {"message-id": message_id, "subject": subject}
+    if authenticated:
+        # SES's own shape, written against the sender's domain so SPF, DKIM and
+        # DMARC all align — an aligned pass is the whole of what "vouched for"
+        # means here.
+        domain = from_address.rpartition("@")[2]
+        headers["authentication-results"] = (
+            f"amazonses.com; spf=pass smtp.mailfrom={domain}; "
+            f"dkim=pass header.i=@{domain}; dmarc=pass header.from={domain}"
+        )
 
     body = _json.dumps(
         {
             "type": "email.received",
             "data": {
                 "email_id": f"em_{uuid4().hex[:12]}",
-                "from": sender or alice.email,
+                "from": from_address,
                 "to": [to],
                 "subject": subject,
                 "text": text,
-                "headers": {"message-id": message_id, "subject": subject},
+                "headers": headers,
             },
         }
     ).encode()
