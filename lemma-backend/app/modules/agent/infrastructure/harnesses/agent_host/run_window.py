@@ -27,20 +27,31 @@ from app.modules.agent.infrastructure.harnesses.agent_host.events import (
 logger = get_logger(__name__)
 
 # The deadline we hand the host, and therefore the real lifetime of the run.
-# It is bounded from above by two things that are not negotiable:
 #
-#   * the worker task that drives the harness (AGENT_RUN_JOB_TIMEOUT_SECONDS,
-#     55 minutes). Past that, streaq cancels the job and Lemma reports the run
-#     failed - so a deadline beyond it is a deadline we cannot honour, and the
-#     host would keep executing a run we have already given up on;
-#   * the MCP credential encrypted into START_RUN, which the SuperTokens core
-#     issues with a one-hour validity and which nothing refreshes.
+# This was 50 minutes, and the reason given was the MCP credential encrypted
+# into START_RUN: the SuperTokens core issues it with a one-hour validity, and
+# "nothing refreshes" it. Something does now -- `refresh_credential` mints a
+# replacement and sends it to the host as a command, on the margin below -- so
+# the credential stopped being the ceiling and the 50 minutes outlived its own
+# justification. What it cost was an agent working steadily on a real task
+# being killed at minute fifty with "run deadline elapsed", which is a system
+# failure wearing the clothes of a policy.
 #
-# 50 minutes sits inside both with room for the harness to notice its own
-# deadline, cancel the host run, and finalize before either ceiling bites. It
-# also comfortably exceeds the host's 30-minute permission window, so a
-# permission parked mid-run can still be answered before the run is over.
-DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS = 3000.0
+# A long deadline is safe because it is not what detects a host that has gone
+# away. The run lease is 90 seconds and is checked every 5, so a host that
+# crashed, slept or lost its network is failed inside two minutes no matter how
+# far off the deadline is. The deadline exists only to bound a host that is
+# still answering and still working.
+#
+# What it must still sit inside:
+#
+#   * the worker task that drives the harness
+#     (AGENT_RUN_JOB_TIMEOUT_SECONDS). Past that, streaq cancels the job and
+#     Lemma reports the run failed -- so a deadline beyond it is one we cannot
+#     honour, and the host would keep executing a run we have given up on;
+#   * comfortably above the host's 30-minute permission window, so a permission
+#     parked mid-run can still be answered before the run is over.
+DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS = 14400.0
 # Stop this far short of the credential's own expiry, so the last tool call of
 # a run is still made with a token that is valid.
 CREDENTIAL_SAFETY_MARGIN_SECONDS = 120.0
@@ -126,16 +137,24 @@ def credential_bounded_timeout(
     now: datetime,
     agent_run_id: UUID,
 ) -> tuple[float, bool]:
-    """Bound the run by the credential it is being dispatched with.
+    """Refuse to dispatch a run whose credential is already spent.
 
-    A run is no longer stuck with that credential — the consume loop renews it
-    in flight (:func:`credential_refresh_due`) — so this is the conservative
-    starting bound rather than the run's real ceiling, and it normally does
-    nothing: a fresh token outlives the configured window.
+    This used to also *shorten* the run to the credential's remaining life. That
+    made sense while the token was the run's real ceiling, and it was harmless
+    while the window was fifty minutes, because a fresh one-hour token outlived
+    it and the clamp never fired.
 
-    What it still does is refuse to dispatch at all when there is not enough
-    credential left to be worth starting, so the turn fails immediately rather
-    than a minute later for a reason nobody can see.
+    It is neither now. The consume loop renews the credential in flight
+    (:func:`credential_refresh_due`), so the token dispatched with the run is a
+    starting point rather than a limit -- and against a window measured in hours
+    a clamp to the *initial* expiry would fire on every single run, quietly
+    putting back the ceiling this was supposed to have lifted.
+
+    So the expiry no longer bounds the window. What it still does is refuse to
+    start a run there is not enough credential left to be worth starting, and
+    the run that outlives every attempt to renew is ended explicitly by
+    :func:`credential_exhausted` rather than left to discover its tools have
+    stopped working.
     """
     if credential_expires_at is None:
         # An opaque credential silently disables all three of the protections
@@ -153,18 +172,11 @@ def credential_bounded_timeout(
     usable = (
         credential_expires_at - now
     ).total_seconds() - CREDENTIAL_SAFETY_MARGIN_SECONDS
-    if usable >= configured_seconds:
-        return configured_seconds, False
     if usable < MINIMUM_RUN_SECONDS:
         raise RuntimeError(
             "The Lemma credential for this run expires too soon to dispatch it"
         )
-    logger.warning(
-        "agent.harnesses.agent_host.run_deadline_capped_by_credential.degraded",
-        agent_run_id=str(agent_run_id),
-        timeout_seconds=int(usable),
-    )
-    return usable, True
+    return configured_seconds, False
 
 
 def failure_events(
