@@ -160,8 +160,7 @@ async def message_user(
         # The pod assistant's id is an authorization sentinel, not a row in
         # `agents` — and `notifications.actor_agent_id` is a foreign key to that
         # table, so passing it through fails the insert and loses the message.
-        # The column is nullable precisely for actors that are not agents.
-        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
+        actor_agent_id=deps.workload_id,
         # Display name first, but fall back to the pod-unique name: the display
         # name comes from surface metadata and is None for any run that did not
         # start on a surface, which would silently drop the attribution header.
@@ -273,8 +272,7 @@ async def list_pod_members(
         limit=request.limit,
         # Whose reach to report. Same sentinel handling as message_user: the pod
         # assistant is not a row in `agents`, and its surfaces are the ones with
-        # no agent of their own.
-        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
+        actor_agent_id=deps.workload_id,
     )
     if result is None:
         return ListPodMembersResponse(

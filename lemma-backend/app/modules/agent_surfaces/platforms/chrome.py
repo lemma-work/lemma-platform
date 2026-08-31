@@ -46,19 +46,6 @@ class SurfaceChromeMixin:
         del surface_id
         return False
 
-    async def open_dm_agent_modal(
-        self,
-        *,
-        credentials: dict[str, Any],
-        trigger_id: str,
-        agent_names: list,
-        current: str | None,
-        surface_id: str | None = None,
-    ) -> bool:
-        """Ask, in-chat, which agent answers a person's DMs. Default: unsupported."""
-        del credentials, trigger_id, agent_names, current, surface_id
-        return False
-
     async def send_starter_prompt(
         self, *, credentials: dict[str, Any], user_id: str, prompt: str
     ) -> bool:
@@ -72,7 +59,7 @@ class SurfaceChromeMixin:
         credentials: dict[str, Any],
         user_id: str,
         pod_name: str | None,
-        dm_agent_name: str | None,
+        agent_name: str,
         channel_routes: list,
         agents: list | None = None,
         apps: list | None = None,
@@ -80,12 +67,10 @@ class SurfaceChromeMixin:
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
-        offers_dm_agent_choice: bool = True,
     ) -> bool:
         """Render the app's home tab. Default: the platform has no home tab."""
-        del credentials, user_id, pod_name, dm_agent_name, channel_routes
+        del credentials, user_id, pod_name, agent_name, channel_routes
         del agents, apps, workspace_url, logo_url, surface_choices, access_message
-        del offers_dm_agent_choice
         return False
 
     async def send_channel_setup_prompt(

@@ -166,7 +166,37 @@ def upgrade() -> None:
         )
     )
 
-    # --- 8. the schedule half ------------------------------------------------
+    # --- 8. surfaces belong to exactly one agent ------------------------------
+    # A surface's `agent_id` used to answer two questions at once. Inbound it
+    # meant "who answers here by default", and null meant the assistant.
+    # Outbound it meant "whose bot is this", and null meant nobody's -- so any
+    # agent could borrow it. One column, two meanings, and the same rows.
+    #
+    # Now it answers one question: whose surface this is. Null becomes the
+    # assistant's row like everywhere else, and the column stops being nullable
+    # so the ambiguity is unrepresentable rather than merely discouraged.
+    op.execute(
+        sa.text("UPDATE agent_surfaces SET agent_id = pod_id WHERE agent_id IS NULL")
+    )
+    op.alter_column("agent_surfaces", "agent_id", nullable=False)
+    # Was ON DELETE SET NULL, and that is what produced a bug the code had to
+    # carry a cleanup routine for: a deleted agent's mailbox became an agentless
+    # surface -- which is exactly what the assistant's own surface was -- so the
+    # pod started answering from a deleted agent's address. A surface cannot
+    # outlive its agent.
+    op.drop_constraint(
+        "agent_surfaces_agent_id_fkey", "agent_surfaces", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "agent_surfaces_agent_id_fkey",
+        "agent_surfaces",
+        "agents",
+        ["agent_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+
+    # --- 9. the schedule half ------------------------------------------------
     op.add_column("schedules", sa.Column("instruction", sa.Text(), nullable=True))
     # Two arms again, not three: `agent_id` can now name the assistant like any
     # other agent, so there is nothing for a third column to say.
@@ -180,6 +210,22 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_constraint("ck_schedules_single_target", "schedules", type_="check")
     op.drop_column("schedules", "instruction")
+
+    op.drop_constraint(
+        "agent_surfaces_agent_id_fkey", "agent_surfaces", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "agent_surfaces_agent_id_fkey",
+        "agent_surfaces",
+        "agents",
+        ["agent_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.alter_column("agent_surfaces", "agent_id", nullable=True)
+    op.execute(
+        sa.text("UPDATE agent_surfaces SET agent_id = NULL WHERE agent_id = pod_id")
+    )
 
     op.create_index(
         "ix_agent_conv_user_pod_agent_roots",

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.dependencies import PodContextDep
@@ -84,7 +85,9 @@ def _surface_response(
         name=surface.name,
         agent_id=surface.agent_id,
         agent_name=agent_name,
-        uses_default_agent=surface.agent_id is None,
+        uses_default_agent=is_pod_default_agent(
+            surface.agent_id, pod_id=surface.pod_id
+        ),
         platform=surface.surface_type,
         credential_mode=surface.credential_mode,
         account_id=surface.account_id,
@@ -182,7 +185,11 @@ async def list_surfaces(
     visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = []
     for surface in surfaces:
         resolved_agent_name = None
-        if surface.agent_id is not None:
+        # The assistant's surfaces stay visible to every pod member: it is
+        # pod-scoped, so there is no per-agent grant to hold. Reading this as an
+        # ordinary agent would silently drop the pod's own mailbox out of the
+        # listing for anyone without a grant on it.
+        if not is_pod_default_agent(surface.agent_id, pod_id=pod_id):
             allowed = await ctx.can(
                 Permissions.AGENT_READ,
                 ResourceRef(

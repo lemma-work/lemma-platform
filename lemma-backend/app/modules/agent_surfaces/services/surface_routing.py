@@ -6,6 +6,7 @@ name the agent that answers, and identify who sent it. Nothing here writes.
 
 from __future__ import annotations
 
+from app.modules.agent.contracts import AgentKind
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -266,56 +267,16 @@ class SurfaceRoutingMixin:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceRoute:
-        """A DM or an email: one agent, no per-channel configuration."""
+        """A DM or an email: the surface's agent, which is the only one it has."""
         agent_id = surface.agent_id
-        agent_name = await self._agent_name_for_agent_id(agent_id)
-        # On Slack a person can choose which agent answers their own DMs.
-        # Their choice wins over the workspace default; everyone who has
-        # not chosen keeps it, so this is purely additive.
-        if surface.surface_type is SurfacePlatform.SLACK:
-            # An explicit pod-assistant pick means *no* agent, which is not
-            # the same as falling back to the surface default.
-            if surface.config.slack.chose_pod_assistant(parsed.sender_external_user_id):
-                return ResolvedSurfaceRoute(
-                    agent_id=None,
-                    agent_name=None,
-                    agent_display_name="Lemma",
-                    conversation_kind="DM",
-                    route_key="dm",
-                )
-            chosen = await self._slack_chosen_agent(surface, parsed)
-            if chosen is not None:
-                agent_id, agent_name = chosen
-
         is_email = surface.mode is SurfaceMode.EMAIL
         return ResolvedSurfaceRoute(
             agent_id=agent_id,
-            agent_name=agent_name,
-            agent_display_name=agent_name or "Lemma",
+            agent_name=await self._agent_name_for_agent_id(agent_id),
+            agent_display_name=await self._agent_display_name(agent_id),
             conversation_kind="EMAIL" if is_email else "DM",
             route_key="email" if is_email else "dm",
         )
-
-    async def _slack_chosen_agent(
-        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
-    ) -> tuple[UUID, str] | None:
-        """The agent this person picked for their Slack DMs, if it still exists."""
-        chosen = surface.config.slack.agent_for_user(parsed.sender_external_user_id)
-        if not chosen:
-            return None
-        agent = await self.conversation_service.agent_repository.get_by_pod_and_name(
-            pod_id=surface.pod_id,
-            name=chosen,
-        )
-        if agent is not None:
-            return agent.id, agent.name
-        # A renamed or deleted agent must not strand the person with a dead DM —
-        # fall back to the surface default.
-        logger.debug(
-            "agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic",
-            pod_id=surface.pod_id,
-        )
-        return None
 
     async def _telegram_group_route(
         self,
@@ -332,11 +293,10 @@ class SurfaceRoutingMixin:
         if not _addressed(parsed):
             return None
         agent_id = surface.agent_id
-        agent_name = await self._agent_name_for_agent_id(agent_id)
         return ResolvedSurfaceRoute(
             agent_id=agent_id,
-            agent_name=agent_name,
-            agent_display_name=agent_name or "Lemma",
+            agent_name=await self._agent_name_for_agent_id(agent_id),
+            agent_display_name=await self._agent_display_name(agent_id),
             conversation_kind="CHANNEL",
             route_key=f"channel:{parsed.external_channel_id}",
         )
@@ -367,13 +327,13 @@ class SurfaceRoutingMixin:
         if not _addressed(parsed):
             return None
 
-        agent_id, agent_name = await self._resolve_route_agent(
-            surface=surface, route=route
-        )
+        # `route` is an allow-list entry: it said this channel is a place the
+        # bot answers, not who answers in it. That is always the surface's agent.
+        agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
             agent_id=agent_id,
-            agent_name=agent_name,
-            agent_display_name=agent_name or "Lemma",
+            agent_name=await self._agent_name_for_agent_id(agent_id),
+            agent_display_name=await self._agent_display_name(agent_id),
             conversation_kind="CHANNEL",
             route_key=(
                 f"channel:{parsed.external_channel_id}"
@@ -382,35 +342,6 @@ class SurfaceRoutingMixin:
             ),
         )
 
-    async def _resolve_route_agent(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        route: SurfaceChannelRoute,
-    ) -> tuple[UUID | None, str | None]:
-        """Resolve a route's agent name to (id, name); a renamed or deleted
-        route agent falls back to the surface default agent."""
-        # The pod assistant is the *absence* of an agent, so it must short
-        # circuit before the surface-default fallback below — otherwise picking
-        # it silently routes to whichever agent the surface defaults to.
-        if route.use_pod_assistant:
-            return None, None
-        if route.agent_name:
-            agent = (
-                await self.conversation_service.agent_repository.get_by_pod_and_name(
-                    pod_id=surface.pod_id,
-                    name=route.agent_name,
-                )
-            )
-            if agent is not None:
-                return agent.id, agent.name
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_channel_route_agent_s.diagnostic",
-                pod_id=surface.pod_id,
-            )
-        agent_id = surface.agent_id
-        return agent_id, await self._agent_name_for_agent_id(agent_id)
-
     async def agent_name_for_surface(
         self,
         surface: AgentSurfaceEntity,
@@ -418,12 +349,34 @@ class SurfaceRoutingMixin:
         """Whose name a message on this surface goes out under.
 
         Public because notification delivery names the agent when it opens a
-        conversation for a recipient — see ``SurfaceNotificationEgressPort``.
+        conversation for a recipient -- see ``SurfaceNotificationEgressPort``.
         It was private for exactly as long as it took that cross-service call to
         raise ``AttributeError`` in production; keeping the port and this method
         in step is what stops the next rename doing the same.
+
+        The assistant's real name, not its display name: this feeds
+        `create_conversation`, which resolves it back to a row. Use
+        `_agent_display_name` for anything a person reads.
         """
         return await self._agent_name_for_agent_id(surface.agent_id)
+
+    async def _agent_display_name(self, agent_id: UUID | None) -> str:
+        """What this agent calls itself in front of a person.
+
+        Not `agent.name`. The pod's own assistant is stored as `pod_default`,
+        which is an internal identifier -- it used to have no row at all, so
+        every caller wrote `agent_name or "Lemma"` and the null did the work.
+        Now that it has one, that expression would put `pod_default` on the
+        message.
+        """
+        agent = (
+            await self.conversation_service.agent_repository.get(agent_id)
+            if agent_id
+            else None
+        )
+        if agent is None or agent.kind is AgentKind.POD_DEFAULT:
+            return "Lemma"
+        return agent.name
 
     async def _agent_name_for_agent_id(
         self,

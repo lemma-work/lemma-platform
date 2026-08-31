@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.platforms.slack.blocks import (
     channel_setup_confirmation_blocks,
     channel_setup_modal,
     channel_setup_prompt_blocks,
-    dm_agent_modal,
     truncate_slack_text as _truncate_slack_text,
 )
 from app.modules.agent_surfaces.platforms.slack.home_blocks import (
@@ -163,41 +162,12 @@ class SlackHomeSurface:
             )
             return False
 
-    async def open_dm_agent_modal(
-        self,
-        *,
-        trigger_id: str,
-        agent_names: list[str],
-        current: str | None,
-        surface_id: str | None = None,
-    ) -> bool:
-        token = slack_access_token(self.credentials)
-        if not token or not trigger_id:
-            return False
-        try:
-            client = await build_slack_client(self.credentials)
-            await client.views_open(
-                trigger_id=trigger_id,
-                view=dm_agent_modal(
-                    agent_names=agent_names,
-                    current=current,
-                    surface_id=surface_id,
-                ),
-            )
-            return True
-        except SlackApiError as exc:
-            logger.debug(
-                "agent_surfaces.service.slack_open_setup_modal.diagnostic",
-                error_code=str((exc.response or {}).get("error") or "unknown"),
-            )
-            return False
-
     async def publish_home_view(
         self,
         *,
         user_id: str,
         pod_name: str | None,
-        dm_agent_name: str | None,
+        agent_name: str,
         channel_routes: list,
         agents: list | None = None,
         apps: list | None = None,
@@ -205,7 +175,6 @@ class SlackHomeSurface:
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
-        offers_dm_agent_choice: bool = True,
     ) -> bool:
         """Publish the Home tab for one person."""
         token = slack_access_token(self.credentials)
@@ -217,7 +186,7 @@ class SlackHomeSurface:
                 user_id=str(user_id),
                 view=app_home_view(
                     pod_name=pod_name,
-                    dm_agent_name=dm_agent_name,
+                    agent_name=agent_name,
                     channel_routes=channel_routes,
                     agents=agents,
                     apps=apps,
@@ -225,7 +194,6 @@ class SlackHomeSurface:
                     logo_url=logo_url,
                     surface_choices=surface_choices,
                     access_message=access_message,
-                    offers_dm_agent_choice=offers_dm_agent_choice,
                 ),
             )
             return True

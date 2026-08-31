@@ -13,7 +13,6 @@ from typing import Any
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     DEFAULT_RESPONDER_NAME,
-    DM_AGENT_SETUP_ACTION_ID,
     _truncate,
 )
 
@@ -222,44 +221,24 @@ def _channel_routes_block(channel_routes: list) -> dict[str, Any]:
 
 
 def _settings_blocks(
-    dm_agent_name: str | None,
     channel_routes: list,
-    *,
-    offers_dm_agent_choice: bool = True,
+    agent_name: str,
 ) -> list[dict[str, Any]]:
     """Settings last: real, but not the pitch.
 
-    A bot made for one agent has nothing to offer here: it answers as that agent
-    or not at all, so the row states who that is and carries no button. Changing
-    the copy as well as dropping the button matters — "Answered by X" beside a
-    "Change" that is gone reads as something broken, where "This is X" reads as
-    the fact it is.
+    A row that states who this bot is, and carries no button. It used to offer
+    "Change", because one app could answer as any of the pod's agents and each
+    person picked their own. One app is one agent now, so there is nothing to
+    change -- and stating the fact reads better than an affordance that would
+    only ever refuse.
     """
-    responder = f"`{dm_agent_name}`" if dm_agent_name else DEFAULT_RESPONDER_NAME
-    if not offers_dm_agent_choice:
-        return [
-            {"type": "divider"},
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Your direct messages*\nYou are talking to {responder}",
-                },
-            },
-            _channel_routes_block(channel_routes),
-        ]
     return [
         {"type": "divider"},
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Your direct messages*\nAnswered by {responder}",
-            },
-            "accessory": {
-                "type": "button",
-                "action_id": DM_AGENT_SETUP_ACTION_ID,
-                "text": {"type": "plain_text", "text": "Change"},
+                "text": f"*Your direct messages*\nYou are talking to `{agent_name}`",
             },
         },
         _channel_routes_block(channel_routes),
@@ -288,7 +267,7 @@ def _footer_blocks(workspace_url: str | None) -> list[dict[str, Any]]:
 def app_home_view(
     *,
     pod_name: str | None,
-    dm_agent_name: str | None,
+    agent_name: str,
     channel_routes: list,
     agents: list | None = None,
     apps: list | None = None,
@@ -296,7 +275,6 @@ def app_home_view(
     logo_url: str | None = None,
     surface_choices: list[tuple[str, str]] | None = None,
     access_message: str | None = None,
-    offers_dm_agent_choice: bool = True,
 ) -> dict[str, Any]:
     """The App Home — the one screen that has to explain and sell Lemma.
 
@@ -321,11 +299,7 @@ def app_home_view(
             *_try_one_blocks(),
             *_agent_blocks(list(agents or [])),
             *_app_blocks(list(apps or [])),
-            *_settings_blocks(
-                dm_agent_name,
-                channel_routes,
-                offers_dm_agent_choice=offers_dm_agent_choice,
-            ),
+            *_settings_blocks(channel_routes, agent_name),
             *_footer_blocks(workspace_url),
         ]
     )

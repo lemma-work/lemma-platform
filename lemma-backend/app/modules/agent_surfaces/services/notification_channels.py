@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from app.core.authorization.delegation import is_pod_default_agent
+from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
@@ -111,6 +111,16 @@ class NotificationChannelResolver:
         # human connected by hand — so the first page is the whole set.
         all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
         active = [surface for surface in all_surfaces if surface.is_active]
+        # Normalised here, once, rather than at each caller. `actor_agent_id`
+        # arrives in three spellings for the same agent: the assistant's row id,
+        # `None` from a caller that has no agent at all (a workflow form, the
+        # notifications API) and used to mean "the pod's own surfaces", and the
+        # delegation sentinel from a token minted before the row existed.
+        #
+        # Getting this wrong is not a lookup miss: `surfaces_for_agent` would
+        # return nothing, and the resolver below would mint the pod a *second*
+        # mailbox beside the one it already has.
+        actor_agent_id = effective_agent_id(actor_agent_id, pod_id=pod_id)
         surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
 
         # Before provisioning, not after: a mailbox is what "reach them somehow"
@@ -456,6 +466,8 @@ class NotificationChannelResolver:
         """
         all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
         active = [surface for surface in all_surfaces if surface.is_active]
+        # Same normalisation as `resolve`, for the same reason.
+        actor_agent_id = effective_agent_id(actor_agent_id, pod_id=pod_id)
         surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
 
         reachable: dict[UUID, set[str]] = {user_id: set() for user_id in recipients}

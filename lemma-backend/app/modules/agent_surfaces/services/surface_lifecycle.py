@@ -146,7 +146,6 @@ class SurfaceLifecycleMixin:
                     credentials=credentials,
                     user_id=parsed.actor_external_user_id,
                     pod_name=None,
-                    dm_agent_name=None,
                     channel_routes=[],
                     agents=[],
                     apps=[],

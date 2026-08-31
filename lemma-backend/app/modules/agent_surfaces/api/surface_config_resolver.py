@@ -4,8 +4,8 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
-from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.api.schemas import (
     SurfaceBehaviorConfigInput,
     surface_config_from_input,
@@ -31,7 +31,11 @@ async def require_surface_agent_action(
     agent_id: UUID | None,
     action: str,
 ) -> None:
-    if agent_id is None:
+    # The pod's own assistant is asked about pod-scoped, the same as everywhere
+    # else. Its row's id is the pod's, so both arms would name the same thing --
+    # but grants match on (type, id), and an AGENT-typed check would newly hit
+    # the resource-owner shortcut for whoever created the pod.
+    if agent_id is None or is_pod_default_agent(agent_id, pod_id=pod_id):
         return
     await ctx.require(
         action,
@@ -76,40 +80,23 @@ async def require_own_account(
         ) from exc
 
 
-async def _resolve_channel_routes(
+def _resolve_channel_routes(
     *,
-    pod_id: UUID,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
-    ctx,
 ) -> list[SurfaceChannelRoute]:
-    routes: list[SurfaceChannelRoute] = []
-    for route in config_input.channels:
-        agent_name = None
-        if route.agent_name:
-            agent = await agent_service.get_agent_by_name(
-                pod_id=pod_id,
-                name=route.agent_name,
-            )
-            await require_surface_agent_action(
-                ctx=ctx,
-                pod_id=pod_id,
-                agent_id=agent.id,
-                action=Permissions.AGENT_UPDATE,
-            )
-            agent_name = agent.name
-        routes.append(
-            SurfaceChannelRoute(
-                channel_id=route.channel_id,
-                channel_name=route.channel_name,
-                agent_name=agent_name,
-                # Carried, not derived. "The pod assistant answers here" and
-                # "nobody has said" both leave agent_name empty, and dropping
-                # the flag turned the first into the second on every save.
-                use_pod_assistant=route.use_pod_assistant,
-            )
+    """The channels this surface's agent may be spoken to in.
+
+    No agent resolution and no per-route permission check: a channel is an
+    allow-list entry now, so there is no second agent to be authorized against.
+    Whoever may configure the surface may say where its one agent answers.
+    """
+    return [
+        SurfaceChannelRoute(
+            channel_id=route.channel_id,
+            channel_name=route.channel_name,
         )
-    return routes
+        for route in config_input.channels
+    ]
 
 
 async def resolve_telegram_config(
@@ -146,25 +133,17 @@ async def resolve_slack_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     app_name: str | None,
-    dedicated_to_agent: bool = False,
-    existing: SurfaceSlackConfig | None = None,
     ctx,
 ) -> SurfaceSlackConfig:
-    """Resolve the Slack block, keeping everyone's DM choices.
+    """Resolve the Slack block.
 
-    ``dm_agent_by_user`` is carried from ``existing`` rather than taken from
-    the request: it is written from inside Slack, one person at a time, and a
-    settings save from the web UI has no business replacing it. That holds even
-    while ``dedicated_to_agent`` is on and nothing reads the map — turning a
-    dedicated bot back into a shared one has to give people their choices back,
-    and a save in between must not be what quietly drops them.
+    Only the featured app is left. This used to carry everyone's per-person DM
+    agent choices forward across a save, and a flag saying whether to honour
+    them; both went with the shared bot they were written for.
     """
-    chosen = dict(existing.dm_agent_by_user) if existing else {}
     resolved_name = str(app_name or "").strip()
     if not resolved_name:
-        return SurfaceSlackConfig(
-            dm_agent_by_user=chosen, dedicated_to_agent=dedicated_to_agent
-        )
+        return SurfaceSlackConfig()
     if platform is not SurfacePlatform.SLACK:
         raise AgentSurfaceValidationError(
             "A Slack app can only be featured on a Slack surface"
@@ -179,11 +158,7 @@ async def resolve_slack_config(
         raise AgentSurfaceValidationError(
             "The selected app must belong to this pod and be deployed"
         )
-    return SurfaceSlackConfig(
-        app_name=app.name,
-        dm_agent_by_user=chosen,
-        dedicated_to_agent=dedicated_to_agent,
-    )
+    return SurfaceSlackConfig(app_name=app.name)
 
 
 async def resolve_surface_config(
@@ -195,12 +170,7 @@ async def resolve_surface_config(
     agent_service,
     ctx,
 ) -> SurfaceConfig:
-    channel_routes = await _resolve_channel_routes(
-        pod_id=pod_id,
-        config_input=config_input,
-        agent_service=agent_service,
-        ctx=ctx,
-    )
+    channel_routes = _resolve_channel_routes(config_input=config_input)
     config = surface_config_from_input(config_input, channel_routes=channel_routes)
     config.telegram = await resolve_telegram_config(
         uow=uow,
@@ -214,7 +184,6 @@ async def resolve_surface_config(
         pod_id=pod_id,
         platform=platform,
         app_name=config_input.slack.app_name,
-        dedicated_to_agent=config_input.slack.dedicated_to_agent,
         ctx=ctx,
     )
     return config
@@ -237,12 +206,7 @@ async def merge_surface_config(
             allowed_email_addresses=config_input.identity.allowed_email_addresses,
         )
     if "channels" in config_input.model_fields_set:
-        updates["channels"] = await _resolve_channel_routes(
-            pod_id=pod_id,
-            config_input=config_input,
-            agent_service=agent_service,
-            ctx=ctx,
-        )
+        updates["channels"] = _resolve_channel_routes(config_input=config_input)
     if "dm_conversation_reset_after_hours" in config_input.model_fields_set:
         updates["dm_conversation_reset_after_hours"] = (
             config_input.dm_conversation_reset_after_hours
@@ -265,8 +229,6 @@ async def merge_surface_config(
             pod_id=pod_id,
             platform=platform,
             app_name=config_input.slack.app_name,
-            dedicated_to_agent=config_input.slack.dedicated_to_agent,
-            existing=existing.slack,
             ctx=ctx,
         )
     return existing.model_copy(update=updates)

@@ -7,6 +7,7 @@ every one of them starts here and none of them needs the others.
 
 from __future__ import annotations
 
+from app.modules.agent.contracts import AgentKind
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
@@ -17,7 +18,6 @@ from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
-    SurfacePlatform,
 )
 from app.core.log.log import get_logger
 
@@ -94,38 +94,21 @@ class SurfaceEgressTargetMixin:
         metadata: dict[str, Any] | None,
     ) -> dict[str, Any]:
         resolved = dict(metadata or {})
+        # The link first: it records which agent actually answered this thread,
+        # which is not always the one the surface points at now -- a surface can
+        # be moved to another agent, and older threads keep the name they wore.
         agent_id = target.link.routed_agent_id or target.surface.agent_id
-        # A pod-assistant route has no agent *by design*, so the usual
-        # "fall back to the surface default" would put the default agent's name
-        # and face on the pod assistant's replies.
-        if self._routes_to_pod_assistant(target):
-            agent_id = None
         agent = (
             await self.conversation_service.agent_repository.get(agent_id)
             if agent_id
             else None
         )
-        resolved.setdefault(
-            "agent_display_name", getattr(agent, "name", None) or "Lemma"
-        )
+        # Not `agent.name`: the pod's own assistant is stored as `pod_default`,
+        # an internal identifier that used to be absent entirely, so every
+        # caller wrote `or "Lemma"` and the null did the work.
+        is_default = agent is None or agent.kind is AgentKind.POD_DEFAULT
+        resolved.setdefault("agent_display_name", "Lemma" if is_default else agent.name)
         icon_url = getattr(agent, "icon_url", None)
         if icon_url:
             resolved.setdefault("agent_icon_url", str(icon_url))
         return resolved
-
-    def _routes_to_pod_assistant(self, target: "SurfaceEgressTarget") -> bool:
-        """True when this conversation is answered by the pod assistant.
-
-        Two ways to get there, and both have to be checked: a *channel* routed
-        to it, or a *person* who chose it for their own DMs. Checking only the
-        channel left every pod-assistant DM wearing the default agent's name.
-        """
-        if target.surface.surface_type is SurfacePlatform.SLACK:
-            external_user_id = str(getattr(target.link, "external_user_id", "") or "")
-            if target.surface.config.slack.chose_pod_assistant(external_user_id):
-                return True
-        channel_id = str(getattr(target.link, "external_channel_id", "") or "")
-        if not channel_id:
-            return False
-        route = target.surface.channel_route_for(channel_id=channel_id, channel_name="")
-        return bool(route is not None and route.use_pod_assistant)

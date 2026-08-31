@@ -240,39 +240,25 @@ def reply_window_open(
 
 
 def surfaces_for_agent(
-    surfaces: list[AgentSurfaceEntity], *, actor_agent_id: UUID | None
+    surfaces: list[AgentSurfaceEntity], *, actor_agent_id: UUID
 ) -> list[AgentSurfaceEntity]:
-    """The surfaces this agent speaks through.
+    """The surfaces this agent speaks through — its own, and only its own.
 
-    Matched on ``surface.agent_id`` only. Channel routes and the Slack per-user
-    DM choice deliberately play no part: both are keyed on things a notification
-    does not have — a channel id, and the recipient's own external id — and
-    honouring them would make "who can this agent reach" depend on where someone
-    last happened to speak to it.
+    A surface belongs to exactly one agent, so "which of these are mine" is the
+    whole question. There used to be a fallback here: an agent with no surface
+    of its own borrowed the pod's unowned ones. That went with the shared bot it
+    was written for, and it was already half-broken — a borrowed surface sent
+    under the borrower's name but handed the *reply* to whoever the surface
+    actually belonged to, because the conversation was opened against the
+    surface's agent rather than the sender's.
 
-    ``actor_agent_id is None`` means the pod assistant, whose surfaces are the
-    ones with no agent of their own. That is a *deliberate* absence rather than
-    "unset", which is also why it must not be read as "every surface": routing
-    the pod assistant through a named agent's bot would put the wrong name on
-    the message.
+    An agent with no surface is not stuck: `NotificationChannelResolver.resolve`
+    mints it a mailbox on the spot.
 
-    A caller with no agent at all — a workflow form assignment, or the
-    notifications API — passes ``None`` and gets the same set, which is the pod's
-    own surfaces. That is the right answer for them too: nobody's agent identity
-    is being borrowed.
-
-    **Falls back to the pod's own surfaces when the agent has none.** The common
-    existing shape is a single pod-level Slack or Telegram bot with no agent of
-    its own, routed to named agents by channel; without this an agent in such a
-    pod could reach nobody, which is a regression rather than a policy. Sending
-    from the pod's own bot borrows no other agent's identity, and ``attribute()``
-    still names the agent in the message — it is exactly what happened before
-    delivery became agent-scoped.
+    ``actor_agent_id`` is always a real id now, the pod's own assistant
+    included. Callers must not pass ``None`` for it — see `effective_agent_id`.
     """
-    own = [surface for surface in surfaces if surface.agent_id == actor_agent_id]
-    if own or actor_agent_id is None:
-        return own
-    return [surface for surface in surfaces if surface.agent_id is None]
+    return [surface for surface in surfaces if surface.agent_id == actor_agent_id]
 
 
 def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:
