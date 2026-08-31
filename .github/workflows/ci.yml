@@ -69,6 +69,12 @@ jobs:
               - 'lemma-typescript/scripts/generate_openapi_client.sh'
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              # The published copy of the spec is generated from it too. It
+              # belongs to this filter and not `frontend`, because the change
+              # that staled it is a spec regeneration -- a lemma-python edit,
+              # which never starts the frontend job.
+              - 'lemma-frontend/public/openapi.json'
+              - 'lemma-frontend/scripts/sync-openapi-spec.mjs'
               - '.github/workflows/ci.yml'
             desktop:
               # desktop/** is now every Rust crate the app ships: the shell,
@@ -213,7 +219,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -246,7 +252,7 @@ jobs:
           echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-unit-coverage
           include-hidden-files: true
@@ -277,7 +283,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -376,7 +382,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync
@@ -398,13 +404,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
       # what a release verifies cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-python-sdk
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: lemma-stack/uv.lock
@@ -445,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Build sdist + wheel the way the release does
@@ -467,7 +473,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -484,15 +490,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: lemma-typescript/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Regenerate Python client from committed spec
@@ -507,7 +513,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
@@ -516,6 +522,13 @@ jobs:
         run: |
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
+      # lemma-frontend/public/openapi.json is what lemma.work/openapi.json
+      # serves, generated from the same committed spec. `npm run check` in the
+      # frontend job verifies it too, but that job does not run on a
+      # lemma-python-only change -- so this is the gate that sees a spec
+      # regeneration. No `npm ci`: the script is dependency-free Node.
+      - name: Fail on published OpenAPI spec drift
+        run: node lemma-frontend/scripts/sync-openapi-spec.mjs --check
 
   # Was two jobs. They were byte-identical for their first four steps -- two
   # checkouts, two `npm ci` pairs, and the lemma-typescript build that every
@@ -533,7 +546,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -544,7 +557,7 @@ jobs:
       # is cold. Keyed on the lockfile plus the source, restoring from any
       # earlier build of the same dependency set.
       - name: Cache the Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: lemma-frontend/.next/cache
           key: >-
@@ -587,7 +600,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Run dev workflow tests
@@ -622,10 +635,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install lemma-cli from local checkout
@@ -739,7 +752,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -747,13 +760,13 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       # The Agent Host's ACP integration tests spawn a scripted Python agent
       # over stdio, and panic outright when there is no interpreter to spawn.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -956,7 +969,7 @@ jobs:
         if: >-
           github.event_name == 'push'
           || needs.changes.outputs.desktop_packaging == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
@@ -999,7 +1012,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       # `.nvmrc`, like every other Node job here and — the reason this matters
@@ -1011,7 +1024,7 @@ jobs:
       # runner's tool-cache build of 22.23.1 links `@rpath/libnode.127.dylib`
       # while 24.x is a single static executable. `copy_node_runtime` copies
       # the executable alone, so the packed Node could not start at all.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -1121,7 +1134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
@@ -1256,7 +1269,7 @@ jobs:
       # that was correctly unaffected. This compares each job's result against
       # the filter it actually gates on, read back out of this file.
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: No gated job skipped while its filter was live
@@ -1267,90 +1280,3 @@ jobs:
           CI_EVENT_NAME: ${{ github.event_name }}
         run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."
-
-  # Who notices a red main.
-  #
-  # Nobody did. "Host pack builds and runs (macOS)" broke on 25 August and was
-  # red on every push for the next three days, through eleven merges, and the
-  # run list read green the whole time -- because that job is deliberately
-  # outside the `ci` aggregator, so the check people look at was reporting on
-  # everything except the job that was failing. That is the correct design for
-  # the merge gate (a release-time check must not block a review-time PR) and
-  # it leaves a hole exactly the size of one unwatched job.
-  #
-  # So this watches the run rather than the gate: every job in the workflow,
-  # `host-pack-macos` included, and only on a push to main, where there is no
-  # PR conversation for a failure to show up in.
-  #
-  # It is not a gate. It cannot fail the run -- there is nothing left to fail
-  # by the time it runs -- and it says so out loud rather than failing when
-  # SLACK_WEBHOOK_URL is unset, so a fork or a repository without the secret
-  # gets a warning in the log instead of a red job about the notifier.
-  main-red:
-    name: Report a red main
-    timeout-minutes: 10
-    if: >-
-      always() && github.event_name == 'push' &&
-      (contains(needs.*.result, 'failure') ||
-      contains(needs.*.result, 'cancelled'))
-    needs:
-      - changes
-      - backend-unit
-      - backend-lint
-      - backend-migration
-      - python-sdk
-      - cli-packaging
-      - typescript-sdk
-      - codegen-drift
-      - frontend
-      - dev-workflow
-      - windows-cli
-      - desktop
-      - desktop-contract
-      - desktop-guestd
-      - desktop-windows
-      # The whole reason this job exists.
-      - host-pack-macos
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post the failure to Slack
-        env:
-          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-          NEEDS_JSON: ${{ toJSON(needs) }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT: ${{ github.sha }}
-          SUBJECT: ${{ github.event.head_commit.message }}
-        run: |
-          python3 - <<'PY'
-          import json, os, urllib.request
-
-          failed = sorted(
-              name
-              for name, result in json.loads(os.environ["NEEDS_JSON"]).items()
-              if result.get("result") in {"failure", "cancelled"}
-          )
-          subject = os.environ["SUBJECT"].splitlines()[0]
-          text = (
-              f"*CI is red on main* — {', '.join(failed)}\n"
-              f"{os.environ['COMMIT'][:12]} {subject}\n"
-              f"{os.environ['RUN_URL']}"
-          )
-          print(text)
-
-          webhook = os.environ["WEBHOOK"]
-          if not webhook:
-              print(
-                  "::warning title=No Slack webhook configured::main is red and "
-                  "nothing was notified. Set the SLACK_WEBHOOK_URL repository "
-                  "secret to route this somewhere a person reads."
-              )
-              raise SystemExit(0)
-
-          request = urllib.request.Request(
-              webhook,
-              data=json.dumps({"text": text}).encode(),
-              headers={"Content-Type": "application/json"},
-          )
-          with urllib.request.urlopen(request, timeout=30) as response:
-              print(f"Slack responded {response.status}")
-          PY

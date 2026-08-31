@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, proves, scenario, stack_lane
 
 pytestmark = [journey("Operating a deployment"), capability("Platform services")]
 
@@ -78,6 +78,7 @@ async def test_feedback_can_be_reported(person):
 @scenario("Web search is refused rather than silently empty when unconfigured")
 @proves("PS-OPS-030")
 @covers("agent.tool.web_search")
+@stack_lane("the promise is about a deployment with no search provider")
 async def test_web_search_says_when_it_is_unavailable(person):
     response = await person.api.call(
         "POST", "/tools/web-search", json={"query": "lemma platform", "max_results": 3}

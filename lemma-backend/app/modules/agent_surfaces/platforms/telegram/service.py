@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import mimetypes
 from html import escape
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +18,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
+)
+from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
+    resolve_attachment_name_and_mime,
 )
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
     put_callback_token,
@@ -159,20 +160,23 @@ class TelegramPlatformService:
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            retry_token = await put_callback_token(
-                {
-                    "action": "retry",
-                }
-            )
+            retry_token = await put_callback_token({"action": "retry"})
             reply_markup = {
                 "inline_keyboard": [
                     [{"text": "Try again", "callback_data": retry_token}]
                 ]
             }
 
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
-            message or ""
-        ]
+        # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
+        # made that one empty chunk: a blank bubble, and for an approval one
+        # with no words and no buttons.
+        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
+        if not raw_chunks:
+            logger.warning(
+                "agent_surfaces.telegram.empty_message_not_sent",
+                has_reply_markup=isinstance(reply_markup, dict),
+            )
+            return
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
@@ -184,7 +188,7 @@ class TelegramPlatformService:
                 payload["reply_markup"] = reply_markup
             await self._send_chunk(payload, raw_chunk)
 
-    async def send_questions(
+    async def _render_choices(
         self,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
@@ -234,7 +238,7 @@ class TelegramPlatformService:
             )
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
@@ -312,7 +316,7 @@ class TelegramPlatformService:
         except TypeError, ValueError:
             return None
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
@@ -492,15 +496,13 @@ class TelegramPlatformService:
                     file_response.aiter_bytes(),
                     max_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
                 )
-        file_name = (
-            str(attachment.get("name") or "").strip()
-            or Path(file_path).name
-            or "telegram_file"
-        )
-        mime_type = (
-            str(attachment.get("mime_type") or "").strip()
-            or mimetypes.guess_type(file_name)[0]
-            or "application/octet-stream"
+        # Naming is its own module because getting it wrong is silent: a photo
+        # arrives with no filename and no mime type, and every layer downstream
+        # types a file by its name. See `attachment_naming`.
+        file_name, mime_type = resolve_attachment_name_and_mime(
+            attachment=attachment,
+            file_path=file_path,
+            content=content,
         )
         return content, file_name, mime_type
 

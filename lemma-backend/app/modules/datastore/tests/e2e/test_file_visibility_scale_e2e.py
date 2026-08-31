@@ -41,8 +41,8 @@ from sqlalchemy import and_, select
 pytestmark = pytest.mark.e2e
 
 #: Enough rows that an accidental O(N^2) plan is unmistakable, few enough that
-#: seeding stays under a couple of seconds. The production pod that motivated
-#: this work has 16,050.
+#: seeding stays under a couple of seconds. The real pod that motivated this work
+#: holds several times as many.
 _FILE_COUNT = 3_000
 _MEMBERS = 25
 

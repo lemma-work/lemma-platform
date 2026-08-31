@@ -30,10 +30,11 @@ class ProgressWaitingMixin:
     ) -> None:
         """Render a paused ``ask_user`` or ``request_approval`` on the surface.
 
-        The run pauses with a WAITING event before terminating. We deliver any
-        buffered narration first (so the lead-in to the question still reaches the
-        user), mark the final answer delivered so ``on_run_finished`` doesn't
-        re-send it, then render the questions / approval prompt.
+        The run pauses with a WAITING event before terminating. The narration
+        that led up to the question travels *with* it rather than ahead of it:
+        two sends arrive as two messages on a chat surface, and as two emails on
+        a surface that only gets one. Delivering it here also marks the final
+        answer delivered, so ``on_run_finished`` does not re-send it.
 
         ``ends_run`` is False for an Agent Host permission pause, which happens
         inside a run that keeps going; see the reset at the end.
@@ -51,12 +52,12 @@ class ProgressWaitingMixin:
             self._rendered_waiting_tool_calls.add(rendered_key)
 
         await self._clear_progress(conversation.id)
-        await self._deliver_pre_question_narration(conversation)
         await self._render_waiting_prompt(
             kind=str(kind),
             conversation=conversation,
             tool_call_id=tool_call_id,
             rendered_key=rendered_key,
+            narration=self._take_pre_question_narration(),
         )
 
         if not ends_run:
@@ -68,25 +69,18 @@ class ProgressWaitingMixin:
             self._final_answer_text = None
             self._buffered_text = None
 
-    async def _deliver_pre_question_narration(self, conversation: Conversation) -> None:
-        """Deliver buffered narration -- the lead-in to the question -- exactly once."""
+    def _take_pre_question_narration(self) -> str | None:
+        """The buffered lead-in to the question, claimed exactly once.
+
+        Claiming it is what stops ``on_run_finished`` sending the same text
+        again as a separate answer.
+        """
         if self._final_delivered:
-            return
+            return None
         self._final_delivered = True
         if self._run_errored:
-            return
-        message = (self._final_answer_text or self._buffered_text or "").strip()
-        if not message:
-            return
-        try:
-            await self._send_agent_message(
-                conversation_id=conversation.id,
-                message=message,
-            )
-        except Exception:
-            logger.debug(
-                "agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic"
-            )
+            return None
+        return (self._final_answer_text or self._buffered_text or "").strip() or None
 
     async def _render_waiting_prompt(
         self,
@@ -95,6 +89,7 @@ class ProgressWaitingMixin:
         conversation: Conversation,
         tool_call_id: str,
         rendered_key: tuple[str, str] | None,
+        narration: str | None = None,
     ) -> None:
         """Send the questions or the approval prompt, and un-dedupe on failure.
 
@@ -110,11 +105,13 @@ class ProgressWaitingMixin:
                     delivered = await service.send_questions_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
+                        narration=narration,
                     )
                 else:
                     delivered = await service.send_approval_prompt_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
+                        narration=narration,
                     )
                 if not delivered:
                     # Nothing reached the user; the send method logs the precise

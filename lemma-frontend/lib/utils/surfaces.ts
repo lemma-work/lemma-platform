@@ -179,7 +179,7 @@ function channelLabel(route: { channel_id?: string | null; channel_name?: string
 }
 
 /** Platforms where the surface's own reach is an inbox, not a chat. */
-const MAIL_PLATFORMS = new Set(['RESEND', 'GMAIL', 'OUTLOOK']);
+const MAIL_PLATFORMS = new Set(['RESEND']);
 
 /**
  * Every place this surface reaches one agent. `reachFor` is the agent name whose

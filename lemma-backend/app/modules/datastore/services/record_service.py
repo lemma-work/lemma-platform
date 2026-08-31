@@ -246,8 +246,12 @@ class RecordService:
         table_service: "TableService",
         ctx: Context,
         admin_mode: bool = False,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, bool]:
         """Validate, authorize, and run an ad-hoc read-only SQL query.
+
+        Returns the rows, how many came back, and whether the row cap cut the
+        result short. The third value matters: without it a capped result is
+        indistinguishable from a complete one.
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via
@@ -479,7 +483,7 @@ class RecordService:
         # preamble per row -- a permission check against the database, a
         # connection release, and a row-scope decision -- none of which can
         # change inside the loop, because the caller, the table and the mode are
-        # all fixed. Production saw the cost as p50 8.6s on records/bulk/update.
+        # all fixed. That per-row cost is what dominated records/bulk/update.
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,

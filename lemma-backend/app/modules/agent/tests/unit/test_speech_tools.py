@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
+import pytest
 
 import app.modules.agent.tools.speech.speech as speech_module
 from app.modules.agent.tools.speech.models import (
@@ -400,3 +401,98 @@ async def test_transcribe_asks_for_multilingual_by_default(monkeypatch):
     assert params["model"] == "nova-3"
     assert params["language"] == "multi"
     assert "detect_language" not in params
+
+
+# ---- a voice note is transcribed once ---------------------------------------
+#
+# Ingress transcribes an inbound voice note before the agent is asked anything,
+# and the prompt says so. A model is free to ignore that, and on dev five
+# `listen` calls landed on files whose transcript was already sitting in the
+# same conversation -- each one paying a speech provider to reproduce text the
+# run had been handed for free. So the second call is answered from the first
+# rather than forbidden.
+
+
+def test_a_path_is_matched_under_either_spelling():
+    """`/me/...` is what a listing shows; `/{user}/...` is what is stored and
+    what the prompt block quotes. The agent may write either."""
+    deps = SimpleNamespace(user_id=UUID("9452add2-8d96-4ce3-95fc-f05fc6128f39"))
+
+    from_public = speech_module._both_spellings_of(deps, "/me/whatsapp/audio.ogg")
+    from_stored = speech_module._both_spellings_of(
+        deps, "/9452add2-8d96-4ce3-95fc-f05fc6128f39/whatsapp/audio.ogg"
+    )
+
+    assert set(from_public) == set(from_stored)
+    assert len(from_public) == 2
+
+
+def test_a_workspace_path_is_left_alone():
+    """Only datastore paths have two spellings; a sandbox path has one."""
+    deps = SimpleNamespace(user_id=uuid4())
+
+    assert speech_module._both_spellings_of(deps, "recording.wav") == ("recording.wav",)
+
+
+@pytest.mark.asyncio
+async def test_listen_returns_the_existing_transcript_without_a_provider(monkeypatch):
+    """The whole point: no read, no provider call, no second bill."""
+    reached: list[str] = []
+
+    async def _found(deps, path):
+        return "book me a table for two"
+
+    async def _never_read(deps, path):
+        reached.append("read")
+        raise AssertionError("the file must not be read again")
+
+    def _never_provider():
+        reached.append("provider")
+        raise AssertionError("the provider must not be reached")
+
+    monkeypatch.setattr(speech_module, "_already_transcribed", _found)
+    monkeypatch.setattr(speech_module, "read_agent_file_bytes", _never_read)
+    monkeypatch.setattr(speech_module, "get_speech_provider", _never_provider)
+
+    result = await speech_module.listen_internal(
+        SimpleNamespace(user_id=uuid4(), conversation_id=uuid4()),
+        ListenRequest(file_path="/me/whatsapp/audio.ogg"),
+    )
+
+    assert result.success is True
+    assert result.transcript == "book me a table for two"
+    assert "transcribed when it arrived" in (result.message or "")
+    assert reached == []
+
+
+@pytest.mark.asyncio
+async def test_audio_with_no_existing_transcript_is_still_transcribed(monkeypatch):
+    """The reuse must not swallow the case `listen` exists for: audio the agent
+    went and found, which nothing has transcribed."""
+
+    async def _nothing_stored(deps, path):
+        return None
+
+    async def _read(deps, path):
+        return b"OggS-audio", "audio/ogg"
+
+    class _Provider:
+        async def transcribe(self, content, *, mime, language=None):
+            return SimpleNamespace(
+                text="a recording from the datastore",
+                detected_language="en",
+                duration_seconds=3.0,
+            )
+
+    monkeypatch.setattr(speech_module, "_already_transcribed", _nothing_stored)
+    monkeypatch.setattr(speech_module, "read_agent_file_bytes", _read)
+    monkeypatch.setattr(speech_module, "get_speech_provider", lambda: _Provider())
+
+    result = await speech_module.listen_internal(
+        SimpleNamespace(user_id=uuid4(), conversation_id=uuid4()),
+        ListenRequest(file_path="/me/recordings/standup.ogg"),
+    )
+
+    assert result.success is True
+    assert result.transcript == "a recording from the datastore"
+    assert result.message == "Transcribed audio."

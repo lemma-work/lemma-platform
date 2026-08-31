@@ -24,12 +24,14 @@ class UpdateConversationRequest:
     Attributes:
         agent_runtime (AgentRuntimeConfig | None | Unset):
         instructions (None | str | Unset):
+        is_archived (bool | None | Unset):
         metadata (None | Unset | UpdateConversationRequestMetadataType0):
         title (None | str | Unset):
     """
 
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
     instructions: None | str | Unset = UNSET
+    is_archived: bool | None | Unset = UNSET
     metadata: None | Unset | UpdateConversationRequestMetadataType0 = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -54,6 +56,12 @@ class UpdateConversationRequest:
         else:
             instructions = self.instructions
 
+        is_archived: bool | None | Unset
+        if isinstance(self.is_archived, Unset):
+            is_archived = UNSET
+        else:
+            is_archived = self.is_archived
+
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -75,6 +83,8 @@ class UpdateConversationRequest:
             field_dict["agent_runtime"] = agent_runtime
         if instructions is not UNSET:
             field_dict["instructions"] = instructions
+        if is_archived is not UNSET:
+            field_dict["is_archived"] = is_archived
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if title is not UNSET:
@@ -117,6 +127,15 @@ class UpdateConversationRequest:
 
         instructions = _parse_instructions(d.pop("instructions", UNSET))
 
+        def _parse_is_archived(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        is_archived = _parse_is_archived(d.pop("is_archived", UNSET))
+
         def _parse_metadata(
             data: object,
         ) -> None | Unset | UpdateConversationRequestMetadataType0:
@@ -148,6 +167,7 @@ class UpdateConversationRequest:
         update_conversation_request = cls(
             agent_runtime=agent_runtime,
             instructions=instructions,
+            is_archived=is_archived,
             metadata=metadata,
             title=title,
         )

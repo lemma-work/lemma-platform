@@ -12,13 +12,14 @@ import structlog
 from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.repositories import (
-    conversation_repository as cts_repo,
+from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+    ConversationOpeningTexts,
 )
 from app.modules.agent.services import conversation_title_service as cts
 from app.modules.agent.services.conversation_title_service import (
     ConversationTitleService,
     _sanitize_title,
+    title_matches_user_script,
 )
 from app.modules.agent.services.realtime import title_updated_payload
 from app.modules.usage.domain.entities import UsageReservation
@@ -106,7 +107,7 @@ class _FakeRepo:
     ) -> Conversation | None:
         if include_messages:
             # Titling needs two rows. Loading the transcript to find them cost
-            # 1.4s of materialisation inside an open transaction in production.
+            # seconds of materialisation inside an open transaction.
             raise AssertionError(
                 "titling must not load the transcript; "
                 "use get_conversation_opening_texts"
@@ -129,7 +130,7 @@ class _FakeRepo:
                     return message.text.strip()
             return None
 
-        return cts_repo.ConversationOpeningTexts(
+        return ConversationOpeningTexts(
             user_text=_first("user"), assistant_text=_first("assistant")
         )
 
@@ -215,7 +216,13 @@ def _patch_llm(
     return capture
 
 
-def _conversation(*, title=None, with_user=True, with_reply=True) -> Conversation:
+def _conversation(
+    *,
+    title=None,
+    with_user=True,
+    with_reply=True,
+    user_text="Help me plan a 5-day trip to Japan in spring.",
+) -> Conversation:
     conv = Conversation(user_id=uuid4(), pod_id=uuid4(), title=title)
     seq = 0
     if with_user:
@@ -225,7 +232,7 @@ def _conversation(*, title=None, with_user=True, with_reply=True) -> Conversatio
                 sequence=seq,
                 role="user",
                 kind=MessageKind.TEXT,
-                text="Help me plan a 5-day trip to Japan in spring.",
+                text=user_text,
             )
         )
         seq += 1
@@ -460,3 +467,79 @@ def test_sanitize_title_strips_and_clamps() -> None:
     long = "word " * 40
     assert len(_sanitize_title(long)) <= 80
     assert _sanitize_title("") == ""
+
+
+# --- the title is in the language the person wrote in ---------------------
+#
+# Reported from production: a conversation opened with a greeting came back
+# titled 初识寒暄. The system prompt already asked for the user's language; what
+# it did not say was what to do when the opening message has no language to
+# match, which is exactly the case that broke. The prompt now names English as
+# the default, and these pin the guard that holds when the prompt does not.
+
+
+def test_a_latin_title_always_passes() -> None:
+    assert title_matches_user_script("Five Day Japan Itinerary", "hi") is True
+    # Digits and punctuation carry no language.
+    assert title_matches_user_script("Q4 2026 Revenue (draft)", "hi") is True
+
+
+def test_a_title_in_a_script_the_person_never_used_is_rejected() -> None:
+    assert title_matches_user_script("初识寒暄", "hi") is False
+    assert title_matches_user_script("Привет мир", "hello there") is False
+    assert title_matches_user_script("데이터 정리", "clean up my data") is False
+
+
+def test_a_title_matching_the_person_is_kept() -> None:
+    assert title_matches_user_script("初识寒暄", "你好，帮我看一下") is True
+    assert title_matches_user_script("Планы на квартал", "Привет, помоги мне") is True
+    # A mixed-script message licenses either script.
+    assert title_matches_user_script("items 表行数", "查询 items 表的行数") is True
+
+
+@pytest.mark.asyncio
+async def test_a_mismatched_title_falls_back_to_the_persons_own_words(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_llm(monkeypatch, output="初识寒暄")
+    conv = _conversation(user_text="hi", with_reply=False)
+    uow = _FakeUow(conv)
+    monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)
+    counter = _FakeCounter()
+    monkeypatch.setattr(cts, "title_counter", counter)
+
+    title = await ConversationTitleService(uow_factory=uow).generate_title_if_absent(
+        conv.id
+    )
+
+    assert title == "hi"
+    assert uow.updated_with is not None and uow.updated_with.title == "hi"
+    # Counted as the fallback path, because that is the one that produced it.
+    assert counter.outcomes == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_a_chinese_conversation_still_gets_a_chinese_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The guard must not become "titles are English now".
+    _patch_llm(monkeypatch, output="查询items表行数")
+    conv = _conversation(user_text="查询 items 表有多少行", with_reply=False)
+    uow = _FakeUow(conv)
+    monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)
+
+    title = await ConversationTitleService(uow_factory=uow).generate_title_if_absent(
+        conv.id
+    )
+
+    assert title == "查询items表行数"
+
+
+def test_the_prompt_names_english_as_the_default() -> None:
+    # The mismatch guard is the backstop; the prompt is what should stop this
+    # reaching it. A rule that only says "match the user" leaves the
+    # no-language-to-match case undefined, which is the case that failed.
+    prompt = cts._TITLE_SYSTEM_PROMPT
+    assert "same script" in prompt
+    assert "English is the default" in prompt
+    assert "Never translate" in prompt

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, proves, scenario, stack_lane
 from harness.waiting import eventually, never
 
 pytestmark = [journey("Working with data"), capability("Put documents in")]
@@ -102,6 +102,7 @@ A_READABLE_PDF = (
 @scenario("An unavailable converter does not count against the document")
 @proves("PS-DATA-041")
 @covers("file.upload", "file.get")
+@stack_lane("needs a deployment with no document converter reachable")
 async def test_an_unavailable_converter_does_not_burn_attempts(a_pod_of_its_own):
     # A pod of its own, because this scenario's whole subject is a document that
     # can never be converted — it stays queued and retrying for as long as it

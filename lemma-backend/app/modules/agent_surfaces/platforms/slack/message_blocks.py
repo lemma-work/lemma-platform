@@ -236,3 +236,47 @@ def _truncate_slack_text(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
     return value[: max_length - 1].rstrip() + "..."
+
+
+def slack_acknowledgement_body(
+    original_message: dict[str, Any],
+    *,
+    text: str | None,
+    clear_actions: bool,
+) -> dict[str, Any]:
+    """The ``response_url`` payload that answers a tapped button.
+
+    Two shapes, because a tap means two different things. When the decision is
+    settled (``clear_actions``) the original message is rewritten without its
+    action blocks and with the outcome appended, so the card stays readable in
+    the thread and cannot be tapped a second time. When it is not settled --
+    "reply with your own answer" -- the card is left alone and the note goes
+    only to the person who tapped, because nobody else in the channel is
+    waiting on it.
+
+    Pure, so the exact body Slack receives can be asserted without a transport.
+    """
+    note = (text or "").strip()
+    if not clear_actions:
+        return {
+            "response_type": "ephemeral",
+            "replace_original": False,
+            "text": note or "Got it.",
+        }
+
+    kept = [
+        block
+        for block in (original_message.get("blocks") or [])
+        if isinstance(block, dict) and block.get("type") != "actions"
+    ]
+    if note:
+        kept.append({"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
+    body: dict[str, Any] = {
+        "replace_original": True,
+        # Slack needs a text fallback whenever blocks are sent; it is what a
+        # notification preview shows.
+        "text": note or str(original_message.get("text") or "").strip() or "Done",
+    }
+    if kept:
+        body["blocks"] = kept
+    return body

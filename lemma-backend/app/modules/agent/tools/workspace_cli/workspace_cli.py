@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
-from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
@@ -16,7 +14,11 @@ from app.modules.agent.tools.file_access import (
     read_workspace_file_bytes,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.agent.tools.tool_errors import (
+    approval_error_result,
+    safe_described_error,
+    safe_error_text,
+)
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -37,13 +39,14 @@ from app.modules.agent.tools.workspace_cli.github_project import (
     prepare_project_directory,
 )
 from app.modules.agent.tools.workspace_cli.helper import (
-    CHARACTER_LIMIT_STDOUT,
-    normalize_terminal_output,
-    tail_truncate,
+    render_terminal_result,
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
 from app.modules.workspace.session_support import retry_advice
+from app.modules.agent.tools.workspace_cli.process_visibility import (
+    visible_processes,
+)
 from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
 )
@@ -103,7 +106,7 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{describe_exception(exc)}." + retry_advice(exc)
+            f"{safe_described_error(exc)}." + retry_advice(exc)
         ),
     )
 
@@ -125,7 +128,7 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{describe_exception(exc)}." + retry_advice(exc)
+                f"{safe_described_error(exc)}." + retry_advice(exc)
             ),
             "traceback": [],
         },
@@ -176,21 +179,6 @@ def _with_notice(text: str | None, *, notice: str | None) -> str | None:
     if not notice:
         return text
     return f"{notice}\n{text or ''}"
-
-
-def _render_terminal_result(
-    result: dict[str, Any], *, tty: bool
-) -> tuple[str | None, str | None]:
-    """Make raw PTY output readable, keeping the end rather than the start."""
-
-    stdout = result.get("stdout")
-    stderr = result.get("stderr")
-    if not tty:
-        return stdout, stderr
-    return (
-        tail_truncate(normalize_terminal_output(stdout or ""), CHARACTER_LIMIT_STDOUT),
-        tail_truncate(normalize_terminal_output(stderr or ""), CHARACTER_LIMIT_STDOUT),
-    )
 
 
 async def _process_control_tool(
@@ -317,7 +305,7 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
-        stdout, stderr = _render_terminal_result(result, tty=request.tty)
+        stdout, stderr = render_terminal_result(result, tty=request.tty)
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )
@@ -371,7 +359,7 @@ async def write_stdin_internal(
             )
         # write_stdin only ever targets an interactive process, so its output is
         # terminal output and is rendered as such.
-        stdout, stderr = _render_terminal_result(result, tty=True)
+        stdout, stderr = render_terminal_result(result, tty=True)
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,
@@ -421,36 +409,19 @@ async def list_processes_internal(
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
-        # One sandbox serves every conversation belonging to a user, so this
-        # list spans all of them. Show only what this conversation may drive:
-        # its own processes, plus any that no conversation currently owns.
-        # Rebinding indiscriminately would let a parent agent take over the
-        # processes its own sub-agents started, since a sub-agent shares the
-        # sandbox but has its own session.
-        session_id = workspace_session.session_id
-        visible: list[dict[str, Any]] = []
-        for process in processes:
-            process_id = str(process["process_id"])
-            owner = await runtime.resolve_session_for_process(process_id)
-            if owner is None:
-                # Unowned: its binding expired, or it was started outside the
-                # tool path. Claiming it here is how an agent recovers a
-                # process it can otherwise no longer address.
-                if not process.get("completed") and session_id:
-                    await runtime.bind_process_to_session(
-                        process_id=process_id,
-                        session_id=session_id,
-                    )
-                visible.append(process)
-            elif owner == session_id:
-                visible.append(process)
+        visible = await visible_processes(
+            processes,
+            runtime=runtime,
+            session_id=workspace_session.session_id,
+            own_cwd=runtime_context.initial_cwd,
+        )
         return ListProcessesResult(
             success=True,
             processes=[ProcessInfo.model_validate(process) for process in visible],
         )
     except Exception as exc:
-        logger.debug(
-            "agent.workspace_cli.workspace_cli_list_processes_s.diagnostic",
+        logger.warning(
+            "agent.workspace_cli.workspace_cli_list_processes_s.degraded",
             exc_info=True,
         )
         return ListProcessesResult(
@@ -458,7 +429,7 @@ async def list_processes_internal(
             processes=[],
             error=(
                 f"Workspace list_processes failed before the tool could complete: "
-                f"{describe_exception(exc)}. Treat this as a recoverable tool "
+                f"{safe_described_error(exc)}. Treat this as a recoverable tool "
                 "failure and retry if the operation is still needed."
             ),
         )
@@ -524,7 +495,7 @@ async def view_image_internal(
             exc, tool_name="view_image", args=request.model_dump()
         )
     except Exception as exc:
-        return ExecCommandResult(success=False, error=str(exc))
+        return ExecCommandResult(success=False, error=safe_error_text(exc))
 
     media_type = detected_mime or mimetypes.guess_type(file_path)[0]
     if not media_type or not media_type.startswith("image/"):

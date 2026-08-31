@@ -180,6 +180,19 @@ def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
+    """A schedule as a definition, with where-it-ran-last left behind.
+
+    The list below drifted from the API: it strips `last_run_at`/`next_run_at`
+    and not the fields that replaced them, so export wrote seven pieces of
+    runtime state that import rejects by name -- "Unrecognized field(s) on
+    schedule". A bundle this code produced could not be imported by it, and the
+    only way through was editing the JSON by hand.
+
+    The rule is what a schedule *is*, not how a particular installation's copy
+    of it has been getting on: when it last fired, what it returned, how many
+    times it has failed, and whether failures have paused it all belong to the
+    pod it ran in, never to the pod it is being copied into.
+    """
     return _strip_keys(
         schedule,
         {
@@ -193,6 +206,14 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
             "agent_id",
             "workflow_id",
             "allowed_actions",
+            # Runtime state, added after this list was written.
+            "consecutive_failures",
+            "is_internal",
+            "last_error",
+            "last_fire_status",
+            "last_fired_at",
+            "last_run_id",
+            "paused_by_failures",
         },
     )
 

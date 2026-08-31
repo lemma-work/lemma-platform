@@ -52,11 +52,28 @@ EXEMPT = {
     # job that never starts, since its `if:` includes `github.event_name ==
     # 'push'`. A red one is "look in the morning".
     ("ci.yml", "host-pack-macos"),
-    # The notifier, not a suite. It reports on the aggregator's blind spot --
-    # `host-pack-macos` -- so it necessarily runs after every job the
-    # aggregator waits for, and putting it inside `ci`.needs would be a cycle.
-    # It also cannot fail a run: there is nothing left to fail by then.
-    ("ci.yml", "main-red"),
+}
+
+# The workflow that announces a failure nobody is looking at. It watches the
+# others by name, so a workflow missing from its list is silent -- which is the
+# state every scheduled lane in this repository was in.
+NOTIFIER = "notify-failure.yml"
+
+# Workflows the notifier deliberately does not watch.
+UNWATCHED = {
+    # A `workflow_run` consumer, and the only one here. Such a run always
+    # reports `head_branch: main` and `event: workflow_run`, whatever commit it
+    # is actually about -- so there is no expression the notifier can write that
+    # tells "coverage failed on main" from "coverage failed on somebody's pull
+    # request", and the second is far more common. Announcing both would put
+    # pull-request noise in a channel that exists for the runs nobody sees,
+    # which is how a channel stops being read.
+    #
+    # Affordable because this one is advisory by design: not a required check,
+    # off the pull-request critical path, and enforcing module floors several
+    # modules are still below. A real regression in it is found by reading it,
+    # not by being paged about it.
+    "backend-coverage.yml",
 }
 
 # Every workflow is checked for timeouts, not just the two with aggregators.
@@ -129,6 +146,37 @@ def literal_node_versions(workflow: str, jobs: dict) -> list[str]:
     return problems
 
 
+def unwatched_workflows() -> list[str]:
+    """Every workflow must be named in the failure notifier.
+
+    `workflow_run` takes a literal list of workflow names -- there is no
+    wildcard -- so the notifier is only as complete as a list somebody has to
+    remember to edit. Nobody would, and the cost of not doing it is exactly
+    what this repository already paid: the nightly product scenarios red 9 runs
+    running, the weekly security scan red for six weeks, and a host-pack job
+    red through eleven merges, all of them reporting into a run list.
+
+    Matched on the workflow's `name:`, which is what `workflow_run` matches on
+    -- not the filename, which it ignores.
+    """
+    notifier = yaml.safe_load((WORKFLOWS / NOTIFIER).read_text())
+    triggers = notifier.get(True) or notifier.get("on") or {}
+    watched = set((triggers.get("workflow_run") or {}).get("workflows") or [])
+
+    problems = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        if path.name == NOTIFIER or path.name in UNWATCHED:
+            continue
+        name = yaml.safe_load(path.read_text()).get("name")
+        if name not in watched:
+            problems.append(
+                f"{path.name}: workflow '{name}' is not watched by {NOTIFIER}, so "
+                f"a failure outside a pull request is announced nowhere. Add it "
+                f"to that file's `on.workflow_run.workflows` list."
+            )
+    return problems
+
+
 def main() -> int:
     problems: list[str] = []
 
@@ -166,6 +214,8 @@ def main() -> int:
                     f"{path.name}: job '{name}' is not in '{aggregator}'.needs, so it "
                     f"can fail while the required check stays green"
                 )
+
+    problems.extend(unwatched_workflows())
 
     for problem in problems:
         print(f"::error::{problem}")

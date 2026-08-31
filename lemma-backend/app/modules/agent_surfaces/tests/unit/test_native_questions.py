@@ -248,7 +248,7 @@ async def test_telegram_send_questions_builds_inline_keyboard():
             new=AsyncMock(),
         ) as send_message,
     ):
-        ok = await adapter.send_questions(
+        ok = await adapter._render_choices(
             credentials={"bot_token": "x"},
             event=_telegram_event(),
             question_plan=_single_question_plan(),
@@ -284,7 +284,7 @@ async def test_telegram_send_questions_falls_back_on_multi_select():
             )
         ],
     )
-    ok = await adapter.send_questions(
+    ok = await adapter._render_choices(
         credentials={"bot_token": "x"},
         event=_telegram_event(),
         question_plan=plan,
@@ -408,7 +408,7 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         return _Resp()
 
     with patch("httpx.AsyncClient.post", new=_fake_post):
-        ok = await adapter.send_questions(
+        ok = await adapter._render_choices(
             credentials={"access_token": "t", "phone_number_id": "pn1"},
             event=_whatsapp_event(),
             question_plan=_single_question_plan(),
@@ -442,7 +442,7 @@ async def test_whatsapp_send_questions_falls_back_on_multi_select():
             )
         ],
     )
-    ok = await adapter.send_questions(
+    ok = await adapter._render_choices(
         credentials={"access_token": "t", "phone_number_id": "pn1"},
         event=_whatsapp_event(),
         question_plan=plan,

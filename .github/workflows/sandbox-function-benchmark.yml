@@ -39,7 +39,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install locked backend dependencies
@@ -65,9 +65,33 @@ jobs:
         env:
           FUNCTION_BENCH_CONCURRENCY: "5"
         run: make benchmark-functions-docker
+      # Every run, pass or fail. The interesting output of a benchmark is the
+      # number, not the outcome -- and until now the numbers went into a 30-day
+      # artifact and were compared to nothing at all, so a sandbox that got
+      # twice as slow produced a green run and a file nobody opened. A person
+      # who sees the figures nightly knows what normal looks like; a threshold
+      # tight enough to catch a real regression here would fire on a noisy
+      # Tuesday. Reporting cannot fail the lane: no webhook, or a Slack outage,
+      # prints and exits 0.
+      - name: Post the docker numbers to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          BENCHMARK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # From the repository root, not `lemma-backend`: the benchmark resolves
+        # its output directory from the repo root, and this job's `defaults`
+        # put `run` steps a level down. The upload step below looks correct
+        # beside this one and is not affected -- `actions/upload-artifact`
+        # resolves against the workspace, never against `working-directory`.
+        working-directory: .
+        run: >-
+          python3 scripts/report_benchmark_to_slack.py
+          .benchmark-results/function-execution/docker/*.json
+          --lane docker
+
       - name: Publish Docker benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sandbox-function-docker-${{ github.sha }}
           path: .benchmark-results/function-execution/docker/*.json
@@ -88,7 +112,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install locked backend dependencies
@@ -137,9 +161,33 @@ jobs:
           # may select ngrok to distinguish tunnel failures from executor failures.
           FUNCTION_BENCH_TUNNEL: cloudflared
         run: make benchmark-functions-e2b
+      # Every run, pass or fail. The interesting output of a benchmark is the
+      # number, not the outcome -- and until now the numbers went into a 30-day
+      # artifact and were compared to nothing at all, so a sandbox that got
+      # twice as slow produced a green run and a file nobody opened. A person
+      # who sees the figures nightly knows what normal looks like; a threshold
+      # tight enough to catch a real regression here would fire on a noisy
+      # Tuesday. Reporting cannot fail the lane: no webhook, or a Slack outage,
+      # prints and exits 0.
+      - name: Post the e2b numbers to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          BENCHMARK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # From the repository root, not `lemma-backend`: the benchmark resolves
+        # its output directory from the repo root, and this job's `defaults`
+        # put `run` steps a level down. The upload step below looks correct
+        # beside this one and is not affected -- `actions/upload-artifact`
+        # resolves against the workspace, never against `working-directory`.
+        working-directory: .
+        run: >-
+          python3 scripts/report_benchmark_to_slack.py
+          .benchmark-results/function-execution/e2b/*.json
+          --lane e2b
+
       - name: Publish E2B benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sandbox-function-e2b-${{ github.sha }}
           path: .benchmark-results/function-execution/e2b/*.json

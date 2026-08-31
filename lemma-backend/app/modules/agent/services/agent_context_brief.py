@@ -40,6 +40,7 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
+    UserProfile,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
@@ -61,10 +62,10 @@ _MAX_COLUMNS = 40
 # Redis being unavailable degrades to a miss and never fails a run.
 #
 # Deliberately NOT keyed by conversation. It used to be, and that made the cache
-# almost dead: 89.9% of production runs are the first run of their conversation
-# and therefore a guaranteed miss, and of the runs that were not, the median gap
-# to the previous one was 426.9s -- seven times the TTL. So the hot path paid a
-# full rebuild on ~90% of runs to protect against variation that does not exist.
+# almost dead: most runs are the first run of their conversation and therefore a
+# guaranteed miss, and the runs that were not typically arrived long enough after
+# the previous one to have outlived the TTL anyway. So the hot path paid a full
+# rebuild on nearly every run to protect against variation that does not exist.
 #
 # Nothing in the rendered brief is conversation-derived. The build reads the pod,
 # the user and either the pod inventory or the agent's grants; the only thing it
@@ -201,12 +202,11 @@ class AgentContextBriefBuilder:
         async with self.uow_factory() as uow:
             repo = AgentContextBriefRepository(uow)
             pod_name = await repo.get_pod_name(pod_id) or "(unknown)"
-            email = await repo.get_user_email(user_id)
-        user_line = f"{email} ({user_id})" if email else str(user_id)
+            profile = await repo.get_user_profile(user_id)
         lines = [
             "# Runtime Context",
             f"- Pod: {pod_name} ({pod_id})",
-            f"- User: {user_line}",
+            *_user_lines(profile, user_id),
         ]
 
         if is_default:
@@ -233,10 +233,11 @@ class AgentContextBriefBuilder:
             )
             token = set_current_context(ctx)
             try:
-                tables, _ = await build_table_service(uow).list_tables(
+                tables, table_total = await build_table_service(uow).list_tables(
                     pod_id, ctx, limit=_MAX_TABLES
                 )
                 table_lines = [_table_line(table) for table in tables]
+                table_lines.extend(_more_note(len(tables), table_total, "tables"))
             finally:
                 reset_current_context(token)
         if table_lines:
@@ -245,7 +246,7 @@ class AgentContextBriefBuilder:
 
         # Agents (plain query).
         async with self.uow_factory() as uow:
-            agents, _ = await AgentRepository(uow).list_by_pod(
+            agents, agent_total = await AgentRepository(uow).list_by_pod(
                 pod_id=pod_id, limit=_MAX_RESOURCES
             )
         named = [a for a in agents if a.id != DEFAULT_POD_AGENT_ID]
@@ -255,12 +256,13 @@ class AgentContextBriefBuilder:
                 f"- {a.name}" + (f" — {a.description}" if a.description else "")
                 for a in named
             )
+            lines.extend(_more_note(len(agents), agent_total, "agents"))
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, _ = await create_function_repository(uow).list_by_pod(
-                pod_id, limit=_MAX_RESOURCES
-            )
+            functions, function_total = await create_function_repository(
+                uow
+            ).list_by_pod(pod_id, limit=_MAX_RESOURCES)
         if functions:
             lines.append("\n## Functions")
             lines.extend(
@@ -268,6 +270,7 @@ class AgentContextBriefBuilder:
                 + (f" — {f.description}" if f.description else "")
                 for f in functions
             )
+            lines.extend(_more_note(len(functions), function_total, "functions"))
 
         # Files — best-effort grounding, isolated in its own uow so the storage
         # walk never extends the spans above. (Removing the storage hold inside
@@ -289,8 +292,14 @@ class AgentContextBriefBuilder:
                 lines.append("\n## Files (top level)")
                 lines.extend(f"- {entry}" for entry in entries)
         except Exception:
-            # Files are best-effort context; never fail prompt assembly on them.
-            pass
+            # Files are best-effort context; never fail prompt assembly on them
+            # -- but say so. A silently missing "Files (top level)" section reads
+            # to the model as a pod with no files in it.
+            logger.warning(
+                "agent.context_brief.file_inventory_unavailable.degraded",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
         return lines
 
     async def _granted_resources(
@@ -355,9 +364,15 @@ class AgentContextBriefBuilder:
             "tool returns a permission error (403), or for an explicitly "
             "destructive action.",
         ]
-        for (resource_type, resource_id), perms in list(perms_by_ref.items())[
-            :_MAX_RESOURCES
-        ]:
+        granted = list(perms_by_ref.items())
+        # Truncating a section headed "These are pre-authorized for you" without
+        # saying so means the agent asks for approval it already has.
+        lines.extend(
+            _more_note(
+                min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"
+            )
+        )
+        for (resource_type, resource_id), perms in granted[:_MAX_RESOURCES]:
             try:
                 ref_type = ResourceType(resource_type)
             except ValueError:
@@ -373,12 +388,73 @@ class AgentContextBriefBuilder:
         return lines
 
 
+def _more_note(shown: int, total: object, noun: str) -> list[str]:
+    """One line saying what the cap left out, or nothing when it left nothing.
+
+    Every cap in this brief used to be silent, so a pod's 51st table simply did
+    not exist as far as the agent was concerned -- and an agent that believes a
+    table is absent does not go looking for it, it tells the user there isn't
+    one.
+    """
+    # A repository that does not count returns None rather than a total; that is
+    # "unknown", not "nothing more", and must not crash prompt assembly.
+    if not isinstance(total, int) or total <= shown:
+        return []
+    return [
+        f"- … and {total - shown} more {noun} not listed here "
+        f"(showing {shown}). Use your tools to list them all."
+    ]
+
+
+def _user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
+    """Who the agent is talking to, and what time it is where they are.
+
+    Both halves used to be missing, and neither is recoverable from anywhere
+    else in the prompt. The brief named an address and a UUID, so an agent
+    asked to greet somebody by name had nothing to read one from -- it either
+    said the email address out loud or hoped a past agent had written the name
+    into `/me`. And the only clock a run is given is UTC, which is the wrong
+    answer to "this morning" and the wrong date to write into a memory file.
+
+    Said plainly when the timezone is unset, rather than left out: an agent
+    told nothing assumes the clock in front of it is the person's.
+    """
+    identity = profile.email or "(unknown)"
+    if profile.display_name:
+        identity = (
+            f"{profile.display_name} <{profile.email}>"
+            if profile.email
+            else profile.display_name
+        )
+    lines = [f"- User: {identity} ({user_id})"]
+    if profile.timezone:
+        lines.append(
+            f"- Their timezone: {profile.timezone}. The clock you are given "
+            "reads UTC — convert before naming a time of day or resolving a "
+            "date for them."
+        )
+    else:
+        lines.append(
+            "- Their timezone is not set, and the clock you are given reads "
+            "UTC, which may not be theirs. Don't name a time of day or resolve "
+            '"today" on their behalf without asking.'
+        )
+    return lines
+
+
 def _table_line(table) -> str:
+    shown = table.columns[:_MAX_COLUMNS]
     columns = ", ".join(
         f"{c.name}:{c.type.value if hasattr(c.type, 'value') else c.type}"
-        for c in table.columns[:_MAX_COLUMNS]
+        for c in shown
     )
-    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}"
+    # A column the agent cannot see is a column it will omit from a write and
+    # then be told is required, or will report to the user as not existing.
+    hidden = len(table.columns) - len(shown)
+    suffix = (
+        f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
+    )
+    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}{suffix}"
 
 
 def _top_level_file_entries(tree: object) -> list[str]:
@@ -394,4 +470,9 @@ def _top_level_file_entries(tree: object) -> list[str]:
             kind = child.get("kind") or child.get("type")
             if name:
                 entries.append(f"{name}" + (f" [{kind}]" if kind else ""))
+    if len(children) > _MAX_RESOURCES:
+        entries.append(
+            f"… and {len(children) - _MAX_RESOURCES} more top-level entries "
+            "not listed here"
+        )
     return entries

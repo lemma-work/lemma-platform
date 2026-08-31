@@ -10,7 +10,6 @@ import {
     CopyCheck,
     Download,
     Eye,
-    File as FileIcon,
     FileText,
     Maximize2,
     Minimize2,
@@ -30,6 +29,7 @@ import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { isPersonalPath } from '@/lib/files/doc-sections';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
+import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import {
     MarkdownAttachmentControl,
     canAttachDocumentMarkdown,
@@ -48,13 +48,18 @@ import {
     canPrintDocument,
     getDocumentPreviewType,
     getOfficePreviewKind,
+    isTextPreviewType,
     printFileName,
     renderDocxPreview,
     renderPdfPreview,
 } from '@/components/documents/preview-renderers';
-import { DocumentFrontmatter } from '@/components/documents/document-frontmatter';
-import { joinFrontmatter, splitFrontmatter } from '@/lib/files/frontmatter';
-import { MarkdownEditor } from './markdown-editor';
+import { DocumentPreviewBody } from '@/components/documents/document-preview';
+import {
+    buildDocxPreviewSrcDoc,
+    buildHtmlPreviewDocument,
+    buildHtmlPreviewSrcDoc,
+    type HtmlPreviewDocument,
+} from '@/lib/files/html-preview';
 import { DocumentBodySkeleton, DocumentSkeleton } from '@/components/documents/document-skeleton';
 import { cn } from '@/lib/utils';
 
@@ -76,10 +81,6 @@ interface DocumentViewerProps {
 
 type TextViewMode = 'preview' | 'source';
 
-type HtmlPreviewDocument = {
-    srcDoc: string;
-};
-
 function inferTextMimeType(filename: string): string {
     const lower = filename.toLowerCase();
     if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown';
@@ -89,237 +90,6 @@ function inferTextMimeType(filename: string): string {
     if (lower.endsWith('.csv')) return 'text/csv';
     if (lower.endsWith('.xml')) return 'application/xml';
     return 'text/plain';
-}
-
-function buildDocxPreviewSrcDoc(contentHtml: string): string {
-    return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: rgb(255 255 255); color: rgb(15 23 42); }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.55;
-      overflow-x: hidden;
-    }
-    body :where(*) { max-width: 100%; }
-    body :where(p, li, td, th, span) { overflow-wrap: anywhere; word-break: break-word; }
-    img { max-width: 100%; height: auto; }
-    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-    td, th { border: 1px solid rgb(229 231 235); padding: 6px 8px; vertical-align: top; }
-    p { margin: 0 0 10px; }
-    h1, h2, h3, h4, h5, h6 { margin: 14px 0 10px; }
-  </style>
-</head>
-<body>${contentHtml}</body>
-</html>`;
-}
-
-function looksLikeHtmlDocument(contentHtml: string): boolean {
-    return /^\s*<!doctype\s+html/i.test(contentHtml) || /^\s*<html[\s>]/i.test(contentHtml);
-}
-
-function buildHtmlPreviewSrcDoc(contentHtml: string): string {
-    if (looksLikeHtmlDocument(contentHtml)) {
-        return contentHtml;
-    }
-
-    return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-</head>
-<body>${contentHtml}</body>
-</html>`;
-}
-
-function getDirectoryPath(filePath: string): string {
-    const normalized = filePath.replace(/\\/g, '/');
-    const lastSlashIndex = normalized.lastIndexOf('/');
-    if (lastSlashIndex <= 0) return '/';
-    return normalized.slice(0, lastSlashIndex);
-}
-
-function normalizePathSegments(path: string): string {
-    const startsWithSlash = path.startsWith('/');
-    const segments = path.split('/').filter((segment) => segment.length > 0);
-    const normalizedSegments: string[] = [];
-
-    segments.forEach((segment) => {
-        if (segment === '.') return;
-        if (segment === '..') {
-            normalizedSegments.pop();
-            return;
-        }
-        normalizedSegments.push(segment);
-    });
-
-    return `${startsWithSlash ? '/' : ''}${normalizedSegments.join('/')}` || '/';
-}
-
-function resolveHtmlAssetPath(baseFilePath: string, rawUrl: string): string | null {
-    const value = rawUrl.trim();
-    if (!value || value.startsWith('#')) return null;
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)) return null;
-
-    const [withoutHash] = value.split('#');
-    const [pathname] = withoutHash.split('?');
-    if (!pathname) return null;
-    const decodedPathname = safeDecodeUrlPath(pathname);
-
-    if (decodedPathname.startsWith('/')) {
-        return normalizePathSegments(decodedPathname);
-    }
-
-    return normalizePathSegments(`${getDirectoryPath(baseFilePath)}/${decodedPathname}`);
-}
-
-function safeDecodeUrlPath(pathname: string): string {
-    try {
-        return decodeURIComponent(pathname);
-    } catch {
-        return pathname;
-    }
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            if (typeof reader.result === 'string') resolve(reader.result);
-            else reject(new Error('Failed to read asset'));
-        };
-        reader.onerror = () => reject(reader.error || new Error('Failed to read asset'));
-        reader.readAsDataURL(blob);
-    });
-}
-
-async function buildHtmlPreviewDocument({
-    contentHtml,
-    documentPath,
-    loadAsset,
-}: {
-    contentHtml: string;
-    documentPath: string;
-    loadAsset: (path: string) => Promise<Blob>;
-}): Promise<HtmlPreviewDocument> {
-    const html = buildHtmlPreviewSrcDoc(contentHtml);
-    const parser = new DOMParser();
-    const parsed = parser.parseFromString(html, 'text/html');
-    const assetCache = new Map<string, Promise<string | null>>();
-
-    const resolveAssetUrl = (rawUrl: string, basePath = documentPath): Promise<string | null> => {
-        const assetPath = resolveHtmlAssetPath(basePath, rawUrl);
-        if (!assetPath) return Promise.resolve(null);
-
-        const cached = assetCache.get(assetPath);
-        if (cached) return cached;
-
-        const next = loadAsset(assetPath)
-            .then((blob) => blobToDataUrl(blob))
-            .catch(() => null);
-        assetCache.set(assetPath, next);
-        return next;
-    };
-
-    const resolveStylesheetUrl = (rawUrl: string): Promise<string | null> => {
-        const stylesheetPath = resolveHtmlAssetPath(documentPath, rawUrl);
-        if (!stylesheetPath) return Promise.resolve(null);
-
-        const cacheKey = `css:${stylesheetPath}`;
-        const cached = assetCache.get(cacheKey);
-        if (cached) return cached;
-
-        const next = loadAsset(stylesheetPath)
-            .then(async (blob) => {
-                const cssText = await blob.text();
-                const rewrittenCss = await rewriteCssUrls(cssText, stylesheetPath, resolveAssetUrl);
-                return blobToDataUrl(new Blob([rewrittenCss], { type: blob.type || 'text/css' }));
-            })
-            .catch(() => resolveAssetUrl(rawUrl));
-        assetCache.set(cacheKey, next);
-        return next;
-    };
-
-    const rewriteAttribute = async (
-        selector: string,
-        attribute: string,
-        resolveUrl: (rawUrl: string) => Promise<string | null> = resolveAssetUrl
-    ) => {
-        const elements = Array.from(parsed.querySelectorAll<HTMLElement>(selector));
-        await Promise.all(elements.map(async (element) => {
-            const rawValue = element.getAttribute(attribute);
-            if (!rawValue) return;
-            const nextValue = await resolveUrl(rawValue);
-            if (nextValue) element.setAttribute(attribute, nextValue);
-        }));
-    };
-
-    const rewriteSrcset = async () => {
-        const elements = Array.from(parsed.querySelectorAll<HTMLElement>('[srcset]'));
-        await Promise.all(elements.map(async (element) => {
-            const rawValue = element.getAttribute('srcset');
-            if (!rawValue) return;
-            const nextValue = await rewriteSrcsetValue(rawValue, resolveAssetUrl);
-            if (nextValue) element.setAttribute('srcset', nextValue);
-        }));
-    };
-
-    await Promise.all([
-        rewriteAttribute('img[src], script[src], iframe[src], source[src], video[src], audio[src], embed[src]', 'src'),
-        rewriteAttribute('object[data]', 'data'),
-        rewriteAttribute('link[rel~="stylesheet"][href]', 'href', resolveStylesheetUrl),
-        rewriteAttribute('link[rel~="icon"][href], link[rel~="preload"][href], link[rel~="modulepreload"][href]', 'href'),
-        rewriteAttribute('[poster]', 'poster'),
-        rewriteSrcset(),
-    ]);
-
-    return {
-        srcDoc: `<!doctype html>\n${parsed.documentElement.outerHTML}`,
-    };
-}
-
-async function rewriteCssUrls(
-    cssText: string,
-    stylesheetPath: string,
-    resolveAssetUrl: (rawUrl: string, basePath?: string) => Promise<string | null>
-): Promise<string> {
-    const urlPattern = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
-    const matches = Array.from(cssText.matchAll(urlPattern));
-    if (matches.length === 0) return cssText;
-
-    const replacements = await Promise.all(matches.map(async (match) => {
-        const rawUrl = match[2]?.trim();
-        if (!rawUrl) return null;
-        const objectUrl = await resolveAssetUrl(rawUrl, stylesheetPath);
-        return objectUrl ? { from: match[0], to: `url("${objectUrl}")` } : null;
-    }));
-
-    return replacements.reduce((nextCss, replacement) => (
-        replacement ? nextCss.replace(replacement.from, replacement.to) : nextCss
-    ), cssText);
-}
-
-async function rewriteSrcsetValue(
-    srcset: string,
-    resolveAssetUrl: (rawUrl: string) => Promise<string | null>
-): Promise<string | null> {
-    const candidates = srcset.split(',').map((candidate) => candidate.trim()).filter(Boolean);
-    if (candidates.length === 0) return null;
-
-    const rewrittenCandidates = await Promise.all(candidates.map(async (candidate) => {
-        const [rawUrl, ...descriptorParts] = candidate.split(/\s+/);
-        if (!rawUrl) return candidate;
-        const objectUrl = await resolveAssetUrl(rawUrl);
-        return [objectUrl || rawUrl, ...descriptorParts].join(' ');
-    }));
-
-    return rewrittenCandidates.join(', ');
 }
 
 export function DocumentViewer({
@@ -362,29 +132,7 @@ export function DocumentViewer({
     const canWriteDocument = resourceAllows(doc, 'folder.write', canWrite);
     const canDeleteDocument = resourceAllows(doc, 'folder.delete', canDelete);
 
-    const isTextEditable = previewType === 'markdown'
-        || previewType === 'json'
-        || previewType === 'html'
-        || previewType === 'code';
-
-    /**
-     * Frontmatter never reaches the markdown editor. A `---` fence renders as a
-     * rule and a setext heading, and the editor would then write that mangled
-     * shape back — quietly stripping the contract a SKILL.md depends on. The
-     * block is held aside here and re-attached to whatever the editor emits.
-     */
-    const markdownFrontmatter = useMemo(
-        () => (previewType === 'markdown' ? splitFrontmatter(docContent) : null),
-        [docContent, previewType]
-    );
-    const markdownBody = markdownFrontmatter ? markdownFrontmatter.body : docContent;
-    const markdownFrontmatterRaw = markdownFrontmatter?.raw ?? null;
-    const handleMarkdownBodyChange = useCallback(
-        (body: string) => {
-            setDocContent(joinFrontmatter(markdownFrontmatterRaw, body));
-        },
-        [markdownFrontmatterRaw]
-    );
+    const isTextEditable = isTextPreviewType(previewType);
 
     useEffect(() => {
         if (!doc) return;
@@ -495,7 +243,7 @@ export function DocumentViewer({
     });
 
     const docxPreviewSrcDoc = useMemo(() => (
-        docxPreview?.html ? buildDocxPreviewSrcDoc(docxPreview.html) : ''
+        docxPreview ? buildDocxPreviewSrcDoc(docxPreview.html, docxPreview.styles) : ''
     ), [docxPreview]);
 
 
@@ -957,7 +705,7 @@ export function DocumentViewer({
 
         topbar?.setTopbar({
             title: doc?.name || documentPath,
-            icon: <FileIcon className="h-4 w-4" />,
+            icon: <FileTypeIcon filename={doc?.name || documentPath} size="sm" />,
             meta: doc ? <FileIndexStatusBadge file={doc} /> : undefined,
             backHref: topbarBackHref,
             backLabel: topbarBackLabel || backLabel,
@@ -1068,110 +816,20 @@ export function DocumentViewer({
                 )}
 
                 {!isLoadingPreview && !previewError && (
-                    previewType === 'markdown' ? (
-                        // One column, one left edge. The frontmatter and the
-                        // prose used to sit in boxes of different widths, which
-                        // is what made a plain document look crooked.
-                        <div className="document-page px-2 py-5 sm:px-4">
-                            <DocumentFrontmatter
-                                content={docContent}
-                                path={documentPath}
-                                editable={isEditable}
-                                onChange={setDocContent}
-                            />
-                            <MarkdownEditor
-                                content={markdownBody}
-                                onChange={isEditable ? handleMarkdownBodyChange : () => undefined}
-                                editable={isEditable}
-                                className="min-h-[70vh]"
-                                editorClassName="min-h-[70vh]"
-                                readableProse
-                            />
-                        </div>
-                    ) : previewType === 'html' && !isTextSourceMode ? (
-                        <iframe
-                            title={doc.name}
-                            srcDoc={htmlPreviewDocument?.srcDoc || buildHtmlPreviewSrcDoc(docContent)}
-                            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-top-navigation-by-user-activation"
-                            className="embedded-canvas block h-full min-h-[78vh] w-full border-0"
-                            referrerPolicy="strict-origin-when-cross-origin"
-                        />
-                    ) : previewType === 'json' || previewType === 'html' || previewType === 'code' ? (
-                        <textarea
-                            className="document-viewer-source-field h-[78vh] w-full resize-none rounded-md border border-[color:var(--field-border)] bg-[var(--field-bg)] p-3 font-mono text-xs leading-5 text-[var(--text-secondary)] focus:outline-none"
-                            value={docContent}
-                            onChange={(event) => {
-                                if (isEditable) setDocContent(event.target.value);
-                            }}
-                            readOnly={!isEditable}
-                            spellCheck={false}
-                        />
-                    ) : previewType === 'image' ? (
-                        imagePreviewUrl ? (
-                            <div className="flex min-h-[78vh] items-start justify-center overflow-auto rounded-md bg-[var(--row-bg)] p-4">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                    src={imagePreviewUrl}
-                                    alt={doc.name}
-                                    className="max-h-[78vh] max-w-full object-contain"
-                                />
-                            </div>
-                        ) : (
-                            <div className="surface-panel-muted px-3 py-2 text-xs text-[var(--text-tertiary)]">
-                                Could not render image preview. Use Download.
-                            </div>
-                        )
-                    ) : previewType === 'pdf' ? (
-                        pdfPreview && pdfPreview.pages.length > 0 ? (
-                            <div className="space-y-3">
-                                {pdfPreview.pages.map((page, index) => (
-                                    <div
-                                        key={`pdf-page-${index + 1}`}
-                                        className="embedded-canvas flex justify-center rounded-md border border-[color:var(--card-border)] p-1.5"
-                                    >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                            src={page.src}
-                                            alt={`PDF page ${index + 1}`}
-                                            width={page.displayWidth}
-                                            height={page.displayHeight}
-                                            className="h-auto max-w-full rounded-sm"
-                                        />
-                                    </div>
-                                ))}
-
-                                {pdfPreview.truncated && (
-                                    <div className="surface-panel-muted px-3 py-2 text-xs text-[var(--text-tertiary)]">
-                                        Showing first {pdfPreview.pages.length} of {pdfPreview.totalPages} pages.
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="surface-panel-muted px-3 py-2 text-xs text-[var(--text-tertiary)]">
-                                Could not render PDF preview. Use Download.
-                            </div>
-                        )
-                    ) : previewType === 'office' ? (
-                        officePreviewKind === 'docx' && docxPreviewSrcDoc ? (
-                            <iframe
-                                title={doc.name}
-                                srcDoc={docxPreviewSrcDoc}
-                                sandbox=""
-                                className="embedded-canvas block w-full h-full min-h-[78vh] rounded-md border border-[color:var(--card-border)]"
-                            />
-                        ) : (
-                            <div className="surface-panel-muted px-3 py-2 text-xs text-[var(--text-tertiary)]">
-                                This office file type is not previewable here yet. Use Download.
-                            </div>
-                        )
-                    ) : (
-                        <div className="surface-panel-muted px-3 py-4 text-xs text-[var(--text-tertiary)]">
-                            <div className="flex items-center gap-2">
-                                <FileIcon className="h-4 w-4" />
-                                Preview is not available for this file type. Use Download.
-                            </div>
-                        </div>
-                    )
+                    <DocumentPreviewBody
+                        name={doc.name}
+                        path={documentPath}
+                        previewType={previewType}
+                        officeKind={officePreviewKind}
+                        content={docContent}
+                        htmlSrcDoc={htmlPreviewDocument?.srcDoc ?? null}
+                        imageUrl={imagePreviewUrl}
+                        pdf={pdfPreview ?? null}
+                        docxSrcDoc={docxPreviewSrcDoc}
+                        showHtmlSource={isTextSourceMode}
+                        editable={isEditable}
+                        onContentChange={setDocContent}
+                    />
                 )}
             </div>
             {canDeleteDocument ? <DestructiveConfirmationDialog

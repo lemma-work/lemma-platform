@@ -35,8 +35,6 @@ import {
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
 import { ReasoningPartCard, TraceDisclosureLine } from "./assistant-parts";
-import { SubagentActivityRollup } from "./assistant-subagent-activity";
-import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
   currentPodIdFromBrowserPath,
   isCurrentBrowserHref,
@@ -441,14 +439,13 @@ export function ToolActivityRollup({
   // names what happened ("Ran 3 commands"), which is the summary — the cards are
   // the detail behind it.
   const [isExpanded, setIsExpanded] = useState(false);
-  const subagentToolParts = detailParts.filter((part): part is ToolActivityPart => (
-    part.type === "tool" && isSubagentLifecycleToolName(part.toolInvocation.toolName)
-  ));
-  const visibleDetailParts = detailParts.filter((part) => (
-    part.type !== "tool" || !isSubagentLifecycleToolName(part.toolInvocation.toolName)
-  ));
-  const toolParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
-  const reasoningParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
+  // A lifecycle call is an ordinary tool call here. It used to be pulled out
+  // of the list and replaced by a rollup of every sub-agent in the turn, which
+  // meant clicking one call in the trace opened a summary of all of them —
+  // `spawn_subagent` has its own detail card, and this is where it belongs.
+  // The navigable view of the children is the chip row on the turn.
+  const toolParts = detailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
+  const reasoningParts = detailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
   const hasCompleteThoughtDuration = reasoningParts.length > 0
     && reasoningParts.every((part) => typeof part.durationMs === "number" && part.durationMs > 0);
   const totalThoughtDurationMs = hasCompleteThoughtDuration
@@ -456,7 +453,7 @@ export function ToolActivityRollup({
     : 0;
   const hasRunHeader = Boolean(collapsedLabel);
   const activitySummary = formatToolActivitySummary(toolParts);
-  const activityBlocks = groupActivityDetailParts(visibleDetailParts);
+  const activityBlocks = groupActivityDetailParts(detailParts);
   // Only a *single* tool-group relies on the master header to summarize/collapse
   // it (its body renders the calls bare). When other blocks are interleaved
   // (e.g. a trailing "Thought"), each long group renders its own summary button,
@@ -478,14 +475,14 @@ export function ToolActivityRollup({
   // much it holds, which does not change when the run does.
   void hasRunHeader;
   void hasLongToolGroup;
-  const shouldShowHeader = visibleDetailParts.length + subagentToolParts.length > 1;
+  const shouldShowHeader = detailParts.length > 1;
   const failedCount = toolParts.filter((part) => (
     part.toolInvocation.state === "result"
     && !isLongRunningToolResult(part.toolInvocation)
     && part.toolInvocation.result?.success === false
   )).length;
   const isWorking = Boolean(isRunActive) || reasoningParts.some((part) => part.state === "streaming");
-  const isSingleDetail = visibleDetailParts.length === 1;
+  const isSingleDetail = detailParts.length === 1;
   const completionSummary = activitySummary
     ? activitySummary
     : totalThoughtDurationMs > 0
@@ -502,7 +499,7 @@ export function ToolActivityRollup({
     : `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
   const collapsedSummary = `${collapsedLabel || summary}${isWorking && failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
 
-  if (visibleDetailParts.length === 0 && subagentToolParts.length === 0) return null;
+  if (detailParts.length === 0) return null;
 
   const isTraceExpanded = isExpanded || hasPendingUserInteraction;
 
@@ -580,14 +577,7 @@ export function ToolActivityRollup({
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {subagentToolParts.length > 0 ? (
-        <SubagentActivityRollup
-          parts={subagentToolParts}
-          parentConversationId={activeConversationId}
-          isRunActive={isRunActive}
-        />
-      ) : null}
-      {visibleDetailParts.length > 0 ? (
+      {detailParts.length > 0 ? (
         <div className={cn("flex min-w-0 flex-col", hasRunHeader ? "gap-3" : "gap-1.5")} data-single={isSingleDetail ? "true" : "false"}>
       {hasRunHeader ? (
         <RunTraceHeader

@@ -103,6 +103,17 @@ export function conversationWorkspaceTab(
     };
 }
 
+/**
+ * Where a conversation the pod's list cannot account for is cached.
+ *
+ * Shared, so a caller that has already listed a conversation's children can
+ * prime it and spare the tab the "Untitled conversation" flash between the
+ * navigation and the fetch that names it.
+ */
+export function workspaceTabConversationQueryKey(podId: string, conversationId: string) {
+    return ['workspace-tab-conversation', podId, conversationId] as const;
+}
+
 function safeWorkspaceHref(value: string) {
     if (!value.startsWith('/pod/')) return '/';
     return buildConversationStandaloneResourceHref(value) ?? '/';

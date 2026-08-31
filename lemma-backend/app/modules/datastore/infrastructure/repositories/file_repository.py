@@ -465,8 +465,8 @@ class DatastoreFileRepository(
     ) -> set[UUID]:
         """Every file id in the pod the caller may read, in one statement.
 
-        This replaces a loop that loaded *every* file row in the pod (16,050 in
-        one production pod), hydrated them into ORM objects and then entities,
+        This replaces a loop that loaded *every* file row in the pod, hydrated
+        them into ORM objects and then entities,
         collected the ancestor path of each, re-queried by those paths, and
         then re-derived inheritance in Python. The predicate it re-derived is
         the same ``_file_actions_expr`` CASE used everywhere else, so it was
@@ -477,8 +477,8 @@ class DatastoreFileRepository(
         ambient access, so ``_file_actions_expr`` — which already resolves the
         grant cascade — is the whole answer: re-deriving inheritance on top of
         it would demand a separate grant on every folder above and cancel the
-        cascade it just followed. That regression withheld 241 of 241 files
-        from an agent holding a real folder grant. A human, by contrast, may
+        cascade it just followed. That regression withheld every file from an
+        agent holding a real folder grant. A human, by contrast, may
         read a POD file by role alone, so an unreadable folder above it has to
         hide what is inside.
         """

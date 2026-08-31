@@ -30,12 +30,15 @@ class ConversationResponse:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        pod_cwd (str): The conversation's working directory in pod files. Anything a person attaches here is what the
+            agent finds by a bare filename, because this is the directory its pod tools resolve against.
         pod_id (UUID):
         updated_at (datetime.datetime):
         user_id (UUID):
         agent_id (None | Unset | UUID):
         agent_runtime (AgentRuntimeConfig | None | Unset):
         instructions (None | str | Unset):
+        is_archived (bool | Unset):  Default: False.
         last_run_error (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
         last_run_retryable (bool | Unset):  Default: False.
@@ -51,12 +54,14 @@ class ConversationResponse:
 
     created_at: datetime.datetime
     id: UUID
+    pod_cwd: str
     pod_id: UUID
     updated_at: datetime.datetime
     user_id: UUID
     agent_id: None | Unset | UUID = UNSET
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
     instructions: None | str | Unset = UNSET
+    is_archived: bool | Unset = False
     last_run_error: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
     last_run_retryable: bool | Unset = False
@@ -79,6 +84,8 @@ class ConversationResponse:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        pod_cwd = self.pod_cwd
 
         pod_id = str(self.pod_id)
 
@@ -107,6 +114,8 @@ class ConversationResponse:
             instructions = UNSET
         else:
             instructions = self.instructions
+
+        is_archived = self.is_archived
 
         last_run_error: None | str | Unset
         if isinstance(self.last_run_error, Unset):
@@ -186,6 +195,7 @@ class ConversationResponse:
             {
                 "created_at": created_at,
                 "id": id,
+                "pod_cwd": pod_cwd,
                 "pod_id": pod_id,
                 "updated_at": updated_at,
                 "user_id": user_id,
@@ -197,6 +207,8 @@ class ConversationResponse:
             field_dict["agent_runtime"] = agent_runtime
         if instructions is not UNSET:
             field_dict["instructions"] = instructions
+        if is_archived is not UNSET:
+            field_dict["is_archived"] = is_archived
         if last_run_error is not UNSET:
             field_dict["last_run_error"] = last_run_error
         if last_run_finished_at is not UNSET:
@@ -233,6 +245,8 @@ class ConversationResponse:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
+
+        pod_cwd = d.pop("pod_cwd")
 
         pod_id = UUID(d.pop("pod_id"))
 
@@ -282,6 +296,8 @@ class ConversationResponse:
             return cast(None | str | Unset, data)
 
         instructions = _parse_instructions(d.pop("instructions", UNSET))
+
+        is_archived = d.pop("is_archived", UNSET)
 
         def _parse_last_run_error(data: object) -> None | str | Unset:
             if data is None:
@@ -430,12 +446,14 @@ class ConversationResponse:
         conversation_response = cls(
             created_at=created_at,
             id=id,
+            pod_cwd=pod_cwd,
             pod_id=pod_id,
             updated_at=updated_at,
             user_id=user_id,
             agent_id=agent_id,
             agent_runtime=agent_runtime,
             instructions=instructions,
+            is_archived=is_archived,
             last_run_error=last_run_error,
             last_run_finished_at=last_run_finished_at,
             last_run_retryable=last_run_retryable,

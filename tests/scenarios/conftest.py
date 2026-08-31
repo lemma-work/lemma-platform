@@ -212,3 +212,36 @@ def provider(egress) -> ProviderView:
     which calls arrived" a per-scenario question.
     """
     return ProviderView(egress)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Do not *ask* a deployment a question only a broken one can answer.
+
+    Three scenarios need the target configured to be missing something — no
+    document converter, no search provider, an organization capped at zero
+    spend. Each proves a real promise about how the product behaves when a
+    dependency is absent, and each runs for real in the fast lane, where
+    `harness/stack.py` boots precisely that deployment on purpose. Two of them
+    are the only place their promise is proved anywhere in the repository.
+
+    Against somebody else's Lemma they cannot run, and should not: a healthy
+    deployment is not in the state under test, and nobody is going to break dev
+    so a scenario can watch. They used to report as skips there, which is the
+    wrong word — a skip says "this could have run and did not", and it put three
+    permanent entries on a list whose whole value is that somebody reads it.
+
+    So they are deselected instead. `--base-url` is the question being asked:
+    with one, the lifecycle belongs to somebody else and the suite cannot decide
+    how the target is configured. Without one it booted the target itself and
+    knows exactly how, because it chose.
+    """
+    if not config.getoption("--base-url"):
+        return
+    kept, dropped = [], []
+    for item in items:
+        (dropped if item.get_closest_marker("stack_lane") else kept).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept

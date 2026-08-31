@@ -23,6 +23,7 @@ from app.modules.apps.domain.entities import (
 )
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
+from app.modules.apps.services import app_install_assets
 from app.modules.apps.services.app_storage_phase import _AssetReadInputs
 
 logger = structlog.get_logger()
@@ -122,6 +123,41 @@ class AppAssetResolver:
             return None
         return runtime_config.build_app_branding(public_url)
 
+    def _reserved(
+        self,
+        app: AppEntity,
+        normalized_asset_path: str,
+        request_etag: str | None,
+    ) -> AppAssetDocument | None:
+        """Answer a ``/.lemma/`` request -- what makes this app installable.
+
+        Ahead of the release lookup because none of it describes the build: the
+        manifest names the app, and the icon is drawn from that name. They are
+        marked as entrypoints only to borrow the entrypoint cache policy
+        (revalidate, 304 on match); nothing is injected into them.
+        """
+        name = app_install_assets.reserved_asset_name(normalized_asset_path)
+        if name is None:
+            return None
+
+        etag = app_install_assets.reserved_asset_etag(app, name)
+        quoted_etag = self._quote_etag(etag)
+        if self._etag_matches(etag, request_etag):
+            return AppAssetDocument(
+                etag=quoted_etag,
+                not_modified=True,
+                is_entrypoint=True,
+            )
+
+        asset = app_install_assets.render_reserved_asset(app, name)
+        return AppAssetDocument(
+            content=asset.content,
+            media_type=asset.media_type,
+            etag=quoted_etag,
+            is_entrypoint=True,
+            headers=asset.headers,
+        )
+
     async def resolve(
         self,
         app: AppEntity,
@@ -131,11 +167,15 @@ class AppAssetResolver:
         request_etag: str | None = None,
         public_url: str | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
+        normalized_asset_path = self._normalize_asset_path(asset_path)
+        reserved = self._reserved(app, normalized_asset_path, request_etag)
+        if reserved is not None:
+            return reserved
+
         release = await self.current_release(
             app,
             raise_not_found_name=raise_not_found_name,
         )
-        normalized_asset_path = self._normalize_asset_path(asset_path)
         app_identity = runtime_config.build_runtime_app_identity(
             app.name,
             app.description,

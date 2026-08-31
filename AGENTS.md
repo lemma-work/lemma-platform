@@ -48,7 +48,7 @@ wrong interpreter does not fail with "module not found", it reports a
 - **[docs/testing.md](docs/testing.md)** — the three suites, which one your
   change needs, and what gates what.
 
-## The four that get broken most
+## The six that get broken most
 
 **The specification is not a description.** If the system does not behave the
 way a scenario says, do not edit the scenario to match. Mark it `gap`, record
@@ -59,6 +59,15 @@ cannot fail is documentation.
 a scenario in `tests/scenarios/`. A failure path gets a module e2e test. One
 function gets a unit test. `docs/testing.md` covers choosing.
 
+**Never leave a background process behind.** Anything that spawns load — a
+stress loop, a dev server, a CPU hog used to reproduce a flake — tears it down
+from a `trap`, not from the last line of the script, which is not reached when
+the command times out or the session ends. Orphans pin a core each until
+somebody notices, and it has already happened more than once. Use
+`desktop/scripts/stress_test_under_load.sh` rather than writing the loop again;
+[docs/testing.md](docs/testing.md#rules-that-apply-everywhere) has the rule and
+the two ways the hand-rolled version fails silently under `zsh`.
+
 **Generated code is generated.** The OpenAPI spec, the route inventory, the
 module contracts and the scenario coverage document are all produced by scripts
 and gated in CI. Edit the source and re-run, never the output. `make quality`
@@ -68,6 +77,14 @@ checks all of it.
 `docs/` and gets a row in its index. Do not paste coverage percentages or
 benchmark numbers into prose — they go stale silently. Name the command that
 produces them.
+
+**Comments say why, and never carry production data.** A comment that restates
+the code is one the next edit invalidates — make the code say it instead, with a
+name or a smaller function. And nothing measured against production belongs in
+the source: no traffic percentages, row or request counts, latencies, error
+rates, costs, customer names or internal URLs. Keep the reasoning, drop the
+figures. Configured limits, TTLs and API ceilings are contract and stay.
+[CONTRIBUTING.md](CONTRIBUTING.md#code-and-comments) has the full rule.
 
 ## Before opening a pull request
 

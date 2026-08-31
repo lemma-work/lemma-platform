@@ -251,6 +251,42 @@ everywhere else, and each is now guarded — see
 **Wait on a condition, never on the clock.** A sleep is either too short and
 flakes under load, or too long and everyone pays for it on every run.
 
+**Never leave a process behind.** Anything that spawns background load — a
+stress loop, a dev server, a sidecar, a CPU hog used to reproduce a flake —
+tears it down from a `trap`, never from the last line of the script. The last
+line is not reached when the run times out, when the harness kills the command,
+or when the session simply ends; the children are reparented onto pid 1 and
+each one pins a core until a person notices. That is not hypothetical, and it
+is not rare: a busy loop once ran for 20+ hours, and a later agent
+reproducing a `locald` flake left nineteen `yes > /dev/null` spinners at ~45%
+CPU each for an hour and a half, on an 11-core machine, while every command it
+ran printed `load stopped`.
+
+Do not write the loop again.
+[`desktop/scripts/stress_test_under_load.sh`](../desktop/scripts/stress_test_under_load.sh)
+already does it correctly — it traps `EXIT INT TERM HUP`, kills by array,
+`wait`s, and enforces its own runtime ceiling so a hung test loop still tears
+the load down.
+
+Two details make the hand-rolled version fail silently, so both are worth
+knowing before you reach for one anyway:
+
+- **`kill` at the end of a script is not cleanup.** Only `trap` runs on the
+  paths that actually happen. `HUP` needs naming explicitly — bash's default
+  handler terminates *without* running the `EXIT` trap, so closing the terminal
+  leaks everything.
+- **Ad-hoc commands here run under `zsh`, which does not word-split.**
+  `PIDS="$PIDS $!"` followed by `kill $PIDS` is a correct *bash* idiom that
+  does nothing at all in zsh: the whole string arrives as a single argument,
+  `kill` exits 1, and the `2>/dev/null` everyone appends hides it. Collect into
+  an array and `kill "${PIDS[@]}"`. `jobs -p` is the same trap from the other
+  side — inside `$(...)` it is a subshell with an empty jobs table, so
+  `kill $(jobs -p)` reliably kills nothing.
+
+A script that owns background processes belongs in a file with a
+`#!/usr/bin/env bash` shebang, not inlined into a shell command, for exactly
+this reason.
+
 **A stub is legitimate only when a contract test pins both sides against one
 committed artifact.** A stand-in you wrote proves your half of an interface and
 certifies nothing about the half that ships. This is not hypothetical: the

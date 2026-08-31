@@ -159,7 +159,7 @@ Telegram long-polling and Slack Socket Mode connect local setups directly.
     <td align="center"><img src="docs/Assets/Logos/microsoft-teams.svg" height="40" alt="Microsoft Teams"><br><sub>Teams</sub></td>
     <td align="center"><img src="docs/Assets/Logos/telegram.svg" height="40" alt="Telegram"><br><sub>Telegram</sub></td>
     <td align="center"><img src="docs/Assets/Logos/WhatsApp.svg" height="40" alt="WhatsApp"><br><sub>WhatsApp</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/Gmail.svg" height="40" alt="Gmail"><img src="docs/Assets/Logos/outlook.svg" height="40" alt="Outlook"><br><sub>Email</sub></td>
+    <td align="center"><strong style="font-size:28px">&#9993;</strong><br><sub>Email</sub></td>
   </tr>
 </table>
 
@@ -167,8 +167,10 @@ Telegram long-polling and Slack Socket Mode connect local setups directly.
 
 </div>
 
-Email covers Gmail, Outlook, and Resend. Each surface resolves who is asking and
-what they may ask for; the pod holds the data.
+Every pod agent gets its own address, and anyone can write to it from whatever
+mail client they already use. Reaching a Gmail or Outlook *account* is a
+connector, not a surface. Each surface resolves who is asking and what they may
+ask for; the pod holds the data.
 
 A pod also works for one person. One human and a few agents, with WhatsApp as
 the front door and tables as the memory, make a personal assistant that keeps

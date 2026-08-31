@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
@@ -53,7 +52,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const { pages, isLoading } = useAppPages(podId);
     const { mutate: deleteApp, isPending: isDeletingApp } = useDeleteApp();
     const { mutateAsync: updateAppVisibility } = useUpdateAppVisibility();
-    const assistant = useAIAssistant();
     const { launchRecipe } = useLaunchRecipe(podId);
     const [appPendingDelete, setAppPendingDelete] = useState<AppPageRef | null>(null);
 
@@ -111,14 +109,9 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             onClick={() => {
                                 void createAppWithAssistant();
                             }}
-                            disabled={assistant.isLoading || assistant.isOpenedConversationRunning}
                             className="h-9 w-fit gap-2 rounded-md px-3 text-sm"
                         >
-                            {assistant.isLoading || assistant.isOpenedConversationRunning ? (
-                                <StepLoader size="sm" />
-                            ) : (
-                                <Plus className="h-4 w-4" />
-                            )}
+                            <Plus className="h-4 w-4" />
                             New app
                         </Button>
                     ) : null
@@ -266,7 +259,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                                     onChange={async (visibility: ResourceVisibilityValue) => {
                                                         await updateAppVisibility({ podId, name: appName, visibility });
                                                     }}
-                                                    className="contents"
                                                     trigger={({ openShare, disabled }) => (
                                                         <DropdownMenuItem
                                                             disabled={disabled}

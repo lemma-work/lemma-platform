@@ -3,6 +3,12 @@
 These resume a run that paused on ``ask_user`` or ``request_approval``, which is
 a different lifecycle from an ordinary inbound message: there is already a
 conversation and a waiting run, and the work is matching the submission to it.
+
+Every path out of ``handle_interaction`` that has a delivery target says what
+happened -- accepted, expired, not yours, gone, failed. A tap that produces
+nothing is indistinguishable from a broken button, so the person taps again;
+and the one path that used to produce nothing was the failure path, on the
+three platforms where ``acknowledge_interaction`` was a no-op.
 """
 
 from __future__ import annotations
@@ -25,6 +31,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
+)
+from app.modules.agent_surfaces.services.free_text_answer import (
+    remember_free_text_answer_wanted,
 )
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     merge_other_answers,
@@ -122,6 +131,17 @@ class SurfaceInteractionMixin:
             conversation_id = link.conversation_id
 
             if parsed.interaction_state == "other":
+                # Remember that they asked to type the answer. Without this the
+                # next message is indistinguishable from any other, and the only
+                # way to honour "Other" was to treat *every* typed message as an
+                # answer — which is how an unanswered question came to swallow
+                # whatever somebody said next. Recorded against the specific
+                # call, so it cannot be spent on a later, unrelated one.
+                await remember_free_text_answer_wanted(
+                    self.uow,
+                    conversation_id=conversation_id,
+                    tool_call_id=tool_call_id,
+                )
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -150,11 +170,30 @@ class SurfaceInteractionMixin:
             # Authz: only the surface user who owns the conversation may submit
             # the answer that was shown to them.
             if not interaction_sender_matches(link, parsed):
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic",
+                # Warning, not debug: this is the control in front of a native
+                # Approve, and it now also fires where neither side identified
+                # anybody. An operator has to be able to see that happening --
+                # `LOG_LEVEL=INFO` drops debug before it is formatted.
+                logger.warning(
+                    "agent_surfaces.ingress_service.interaction_submitter_refused.degraded",
                     external_user_id=parsed.external_user_id,
                     conversation_id=conversation_id,
                 )
+                # Say so, and say which of the two it is. Refusing in silence is
+                # indistinguishable from the button being broken, and "not yours
+                # to answer" is wrong when the truth is that nothing identified
+                # the person who tapped. Either way the typed reply still works,
+                # so the sentence has to point at it.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text=(
+                            "I can't tell that this is yours to answer. Reply "
+                            "with your decision instead and I'll take it."
+                        ),
+                        show_alert=True,
+                    )
                 return
 
             conversation = await self.conversation_service.conversation_repository.get_conversation(
@@ -165,6 +204,14 @@ class SurfaceInteractionMixin:
                     "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic",
                     conversation_id=conversation_id,
                 )
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="That conversation is gone. Please ask again.",
+                        show_alert=True,
+                        clear_actions=True,
+                    )
                 return
 
             if parsed.action == "retry":

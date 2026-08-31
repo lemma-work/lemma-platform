@@ -23,6 +23,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
+from app.core.log.log import get_logger
 from app.core.api.dependencies import get_uow_factory
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -60,6 +61,9 @@ router = APIRouter(
 )
 
 
+logger = get_logger(__name__)
+
+
 class WidgetEmbedUrlResponse(BaseModel):
     url: str
 
@@ -74,12 +78,13 @@ async def _resolve_widget_viewer(
     try:
         session = await get_session(request, session_required=False)
     except Exception:
+        logger.warning("agent.widget.viewer_session_unreadable.degraded", exc_info=True)
         session = None
     if session is not None:
         try:
             return UUID(session.get_user_id())
         except Exception:
-            pass
+            logger.warning("agent.widget.viewer_id_unparsable.degraded", exc_info=True)
     if token:
         try:
             return verify_widget_token(

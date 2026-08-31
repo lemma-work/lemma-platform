@@ -937,7 +937,7 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([], 0)
+    record_repository.execute_readonly_query.return_value = ([], 0, False)
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
@@ -965,13 +965,17 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([{"merchant": "x"}], 1)
+    record_repository.execute_readonly_query.return_value = (
+        [{"merchant": "x"}],
+        1,
+        False,
+    )
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
     )
 
-    rows, total = await service.execute_readonly_query(
+    rows, total, truncated = await service.execute_readonly_query(
         pod_id=uuid4(),
         query="SELECT merchant FROM expenses",
         user_id=uuid4(),
@@ -1018,7 +1022,7 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     ctx = AsyncMock()
     table_service = AsyncMock()
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1)
+    record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1, False)
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
@@ -1052,8 +1056,8 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypa
 
     `bulk_create_records` in the same service already hoists its permission
     check and stages events for one dispatch. This is that shape, applied to
-    update. Production saw the difference as p50 8.6s and max 14.9s on
-    `records/bulk/update`.
+    update, and the difference showed up as `records/bulk/update` latency that
+    scaled with the batch instead of staying flat.
 
     The rows themselves are now written by one repository call in one
     transaction, rather than N calls that each opened a session, set the RLS

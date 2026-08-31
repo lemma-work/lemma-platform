@@ -272,6 +272,23 @@ async def _build_lemma_harness_tooling(
     # Appended AFTER the caching-sensitive fragments above and rebuilt each run
     # on purpose: unlike per-platform guidance, this changes the moment somebody
     # answers, and a cached copy would have the agent chasing a closed question.
+    if extra:
+        # Tool search reveals the deferred extra tools on demand (provider-native
+        # on Anthropic/OpenAI, a local search_tools function on Fireworks).
+        capabilities.append(ToolSearch())
+        capabilities.extend(_deferred_capability(obj) for obj in extra)
+        # ...and a static hint so the model knows those tools exist to search for.
+        # Ahead of open notifications: this is the largest stable block here and
+        # `deferred_hint` sorts its tool names specifically to keep it
+        # byte-identical between runs. Behind volatile text it would be re-read
+        # every time somebody answered a question.
+        hint = build_deferred_tools_hint(extra)
+        if hint:
+            capabilities.append(DeferredToolsHintCapability(hint))
+
+    # Last of the instruction-bearing capabilities, because it is the only one
+    # that changes the moment somebody answers. Everything above it stays in the
+    # cached prefix when it does.
     open_notifications = await build_open_notifications_capability(ctx.conversation_id)
     if open_notifications is not None:
         capabilities.append(open_notifications)
@@ -282,15 +299,5 @@ async def _build_lemma_harness_tooling(
                 conversation_id=ctx.conversation_id, protocol=protocol
             )
         )
-
-    if extra:
-        # Tool search reveals the deferred extra tools on demand (provider-native
-        # on Anthropic/OpenAI, a local search_tools function on Fireworks).
-        capabilities.append(ToolSearch())
-        capabilities.extend(_deferred_capability(obj) for obj in extra)
-        # ...and a static hint so the model knows those tools exist to search for.
-        hint = build_deferred_tools_hint(extra)
-        if hint:
-            capabilities.append(DeferredToolsHintCapability(hint))
 
     return capabilities

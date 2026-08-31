@@ -6,7 +6,10 @@ from typing import Any
 import httpx
 from slack_sdk.errors import SlackApiError
 
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -33,6 +36,7 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _display_resource_blocks,
     _progress_status_text,
     _question_blocks,
+    slack_acknowledgement_body,
 )
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
@@ -166,7 +170,48 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             raise
 
-    async def send_display_resource(
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None,
+        show_alert: bool,
+        clear_actions: bool,
+    ) -> None:
+        """Answer a tapped button where it was tapped.
+
+        ``response_url`` is the right instrument for this: Slack mints one per
+        interaction, it needs no token and no scope, and ``replace_original``
+        rewrites the very message the button was in. It expires after 30
+        minutes, which is longer than any tap-to-decision gap.
+
+        Best-effort by construction. The decision has already been recorded by
+        the time this runs, so a failed acknowledgement must never raise and
+        undo it -- but until this existed, a tap on Slack produced no
+        confirmation, left the buttons live, and reported a failure to nobody.
+        """
+        del show_alert  # Slack has no modal alert outside a trigger_id flow.
+        response_url = str(
+            (interaction.raw_payload or {}).get("response_url") or ""
+        ).strip()
+        if not response_url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                await http_client.post(
+                    response_url,
+                    json=slack_acknowledgement_body(
+                        (interaction.raw_payload or {}).get("message") or {},
+                        text=text,
+                        clear_actions=clear_actions,
+                    ),
+                )
+        except httpx.HTTPError, httpx.InvalidURL:
+            logger.debug(
+                "agent_surfaces.service.slack_interaction_acknowledgement_best.observed"
+            )
+
+    async def _render_resource(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -207,7 +252,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             )
             raise
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -236,7 +281,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         await client.chat_postMessage(**payload)
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         event: ParsedInboundSurfaceEvent,

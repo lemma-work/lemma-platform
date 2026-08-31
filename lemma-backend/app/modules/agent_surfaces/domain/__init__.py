@@ -17,7 +17,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfaceIngressRequest,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.domain.models import (
     SurfaceMessageMetadata,
@@ -38,6 +37,5 @@ __all__ = [
     "SurfaceMessageMetadata",
     "SurfacePlatform",
     "SurfacePlatformWebhookIngress",
-    "SurfaceScheduleIngress",
     "SurfaceSenderProfile",
 ]

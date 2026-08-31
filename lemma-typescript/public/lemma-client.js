@@ -11444,6 +11444,7 @@ var LemmaClient = (() => {
           agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
+          archived: options.archived,
           limit: (_a = options.limit) != null ? _a : 20,
           page_token: options.page_token
         }
@@ -11526,6 +11527,17 @@ var LemmaClient = (() => {
           Accept: "text/event-stream"
         }
       });
+    }
+    appendMessage(conversationId, payload, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/messages/append`,
+        {
+          body: payload,
+          signal: options.signal
+        }
+      );
     }
     retryFailedRun(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);

@@ -603,13 +603,13 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
     wrote back the four values the row already held, SQLAlchemy computed no net
     change, no UPDATE fired, and ``updated_at`` -- which the query ordered by --
     never moved. The next tick selected the same rows. In production the cursor
-    sat on rows last touched 2026-08-12 11:50:01 for three days while reporting
-    ``reconciled=100`` on four hundred consecutive samples: not a full batch,
-    the same batch, with 1,386 eligible rows behind it never examined.
+    sat on the same rows for days while reporting a full batch reconciled on
+    every consecutive sample: not a full batch, the same batch, with the eligible
+    rows behind it never examined.
 
-    All 1,634 of those rows had live targets -- 1,375 workflows parked on human
-    form waits, the rest agents still running -- so the sweep's *decision* was
-    right every time. Only the bookkeeping was wrong.
+    All of those rows had live targets -- mostly workflows parked on human form
+    waits, the rest agents still running -- so the sweep's *decision* was right
+    every time. Only the bookkeeping was wrong.
     """
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(

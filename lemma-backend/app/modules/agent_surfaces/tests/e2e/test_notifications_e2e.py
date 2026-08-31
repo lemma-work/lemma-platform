@@ -396,10 +396,10 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
         wait_for_messages,
     )
     from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+        script_text,
         process_ingress_and_run_scripted,
     )
     from app.modules.connectors.domain.connector import AuthProvider
-    from app.modules.test_support.e2e.scripted_model import script_email_reply
 
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
@@ -453,7 +453,7 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
             },
             headers={},
         ),
-        script=[script_email_reply("resend_reply_email", "Thanks, recorded.")],
+        script=[script_text("Thanks, recorded.")],
     )
 
     threaded = await _conversation_by_external_thread(

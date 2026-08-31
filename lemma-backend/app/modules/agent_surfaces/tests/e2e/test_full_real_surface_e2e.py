@@ -34,20 +34,19 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
     _ensure_connector_account,
-    _ensure_connector_trigger,
-    _gmail_payload,
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
     _wait_for_conversation_message,
-    _outlook_payload,
     _resend_payload,
     _seed_external_user,
     _set_user_mobile_number,
     _telegram_payload,
+    _telegram_photo_payload,
     _whatsapp_payload,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    A_RED_PNG,
     build_resend_svix_headers,
     build_slack_signature_headers,
     build_telegram_secret_headers,
@@ -57,8 +56,6 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_slack_replies,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.modules.schedule.domain.events.schedule import ScheduleFired
-from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
@@ -1235,269 +1232,107 @@ async def test_resend_signed_webhook_replies_via_worker(
 # -> worker -> outbound reply as the Slack webhook test, with a different
 # payload shape. Nothing is deleted and no assertion is weakened -- this runs
 # nightly in the protected lane instead of in front of the merge button.
+# The test that was missing, and the reason a real bug shipped. Every other
+# attachment e2e drives a platform that declares its own media types, and the
+# unit tests for ingest hand it a hardcoded "image/png" -- so the one case that
+# matters on Telegram, a file with no name and no type, was certified by a
+# double while production had nothing to go on. `FakeTelegramServer` had no
+# `getFile` route at all, which is what made it untestable rather than untested.
 @pytest.mark.slow
-async def test_gmail_schedule_event_runs_from_outbox_to_composio_provider(
+async def test_a_telegram_photo_is_saved_as_something_the_agent_can_open(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_composio_server,
+    fake_telegram,
+    message_store,
     worker,
     monkeypatch,
 ):
     _ = worker
-    from app.core.infrastructure.events.publisher import EventPublisher
-    from app.composition.schedule_connectors import (
-        ManagersFactory,
-    )
+    from app.core.config import settings as app_settings
 
-    monkeypatch.setattr(
-        ManagersFactory,
-        "get_manager",
-        lambda *args, **kwargs: _FakeScheduleManager(),
-    )
+    monkeypatch.setattr(app_settings, "api_url", "https://surface-e2e.test")
+    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
         user_id=fixed_test_user["id"],
-        connector_id="gmail",
+        connector_id="telegram",
         credentials={
-            "connection_id": "gmail-surface-e2e-account",
+            "bot_token": "e2e-telegram-bot-token",
+            "api_base_url": f"{fake_telegram.api_base}/bot",
         },
-        email="assistant@gmail.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="gmail",
-        trigger_id="gmail_worker_message_e2e",
-        event_type="GMAIL_NEW_GMAIL_MESSAGE",
     )
     agent_name = await _create_system_lemma_agent(authenticated_client, pod_id)
     surface = await _create_surface(
         authenticated_client,
         pod_id,
-        config={"type": "GMAIL", "account_id": str(account.id)},
+        config={"type": "TELEGRAM", "account_id": str(account.id)},
         agent_name=agent_name,
     )
-    surface_row = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_row is not None and surface_row.schedule_id
+    surface_id = surface["id"]
+    sender_id = 5550009
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id=str(sender_id),
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    surface_row = await db_session.get(AgentSurface, UUID(surface_id))
+    assert surface_row is not None and surface_row.webhook_secret
+    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
 
-    gmail_payload = _gmail_payload(
-        sender_email=fixed_test_user["email"],
-        assistant_email="assistant@gmail.test",
-        thread_id="gmail-worker-thread-001",
-        message_id="gmail-worker-message-001",
-        text="Reply through the durable Gmail schedule path",
+    response = await authenticated_client.post(
+        f"/surfaces/{surface_id}/webhook",
+        content=json.dumps(
+            _telegram_photo_payload(
+                caption="what colour is this?", message_id=1, sender_id=sender_id
+            )
+        ).encode("utf-8"),
+        headers=build_telegram_secret_headers(secret),
     )
-    gmail_data = gmail_payload["data"]
-    gmail_data.pop("message_text")
-    body_data = base64.urlsafe_b64encode(
-        b"Reply through the durable Gmail schedule path"
-    ).decode("ascii")
-    attachment = {
-        "filename": "gmail-customer-brief.txt",
-        "mimeType": "text/plain",
-        "body": {
-            "attachmentId": "gmail-attachment-001",
-            "size": 42,
-        },
-    }
-    gmail_data["attachments"] = [attachment]
-    gmail_data["payload"].update(
-        {
-            "mimeType": "multipart/mixed",
-            "parts": [
-                {
-                    "mimeType": "multipart/alternative",
-                    "parts": [
-                        {"mimeType": "text/plain", "body": {"data": body_data}},
-                        {
-                            "mimeType": "text/html",
-                            "body": {
-                                "data": base64.urlsafe_b64encode(
-                                    b"<p>HTML fallback body</p>"
-                                ).decode("ascii")
-                            },
-                        },
-                    ],
-                },
-                attachment,
-            ],
-        }
-    )
-
-    event = ScheduleFired(
-        schedule_id=surface_row.schedule_id,
-        user_id=UUID(fixed_test_user["id"]),
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account.id,
-        pod_id=UUID(pod_id),
-        source_event_id="gmail-worker-message-001",
-        payload=gmail_payload,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
-
-    execution = await _wait_for_composio_execution(
-        fake_composio_server,
-        tool_slug="GMAIL_REPLY_TO_THREAD",
-    )
-    arguments = execution["body"]["arguments"]
-    assert arguments["thread_id"] == "gmail-worker-thread-001"
-    assert str(arguments.get("message_body") or "").strip()
-    attachment_execution = await _wait_for_composio_execution(
-        fake_composio_server,
-        tool_slug="GMAIL_GET_ATTACHMENT",
-    )
-    assert attachment_execution["body"]["arguments"]["attachment_id"] == (
-        "gmail-attachment-001"
-    )
+    assert response.status_code == 200, response.text
 
     conversation = await _conversation_by_external_thread(
         authenticated_client,
         pod_id=pod_id,
         agent_name=agent_name,
-        external_thread_id="gmail-worker-thread-001",
+        external_thread_id=str(sender_id),
     )
     assert conversation is not None
-    persisted = await _messages_for_conversation(
+    inbound = await _wait_for_conversation_message(
         authenticated_client,
         pod_id=pod_id,
         conversation_id=conversation["id"],
+        predicate=lambda item: (
+            item.get("role") == "user"
+            and bool((item.get("metadata") or {}).get("ingested_files"))
+        ),
+        timeout_seconds=REAL_REPLY_TIMEOUT,
     )
-    inbound = next(item for item in persisted if item["role"] == "user")
-    assert (inbound.get("metadata") or {})["ingested_files"]
+    [saved_path] = (inbound.get("metadata") or {})["ingested_files"]
 
-
-# Platform variation, not a distinct journey: same ingress -> conversation
-# -> worker -> outbound reply as the Slack webhook test, with a different
-# payload shape. Nothing is deleted and no assertion is weakened -- this runs
-# nightly in the protected lane instead of in front of the merge button.
-@pytest.mark.slow
-async def test_outlook_schedule_event_runs_from_outbox_to_composio_provider(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_composio_server,
-    worker,
-    monkeypatch,
-):
-    _ = worker
-    from app.core.infrastructure.events.publisher import EventPublisher
-    from app.composition.schedule_connectors import (
-        ManagersFactory,
+    # Not "a file arrived" -- that passed throughout the outage. The photo was
+    # downloaded and saved every time; it was saved as `photo`, with no
+    # extension, which the datastore types as application/octet-stream, which
+    # `view_image` refuses. So the assertion has to be the property the agent
+    # actually depends on: the stored file says it is an image.
+    stored = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/files/by-path", params={"path": saved_path}
+    )
+    assert stored.status_code == 200, stored.text
+    detail = stored.json()
+    assert str(detail.get("mime_type") or "").startswith("image/"), (
+        f"a photo reached the pod typed {detail.get('mime_type')!r}, so the agent "
+        f"is holding a path to something view_image will refuse to open: {detail}"
     )
 
-    monkeypatch.setattr(
-        ManagersFactory,
-        "get_manager",
-        lambda *args, **kwargs: _FakeScheduleManager(),
+    # And the bytes are the ones Telegram served, not a truncated or empty file.
+    downloaded = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/files/download", params={"path": saved_path}
     )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="outlook",
-        credentials={
-            "connection_id": "outlook-surface-e2e-account",
-        },
-        email="assistant@outlook.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="outlook",
-        trigger_id="outlook_worker_message_e2e",
-        event_type="OUTLOOK_MESSAGE_TRIGGER",
-    )
-    agent_name = await _create_system_lemma_agent(authenticated_client, pod_id)
-    surface = await _create_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "OUTLOOK", "account_id": str(account.id)},
-        agent_name=agent_name,
-    )
-    surface_row = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_row is not None and surface_row.schedule_id
-
-    full_message = _outlook_payload(
-        sender_email=fixed_test_user["email"],
-        assistant_email="assistant@outlook.test",
-        thread_id="outlook-worker-thread-001",
-        message_id="outlook-worker-message-001",
-        text="Reply through the durable Outlook schedule path",
-    )["data"]
-    full_message["body"] = {
-        "contentType": "html",
-        "content": "<p>Reply through the durable Outlook schedule path</p>",
-    }
-    full_message["attachments"] = [
-        {
-            "id": "outlook-attachment-001",
-            "name": "outlook-customer-brief.txt",
-            "contentType": "text/plain",
-            "size": 48,
-            "isInline": False,
-            "@odata.type": "#microsoft.graph.fileAttachment",
-        }
-    ]
-    fake_composio_server.set_outlook_message(
-        "outlook-worker-message-001",
-        full_message,
-    )
-
-    event = ScheduleFired(
-        schedule_id=surface_row.schedule_id,
-        user_id=UUID(fixed_test_user["id"]),
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account.id,
-        pod_id=UUID(pod_id),
-        source_event_id="outlook-worker-message-001",
-        # Real Composio Outlook triggers are often sparse; the adapter must
-        # fetch the complete provider message before routing or side effects.
-        payload={
-            "data": {
-                "id": "outlook-worker-message-001",
-                "event_type": "OUTLOOK_MESSAGE_TRIGGER",
-            }
-        },
-    )
-    await EventPublisher.publish(event.stream_name(), event)
-
-    execution = await _wait_for_composio_execution(
-        fake_composio_server,
-        tool_slug="OUTLOOK_REPLY_EMAIL",
-    )
-    arguments = execution["body"]["arguments"]
-    assert arguments["message_id"] == "outlook-worker-message-001"
-    assert str(arguments.get("comment") or "").strip()
-    fetch_execution = await _wait_for_composio_execution(
-        fake_composio_server,
-        tool_slug="OUTLOOK_GET_MESSAGE",
-    )
-    assert fetch_execution["body"]["arguments"]["message_id"] == (
-        "outlook-worker-message-001"
-    )
-    attachment_execution = await _wait_for_composio_execution(
-        fake_composio_server,
-        tool_slug="OUTLOOK_DOWNLOAD_OUTLOOK_ATTACHMENT",
-    )
-    assert attachment_execution["body"]["arguments"]["attachment_id"] == (
-        "outlook-attachment-001"
-    )
-
-    conversation = await _conversation_by_external_thread(
-        authenticated_client,
-        pod_id=pod_id,
-        agent_name=agent_name,
-        external_thread_id="outlook-worker-thread-001",
-    )
-    assert conversation is not None
-    persisted = await _messages_for_conversation(
-        authenticated_client,
-        pod_id=pod_id,
-        conversation_id=conversation["id"],
-    )
-    inbound = next(item for item in persisted if item["role"] == "user")
-    assert (inbound.get("metadata") or {})["ingested_files"]
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == A_RED_PNG

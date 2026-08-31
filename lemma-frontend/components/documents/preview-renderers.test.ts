@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
     canPrintDocument,
     getDocumentPreviewType,
+    isTextPreviewType,
     pdfRenderPixelRatio,
     printFileName,
 } from './preview-renderers';
@@ -78,5 +79,38 @@ describe('getDocumentPreviewType', () => {
 
     it('ignores case', () => {
         expect(getDocumentPreviewType('/Docs/Deep/Zapdata_Proposal.MD')).toBe('markdown');
+    });
+
+    it('names the types a shared file arrives as', () => {
+        // The share route used to sniff the blob's MIME type instead, which put
+        // every one of these through the same `<pre>`: a page shown as its own
+        // markup, prose shown as its asterisks, a spreadsheet shown as nothing.
+        expect(getDocumentPreviewType('/site/index.html')).toBe('html');
+        expect(getDocumentPreviewType('/site/index.htm')).toBe('html');
+        expect(getDocumentPreviewType('/data/rows.csv')).toBe('code');
+        expect(getDocumentPreviewType('/data/config.json')).toBe('json');
+        expect(getDocumentPreviewType('/img/diagram.svg')).toBe('image');
+        expect(getDocumentPreviewType('/decks/q3.pptx')).toBe('office');
+        expect(getDocumentPreviewType('/contracts/msa.pdf')).toBe('pdf');
+    });
+
+    it('has no opinion about a file it cannot show', () => {
+        expect(getDocumentPreviewType('/archive/backup.zip')).toBe('unsupported');
+    });
+});
+
+describe('isTextPreviewType', () => {
+    it('covers the types whose stored form is what a person reads', () => {
+        expect(isTextPreviewType('markdown')).toBe(true);
+        expect(isTextPreviewType('json')).toBe(true);
+        expect(isTextPreviewType('html')).toBe(true);
+        expect(isTextPreviewType('code')).toBe(true);
+    });
+
+    it('excludes the ones that have to be rendered from bytes', () => {
+        expect(isTextPreviewType('pdf')).toBe(false);
+        expect(isTextPreviewType('image')).toBe(false);
+        expect(isTextPreviewType('office')).toBe(false);
+        expect(isTextPreviewType('unsupported')).toBe(false);
     });
 });

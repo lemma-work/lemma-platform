@@ -25,14 +25,11 @@ from app.modules.agent_surfaces.platforms.whatsapp import (
     client as whatsapp_client_module,
     service as whatsapp_service_module,
 )
-from app.modules.agent_surfaces.platforms.gmail.parser import (
-    GmailMessageParser,
-)
-from app.modules.agent_surfaces.platforms.outlook.parser import (
-    OutlookMessageParser,
-)
 from app.modules.agent_surfaces.platforms.telegram.adapter import (
     TelegramSurfaceAdapter,
+)
+from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
+    resolve_attachment_name_and_mime,
 )
 from app.modules.agent_surfaces.platforms.telegram.parser import (
     TelegramMessageParser,
@@ -358,7 +355,7 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
             "access_token": "wa-token",
             "api_base_url": "https://graph.example.test",
         }
-    ).send_display_resource(
+    )._render_resource(
         event,
         SurfaceDisplayRenderPlan(
             resource_type="FILE",
@@ -609,7 +606,7 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
         posted["json"] = json
         return _Response()
 
-    # send_display_resource routes through TelegramClient.call, which uses
+    # _render_resource routes through TelegramClient.call, which uses
     # httpx.AsyncClient from the client module — patch the class method so the
     # call is intercepted regardless of import site.
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -627,7 +624,7 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
 
     await telegram_service_module.TelegramPlatformService(
         {"bot_token": "telegram-token", "api_base_url": "https://telegram.example/bot"}
-    ).send_display_resource(
+    )._render_resource(
         event,
         SurfaceDisplayRenderPlan(
             resource_type="TABLE",
@@ -876,7 +873,7 @@ async def test_base_adapter_download_and_send_file_defaults():
         is None
     )
     assert (
-        await adapter.send_file_attachment(
+        await adapter._render_file(
             credentials={},
             event=event,
             file_name="a.txt",
@@ -887,196 +884,222 @@ async def test_base_adapter_download_and_send_file_defaults():
     )
 
 
-def test_gmail_parse_sender_string_and_attachments():
-    parser = GmailMessageParser()
-    event = parser.parse(
-        {
-            "data": {
-                "thread_id": "gmail-thread-1",
-                "message_id": "gmail-message-1",
-                "sender": "Test User <user@example.com>",
-                "to": "assistant@gmail.test",
-                "subject": "Need help",
-                "body_text": "Please review the file.",
-                "attachments": [
-                    {
-                        "attachment_id": "att-1",
-                        "filename": "invoice.pdf",
-                        "mime_type": "application/pdf",
-                        "size": 42,
-                    }
-                ],
-            }
-        }
-    )
+# ---- Telegram sends files it never describes --------------------------------
+#
+# Telegram is the only surface that hands over a file with no type at all: a
+# photo is an array of sizes with a `file_id` and nothing else. Left undeclared,
+# the file is stored under a name with no extension, the datastore types it from
+# that name as `application/octet-stream`, and `view_image` refuses to open it --
+# so the agent tells the person it cannot read the photo they just sent.
+
+
+def test_a_photo_is_declared_an_image_even_though_telegram_does_not_say_so():
+    payload = _telegram_text_payload()
+    payload["message"]["photo"] = [
+        {"file_id": "small", "file_size": 100},
+        {"file_id": "large", "file_size": 5000},
+    ]
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
 
     assert event is not None
-    assert event.sender_email == "user@example.com"
-    assert event.sender_external_user_id == "user@example.com"
-    assert event.sender_display_name == "Test User"
-    assert event.external_channel_id == "assistant@gmail.test"
-    assert event.metadata["attachments"][0]["id"] == "att-1"
-    assert event.metadata["attachments"][0]["message_id"] == "gmail-message-1"
+    [attachment] = event.metadata["attachments"]
+    assert attachment["file_id"] == "large"
+    assert attachment["mime_type"] == "image/jpeg"
 
 
-def test_gmail_parse_composio_payload_shape():
-    parser = GmailMessageParser()
-    event = parser.parse(
-        {
-            "id": "msg_123",
-            "type": "composio.trigger.message",
-            "data": {
-                "thread_id": "gmail-thread-42",
-                "message_id": "gmail-provider-message-42",
-                "message_text": "Plain body from composio",
-                "attachment_list": [
-                    {
-                        "attachmentId": "att-42",
-                        "filename": "invite.ics",
-                        "mimeType": "text/calendar",
-                    }
-                ],
-                "payload": {
-                    "headers": [
-                        {
-                            "name": "From",
-                            "value": "Test User <user@example.com>",
-                        },
-                        {
-                            "name": "Reply-To",
-                            "value": "Replies <reply@example.com>",
-                        },
-                        {"name": "To", "value": "assistant@gmail.test"},
-                        {"name": "Subject", "value": "Workflow Discussions"},
-                        {
-                            "name": "Message-ID",
-                            "value": "<calendar-message@example.com>",
-                        },
-                    ],
-                    "parts": [
-                        {
-                            "mimeType": "text/plain",
-                            "body": {"data": "UGxhaW4gYm9keSBmcm9tIGNvbXBvc2lv"},
-                        },
-                        {
-                            "mimeType": "application/ics",
-                            "filename": "invite.ics",
-                            "body": {"attachmentId": "att-42", "size": 1491},
-                        },
-                    ],
-                },
-            },
-        }
-    )
+def test_a_sticker_is_typed_by_whether_it_moves():
+    for is_video, expected in ((False, "image/webp"), (True, "video/webm")):
+        payload = _telegram_text_payload()
+        payload["message"]["sticker"] = {"file_id": "S1", "is_video": is_video}
+        del payload["message"]["text"]
+
+        event = TelegramMessageParser().parse(payload)
+
+        assert event is not None
+        [attachment] = event.metadata["attachments"]
+        assert attachment["mime_type"] == expected, is_video
+
+
+def test_a_video_note_reaches_the_agent_at_all():
+    """The round camera messages. Not in the parsed set before, so a person
+    filming something watched the agent answer their caption and ignore it."""
+    payload = _telegram_text_payload()
+    payload["message"]["video_note"] = {"file_id": "VN1", "file_size": 2048}
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
 
     assert event is not None
-    assert event.sender_email == "user@example.com"
-    assert event.external_thread_id == "gmail-thread-42"
-    assert event.external_message_id == "gmail-provider-message-42"
-    assert event.reply_target["recipient_email"] == "reply@example.com"
-    assert event.metadata["internet_message_id"] == "<calendar-message@example.com>"
-    assert event.metadata["attachments"][0]["id"] == "att-42"
-    assert event.metadata["attachments"][0]["name"] == "invite.ics"
+    [attachment] = event.metadata["attachments"]
+    assert attachment["file_id"] == "VN1"
+    assert attachment["content_type"] == "video_note"
+    assert attachment["mime_type"] == "video/mp4"
 
 
-def test_outlook_parse_prefers_internet_message_id_for_dedup_and_keeps_provider_id():
-    parser = OutlookMessageParser()
-    event = parser.parse(
-        {
-            "data": {
-                "id": "graph-message-1",
-                "conversation_id": "outlook-thread-1",
-                "internetMessageId": "<outlook-message-1@example.com>",
-                "from": "Rahul <rahul@example.com>",
-                "to": "assistant@outlook.test",
-                "subject": "Need review",
-                "body": {"contentType": "html", "content": "<p>Hello there</p>"},
-                "attachments": [
-                    {
-                        "id": "att-1",
-                        "name": "brief.txt",
-                        "contentType": "text/plain",
-                    }
-                ],
-            }
-        }
-    )
+def test_an_animation_is_saved_once_not_twice():
+    """Telegram sets `document` alongside `animation` for old clients. Both name
+    the same file, so reading both saves the GIF twice and tells the agent about
+    two files where the person sent one."""
+    payload = _telegram_text_payload()
+    payload["message"]["animation"] = {
+        "file_id": "A1",
+        "file_name": "cat.gif",
+        "mime_type": "video/mp4",
+    }
+    payload["message"]["document"] = {
+        "file_id": "A1",
+        "file_name": "cat.gif",
+        "mime_type": "video/mp4",
+    }
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
 
     assert event is not None
-    assert event.sender_email == "rahul@example.com"
-    assert event.external_message_id == "<outlook-message-1@example.com>"
-    assert event.metadata["message_id"] == "graph-message-1"
-    assert event.metadata["internet_message_id"] == "<outlook-message-1@example.com>"
-    assert event.metadata["attachments"][0]["id"] == "att-1"
-    assert event.metadata["attachments"][0]["message_id"] == "graph-message-1"
+    assert len(event.metadata["attachments"]) == 1
+    assert event.metadata["attachments"][0]["content_type"] == "animation"
 
 
-def test_outlook_parse_sparse_composio_trigger_payload():
-    parser = OutlookMessageParser()
-    event = parser.parse(
-        {
-            "event_type": "message.created",
-            "id": "graph-message-sparse-1",
-        }
-    )
+def test_a_voice_note_keeps_the_type_telegram_did_declare():
+    payload = _telegram_text_payload()
+    payload["message"]["voice"] = {"file_id": "V1", "mime_type": "audio/ogg"}
+    del payload["message"]["text"]
+
+    event = TelegramMessageParser().parse(payload)
 
     assert event is not None
-    assert event.external_thread_id == "graph-message-sparse-1"
-    assert event.external_message_id == "graph-message-sparse-1"
-    assert event.metadata["message_id"] == "graph-message-sparse-1"
-    assert event.metadata["requires_message_fetch"] is True
-    assert event.reply_target["message_id"] == "graph-message-sparse-1"
-    assert event.sender_email is None
+    [attachment] = event.metadata["attachments"]
+    assert attachment["mime_type"] == "audio/ogg"
 
 
-def test_outlook_parse_graph_message_with_recipients_and_headers():
-    parser = OutlookMessageParser()
-    event = parser.parse(
-        {
-            "id": "graph-message-1",
-            "conversationId": "outlook-thread-1",
-            "internetMessageId": "<outlook-message-1@example.com>",
-            "from": {
-                "emailAddress": {
-                    "address": "rahul@example.com",
-                    "name": "Rahul",
-                }
-            },
-            "replyTo": [
-                {
-                    "emailAddress": {
-                        "address": "reply@example.com",
-                        "name": "Replies",
-                    }
-                }
-            ],
-            "toRecipients": [
-                {
-                    "emailAddress": {
-                        "address": "assistant@outlook.test",
-                        "name": "Assistant",
-                    }
-                }
-            ],
-            "subject": "Need review",
-            "body": {"contentType": "html", "content": "<p>Hello there</p>"},
-            "internetMessageHeaders": [
-                {"name": "In-Reply-To", "value": "<parent@example.com>"},
-                {"name": "References", "value": "<parent@example.com>"},
-            ],
-            "attachments": [
-                {
-                    "id": "att-1",
-                    "name": "brief.txt",
-                    "contentType": "text/plain",
-                }
-            ],
-        }
+# ---- naming a file Telegram would not name ----------------------------------
+
+
+def test_a_photo_is_named_from_the_path_telegram_answered_with():
+    """`getFile` knows the extension even when the update did not.
+
+    The parsed name is the type word "photo", which has no extension and so told
+    the datastore nothing. Telegram's own `file_path` -- `photos/file_42.jpg` --
+    had the answer the whole time; it was simply never preferred.
+    """
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"file_id": "F", "name": "photo"},
+        file_path="photos/file_42.jpg",
+        content=b"",
     )
 
-    assert event is not None
-    assert event.external_thread_id == "outlook-thread-1"
-    assert event.reply_target["recipient_email"] == "reply@example.com"
-    assert event.external_channel_id == "assistant@outlook.test"
-    assert event.metadata["references"] == ["<parent@example.com>"]
-    assert event.metadata["in_reply_to"] == "<parent@example.com>"
+    assert name == "file_42.jpg"
+    assert mime == "image/jpeg"
+
+
+def test_a_real_filename_is_never_second_guessed():
+    """Declared beats derived. A document arrives properly named; leave it."""
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "quarter.csv", "mime_type": "text/csv"},
+        file_path="documents/file_9.csv",
+        content=b"a,b\n",
+    )
+
+    assert name == "quarter.csv"
+    assert mime == "text/csv"
+
+
+def test_the_bytes_settle_it_when_neither_name_does():
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "sticker"},
+        file_path="stickers/file_7",
+        content=b"RIFF\x00\x00\x00\x00WEBP",
+    )
+
+    assert mime == "image/webp"
+    assert name.endswith(".webp")
+
+
+def test_a_voice_note_keeps_an_extension_it_can_be_played_by():
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "voice", "mime_type": "audio/ogg"},
+        file_path="voice/file_3.oga",
+        content=b"OggS",
+    )
+
+    assert mime == "audio/ogg"
+    assert name == "file_3.oga"
+
+
+def test_an_unknowable_blob_is_reported_as_one_rather_than_guessed_at():
+    """Honest when nothing knows. A wrong type is worse than none: it looks
+    decided, and every layer downstream believes it."""
+    name, mime = resolve_attachment_name_and_mime(
+        attachment={"name": "document"},
+        file_path="documents/file_1",
+        content=b"\x00\x01\x02\x03",
+    )
+
+    assert mime == "application/octet-stream"
+    assert name == "file_1"
+
+
+async def test_a_downloaded_photo_arrives_typed_end_to_end(monkeypatch):
+    """The whole of bug A's adapter half: a photo update in, an openable
+    `image/png` out, with nothing but `file_id` to start from."""
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "result": {"file_path": "photos/file_42.jpg"}}
+
+        @property
+        def text(self):
+            return ""
+
+    class _Stream:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield png
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fake_post(self, url, *, json=None, **kwargs):
+        return _Resp()
+
+    def fake_stream(self, method, url, **kwargs):
+        return _Stream()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    event = ParsedInboundSurfaceEvent(
+        platform="TELEGRAM",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="1",
+        message_text="what colour is this?",
+    )
+
+    result = await telegram_service_module.TelegramPlatformService(
+        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+    ).download_attachment_bytes(
+        event,
+        # Exactly what the parser produces for a photo, and all Telegram sends.
+        {"file_id": "large", "name": "photo", "content_type": "image"},
+    )
+
+    assert result is not None
+    content, name, mime = result
+    assert content == png
+    assert mime.startswith("image/")
+    assert name.lower().endswith((".jpg", ".jpeg", ".png"))

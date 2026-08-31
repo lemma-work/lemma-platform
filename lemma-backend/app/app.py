@@ -148,6 +148,7 @@ async def lifespan(app: FastAPI):
         from app.core.concurrency.offload import configure_thread_pool, run_blocking
         from app.core.observability.connection_scope import (
             start_connection_scope_monitor_from_settings,
+            stop_connection_scope_monitor,
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
@@ -268,6 +269,10 @@ async def lifespan(app: FastAPI):
             await close_agent_provider_clients()
             await dispose_shared_sql_engines()
             await close_redis_json_caches()
+            # Symmetric with the monitor started at startup: a module
+            # singleton that nothing stopped, which outlives an in-process
+            # lifespan and attaches to whatever engines come next.
+            stop_connection_scope_monitor()
             await close_redis_clients()
             await close_engine()
             await channel_service.disconnect()
@@ -295,8 +300,8 @@ class TrailingSlashMiddleware:
     reads it from *outside* this middleware. With a copy the router wrote to an
     object the observer never saw, so every request whose path ended in a slash
     was logged as ``route: "unmatched"`` regardless of what it actually matched
-    or returned -- silently seeding the bucket that production's fixed-cost
-    5.2s "unmatched" 404s were being investigated in.
+    or returned -- silently seeding the bucket that a fixed-cost class of slow
+    "unmatched" 404s was being investigated in.
     """
 
     def __init__(self, app):
@@ -442,7 +447,7 @@ class RequestObserverMiddleware:
                     }
                     # "unmatched" names no request, so a slow or failing one in
                     # that bucket cannot be investigated at all: two separate
-                    # passes at production's fixed-cost 5.2s `unmatched` 404s
+                    # passes at a fixed-cost class of slow `unmatched` 404s
                     # failed for exactly this reason. Populated only for that
                     # bucket -- a real route template is already the identity,
                     # and raw paths are unbounded.
@@ -736,6 +741,48 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         }
         return JSONResponse(payload, status_code=200 if healthy else 503)
 
+    #: How stale the worker heartbeat may be before readiness calls it stalled.
+    #:
+    #: The watchdog refreshes it every `loop_lag_watchdog_interval_seconds`
+    #: (0.5s by default), so a minute is roughly two orders of magnitude of
+    #: headroom -- generous enough that a busy machine or a long GC pause is
+    #: never mistaken for a dead worker, and short enough that a person does
+    #: not sit in front of a spinner for hours, which is what happened.
+    WORKER_HEARTBEAT_MAX_AGE_SECONDS = 60.0
+
+    def _embedded_worker_state() -> str | None:
+        """Whether this process's own worker is still ticking, or None.
+
+        None where the question does not apply: an API process that runs no
+        worker (the cloud topology, where the worker is its own deployment)
+        must not report itself unready because it has no heartbeat to read.
+        Only the single-process desktop build sets `embedded_worker`.
+
+        The gap this closes is one a desktop install sat in for hours. The
+        heartbeat file exists so a Kubernetes liveness probe can restart a
+        wedged worker -- and on desktop nothing read it. `/health/ready`
+        answered 200 on the strength of the database and Redis while the
+        worker had been dead since a lifespan teardown two hours earlier, so
+        locald's health gate saw a healthy backend, never restarted it, and
+        every agent run queued behind a worker that was not there. The UI
+        showed "thinking" and no log said otherwise.
+
+        A missing file is not a stalled worker: it is a process that has not
+        written one yet, which is every start before the first tick.
+        """
+        if not getattr(app.state, "embedded_worker", False):
+            return None
+        path = settings.worker_heartbeat_path
+        if not path:
+            return None
+        try:
+            with open(path, encoding="utf-8") as handle:
+                written = float(handle.read().strip())
+        except OSError, ValueError:
+            return None
+        age = time.time() - written
+        return "ok" if age <= WORKER_HEARTBEAT_MAX_AGE_SECONDS else "stalled"
+
     # Readiness: bounded, concurrent checks for dependencies required to serve
     # new work. Each check has ~1 s; the whole endpoint has a ~2 s deadline.
     # 503 when not ready; only generic component states are exposed, never
@@ -787,7 +834,10 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "db": "ok" if db_ok else "down",
             "redis": "ok" if redis_ok else "down",
         }
-        ready = bool(db_ok) and bool(redis_ok)
+        worker_state = _embedded_worker_state()
+        if worker_state is not None:
+            components["worker"] = worker_state
+        ready = bool(db_ok) and bool(redis_ok) and worker_state != "stalled"
         payload = {
             "status": "ready" if ready else "not_ready",
             "components": components,

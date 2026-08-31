@@ -1,19 +1,14 @@
 # Product analytics
 
-Status: Phases 1–4 implemented; Phase 5 (ClickStack) not started.
-
-* **Phase 1** — `app/core/origin.py`, `app/core/analytics/` (catalog, sink,
-  emitter, PostHog transport, bootstrap), origin resolved in
-  `RequestObserverMiddleware`, `DomainEvent` carries origin, and
-  `app/composition/analytics_consumer.py` raises 8 catalog events off the bus
-  as a new `analytics` module.
-* **Phase 2** — `lib/analytics/client.ts`, `AnalyticsProvider`, the `/ingest`
-  rewrite, and the two loop events (`share_link.viewed`, `import.started`).
-* **Phase 3** — `lemma_cli/cli_core/telemetry.py` and `lemma telemetry`.
-* **Phase 4** — `locald/src/telemetry.rs`.
+The plane is built on all four edges: the backend spine (`app/core/origin.py`,
+`app/core/analytics/`, and the subscriber in
+`app/composition/analytics_consumer.py`), the web client
+(`lib/analytics/client.ts`), the CLI (`lemma_cli/cli_core/telemetry.py` and
+`lemma telemetry`), and Desktop (`locald/src/telemetry.rs`). The ClickStack sink
+described in §4 is not written yet.
 
 Nothing reports anywhere until an ingestion key is set, and no key is set
-anywhere in this repo. Remaining gaps are listed in §11.
+anywhere in this repo. Current limits are in §10.
 Companion: [observability](../observability.md) — the operational plane, already built
 
 Lemma is not a web app with some integrations. It is a pod that people and
@@ -59,7 +54,7 @@ make.
 
 **A surface is not the platform.** In Lemma, *surface* is a specific product
 noun: a chat platform where an agent answers pod members — Slack, Teams,
-WhatsApp, Telegram, Gmail, Outlook. Using it to mean "the client that made the
+WhatsApp, Telegram, email. Using it to mean "the client that made the
 request" collides with the product's own vocabulary and breaks one noun per
 concept. Surfaces are one entry among many.
 
@@ -132,7 +127,7 @@ class OriginKind(str, Enum):
     DESKTOP = "DESKTOP"            # the Next app in the Tauri webview
     CLI = "CLI"                    # lemma commands
     APP = "APP"                    # a published pod app, members only
-    SURFACE = "SURFACE"            # Slack/Teams/WhatsApp/Telegram/Gmail/Outlook
+    SURFACE = "SURFACE"            # Slack/Teams/WhatsApp/Telegram/email
 
     # Programmatic
     SDK = "SDK"                    # lemma-python / lemma-typescript
@@ -456,58 +451,23 @@ whether the harness is doing its job.
 failure step broken out. Entirely pre-account, which is why it needs the
 install-id channel.
 
-## 10. Rollout
+## 10. Current limits
 
-**Phase 1 — spine.** `OriginKind`, origin resolution at every edge, the
-catalog, the sink interface, the PostHog adapter, the null default, allowlist
-enforcement, the adversarial test. Analytics subscriber on the domain event bus
-covering pod, agent run, workflow run, table, app, surface, connector, bundle.
-At the end of this phase the activation funnel and the loop are readable for
-*every* origin, with zero client work.
+Three things are true of the plane as built, and each shapes what a query
+against it can honestly claim:
 
-**Phase 2 — web.** posthog-js in `app/providers.tsx`, gated on
-`isLocalDeployment()`. Autocapture and replay off, manual pageviews, `/ingest`
-rewrite, landing→signup stitching. Only pre-API steps and client errors.
-
-**Phase 3 — CLI.** Install id, `cli.command_invoked`,
-`lemma system telemetry`, `LEMMA_TELEMETRY=0`. Fire-and-forget with a hard
-timeout — a CLI that hangs on an analytics endpoint is a bug report, and a
-deserved one.
-
-**Phase 4 — Desktop.** Install-health catalog in Rust, first-run disclosure,
-Local settings toggle, separate write key.
-
-**Phase 5 — ClickStack.** Add `ClickStackSink`, dual-write for one retention
-window, reconcile a known funnel across both, cut over, drop PostHog. The
-catalog does not change, which is the point of §4.
-
-## 11. Open items
-
-- **Backfilling origin onto `Conversation.origin_type`** — the loose string
-  should become `OriginKind`. Worth doing in Phase 1 as the migration that
-  proves the enum, or deferring so analytics does not block on a data
-  migration.
 - **The TypeScript SDK does not send `X-Lemma-Client`.** The Python SDK does,
   and honours `LEMMA_CLIENT`, which is how the CLI names itself. Until the TS
   transport does the same, browser and Desktop traffic resolves to `SDK` rather
-  than `WEB`/`DESKTOP` — deliberately safe (an unknown caller is never counted
-  as a person in a browser) but it means the origin split is incomplete for the
+  than `WEB`/`DESKTOP` — safe by construction (an unknown caller is never
+  counted as a person in a browser) but the origin split is incomplete for the
   two biggest human surfaces.
-- **Server-initiated origins** (schedule, data trigger, workflow, connector)
-  are not set where the work is enqueued, so those events carry no origin.
-  Guessing them downstream from the consumer is what makes an origin dimension
-  quietly wrong, so the consumer leaves them empty instead.
-- **Desktop events are defined but not raised.** `locald/src/telemetry.rs` has
-  the contract, the install id, the opt-out and the transport; the launch and
-  runtime-install call sites do not call `record()` yet, and there is no Local
-  settings toggle in the UI. Until both land, Desktop reports nothing.
-- **Eighteen catalog events have no emitter**, listed in
-  `test_analytics_wiring.py::KNOWN_GAPS`. Most need a domain event the platform
-  does not publish today — `pod_bundle` and `connectors` raise none at all,
-  which is why the share→import→remix loop is only half measurable from the
-  server.
-- Whether `agent_run.completed` carries token counts. Makes cost-per-activated-
-  pod answerable in one place, but duplicates metering Postgres owns. Leaning
-  yes, bucketed, explicitly labelled non-authoritative.
-- Event volume estimate — agent runs counted per run or per conversation. Per
-  run is more useful and materially more expensive; start per run.
+- **Server-initiated origins** (schedule, data trigger, workflow, connector) are
+  not set where the work is enqueued, so those events carry no origin. Guessing
+  them downstream from the consumer is what makes an origin dimension quietly
+  wrong, so the consumer leaves them empty instead.
+- **Not every catalog event has an emitter.** Most of the gaps need a domain
+  event the platform does not publish today; `pod_bundle` and `connectors` raise
+  none at all, which is why the share→import→remix loop is only half measurable
+  from the server. `test_analytics_wiring.py::KNOWN_GAPS` is the authoritative
+  list, and it fails the build when it drifts.

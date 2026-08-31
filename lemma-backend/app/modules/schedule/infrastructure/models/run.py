@@ -70,8 +70,8 @@ class ScheduleRun(UUIDAuditBase):
     # sweep: for a run whose target is alive but not yet finished there is
     # nothing to write, so SQLAlchemy emitted no UPDATE, so ``updated_at`` never
     # moved, so the ORDER BY handed back the same hundred rows on the next tick
-    # and every tick after it. In production the cursor sat on rows last touched
-    # 2026-08-12 11:50:01 for three days while reporting ``reconciled=100``.
+    # and every tick after it. In production the cursor sat on the same rows for
+    # days while reporting a full batch reconciled on every tick.
     last_inspected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -88,12 +88,13 @@ class ScheduleRun(UUIDAuditBase):
         ),
         # Serves the failure-streak count behind the circuit breaker, which
         # orders by completed_at and therefore could not use the created_at
-        # index above for its ordering. Production planned it as a bitmap heap
-        # scan of 5,946 rows plus a sort, 48ms, on every run completion.
+        # index above for its ordering. Without it Postgres bitmap-scanned the
+        # schedule's whole completed history and sorted it, on every run
+        # completion.
         #
         # Partial on completed_at IS NOT NULL because that is the query's own
         # filter and because an in-flight run has no place in a streak: at rest
-        # this excludes the ~2% of the table that has not finished.
+        # that excludes only the small fraction of the table still running.
         Index(
             "ix_schedule_runs_schedule_completed",
             "schedule_id",
@@ -125,13 +126,14 @@ class ScheduleRun(UUIDAuditBase):
         # built by create_all -- every test database -- never had it at all.
         #
         # The predicate is `target_outcome IS NULL` and nothing else, because
-        # that alone is the selectivity: 1,672 of 81,334 production rows, 2%.
-        # Adding back the sweep's status set would exclude a further *five*
-        # rows -- and reintroduce precisely the coupling that made 0003 dead
-        # weight, where the query's status list drifts from the index's and
-        # Postgres silently stops using it. A predicate that costs 0.006% of the
-        # index size and can silently disable it is not worth having. Statuses
-        # are filtered from the rows this returns instead.
+        # that alone carries essentially all the selectivity: unresolved runs are
+        # a small fraction of the table. Adding back the sweep's status set would
+        # exclude a negligible handful of rows on top of that -- and reintroduce
+        # precisely the coupling that made 0003 dead weight, where the query's
+        # status list drifts from the index's and Postgres silently stops using
+        # it. A predicate that saves almost nothing and can silently disable the
+        # index is not worth having. Statuses are filtered from the rows this
+        # returns instead.
         #
         # Leads with (last_inspected_at, id) because that is what the sweep now
         # orders by. It used to lead with updated_at, which the sweep could not

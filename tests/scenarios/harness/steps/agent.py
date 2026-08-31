@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from harness.run import a_name_for
-from harness.drivers.api import items_of
+from harness.drivers.api import every_item, items_of
 from harness.waiting import eventually
 
 JSON = dict[str, Any]
@@ -126,7 +126,17 @@ class AgentSteps:
         return answered.status_code == 200
 
     async def agents_in(self, pod: JSON) -> list[JSON]:
-        return items_of(await self.api.get(f"/pods/{pod['id']}/agents"))
+        """Every agent in the pod, following the pages.
+
+        The cap here has already broken provisioning once: the list stops at
+        100, `works_in` decided whether the standing agent existed by looking
+        for it, and once a standing pod held more than a page of leftovers the
+        deployment answered 409 for a name that had been there all along. See
+        `has_agent`, which is still the right way to ask about one by name.
+        """
+        return await every_item(
+            lambda params: self.api.get(f"/pods/{pod['id']}/agents", params=params)
+        )
 
     async def deletes_agent(self, name: str, *, in_pod: JSON) -> None:
         await self.api.delete(
@@ -196,20 +206,12 @@ class AgentSteps:
         of a hundred is two thousand conversations. It exists so a bug in the
         cursor cannot spin here forever.
         """
-        found: list[JSON] = []
-        token: str | None = None
-        for _ in range(pages):
-            params: JSON = {"limit": 100}
-            if token:
-                params["page_token"] = token
-            answered = await self.api.get(
+        return await every_item(
+            lambda params: self.api.get(
                 f"/pods/{pod['id']}/conversations", params=params
-            )
-            found.extend(items_of(answered))
-            token = (answered or {}).get("next_page_token")
-            if not token:
-                break
-        return found
+            ),
+            pages=pages,
+        )
 
     async def opens_conversation(self, conversation: JSON, *, in_pod: JSON) -> JSON:
         return await self.api.get(
@@ -231,6 +233,26 @@ class AgentSteps:
         return await self.api.post(
             f"/pods/{in_pod['id']}/conversations/{in_conversation['id']}/messages",
             what=f"{self.label} sending a message",
+            json={"content": message},
+        )
+
+    async def adds_while_it_works(
+        self, message: str, *, in_conversation: JSON, in_pod: JSON
+    ) -> JSON:
+        """Say something without opening a stream to watch the answer arrive.
+
+        Not ``adds``: ``PodSteps.adds`` already owns that name, and ``Person``
+        mixes both in -- a second one is shadowed in silence and the scenario
+        fails on an argument name three files away from the cause.
+
+        What a person does when the agent is already working: the message joins
+        the run in flight rather than starting a second one. ``says`` is the
+        wrong call for that -- it opens a second Server-Sent Events
+        subscription for a run that already has one.
+        """
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/conversations/{in_conversation['id']}/messages/append",
+            what=f"{self.label} adding a message to a run already working",
             json={"content": message},
         )
 
